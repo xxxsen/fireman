@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 
+def hk_exchange_symbol(code: str) -> str:
+    """Normalize HK exchange codes to zero-padded 5-digit symbols."""
+    raw = code.strip().upper()
+    if raw.startswith("HK"):
+        raw = raw[2:]
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return raw
+    return digits.zfill(5)
+
+
 def cn_exchange_symbol(code: str) -> str:
     """Return sh/sz/bj prefixed symbol for Sina/Tencent fund and stock APIs."""
     raw = code.strip().lower()

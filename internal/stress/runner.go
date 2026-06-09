@@ -89,17 +89,23 @@ func Run(in *simulation.InputSnapshot, opt RunOptions) Report {
 }
 
 type pathBatch struct {
-	success      int
-	terminals    []float64
-	drawdowns    []float64
-	failureYears []float64
-	recoveries   []float64
+	success        int
+	terminals      []float64
+	drawdowns      []float64
+	failureYears   []float64
+	recoveryMonths []float64
 }
 
 func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSchedule, opt RunOptions) pathBatch {
 	var batch pathBatch
 	batch.terminals = make([]float64, runs)
 	batch.drawdowns = make([]float64, runs)
+	if sched != nil {
+		batch.recoveryMonths = make([]float64, runs)
+		for i := range batch.recoveryMonths {
+			batch.recoveryMonths[i] = math.MaxFloat64
+		}
+	}
 	shockEnd := ShockEndMonth(sched)
 	shockStart := shockStartMonth(in)
 	if sched != nil {
@@ -135,7 +141,7 @@ func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSche
 			}
 			rec := recoveryMonth(ps.MonthlyWealthMinor, shockEnd+1, recoveryTarget)
 			if rec >= 0 {
-				batch.recoveries = append(batch.recoveries, float64(rec))
+				batch.recoveryMonths[i] = float64(rec)
 			}
 		}
 	}
@@ -186,12 +192,31 @@ func aggregateScenario(sc Scenario, batch pathBatch, baselineSuccess float64, st
 		sort.Float64s(batch.failureYears)
 		sr.FailureYearP50 = simulation.Quantile(batch.failureYears, 0.50)
 	}
-	if len(batch.recoveries) > 0 {
-		sort.Float64s(batch.recoveries)
-		rec := int(math.Round(simulation.Quantile(batch.recoveries, 0.50)))
-		sr.RecoveryMonthP50 = &rec
-	} else {
-		sr.RecoveryNotWithinPlan = true
+	if len(batch.recoveryMonths) > 0 {
+		rec, withinPlan := recoveryP50(batch.recoveryMonths)
+		if withinPlan {
+			sr.RecoveryMonthP50 = rec
+		} else {
+			sr.RecoveryNotWithinPlan = true
+		}
 	}
 	return sr
+}
+
+func recoveryP50(recoveryMonths []float64) (*int, bool) {
+	n := len(recoveryMonths)
+	if n == 0 {
+		return nil, false
+	}
+	sorted := append([]float64(nil), recoveryMonths...)
+	sort.Float64s(sorted)
+	rankIdx := int(math.Ceil(float64(n)*0.50)) - 1
+	if rankIdx < 0 {
+		rankIdx = 0
+	}
+	if sorted[rankIdx] >= math.MaxFloat64 {
+		return nil, false
+	}
+	rec := int(math.Round(sorted[rankIdx]))
+	return &rec, true
 }

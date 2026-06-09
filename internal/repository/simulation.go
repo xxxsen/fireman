@@ -80,8 +80,9 @@ func (r *SimulationRepo) CreatePending(ctx context.Context, tx *sql.Tx, run Simu
 	return err
 }
 
-func (r *SimulationRepo) Complete(ctx context.Context, runID string, success, failure int, summary json.RawMessage) error {
-	_, err := r.db.ExecContext(ctx, `
+func (r *SimulationRepo) Complete(ctx context.Context, tx *sql.Tx, runID string, success, failure int, summary json.RawMessage) error {
+	exec := r.exec(tx)
+	_, err := exec.ExecContext(ctx, `
 		UPDATE simulation_runs SET success_count=?, failure_count=?, summary_json=? WHERE id=?`,
 		success, failure, string(summary), runID)
 	return err
@@ -167,6 +168,25 @@ func (r *SimulationRepo) ReplaceQuantileSeries(ctx context.Context, tx *sql.Tx, 
 		}
 	}
 	return nil
+}
+
+func (r *SimulationRepo) ListQuantileSeries(ctx context.Context, runID string) ([]QuantileSeriesRow, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT run_id, month_offset, p00_minor, p05_minor, p25_minor, p50_minor, p75_minor, p95_minor
+		FROM simulation_quantile_series WHERE run_id=? ORDER BY month_offset`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QuantileSeriesRow
+	for rows.Next() {
+		var q QuantileSeriesRow
+		if err := rows.Scan(&q.RunID, &q.MonthOffset, &q.P00Minor, &q.P05Minor, &q.P25Minor, &q.P50Minor, &q.P75Minor, &q.P95Minor); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
 }
 
 func (r *SimulationRepo) ListPathIndex(ctx context.Context, runID string) ([]PathIndexRow, error) {

@@ -12,6 +12,46 @@ def _client() -> TestClient:
     return TestClient(create_app())
 
 
+def test_fetch_hk_stock_mocked() -> None:
+    df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [300.0, 305.0], "名称": ["腾讯控股", "腾讯控股"]})
+    with patch("akshare.stock_hk_hist", return_value=df):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "HK",
+                "instrument_type": "hk_stock",
+                "source_code": "00700",
+                "end_date": "2026-06-09",
+                "adjust_policy": "qfq",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["code"] == 0
+        assert body["data"]["currency"] == "HKD"
+        assert body["data"]["name"] == "腾讯控股"
+        assert body["data"]["expense_ratio_components"]["region"] == "foreign"
+
+
+def test_fetch_hk_etf_mocked() -> None:
+    df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [20.0]})
+    with patch("akshare.stock_hk_hist", return_value=df):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "HK",
+                "instrument_type": "hk_etf",
+                "source_code": "02800",
+                "end_date": "2026-06-09",
+                "adjust_policy": "qfq",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["code"] == 0
+        assert body["data"]["currency"] == "HKD"
+
+
 def test_fetch_cn_exchange_fund_mocked() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [1.0, 1.1]})
     with patch("akshare.fund_etf_hist_em", return_value=df):

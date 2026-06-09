@@ -2,9 +2,16 @@
 
 from fireman_market_provider.adapters.symbols import (
     cn_exchange_symbol,
+    hk_exchange_symbol,
     sina_adjust_policy,
     tx_adjust_policy,
 )
+
+
+def test_hk_exchange_symbol() -> None:
+    assert hk_exchange_symbol("700") == "00700"
+    assert hk_exchange_symbol("00700") == "00700"
+    assert hk_exchange_symbol("HK02800") == "02800"
 
 
 def test_cn_exchange_symbol_shanghai() -> None:

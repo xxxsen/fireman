@@ -31,15 +31,16 @@ type AnalysisRunnerIface interface {
 
 // Worker polls and executes queued jobs.
 type Worker struct {
-	db          *sql.DB
-	jobs        *repository.JobRepo
-	sims        *repository.SimulationRepo
-	runner      Runner
-	analysis    AnalysisRunnerIface
-	events      *EventHub
-	logger      *slog.Logger
-	interval    time.Duration
-	maintenance func() bool
+	db                *sql.DB
+	jobs              *repository.JobRepo
+	sims              *repository.SimulationRepo
+	runner            Runner
+	analysis          AnalysisRunnerIface
+	events            *EventHub
+	logger            *slog.Logger
+	interval          time.Duration
+	heartbeatInterval time.Duration
+	maintenance       func() bool
 }
 
 func NewWorker(db *sql.DB, jobs *repository.JobRepo, sims *repository.SimulationRepo, runner Runner, analysis AnalysisRunnerIface, events *EventHub, logger *slog.Logger, maintenance func() bool) *Worker {
@@ -69,17 +70,36 @@ func (w *Worker) loop(ctx context.Context) {
 
 	var activeJob string
 	var jobDone chan struct{}
+	var jobCancel context.CancelFunc
+	var hb *time.Ticker
+	defer func() {
+		if hb != nil {
+			hb.Stop()
+		}
+	}()
+
 	for {
 		if activeJob != "" && jobDone != nil {
-			hb := time.NewTicker(heartbeatEvery)
+			if hb == nil {
+				every := w.heartbeatInterval
+				if every <= 0 {
+					every = heartbeatEvery
+				}
+				hb = time.NewTicker(every)
+			}
 			select {
 			case <-ctx.Done():
-				hb.Stop()
+				if jobCancel != nil {
+					jobCancel()
+				}
+				<-jobDone
 				return
 			case <-jobDone:
 				hb.Stop()
+				hb = nil
 				activeJob = ""
 				jobDone = nil
+				jobCancel = nil
 			case <-hb.C:
 				_ = w.jobs.Heartbeat(ctx, activeJob)
 			}
@@ -102,8 +122,10 @@ func (w *Worker) loop(ctx context.Context) {
 			}
 			activeJob = job.ID
 			jobDone = make(chan struct{})
+			jobCtx, cancel := context.WithCancel(ctx)
+			jobCancel = cancel
 			go func(j repository.Job) {
-				w.execute(ctx, j)
+				w.execute(jobCtx, j)
 				close(jobDone)
 			}(job)
 		}
@@ -281,7 +303,7 @@ func (r *SimulationRunner) RunSimulation(ctx context.Context, jobID, runID strin
 	}
 
 	return fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
-		if err := r.sims.Complete(ctx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
+		if err := r.sims.Complete(ctx, tx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
 			return err
 		}
 		if err := r.sims.ReplacePathIndex(ctx, tx, runID, rows); err != nil {

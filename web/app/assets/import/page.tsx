@@ -10,6 +10,7 @@ import { assetClassLabel, dataSourceLabel, formatPercent } from "@/lib/format";
 
 const MARKETS = [
   { value: "CN", label: "中国市场" },
+  { value: "HK", label: "香港市场" },
   { value: "US", label: "美国市场" },
 ];
 
@@ -18,6 +19,10 @@ const TYPES: Record<string, { value: string; label: string }[]> = {
     { value: "cn_exchange_fund", label: "场内 ETF / LOF" },
     { value: "cn_exchange_stock", label: "A 股" },
     { value: "cn_mutual_fund", label: "公募基金" },
+  ],
+  HK: [
+    { value: "hk_etf", label: "香港 ETF" },
+    { value: "hk_stock", label: "港股" },
   ],
   US: [
     { value: "us_etf", label: "美国 ETF" },
@@ -29,6 +34,8 @@ const CODE_HINTS: Record<string, string> = {
   cn_exchange_fund: "例如 510300",
   cn_exchange_stock: "例如 600519",
   cn_mutual_fund: "例如 000001",
+  hk_etf: "例如 02800",
+  hk_stock: "例如 00700",
   us_etf: "例如 SPY",
   us_stock: "例如 AAPL",
 };

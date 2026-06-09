@@ -35,6 +35,7 @@ function AnalysisJobPanel({
   title,
   termKey,
   activeJobId,
+  jobBusy,
   jobState,
   onRun,
   running,
@@ -44,6 +45,7 @@ function AnalysisJobPanel({
   title: string;
   termKey: "stress_test" | "sensitivity_test";
   activeJobId: string | null;
+  jobBusy: boolean;
   jobState: ReturnType<typeof useJobStatus>;
   onRun: () => void;
   running: boolean;
@@ -72,7 +74,7 @@ function AnalysisJobPanel({
         <button
           type="button"
           className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-          disabled={running || !!activeJobId}
+          disabled={running || jobBusy}
           onClick={onRun}
         >
           运行{title}
@@ -335,9 +337,17 @@ export default function AnalysisPage() {
     void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
   };
 
+  const handleJobTerminal = (message?: string) => {
+    setActiveJobId(null);
+    setActiveJobKind(null);
+    if (message) {
+      setJobError(message);
+    }
+    invalidateAll();
+  };
+
   const jobState = useJobStatus(activeJobId, {
     onComplete: async () => {
-      setActiveJobId(null);
       setJobError(null);
       if (activeJobKind === "stress" && activeJobId) {
         await getStressTest(activeJobId).catch(() => null);
@@ -345,10 +355,10 @@ export default function AnalysisPage() {
       if (activeJobKind === "sensitivity" && activeJobId) {
         await getSensitivityTest(activeJobId).catch(() => null);
       }
-      setActiveJobKind(null);
-      invalidateAll();
+      handleJobTerminal();
     },
-    onFailed: (msg) => setJobError(msg),
+    onFailed: (msg) => handleJobTerminal(msg),
+    onCanceled: () => handleJobTerminal(),
   });
 
   const startMut = useMutation({
@@ -432,12 +442,13 @@ export default function AnalysisPage() {
             </>
           )}
         </div>
-        {(jobState.error || jobError) && activeJobKind === "sim" && (
+        {(jobState.error || jobError) && (
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <p className="text-sm text-red-600">{jobState.error ?? jobError}</p>
             <button
               type="button"
               className="text-sm underline"
+              disabled={jobBusy}
               onClick={() => {
                 setJobError(null);
                 startMut.mutate();
@@ -507,6 +518,7 @@ export default function AnalysisPage() {
         title="压力测试"
         termKey="stress_test"
         activeJobId={activeJobKind === "stress" ? activeJobId : null}
+        jobBusy={jobBusy}
         jobState={jobState}
         onRun={() => stressMut.mutate()}
         running={stressMut.isPending}
@@ -518,6 +530,7 @@ export default function AnalysisPage() {
         title="敏感性测试"
         termKey="sensitivity_test"
         activeJobId={activeJobKind === "sensitivity" ? activeJobId : null}
+        jobBusy={jobBusy}
         jobState={jobState}
         onRun={() => sensMut.mutate()}
         running={sensMut.isPending}

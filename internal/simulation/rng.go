@@ -2,6 +2,11 @@ package simulation
 
 import "math"
 
+// DerivePathSeed derives a deterministic non-negative 63-bit seed for one path.
+func DerivePathSeed(rootSeed int64, pathNo int) int64 {
+	return int64(SplitMix64(uint64(rootSeed)+uint64(pathNo)) & math.MaxInt64)
+}
+
 // SplitMix64 derives a deterministic non-negative 63-bit seed.
 func SplitMix64(seed uint64) uint64 {
 	z := seed + 0x9e3779b97f4a7c15

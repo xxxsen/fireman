@@ -14,7 +14,7 @@ from ..timeout_util import call_with_timeout
 from .classification import FundMeta, classify_cn_mutual_fund, classify_us_symbol, default_region
 from .fallback import try_sources
 from .names import resolve_cn_exchange_fund_name
-from .symbols import cn_exchange_symbol, sina_adjust_policy, tx_adjust_policy
+from .symbols import cn_exchange_symbol, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
 
 
 @dataclass(frozen=True)
@@ -358,6 +358,42 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: Asse
     )
 
 
+def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: AssetClass) -> AdapterResult:
+    import akshare as ak
+
+    symbol = hk_exchange_symbol(req.source_code)
+    adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
+    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
+        (
+            "ak.stock_hk_hist",
+            lambda: ak.stock_hk_hist(
+                symbol=symbol,
+                period="daily",
+                start_date=start,
+                end_date=end,
+                adjust=adjust,
+            ),
+        ),
+        ("ak.stock_hk_daily", lambda: _filter_df_by_date(ak.stock_hk_daily(symbol=symbol, adjust=adjust), start, end)),
+    ]
+    df, source_name = try_sources("hk equity", sources)
+    name = symbol
+    if "名称" in df.columns and not df["名称"].empty:
+        name = str(df["名称"].iloc[0])
+    elif "股票名称" in df.columns and not df["股票名称"].empty:
+        name = str(df["股票名称"].iloc[0])
+    meta = classify_us_symbol(name, default_type)
+    return AdapterResult(
+        df=df,
+        source_name=source_name,
+        name=meta.name,
+        asset_class=meta.asset_class,
+        currency="HKD",
+        point_type="adjusted_close",
+        region="foreign",
+    )
+
+
 def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
     import akshare as ak
 
@@ -389,6 +425,8 @@ _REGISTRY: dict[str, ProviderFn] = {
     "cn_exchange_stock": _fetch_cn_exchange_stock,
     "cn_exchange_fund": _fetch_cn_exchange_fund,
     "cn_mutual_fund": _fetch_cn_mutual_fund,
+    "hk_stock": lambda req, s, e: _fetch_hk_equity(req, s, e, "equity"),
+    "hk_etf": lambda req, s, e: _fetch_hk_equity(req, s, e, "equity"),
     "us_stock": lambda req, s, e: _fetch_us_equity(req, s, e, "equity"),
     "us_etf": lambda req, s, e: _fetch_us_equity(req, s, e, "equity"),
     "fx_rate": _fetch_fx_rate,

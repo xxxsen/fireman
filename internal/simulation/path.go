@@ -87,7 +87,7 @@ type assetSlot struct {
 
 // RunPath executes one deterministic path.
 func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *PathDetail) {
-	pathSeed := int64(SplitMix64(uint64(in.RootSeed()) + uint64(pathNo)))
+	pathSeed := DerivePathSeed(in.RootSeed(), pathNo)
 	rng := NewRNG(pathSeed)
 
 	horizon := in.HorizonMonths()
@@ -160,8 +160,9 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 		}
 
 		// 3-4. spending, tax, withdrawal
-		spend := int64(0)
+		netSpend := int64(0)
 		tax := int64(0)
+		grossWithdrawal := int64(0)
 		if month >= retire {
 			isAnniv := month > retire && (month-retire)%12 == 0
 			net := withdraw.MonthlySpending(month, retire, monthStart, infl.Cumulative, isAnniv)
@@ -173,19 +174,21 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 				net += monthShock.ExtraSpendingMinor
 			}
 			gross, t := GrossWithdrawal(net, p.WithdrawalTaxRate, p.TaxableWithdrawalRatio)
-			spend = gross
+			netSpend = net
+			grossWithdrawal = gross
 			tax = t
 			summary.TotalSpendingMinor += net
 		} else {
-			spend = cashFlowAmount(in.CashFlows, month, infl.Cumulative, "expense")
+			netSpend = cashFlowAmount(in.CashFlows, month, infl.Cumulative, "expense")
 			if hasShock {
-				spend += monthShock.ExtraSpendingMinor
+				netSpend += monthShock.ExtraSpendingMinor
 			}
+			grossWithdrawal = netSpend
 		}
 
 		txCost := int64(0)
-		if spend > 0 {
-			ok, cost := withdrawAmount(slots, cashIdx, float64(spend), p.TransactionCostRate)
+		if grossWithdrawal > 0 {
+			ok, cost := withdrawAmount(slots, cashIdx, float64(grossWithdrawal), p.TransactionCostRate)
 			txCost = cost
 			summary.TransactionCostMinor += cost
 			if !ok {
@@ -266,7 +269,7 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 
 		if opts.CollectDetail {
 			mr := MonthRecord{
-				MonthOffset: month, TotalWealthMinor: endWealth, SpendingMinor: spend,
+				MonthOffset: month, TotalWealthMinor: endWealth, SpendingMinor: netSpend,
 				IncomeMinor: income, TaxMinor: tax, TransactionCost: txCost,
 				Rebalanced: rebalanced,
 			}
@@ -274,7 +277,7 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 				mr.Drawdown = 1 - float64(endWealth)/float64(peak)
 			}
 			detail.Monthly = append(detail.Monthly, mr)
-			yearAcc.accum(spend, income, tax, txCost, endWealth, mr.Drawdown, rebalanced)
+			yearAcc.accum(netSpend, income, tax, txCost, endWealth, mr.Drawdown, rebalanced)
 			if month%12 == 11 || month == horizon-1 {
 				detail.Yearly = append(detail.Yearly, yearAcc.finish(month/12, p.CurrentAge, slotWeights(slots)))
 				yearAcc = yearAccumulator{start: endWealth}
@@ -553,20 +556,22 @@ func classifyFailure(month, retire, horizon int, inflCumulative float64) string 
 }
 
 type yearAccumulator struct {
-	start              int64
-	income, spend, tax int64
-	txCost             int64
-	lastWealth         int64
-	maxDD              float64
-	rebalanced         bool
+	start                 int64
+	income, netSpend, tax int64
+	txCost                int64
+	lastWealth            int64
+	lastDD                float64
+	maxDD                 float64
+	rebalanced            bool
 }
 
-func (y *yearAccumulator) accum(spend, income, tax, tx int64, wealth int64, dd float64, rebal bool) {
+func (y *yearAccumulator) accum(netSpend, income, tax, tx int64, wealth int64, dd float64, rebal bool) {
 	y.income += income
-	y.spend += spend
+	y.netSpend += netSpend
 	y.tax += tax
 	y.txCost += tx
 	y.lastWealth = wealth
+	y.lastDD = dd
 	if dd > y.maxDD {
 		y.maxDD = dd
 	}
@@ -576,12 +581,12 @@ func (y *yearAccumulator) accum(spend, income, tax, tx int64, wealth int64, dd f
 }
 
 func (y *yearAccumulator) finish(yearIdx, startAge int, weights map[string]float64) YearRecord {
-	gain := y.lastWealth - y.start - y.income + y.spend + y.tax + y.txCost
+	gain := y.lastWealth - y.start - y.income + y.netSpend + y.tax + y.txCost
 	return YearRecord{
 		Year: startAge + yearIdx, StartWealthMinor: y.start, IncomeMinor: y.income,
-		SpendingMinor: y.spend, TaxMinor: y.tax, TransactionCost: y.txCost,
+		SpendingMinor: y.netSpend, TaxMinor: y.tax, TransactionCost: y.txCost,
 		InvestmentGainLoss: gain, EndWealthMinor: y.lastWealth,
-		YearEndDrawdown: y.maxDD, MaxIntraYearDD: y.maxDD, Rebalanced: y.rebalanced,
+		YearEndDrawdown: y.lastDD, MaxIntraYearDD: y.maxDD, Rebalanced: y.rebalanced,
 		AssetWeights: weights,
 	}
 }

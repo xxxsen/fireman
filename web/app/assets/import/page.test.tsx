@@ -7,6 +7,13 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("ImportAssetPage", () => {
+  it("exposes CN, HK and US markets", () => {
+    render(<ImportAssetPage />);
+    expect(screen.getByRole("option", { name: "中国市场" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "香港市场" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "美国市场" })).toBeInTheDocument();
+  });
+
   it("only exposes market, type and code inputs in search stage", () => {
     render(<ImportAssetPage />);
     expect(screen.getByText(/查询标的/)).toBeInTheDocument();

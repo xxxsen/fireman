@@ -84,9 +84,38 @@ export default function NewPlanWizardPage() {
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
   const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: listInstruments });
 
+  const [simFailed, setSimFailed] = useState(false);
+
   const jobState = useJobStatus(jobId, {
     onComplete: () => {
       if (createdPlanId) router.push(`/plans/${createdPlanId}/dashboard`);
+    },
+    onFailed: (msg) => {
+      setJobId(null);
+      setSimFailed(true);
+      setError(msg);
+    },
+    onCanceled: () => {
+      setJobId(null);
+      setSimFailed(true);
+      setError("模拟已取消");
+    },
+  });
+
+  const retrySimMut = useMutation({
+    mutationFn: async () => {
+      if (!createdPlanId) {
+        throw new Error("计划尚未创建");
+      }
+      return createSimulation(createdPlanId, { runs: DEFAULT_RUNS });
+    },
+    onSuccess: (sim) => {
+      setSimFailed(false);
+      setJobId(sim.job_id);
+      setError(null);
+    },
+    onError: (e) => {
+      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "重试失败");
     },
   });
 
@@ -435,6 +464,24 @@ export default function NewPlanWizardPage() {
                 模拟进度：{jobState.job?.status} {Math.round(jobState.progress * 100)}%
               </p>
             )}
+            {simFailed && createdPlanId && (
+              <div className="mt-3 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+                  disabled={retrySimMut.isPending || !!jobId}
+                  onClick={() => retrySimMut.mutate()}
+                >
+                  重新启动模拟
+                </button>
+                <Link
+                  href={`/plans/${createdPlanId}/dashboard`}
+                  className="rounded-md border px-4 py-2 text-sm"
+                >
+                  进入计划
+                </Link>
+              </div>
+            )}
             {error && <p className="text-sm text-red-600">{error}</p>}
           </>
         )}
@@ -500,6 +547,7 @@ export default function NewPlanWizardPage() {
               assetGap < -100 ||
               (assetGap > 100 && !gapToCash) ||
               !!jobId ||
+              !!createdPlanId ||
               finishMut.isPending
             }
             title={

@@ -5,11 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/simulation"
@@ -165,6 +167,101 @@ func TestSimulationJobFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("path detail status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
 	}
+}
+
+func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+
+	jobsRepo := repository.NewJobRepo(db)
+	simsRepo := repository.NewSimulationRepo(db)
+	runner := persistFailingRunner{db: db, sims: simsRepo}
+	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), jobs.NewEventHub(), nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Start(ctx, 1)
+
+	services := buildServices(db, "")
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "42"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/simulations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create simulation status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
+	}
+	env := decodeEnvelope(t, mustRead(t, resp))
+	data := env["data"].(map[string]any)
+	jobID := data["job_id"].(string)
+	runID := data["run_id"].(string)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err := jobsRepo.GetByID(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == repository.JobStatusFailed {
+			break
+		}
+		if job.Status == repository.JobStatusSucceeded {
+			t.Fatal("expected job to fail when simulation persist is injected")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	run, err := simsRepo.GetByID(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.SuccessCount != 0 || run.FailureCount != 0 {
+		t.Fatalf("expected zero counts after failed persist, got success=%d failure=%d", run.SuccessCount, run.FailureCount)
+	}
+
+	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/simulations/" + runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnv := decodeEnvelope(t, mustRead(t, resp))
+	runView := runEnv["data"].(map[string]any)
+	if int(runView["success_count"].(float64)) != 0 || int(runView["failure_count"].(float64)) != 0 {
+		t.Fatalf("API must not expose successful run counts: %+v", runView)
+	}
+
+	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/jobs/" + jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobEnv := decodeEnvelope(t, mustRead(t, resp))
+	if jobEnv["data"].(map[string]any)["status"].(string) != "failed" {
+		t.Fatalf("expected failed job status, got %+v", jobEnv["data"])
+	}
+}
+
+type persistFailingRunner struct {
+	db   *sql.DB
+	sims *repository.SimulationRepo
+}
+
+func (r persistFailingRunner) RunSimulation(ctx context.Context, jobID, runID string, snap *simulation.InputSnapshot, cancelCheck func() bool, progress func(done, total int, phase string)) error {
+	result := simulation.Run(snap, simulation.RunOptions{
+		Runs: snap.Parameters.SimulationRuns, Progress: progress, CancelCheck: cancelCheck,
+	})
+	summaryJSON, err := json.Marshal(result.Summary)
+	if err != nil {
+		return err
+	}
+	return fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
+		if err := r.sims.Complete(ctx, tx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
+			return err
+		}
+		return fmt.Errorf("injected persist failure")
+	})
 }
 
 func TestInputSnapshotHashStable(t *testing.T) {

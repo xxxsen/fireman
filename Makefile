@@ -4,7 +4,7 @@
 BIN ?= fireman
 BACKEND_IMAGE ?= fireman
 WEB_IMAGE ?= fireman-web
-MARKET_PROVIDER_IMAGE ?= fireman-market-provider
+WEB_API_PROXY_TARGET ?= http://backend:8080
 
 GO ?= go
 NPM ?= npm
@@ -99,7 +99,7 @@ build-backend-image: ## Build $(BACKEND_IMAGE) image.
 	$(DOCKER) build -t $(BACKEND_IMAGE) -f $(PROJECT_ROOT)/Dockerfile $(PROJECT_ROOT)
 
 build-web-image: ## Build $(WEB_IMAGE) image.
-	$(DOCKER) build -t $(WEB_IMAGE) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)
+	$(DOCKER) build -t $(WEB_IMAGE) --build-arg API_PROXY_TARGET=$(WEB_API_PROXY_TARGET) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)
 
 build-market-provider-image: ## Build $(MARKET_PROVIDER_IMAGE) image.
 	$(DOCKER) build -t $(MARKET_PROVIDER_IMAGE) -f $(PROVIDER_DIR)/Dockerfile $(PROVIDER_DIR)

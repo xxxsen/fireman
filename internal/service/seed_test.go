@@ -15,6 +15,15 @@ func TestSeedStringRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFormatSeedInt64PanicsOnNegative(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for negative seed")
+		}
+	}()
+	FormatSeedInt64(-1)
+}
+
 func TestSeedStringRejectsInvalid(t *testing.T) {
 	cases := []string{"-1", "1.5", "1e10", "9223372036854775808", "abc", " 1"}
 	for _, c := range cases {

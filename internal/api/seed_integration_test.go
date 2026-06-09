@@ -96,6 +96,26 @@ func TestMaxSeedRoundTripIntegration(t *testing.T) {
 	if pathSeed == "" {
 		t.Fatal("expected non-empty path_seed")
 	}
+	if pathSeed == "0" {
+		t.Fatal("path_seed must not be silent zero fallback")
+	}
+
+	pathsResp, err := client.Get(srv.URL + "/api/v1/simulations/" + runID + "/paths")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathsEnv := decodeEnvelope(t, readBody(t, pathsResp))
+	paths := pathsEnv["data"].(map[string]any)["paths"].([]any)
+	if len(paths) == 0 {
+		t.Fatal("expected path index rows")
+	}
+	indexSeed := paths[0].(map[string]any)["path_seed"].(string)
+	if indexSeed != pathSeed {
+		t.Fatalf("path seed mismatch index=%q detail=%q", indexSeed, pathSeed)
+	}
+	if indexSeed[0] == '-' {
+		t.Fatalf("path seed must be non-negative, got %q", indexSeed)
+	}
 }
 
 func TestInvalidSeedRejectedIntegration(t *testing.T) {

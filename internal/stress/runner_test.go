@@ -13,6 +13,43 @@ func TestBuiltinScenarioCount(t *testing.T) {
 	}
 }
 
+func TestStressDeterministicWithFixedSeed(t *testing.T) {
+	in := testStressInput()
+	in.Parameters.SimulationRuns = 200
+	in.Parameters.Seed = "12345"
+
+	r1 := Run(in, RunOptions{Runs: 200})
+	r2 := Run(in, RunOptions{Runs: 200})
+
+	if r1.BaselineSuccessProbability != r2.BaselineSuccessProbability {
+		t.Fatalf("baseline mismatch: %f vs %f", r1.BaselineSuccessProbability, r2.BaselineSuccessProbability)
+	}
+	if len(r1.Scenarios) != len(r2.Scenarios) {
+		t.Fatalf("scenario count mismatch: %d vs %d", len(r1.Scenarios), len(r2.Scenarios))
+	}
+	for i := range r1.Scenarios {
+		s1, s2 := r1.Scenarios[i], r2.Scenarios[i]
+		if s1.ScenarioID != s2.ScenarioID {
+			t.Fatalf("scenario id mismatch at %d", i)
+		}
+		if s1.SuccessProbability != s2.SuccessProbability {
+			t.Fatalf("%s success probability mismatch: %f vs %f", s1.ScenarioID, s1.SuccessProbability, s2.SuccessProbability)
+		}
+		if s1.TerminalP50Minor != s2.TerminalP50Minor {
+			t.Fatalf("%s terminal P50 mismatch: %d vs %d", s1.ScenarioID, s1.TerminalP50Minor, s2.TerminalP50Minor)
+		}
+		if s1.RecoveryNotWithinPlan != s2.RecoveryNotWithinPlan {
+			t.Fatalf("%s recovery within-plan mismatch", s1.ScenarioID)
+		}
+		if (s1.RecoveryMonthP50 == nil) != (s2.RecoveryMonthP50 == nil) {
+			t.Fatalf("%s recovery P50 nil mismatch", s1.ScenarioID)
+		}
+		if s1.RecoveryMonthP50 != nil && s2.RecoveryMonthP50 != nil && *s1.RecoveryMonthP50 != *s2.RecoveryMonthP50 {
+			t.Fatalf("%s recovery P50 mismatch: %d vs %d", s1.ScenarioID, *s1.RecoveryMonthP50, *s2.RecoveryMonthP50)
+		}
+	}
+}
+
 func TestStressShockOnlyInWindow(t *testing.T) {
 	in := testStressInput()
 	in.Parameters.SimulationRuns = 20

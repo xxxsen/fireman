@@ -68,7 +68,7 @@ func defaultRegion(market, instrumentType string) string {
 // FeeTreatmentForType reports whether historical values already include holding fees.
 func FeeTreatmentForType(instrumentType string) string {
 	switch instrumentType {
-	case "cn_exchange_stock", "us_stock":
+	case "cn_exchange_stock", "us_stock", "hk_stock":
 		return "none"
 	default:
 		return "embedded"
@@ -78,7 +78,7 @@ func FeeTreatmentForType(instrumentType string) string {
 // DefaultAdjustPolicy picks adjust policy for import.
 func DefaultAdjustPolicy(instrumentType string) string {
 	switch instrumentType {
-	case "cn_exchange_stock", "cn_exchange_fund", "us_stock", "us_etf":
+	case "cn_exchange_stock", "cn_exchange_fund", "us_stock", "us_etf", "hk_stock", "hk_etf":
 		return "qfq"
 	default:
 		return "none"

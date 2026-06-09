@@ -1,7 +1,18 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
+
+const useJobStatusMock = vi.hoisted(() => vi.fn());
+const createSimulation = vi.hoisted(() => vi.fn());
+const createStressTest = vi.hoisted(() => vi.fn());
+const createSensitivityTest = vi.hoisted(() => vi.fn());
+
+let jobStatusCallbacks: {
+  onComplete?: () => void;
+  onFailed?: (message: string) => void;
+  onCanceled?: () => void;
+} = {};
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "plan_1" }),
@@ -54,25 +65,44 @@ vi.mock("@/lib/api/simulations", () => ({
   listPaths: () =>
     Promise.resolve({
       paths: [
-        { path_no: 1, path_seed: "1", representative_percentile: "p00", terminal_wealth_minor: 0, succeeded: false, max_drawdown: 0.5, run_id: "run_1" },
-        { path_no: 2, path_seed: "2", representative_percentile: "p50", terminal_wealth_minor: 0, succeeded: false, max_drawdown: 0.4, run_id: "run_1" },
+        {
+          path_no: 1,
+          path_seed: "1",
+          representative_percentile: "p00",
+          terminal_wealth_minor: 0,
+          succeeded: false,
+          max_drawdown: 0.5,
+          run_id: "run_1",
+        },
+        {
+          path_no: 2,
+          path_seed: "2",
+          representative_percentile: "p50",
+          terminal_wealth_minor: 0,
+          succeeded: false,
+          max_drawdown: 0.4,
+          run_id: "run_1",
+        },
       ],
     }),
-  createSimulation: vi.fn(),
+  createSimulation,
   cancelJob: vi.fn(),
 }));
 
 vi.mock("@/lib/api/analysis", () => ({
   listStressTests: () => Promise.resolve({ stress_tests: [] }),
   listSensitivityTests: () => Promise.resolve({ sensitivity_tests: [] }),
-  createStressTest: vi.fn(),
-  createSensitivityTest: vi.fn(),
+  createStressTest,
+  createSensitivityTest,
   getStressTest: vi.fn(),
   getSensitivityTest: vi.fn(),
 }));
 
 vi.mock("@/hooks/useJobStatus", () => ({
-  useJobStatus: () => ({ job: null, progress: 0, error: null }),
+  useJobStatus: (jobId: string | null, options?: typeof jobStatusCallbacks) => {
+    jobStatusCallbacks = options ?? {};
+    return useJobStatusMock(jobId, options);
+  },
 }));
 
 vi.mock("@/components/charts/WealthPathChart", () => ({
@@ -81,27 +111,91 @@ vi.mock("@/components/charts/WealthPathChart", () => ({
 
 import AnalysisPage from "./page";
 
+function renderAnalysis() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <AnalysisPage />
+    </QueryClientProvider>,
+  );
+}
+
 describe("AnalysisPage zero success", () => {
+  beforeEach(() => {
+    useJobStatusMock.mockReset();
+    createSimulation.mockReset();
+    createStressTest.mockReset();
+    createSensitivityTest.mockReset();
+    useJobStatusMock.mockImplementation((jobId) => {
+      if (!jobId) {
+        return { job: null, progress: 0, error: null };
+      }
+      return {
+        job: { status: "running", progress_current: 40, progress_total: 100 },
+        progress: 0.4,
+        error: null,
+      };
+    });
+    createSimulation.mockResolvedValue({ job_id: "job_sim_busy", run_id: "run_busy", status: "queued" });
+    createStressTest.mockResolvedValue({ job_id: "job_stress", status: "queued" });
+    createSensitivityTest.mockResolvedValue({ job_id: "job_sens", status: "queued" });
+  });
+
   it("shows 0% success and representative paths", async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <AnalysisPage />
-      </QueryClientProvider>,
-    );
+    renderAnalysis();
     expect(await screen.findByText(/成功率 0%/)).toBeInTheDocument();
     expect(await screen.findByText(/P00/)).toBeInTheDocument();
     expect(screen.getByTestId("wealth-chart")).toBeInTheDocument();
   });
 
   it("initializes simulation runs from plan parameters", async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <AnalysisPage />
-      </QueryClientProvider>,
-    );
+    renderAnalysis();
     const input = await screen.findByLabelText("模拟次数");
     await waitFor(() => expect(input).toHaveValue(20000));
+  });
+
+  it("disables stress and sensitivity while simulation job is busy", async () => {
+    renderAnalysis();
+    fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalled());
+
+    expect(screen.getByRole("button", { name: "运行压力测试" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "运行敏感性测试" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "运行模拟" })).toBeDisabled();
+  });
+
+  it("clears active job and keeps error after failed terminal state", async () => {
+    useJobStatusMock.mockImplementation((jobId, options) => {
+      jobStatusCallbacks = options ?? {};
+      if (jobId === "job_sim_busy") {
+        return { job: { status: "failed" }, progress: 0, error: "模拟引擎错误" };
+      }
+      return { job: null, progress: 0, error: null };
+    });
+
+    renderAnalysis();
+    fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalled());
+
+    await act(async () => {
+      jobStatusCallbacks.onFailed?.("模拟引擎错误");
+    });
+
+    expect(screen.getByText("模拟引擎错误")).toBeInTheDocument();
+    expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行压力测试" })).not.toBeDisabled();
+  });
+
+  it("clears active job after canceled terminal state", async () => {
+    renderAnalysis();
+    fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalled());
+
+    await act(async () => {
+      jobStatusCallbacks.onCanceled?.();
+    });
+
+    expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
   });
 });

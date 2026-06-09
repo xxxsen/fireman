@@ -52,10 +52,10 @@ func FormatSeedString(v *int64) *string {
 // FormatSeedInt64 formats a seed value for API JSON.
 func FormatSeedInt64(v int64) string {
 	if v < 0 {
-		return "0"
+		panic(fmt.Sprintf("internal error: negative path seed %d", v))
 	}
 	if v > maxSeedInt64 {
-		return strconv.FormatInt(maxSeedInt64, 10)
+		panic(fmt.Sprintf("internal error: path seed %d exceeds int64 maximum", v))
 	}
 	return strconv.FormatInt(v, 10)
 }

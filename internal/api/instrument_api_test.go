@@ -34,6 +34,46 @@ func mockProviderServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+func buildTwentyYearFixturePoints() []marketdata.HistoricalPoint {
+	var out []marketdata.HistoricalPoint
+	value := 100.0
+	for year := 2005; year <= 2024; year++ {
+		out = append(out, marketdata.HistoricalPoint{
+			Date: fmt.Sprintf("%d-12-31", year-1), Value: value,
+		})
+		for month := 1; month <= 12; month++ {
+			for day := 1; day <= 11; day++ {
+				value *= 1.0004
+				out = append(out, marketdata.HistoricalPoint{
+					Date: formatFixtureDate(year, month, day), Value: value,
+				})
+			}
+		}
+	}
+	return out
+}
+
+func mockHKProviderServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/instruments/fetch" {
+			http.NotFound(w, r)
+			return
+		}
+		resp := marketdata.FetchResponse{
+			Code: 0, Message: "success",
+			Data: marketdata.FetchData{
+				Provider: "akshare", ProviderSymbol: "00700", Name: "腾讯控股",
+				AssetClass: "equity", Currency: "HKD", PointType: "adjusted_close",
+				ExpenseRatioStatus: "unavailable",
+				Points:             buildTwentyYearFixturePoints(),
+				SourceName:         "test_hk_fixture", SourceQuality: "full",
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+}
+
 func buildFixturePoints() []marketdata.HistoricalPoint {
 	var out []marketdata.HistoricalPoint
 	value := 100.0

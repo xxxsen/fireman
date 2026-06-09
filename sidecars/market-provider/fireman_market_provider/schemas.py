@@ -11,6 +11,8 @@ InstrumentType = Literal[
     "cn_exchange_stock",
     "cn_exchange_fund",
     "cn_mutual_fund",
+    "hk_stock",
+    "hk_etf",
     "us_stock",
     "us_etf",
     "fx_rate",

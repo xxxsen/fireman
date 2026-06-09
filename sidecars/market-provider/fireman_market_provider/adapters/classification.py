@@ -32,7 +32,7 @@ UNSUPPORTED_KEYWORDS = (
 
 
 def default_region(market: str, instrument_type: str) -> str:
-    if market == "US":
+    if market in ("US", "HK"):
         return "foreign"
     if instrument_type == "fx_rate":
         return "domestic"

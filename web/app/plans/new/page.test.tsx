@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
@@ -10,6 +10,12 @@ vi.mock("next/navigation", () => ({
 
 const createPlanWizard = vi.fn();
 const createSimulation = vi.fn();
+
+let wizardJobCallbacks: {
+  onComplete?: () => void;
+  onFailed?: (message: string) => void;
+  onCanceled?: () => void;
+} = {};
 
 vi.mock("@/lib/api/plans", () => ({
   createPlanWizard: (...args: unknown[]) => createPlanWizard(...args),
@@ -22,7 +28,13 @@ vi.mock("@/lib/api/simulations", () => ({
   createSimulation: (...args: unknown[]) => createSimulation(...args),
 }));
 vi.mock("@/hooks/useJobStatus", () => ({
-  useJobStatus: () => ({ job: null, progress: 0, error: null }),
+  useJobStatus: (jobId: string | null, options?: typeof wizardJobCallbacks) => {
+    wizardJobCallbacks = options ?? {};
+    if (!jobId) {
+      return { job: null, progress: 0, error: null };
+    }
+    return { job: { status: "running", progress_current: 10, progress_total: 100 }, progress: 0.1, error: null };
+  },
 }));
 
 vi.mock("@/lib/api/allocation", () => ({
@@ -107,5 +119,36 @@ describe("NewPlanWizardPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建并启动模拟" }));
     await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
     expect(createSimulation).toHaveBeenCalledWith("plan_new", { runs: 10000 });
+  });
+
+  it("retries simulation without recreating plan after first failure", async () => {
+    renderWizard();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByRole("option", { name: /测试场景/ })).toBeInTheDocument());
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "scn_a" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByText(/测试基金/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.change(screen.getByTestId("percent-input"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByText(/10,000/)).toBeInTheDocument());
+    const gapBoxes = screen.getAllByRole("checkbox");
+    fireEvent.click(gapBoxes[gapBoxes.length - 1]!);
+    fireEvent.click(screen.getByRole("button", { name: "创建并启动模拟" }));
+
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      wizardJobCallbacks.onFailed?.("首次模拟失败");
+    });
+
+    expect(await screen.findByText("首次模拟失败")).toBeInTheDocument();
+    createSimulation.mockResolvedValue({ job_id: "job_retry", run_id: "run_retry", status: "queued" });
+    fireEvent.click(screen.getByRole("button", { name: "重新启动模拟" }));
+
+    await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(2));
+    expect(createPlanWizard).toHaveBeenCalledTimes(1);
+    expect(createSimulation).toHaveBeenLastCalledWith("plan_new", { runs: 10000 });
   });
 });
