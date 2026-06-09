@@ -1,0 +1,8 @@
+{
+  "addr": ":8080",
+  "db_path": "/data/fireman.db",
+  "market_provider_url": "http://market-provider:18081",
+  "timezone": "Asia/Shanghai",
+  "log_level": "info",
+  "worker_concurrency": 1
+}

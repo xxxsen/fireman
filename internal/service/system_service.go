@@ -1,0 +1,192 @@
+package service
+
+import (
+	"context"
+	"database/sql"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	fdb "github.com/fireman/fireman/internal/db"
+)
+
+// SystemService handles database backup, restore, and plan exports.
+type SystemService struct {
+	sql         *sql.DB
+	dbPath      string
+	plans       *PlanService
+	targets     *TargetService
+	rebalance   *RebalanceService
+	maintenance *MaintenanceGate
+}
+
+func NewSystemService(
+	sqlDB *sql.DB,
+	dbPath string,
+	plans *PlanService,
+	targets *TargetService,
+	rebalance *RebalanceService,
+	maintenance *MaintenanceGate,
+) *SystemService {
+	return &SystemService{
+		sql: sqlDB, dbPath: dbPath, plans: plans, targets: targets, rebalance: rebalance,
+		maintenance: maintenance,
+	}
+}
+
+func (s *SystemService) DownloadBackup(ctx context.Context) ([]byte, string, error) {
+	data, err := fdb.ReadDatabaseFile(ctx, s.sql, s.dbPath)
+	if err != nil {
+		return nil, "", err
+	}
+	base := filepath.Base(s.dbPath)
+	name := fmt.Sprintf("%s.%s.bak", strings.TrimSuffix(base, filepath.Ext(base)), time.Now().UTC().Format("20060102T150405Z"))
+	return data, name, nil
+}
+
+// RestoreBackup validates an uploaded database, backs up the current file, and atomically replaces it.
+// The caller should restart the backend process so connections reopen the restored database.
+func (s *SystemService) RestoreBackup(ctx context.Context, data []byte) error {
+	if s.maintenance != nil {
+		s.maintenance.Enter()
+		defer s.maintenance.Leave()
+	}
+	if len(data) == 0 {
+		return newErr("invalid_backup", "backup file is empty", nil)
+	}
+	if len(data) > 100<<20 {
+		return newErr("invalid_backup", "backup file exceeds 100MB limit", nil)
+	}
+
+	dir := filepath.Dir(s.dbPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tempPath := filepath.Join(dir, ".restore-"+fmt.Sprintf("%d", time.Now().UnixNano())+".db")
+	if err := os.WriteFile(tempPath, data, 0o600); err != nil {
+		return err
+	}
+	defer os.Remove(tempPath)
+
+	if err := fdb.ValidateDatabaseFile(tempPath); err != nil {
+		return newErr("invalid_backup", "backup failed integrity or schema validation", map[string]any{"reason": err.Error()})
+	}
+
+	if err := fdb.CheckpointWAL(ctx, s.sql); err != nil {
+		return err
+	}
+	if info, err := os.Stat(s.dbPath); err == nil && info.Size() > 0 {
+		ts := time.Now().UTC().Format("20060102T150405Z")
+		preRestore := filepath.Join(dir, filepath.Base(s.dbPath)+"."+ts+".pre-restore.bak")
+		if err := copyFile(s.dbPath, preRestore); err != nil {
+			return err
+		}
+	}
+
+	newPath := s.dbPath + ".new"
+	if err := os.WriteFile(newPath, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(newPath, s.dbPath); err != nil {
+		return err
+	}
+	_ = os.Remove(s.dbPath + "-wal")
+	_ = os.Remove(s.dbPath + "-shm")
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, in, 0o600)
+}
+
+// ExportPlanJSON returns a portable plan snapshot.
+func (s *SystemService) ExportPlanJSON(ctx context.Context, planID string) (map[string]any, error) {
+	plan, err := s.plans.Get(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	params, flows, err := s.plans.GetParameters(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	targets, err := s.targets.GetTargets(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	reb, err := s.rebalance.GetRebalance(ctx, planID, "full", 0)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"plan":        plan,
+		"parameters":  params,
+		"cash_flows":  flows,
+		"targets":     targets,
+		"rebalance":   reb,
+	}, nil
+}
+
+func (s *SystemService) ExportTargetsCSV(ctx context.Context, planID string) ([]byte, error) {
+	targets, err := s.targets.GetTargets(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	var buf strings.Builder
+	w := csv.NewWriter(&buf)
+	_ = w.Write([]string{"instrument_id", "asset_class", "region", "weight_within_group", "portfolio_target_weight", "target_amount_minor", "current_amount_minor"})
+	for _, h := range targets.Holdings {
+		if !h.Enabled {
+			continue
+		}
+		_ = w.Write([]string{
+			h.InstrumentID,
+			h.AssetClass,
+			h.Region,
+			fmt.Sprintf("%.6f", h.WeightWithinGroup),
+			fmt.Sprintf("%.6f", h.PortfolioTargetWeight),
+			fmt.Sprintf("%d", h.TargetAmountMinor),
+			fmt.Sprintf("%d", h.CurrentAmountMinor),
+		})
+	}
+	w.Flush()
+	return []byte(buf.String()), w.Error()
+}
+
+func (s *SystemService) ExportRebalanceCSV(ctx context.Context, planID string) ([]byte, error) {
+	reb, err := s.rebalance.GetRebalance(ctx, planID, "full", 0)
+	if err != nil {
+		return nil, err
+	}
+	var buf strings.Builder
+	w := csv.NewWriter(&buf)
+	_ = w.Write([]string{"instrument_id", "action", "suggested_trade_minor", "deviation_weight", "portfolio_target_weight", "current_weight"})
+	for _, line := range reb.Lines {
+		if !line.Enabled {
+			continue
+		}
+		_ = w.Write([]string{
+			line.InstrumentID,
+			line.Action,
+			fmt.Sprintf("%d", line.SuggestedTradeMinor),
+			fmt.Sprintf("%.6f", line.DeviationWeight),
+			fmt.Sprintf("%.6f", line.PortfolioTargetWeight),
+			fmt.Sprintf("%.6f", line.CurrentWeight),
+		})
+	}
+	w.Flush()
+	return []byte(buf.String()), w.Error()
+}
+
+// MarshalPlanExport encodes export payload as JSON bytes.
+func MarshalPlanExport(v map[string]any) ([]byte, error) {
+	return json.MarshalIndent(v, "", "  ")
+}

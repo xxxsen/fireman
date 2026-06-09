@@ -1,0 +1,17 @@
+bin/
+.dev-data/
+*.db
+*.db-shm
+*.db-wal
+*.bak
+.DS_Store
+
+# Tooling caches
+.cache/
+.tmp/
+__debug*
+/.vscode
+
+# Local requirements, designs, reviews, and acceptance records.
+/td/
+/requirement/

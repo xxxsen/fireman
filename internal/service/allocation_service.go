@@ -1,0 +1,233 @@
+package service
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"github.com/google/uuid"
+
+	fdb "github.com/fireman/fireman/internal/db"
+	"github.com/fireman/fireman/internal/domain"
+	"github.com/fireman/fireman/internal/repository"
+)
+
+// AllocationUpdateRequest updates plan allocation with version check.
+type AllocationUpdateRequest struct {
+	ConfigVersion     int                           `json:"config_version"`
+	AssetClassTargets []repository.AssetClassTarget `json:"asset_class_targets"`
+	RegionTargets     []repository.RegionTarget     `json:"region_targets"`
+}
+
+// ApplyScenarioRequest applies a scenario to a plan (preview or commit).
+type ApplyScenarioRequest struct {
+	ScenarioID    string `json:"scenario_id"`
+	ConfigVersion int    `json:"config_version"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+// ApplyScenarioResult shows before/after asset class weights.
+type ApplyScenarioResult struct {
+	ScenarioID    string                        `json:"scenario_id"`
+	Before        []repository.AssetClassTarget `json:"before"`
+	After         []repository.AssetClassTarget `json:"after"`
+	Applied       bool                          `json:"applied"`
+	ConfigVersion int                           `json:"config_version,omitempty"`
+}
+
+// ScenarioCreateRequest creates a custom scenario.
+type ScenarioCreateRequest struct {
+	Name        string                        `json:"name"`
+	Description string                        `json:"description"`
+	Weights     []repository.AssetClassTarget `json:"weights"`
+	CopyFromID  *string                       `json:"copy_from_id,omitempty"`
+}
+
+// AllocationService manages allocation and scenarios.
+type AllocationService struct {
+	sql      *sql.DB
+	plans    *repository.PlanRepo
+	alloc    *repository.AllocationRepo
+	scenario *repository.ScenarioRepo
+}
+
+func NewAllocationService(sqlDB *sql.DB, plans *repository.PlanRepo, alloc *repository.AllocationRepo, scenario *repository.ScenarioRepo) *AllocationService {
+	return &AllocationService{sql: sqlDB, plans: plans, alloc: alloc, scenario: scenario}
+}
+
+func (s *AllocationService) GetAllocation(ctx context.Context, planID string) (repository.PlanAllocation, error) {
+	if _, err := s.plans.GetByID(ctx, planID); err != nil {
+		if errors.Is(err, repository.ErrPlanNotFound) {
+			return repository.PlanAllocation{}, newErr("plan_not_found", "plan not found", nil)
+		}
+		return repository.PlanAllocation{}, err
+	}
+	return s.alloc.Get(ctx, planID)
+}
+
+func (s *AllocationService) UpdateAllocation(ctx context.Context, planID string, req AllocationUpdateRequest) (repository.PlanAllocation, error) {
+	plan, err := s.plans.GetByID(ctx, planID)
+	if err != nil {
+		if errors.Is(err, repository.ErrPlanNotFound) {
+			return repository.PlanAllocation{}, newErr("plan_not_found", "plan not found", nil)
+		}
+		return repository.PlanAllocation{}, err
+	}
+	if req.ConfigVersion != plan.ConfigVersion {
+		return repository.PlanAllocation{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+	}
+	alloc := repository.PlanAllocation{
+		AssetClassTargets: req.AssetClassTargets,
+		RegionTargets:     req.RegionTargets,
+	}
+	da := toDomainAllocation(alloc)
+	holdingsRepo := repository.NewHoldingsRepo(s.sql)
+	holds, _ := holdingsRepo.ListByPlan(ctx, planID)
+	check := domain.ValidateAllWeights(da, holdingsToDomain(holds))
+	if !check.Passed {
+		msg := "allocation weights invalid"
+		if len(check.Checks) > 0 && check.Checks[0].Message != "" {
+			msg = check.Checks[0].Message
+		}
+		return repository.PlanAllocation{}, newErr("plan_weights_invalid", msg, map[string]any{"checks": check.Checks})
+	}
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.alloc.Replace(ctx, tx, planID, alloc); err != nil {
+			return err
+		}
+		_, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrVersionConflict) {
+			return repository.PlanAllocation{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+		}
+		return repository.PlanAllocation{}, err
+	}
+	return s.alloc.Get(ctx, planID)
+}
+
+func (s *AllocationService) ListScenarios(ctx context.Context) ([]repository.AllocationScenario, error) {
+	return s.scenario.List(ctx)
+}
+
+func (s *AllocationService) CreateScenario(ctx context.Context, req ScenarioCreateRequest) (repository.AllocationScenario, error) {
+	weights := req.Weights
+	if req.CopyFromID != nil {
+		src, err := s.scenario.GetByID(ctx, *req.CopyFromID)
+		if err != nil {
+			if errors.Is(err, repository.ErrScenarioNotFound) {
+				return repository.AllocationScenario{}, newErr("scenario_not_found", "scenario not found", nil)
+			}
+			return repository.AllocationScenario{}, err
+		}
+		weights = src.Weights
+		if req.Name == "" {
+			req.Name = src.Name + " (副本)"
+		}
+		if req.Description == "" {
+			req.Description = src.Description
+		}
+	}
+	if req.Name == "" {
+		return repository.AllocationScenario{}, newErr("validation_failed", "name is required", nil)
+	}
+	if err := validateScenarioWeights(weights); err != nil {
+		return repository.AllocationScenario{}, newErr("scenario_weights_invalid", err.Error(), nil)
+	}
+	scn := repository.AllocationScenario{
+		ID: "scn_" + uuid.New().String(), Name: req.Name,
+		Description: req.Description, Weights: weights,
+	}
+	if err := s.scenario.Create(ctx, scn); err != nil {
+		return repository.AllocationScenario{}, err
+	}
+	return s.scenario.GetByID(ctx, scn.ID)
+}
+
+func (s *AllocationService) UpdateScenario(ctx context.Context, scenarioID string, req ScenarioCreateRequest) (repository.AllocationScenario, error) {
+	if err := validateScenarioWeights(req.Weights); err != nil {
+		return repository.AllocationScenario{}, newErr("scenario_weights_invalid", err.Error(), nil)
+	}
+	scn := repository.AllocationScenario{
+		ID: scenarioID, Name: req.Name, Description: req.Description, Weights: req.Weights,
+	}
+	if err := s.scenario.Update(ctx, scn); err != nil {
+		if errors.Is(err, repository.ErrScenarioNotFound) {
+			return repository.AllocationScenario{}, newErr("scenario_not_found", "scenario not found", nil)
+		}
+		return repository.AllocationScenario{}, err
+	}
+	return s.scenario.GetByID(ctx, scenarioID)
+}
+
+func (s *AllocationService) DeleteScenario(ctx context.Context, scenarioID string) error {
+	if err := s.scenario.Delete(ctx, scenarioID); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrScenarioNotFound):
+			return newErr("scenario_not_found", "scenario not found", nil)
+		case errors.Is(err, repository.ErrBuiltinScenario):
+			return newErr("builtin_scenario_immutable", "builtin scenarios cannot be deleted", nil)
+		case errors.Is(err, repository.ErrScenarioInUse):
+			return newErr("scenario_in_use", "scenario is referenced by plans", nil)
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *AllocationService) ApplyScenario(ctx context.Context, planID string, req ApplyScenarioRequest) (ApplyScenarioResult, error) {
+	plan, err := s.plans.GetByID(ctx, planID)
+	if err != nil {
+		if errors.Is(err, repository.ErrPlanNotFound) {
+			return ApplyScenarioResult{}, newErr("plan_not_found", "plan not found", nil)
+		}
+		return ApplyScenarioResult{}, err
+	}
+	if !req.DryRun && req.ConfigVersion != plan.ConfigVersion {
+		return ApplyScenarioResult{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+	}
+	scn, err := s.scenario.GetByID(ctx, req.ScenarioID)
+	if err != nil {
+		if errors.Is(err, repository.ErrScenarioNotFound) {
+			return ApplyScenarioResult{}, newErr("scenario_not_found", "scenario not found", nil)
+		}
+		return ApplyScenarioResult{}, err
+	}
+	current, err := s.alloc.Get(ctx, planID)
+	if err != nil {
+		return ApplyScenarioResult{}, err
+	}
+	result := ApplyScenarioResult{
+		ScenarioID: req.ScenarioID,
+		Before:     current.AssetClassTargets,
+		After:      scn.Weights,
+		Applied:    false,
+	}
+	if req.DryRun {
+		return result, nil
+	}
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		newAlloc := repository.PlanAllocation{
+			AssetClassTargets: scn.Weights,
+			RegionTargets:     current.RegionTargets,
+		}
+		if err := s.alloc.Replace(ctx, tx, planID, newAlloc); err != nil {
+			return err
+		}
+		newVer, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion)
+		if err != nil {
+			return err
+		}
+		result.ConfigVersion = newVer
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrVersionConflict) {
+			return ApplyScenarioResult{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+		}
+		return ApplyScenarioResult{}, err
+	}
+	result.Applied = true
+	return result, nil
+}
