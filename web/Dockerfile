@@ -11,7 +11,9 @@ RUN npm ci --ignore-scripts
 FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
+ARG API_PROXY_TARGET=http://localhost:8080
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    API_PROXY_TARGET=${API_PROXY_TARGET}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

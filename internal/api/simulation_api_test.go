@@ -99,7 +99,7 @@ func TestSimulationJobFlow(t *testing.T) {
 	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
 	defer srv.Close()
 
-	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": 99})
+	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "99"})
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/simulations", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "test-key-1")

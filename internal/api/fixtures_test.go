@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 )
@@ -35,6 +36,11 @@ func createTestPlan(t *testing.T, db *sql.DB) service.PlanDetail {
 			repository.NewParametersRepo(db),
 			repository.NewAllocationRepo(db),
 			repository.NewHoldingsRepo(db),
+		),
+		marketdata.NewSnapshotService(
+			repository.NewSnapshotRepo(db),
+			repository.NewInstrumentRepo(db),
+			repository.NewMarketDataRepo(db),
 		),
 	)
 	scn := "scn_builtin_near_fire"

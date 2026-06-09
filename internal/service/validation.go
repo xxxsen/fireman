@@ -32,6 +32,16 @@ func validateParameters(p repository.PlanParameters) error {
 	if p.AnnualSavingsGrowthRate < -0.5 || p.AnnualSavingsGrowthRate > 0.5 {
 		return fmt.Errorf("annual_savings_growth_rate must be in [-0.5, 0.5]")
 	}
+	switch p.WithdrawalType {
+	case "fixed_real", "fixed_portfolio", "guardrail":
+	default:
+		return fmt.Errorf("withdrawal_type must be fixed_real, fixed_portfolio, or guardrail")
+	}
+	switch p.InflationMode {
+	case "fixed_real", "random_ar1":
+	default:
+		return fmt.Errorf("inflation_mode must be fixed_real or random_ar1")
+	}
 	return nil
 }
 

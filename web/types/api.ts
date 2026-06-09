@@ -51,7 +51,7 @@ export interface PlanParameters {
   transaction_cost_rate: number;
   simulation_runs: number;
   student_t_df: number;
-  seed?: number | null;
+  seed?: string | null;
   updated_at: number;
 }
 
@@ -189,6 +189,8 @@ export interface Instrument {
   status: string;
   quality_status?: string;
   data_as_of?: string;
+  data_source_name?: string;
+  point_type?: string;
   data_stale: boolean;
   stale_warning?: string;
   created_at: number;
@@ -278,7 +280,7 @@ export interface QuantilePoint {
 export interface PathIndexRow {
   run_id: string;
   path_no: number;
-  path_seed: number;
+  path_seed: string;
   succeeded: boolean;
   failure_month?: number | null;
   terminal_wealth_minor: number;

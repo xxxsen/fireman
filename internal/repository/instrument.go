@@ -28,6 +28,8 @@ type InstrumentRecord struct {
 	Status             string   `json:"status"`
 	QualityStatus      string   `json:"quality_status,omitempty"`
 	DataAsOf           string   `json:"data_as_of,omitempty"`
+	DataSourceName     string   `json:"data_source_name,omitempty"`
+	PointType          string   `json:"point_type,omitempty"`
 	DataStale          bool     `json:"data_stale"`
 	StaleWarning       string   `json:"stale_warning,omitempty"`
 	CreatedAt          int64    `json:"created_at"`
@@ -107,6 +109,12 @@ func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst Instrument
 
 func (r *InstrumentRepo) TouchUpdated(ctx context.Context, tx *sql.Tx, id string) error {
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
+	return err
+}
+
+func (r *InstrumentRepo) UpdateNameTx(ctx context.Context, tx *sql.Tx, id, name string) error {
+	now := time.Now().UnixMilli()
+	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET name=?, updated_at=? WHERE id=?`, name, now, id)
 	return err
 }
 

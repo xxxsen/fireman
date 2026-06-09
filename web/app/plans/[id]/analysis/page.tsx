@@ -3,11 +3,17 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { StaleBanner } from "@/components/ui/StaleBanner";
 import { WealthPathChart } from "@/components/charts/WealthPathChart";
+import {
+  ParameterCurvesChart,
+  SensitivityHeatmap,
+  TornadoChart,
+} from "@/components/charts/SensitivityCharts";
 import { useJobStatus } from "@/hooks/useJobStatus";
+import { getParameters } from "@/lib/api/plans";
 import {
   createSensitivityTest,
   createStressTest,
@@ -19,6 +25,7 @@ import {
 import {
   cancelJob,
   createSimulation,
+  getJob,
   listPaths,
   listSimulations,
 } from "@/lib/api/simulations";
@@ -52,6 +59,8 @@ function AnalysisJobPanel({
   const tornado = (report?.tornado as Array<Record<string, unknown>> | undefined) ?? [];
   const heatmap = (report?.heatmap as Array<Array<Record<string, unknown>>> | undefined) ?? [];
   const curves = (report?.curves as Array<Record<string, unknown>> | undefined) ?? [];
+
+  const worstId = report?.worst_scenario_id as string | undefined;
 
   return (
     <section className="rounded-lg border p-4">
@@ -93,7 +102,96 @@ function AnalysisJobPanel({
               </span>
             </p>
           )}
-          {scenarios.length > 0 && (
+          {termKey === "stress_test" && scenarios.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-xs">
+                <thead>
+                  <tr className="text-slate-500">
+                    <th className="pr-3 py-1">场景</th>
+                    <th className="pr-3 py-1">成功率</th>
+                    <th className="pr-3 py-1">相对基准</th>
+                    <th className="pr-3 py-1">终值 P25/P50/P95</th>
+                    <th className="pr-3 py-1">P95 回撤</th>
+                    <th className="pr-3 py-1">失败年份 P50</th>
+                    <th className="pr-3 py-1">恢复期 P50</th>
+                    <th className="pr-3 py-1">说明</th>
+                    <th className="pr-3 py-1">风险提示</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scenarios.map((s) => {
+                    const isWorst = String(s.scenario_id) === worstId;
+                    return (
+                      <tr
+                        key={String(s.scenario_id)}
+                        className={`border-t ${isWorst ? "bg-red-50" : ""}`}
+                      >
+                        <td className="py-1 pr-3 font-medium">
+                          {String(s.scenario_name ?? s.scenario_id)}
+                          {isWorst && <span className="ml-1 text-red-600">（最差）</span>}
+                        </td>
+                        <td className="py-1 pr-3">{formatPercent((s.success_probability as number) ?? 0)}</td>
+                        <td className="py-1 pr-3">{formatPercent((s.baseline_delta as number) ?? 0)}</td>
+                        <td className="py-1 pr-3">
+                          {formatMoney((s.terminal_p25_minor as number) ?? 0)} /{" "}
+                          {formatMoney((s.terminal_p50_minor as number) ?? 0)} /{" "}
+                          {formatMoney((s.terminal_p95_minor as number) ?? 0)}
+                        </td>
+                        <td className="py-1 pr-3">{formatPercent((s.max_drawdown_p95 as number) ?? 0)}</td>
+                        <td className="py-1 pr-3">
+                          {s.failure_year_p50 ? String(s.failure_year_p50) : "—"}
+                        </td>
+                        <td className="py-1 pr-3">
+                          {s.recovery_not_within_plan
+                            ? "规划期内未恢复"
+                            : s.recovery_month_p50 != null
+                              ? `${String(s.recovery_month_p50)} 月`
+                              : "—"}
+                        </td>
+                        <td className="py-1 pr-3 max-w-xs">{String(s.description ?? "")}</td>
+                        <td className="py-1 pr-3 max-w-xs text-amber-800">{String(s.risk_hint ?? "")}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {termKey === "sensitivity_test" && tornado.length > 0 && (
+            <TornadoChart
+              items={tornado.map((t) => ({
+                parameter_name: String(t.parameter_name),
+                low_success: (t.low_success as number) ?? 0,
+                high_success: (t.high_success as number) ?? 0,
+              }))}
+            />
+          )}
+          {termKey === "sensitivity_test" && curves.length > 0 && (
+            <ParameterCurvesChart
+              curves={curves.map((c) => ({
+                parameter_name: String(c.parameter_name),
+                points: ((c.points as Array<Record<string, unknown>>) ?? []).map((p) => ({
+                  label: String(p.label ?? ""),
+                  success_probability: (p.success_probability as number) ?? 0,
+                })),
+              }))}
+            />
+          )}
+          {termKey === "sensitivity_test" && heatmap.length > 0 && (
+            <SensitivityHeatmap
+              heatmap={heatmap.map((row) =>
+                row.map((cell) => ({
+                  spending_label: String(cell.spending_label ?? ""),
+                  return_label: String(cell.return_label ?? ""),
+                  success_probability: (cell.success_probability as number) ?? 0,
+                })),
+              )}
+            />
+          )}
+          {termKey === "stress_test" && scenarios.length === 0 && (
+            <div />
+          )}
+          {termKey !== "stress_test" && scenarios.length > 0 && (
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-xs">
                 <thead>
@@ -119,7 +217,7 @@ function AnalysisJobPanel({
               </table>
             </div>
           )}
-          {tornado.length > 0 && (
+          {termKey !== "sensitivity_test" && tornado.length > 0 && (
             <ul className="space-y-1">
               {tornado.slice(0, 5).map((t) => (
                 <li key={String(t.parameter_id)}>
@@ -129,7 +227,7 @@ function AnalysisJobPanel({
               ))}
             </ul>
           )}
-          {termKey === "sensitivity_test" && heatmap.length > 0 && (
+          {termKey !== "sensitivity_test" && heatmap.length > 0 && (
             <div className="overflow-x-auto">
               <p className="mb-1 text-xs text-slate-500">支出 × 收益敏感性热力图（成功率）</p>
               <table className="min-w-full text-xs">
@@ -151,7 +249,7 @@ function AnalysisJobPanel({
               </table>
             </div>
           )}
-          {termKey === "sensitivity_test" && curves.length > 0 && (
+          {termKey !== "sensitivity_test" && curves.length > 0 && (
             <ul className="space-y-1 text-xs text-slate-600">
               {curves.slice(0, 3).map((c) => (
                 <li key={String(c.parameter_id)}>
@@ -183,8 +281,18 @@ export default function AnalysisPage() {
   const [activeJobKind, setActiveJobKind] = useState<"sim" | "stress" | "sensitivity" | null>(
     null,
   );
-  const [runs, setRuns] = useState(1000);
+  const [runs, setRuns] = useState(10000);
   const [jobError, setJobError] = useState<string | null>(null);
+
+  const paramsQ = useQuery({
+    queryKey: ["parameters", planId],
+    queryFn: () => getParameters(planId),
+  });
+
+  useEffect(() => {
+    const sr = paramsQ.data?.parameters.simulation_runs;
+    if (sr && sr >= 1000) setRuns(sr);
+  }, [paramsQ.data?.parameters.simulation_runs]);
 
   const simsQ = useQuery({
     queryKey: ["simulations", planId],
@@ -203,10 +311,21 @@ export default function AnalysisPage() {
   const latestStress = stressQ.data?.stress_tests[0];
   const latestSens = sensQ.data?.sensitivity_tests[0];
 
+  const simJobQ = useQuery({
+    queryKey: ["job", latest?.job_id],
+    queryFn: () => getJob(latest!.job_id),
+    enabled: !!latest?.job_id,
+  });
+
+  const simCompleted =
+    !!latest &&
+    !!latest.summary_json &&
+    simJobQ.data?.status === "succeeded";
+
   const pathsQ = useQuery({
     queryKey: ["paths", latest?.id],
     queryFn: () => listPaths(latest!.id),
-    enabled: !!latest?.id && latest.success_count > 0,
+    enabled: !!latest?.id && simCompleted,
   });
 
   const invalidateAll = () => {
@@ -332,7 +451,7 @@ export default function AnalysisPage() {
 
       {latest?.result_stale && <StaleBanner />}
 
-      {latest && latest.success_count > 0 && (
+      {latest && simCompleted && (
         <section className="rounded-lg border p-4">
           <h2 className="flex items-center font-medium">
             最新结果
@@ -342,6 +461,16 @@ export default function AnalysisPage() {
             <p className="mt-2 text-2xl font-semibold">
               成功率 {formatPercent(latest.summary_json.success_probability)}
             </p>
+          )}
+          {latest.summary_json?.terminal_quantiles && (
+            <dl className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+              {Object.entries(latest.summary_json.terminal_quantiles).map(([k, v]) => (
+                <div key={k}>
+                  <dt className="text-slate-500">{k.toUpperCase()}</dt>
+                  <dd>{formatMoney(v)}</dd>
+                </div>
+              ))}
+            </dl>
           )}
           {latest.summary_json?.monthly_wealth_quantiles && (
             <div className="mt-4">

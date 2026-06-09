@@ -22,10 +22,11 @@ import (
 
 // CreateSimulationRequest starts a Monte Carlo job.
 type CreateSimulationRequest struct {
-	PlanID         string `json:"-"`
-	IdempotencyKey string `json:"-"`
-	Runs           *int   `json:"runs,omitempty"`
-	Seed           *int64 `json:"seed,omitempty"`
+	PlanID         string  `json:"-"`
+	IdempotencyKey string  `json:"-"`
+	Runs           *int    `json:"runs,omitempty"`
+	Seed           *string `json:"seed,omitempty"`
+	seedInt        *int64  `json:"-"`
 }
 
 // CreateSimulationResponse returns the enqueued job.
@@ -71,7 +72,7 @@ func NewSimulationService(
 }
 
 // BuildInputSnapshot freezes the current plan configuration for analysis jobs.
-func (s *SimulationService) BuildInputSnapshot(ctx context.Context, planID string, runs *int, seed *int64) (*simulation.InputSnapshot, string, error) {
+func (s *SimulationService) BuildInputSnapshot(ctx context.Context, planID string, runs *int, seed *string) (*simulation.InputSnapshot, string, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
@@ -79,8 +80,12 @@ func (s *SimulationService) BuildInputSnapshot(ctx context.Context, planID strin
 		}
 		return nil, "", err
 	}
+	parsed, err := ParseSeedString(seed)
+	if err != nil {
+		return nil, "", newErr("parameters_invalid", err.Error(), nil)
+	}
 	return s.buildInputSnapshot(ctx, plan, CreateSimulationRequest{
-		PlanID: planID, Runs: runs, Seed: seed,
+		PlanID: planID, Runs: runs, Seed: seed, seedInt: parsed,
 	})
 }
 
@@ -91,6 +96,14 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 			return CreateSimulationResponse{}, newErr("plan_not_found", "plan not found", nil)
 		}
 		return CreateSimulationResponse{}, err
+	}
+
+	if req.Seed != nil {
+		parsed, err := ParseSeedString(req.Seed)
+		if err != nil {
+			return CreateSimulationResponse{}, newErr("parameters_invalid", err.Error(), nil)
+		}
+		req.seedInt = parsed
 	}
 
 	snap, inputHash, err := s.buildInputSnapshot(ctx, plan, req)
@@ -177,14 +190,22 @@ func (s *SimulationService) GetRun(ctx context.Context, runID string) (Simulatio
 	return toRunView(run, currentHash), nil
 }
 
-func (s *SimulationService) ListPaths(ctx context.Context, runID string) ([]repository.PathIndexRow, error) {
+func (s *SimulationService) ListPaths(ctx context.Context, runID string) ([]PathIndexView, error) {
 	if _, err := s.sims.GetByID(ctx, runID); err != nil {
 		if errors.Is(err, repository.ErrSimulationNotFound) {
 			return nil, newErr("simulation_not_found", "simulation not found", nil)
 		}
 		return nil, err
 	}
-	return s.sims.ListPathIndex(ctx, runID)
+	rows, err := s.sims.ListPathIndex(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PathIndexView, len(rows))
+	for i, r := range rows {
+		out[i] = PathIndexToView(r)
+	}
+	return out, nil
 }
 
 func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pathNo int) (*simulation.PathDetail, error) {
@@ -269,8 +290,14 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 	if req.Runs != nil {
 		params.SimulationRuns = *req.Runs
 	}
-	if req.Seed != nil {
-		params.Seed = req.Seed
+	if req.seedInt != nil {
+		params.Seed = req.seedInt
+	} else if req.Seed != nil {
+		parsed, err := ParseSeedString(req.Seed)
+		if err != nil {
+			return nil, "", newErr("parameters_invalid", err.Error(), nil)
+		}
+		params.Seed = parsed
 	}
 	if err := validateSimulationReady(params); err != nil {
 		return nil, "", newErr("simulation_input_invalid", err.Error(), nil)

@@ -1,4 +1,5 @@
 import type { ApiEnvelope, ApiErrorBody } from "@/types/api";
+import { normalizeApiArrays } from "./normalize";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
@@ -62,7 +63,7 @@ export async function apiRequest<T>(
   if (body.code !== "ok") {
     throw new ApiError(body.code, body.message);
   }
-  return body.data as T;
+  return normalizeApiArrays(body.data) as T;
 }
 
 export function apiGet<T>(path: string): Promise<T> {

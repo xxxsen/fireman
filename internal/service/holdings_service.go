@@ -80,6 +80,12 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 		existingSnap[h.InstrumentID] = h.SimulationSnapshotID
 	}
 
+	type pendingSnap struct {
+		snap repository.SimulationSnapshot
+		skip bool
+	}
+	pendingSnaps := make([]pendingSnap, 0)
+
 	var built []repository.PlanHolding
 	for _, item := range req.Holdings {
 		if item.AssetClass != nil || item.Region != nil || item.SimulationSnapshotID != nil {
@@ -94,10 +100,15 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 		}
 		snapID, ok := existingSnap[item.InstrumentID]
 		if !ok {
-			snapID, err = s.snapSvc.CreateForHolding(ctx, planID, item.InstrumentID, plan.ValuationDate)
+			snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, item.InstrumentID, plan.ValuationDate)
 			if err != nil {
 				return nil, MapSnapshotError(err)
 			}
+			snapID = snap.ID
+			pendingSnaps = append(pendingSnaps, pendingSnap{
+				snap: snap,
+				skip: snap.ID == repository.SystemCashSnapshotID,
+			})
 		}
 		built = append(built, repository.PlanHolding{
 			ID: "hold_" + uuid.New().String(), PlanID: planID,
@@ -128,6 +139,14 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		for _, ps := range pendingSnaps {
+			if ps.skip {
+				continue
+			}
+			if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, ps.snap); err != nil {
+				return err
+			}
+		}
 		if err := s.holdings.Replace(ctx, tx, planID, built); err != nil {
 			return err
 		}

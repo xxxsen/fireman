@@ -44,6 +44,31 @@ func (r *PlanRepo) Create(ctx context.Context, p Plan) error {
 	return nil
 }
 
+// CreateTx inserts a plan inside an existing transaction.
+func (r *PlanRepo) CreateTx(ctx context.Context, tx *sql.Tx, p Plan) error {
+	now := time.Now().UnixMilli()
+	if p.CreatedAt == 0 {
+		p.CreatedAt = now
+	}
+	if p.UpdatedAt == 0 {
+		p.UpdatedAt = now
+	}
+	if p.Status == "" {
+		p.Status = "active"
+	}
+	if p.ConfigVersion == 0 {
+		p.ConfigVersion = 1
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO plans (id, name, base_currency, valuation_date, status, config_version, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.BaseCurrency, p.ValuationDate, p.Status, p.ConfigVersion, p.CreatedAt, p.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("create plan: %w", err)
+	}
+	return nil
+}
+
 func (r *PlanRepo) List(ctx context.Context) ([]Plan, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, base_currency, valuation_date, status, config_version, created_at, updated_at

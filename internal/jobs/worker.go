@@ -65,19 +65,30 @@ func (w *Worker) Start(ctx context.Context, concurrency int) {
 
 func (w *Worker) loop(ctx context.Context) {
 	ticker := time.NewTicker(w.interval)
-	hb := time.NewTicker(heartbeatEvery)
 	defer ticker.Stop()
-	defer hb.Stop()
 
 	var activeJob string
+	var jobDone chan struct{}
 	for {
+		if activeJob != "" && jobDone != nil {
+			hb := time.NewTicker(heartbeatEvery)
+			select {
+			case <-ctx.Done():
+				hb.Stop()
+				return
+			case <-jobDone:
+				hb.Stop()
+				activeJob = ""
+				jobDone = nil
+			case <-hb.C:
+				_ = w.jobs.Heartbeat(ctx, activeJob)
+			}
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			return
-		case <-hb.C:
-			if activeJob != "" {
-				_ = w.jobs.Heartbeat(ctx, activeJob)
-			}
 		case <-ticker.C:
 			if activeJob != "" {
 				continue
@@ -90,8 +101,11 @@ func (w *Worker) loop(ctx context.Context) {
 				continue
 			}
 			activeJob = job.ID
-			w.execute(ctx, job)
-			activeJob = ""
+			jobDone = make(chan struct{})
+			go func(j repository.Job) {
+				w.execute(ctx, j)
+				close(jobDone)
+			}(job)
 		}
 	}
 }

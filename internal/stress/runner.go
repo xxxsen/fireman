@@ -127,8 +127,13 @@ func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSche
 			batch.failureYears = append(batch.failureYears, float64(in.Parameters.CurrentAge+*ps.FailureMonth/12))
 		}
 		if sched != nil && len(ps.MonthlyWealthMinor) > shockEnd {
-			pre := wealthAt(ps.MonthlyWealthMinor, shockStart)
-			rec := recoveryMonth(ps.MonthlyWealthMinor, shockEnd+1, pre)
+			var recoveryTarget int64
+			if shockStart > 0 {
+				recoveryTarget = wealthAt(ps.MonthlyWealthMinor, shockStart-1)
+			} else {
+				recoveryTarget = in.Parameters.TotalAssetsMinor
+			}
+			rec := recoveryMonth(ps.MonthlyWealthMinor, shockEnd+1, recoveryTarget)
 			if rec >= 0 {
 				batch.recoveries = append(batch.recoveries, float64(rec))
 			}

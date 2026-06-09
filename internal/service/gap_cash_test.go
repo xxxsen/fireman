@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
 )
@@ -16,7 +17,12 @@ func TestUpdateParameters_ApplyUnallocatedGapToCash(t *testing.T) {
 	scenario := repository.NewScenarioRepo(db)
 	holdings := repository.NewHoldingsRepo(db)
 	hash := NewConfigHashService(plans, params, alloc, holdings)
-	svc := NewPlanService(db, plans, params, alloc, scenario, holdings, hash)
+	snapSvc := marketdata.NewSnapshotService(
+		repository.NewSnapshotRepo(db),
+		repository.NewInstrumentRepo(db),
+		repository.NewMarketDataRepo(db),
+	)
+	svc := NewPlanService(db, plans, params, alloc, scenario, holdings, hash, snapSvc)
 
 	scn := "scn_builtin_near_fire"
 	plan, err := svc.Create(context.Background(), CreatePlanRequest{

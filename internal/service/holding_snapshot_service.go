@@ -80,12 +80,17 @@ func (s *HoldingSnapshotService) Sync(ctx context.Context, planID, holdingID str
 	}
 
 	syncDate := time.Now().Format("2006-01-02")
-	snap, err := s.snapSvc.SyncForHolding(ctx, planID, holding.InstrumentID, holdingID, syncDate)
+	snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, holding.InstrumentID, syncDate)
 	if err != nil {
 		return repository.SimulationSnapshot{}, MapSnapshotError(err)
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if snap.ID != repository.SystemCashSnapshotID {
+			if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, snap); err != nil {
+				return err
+			}
+		}
 		if err := s.holdings.UpdateSnapshotID(ctx, tx, holdingID, snap.ID); err != nil {
 			return err
 		}

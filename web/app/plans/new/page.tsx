@@ -6,18 +6,60 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
-import { createPlan } from "@/lib/api/plans";
-import { updateParameters } from "@/lib/api/plans";
+import { createPlanWizard } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
-import { updateHoldings } from "@/lib/api/holdings";
 import { listInstruments } from "@/lib/api/instruments";
 import { createSimulation } from "@/lib/api/simulations";
-import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
+import { assetClassLabel, formatMoney, formatPercent, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
-import type { Instrument } from "@/types/api";
+import {
+  buildWizardPortfolioReview,
+  formatPendingAmount,
+} from "@/lib/wizard-allocation";
+import type { Instrument, PlanParameters } from "@/types/api";
+import { ApiError } from "@/lib/api/client";
 import { useJobStatus } from "@/hooks/useJobStatus";
 
 const STEPS = ["FIRE 基础信息", "目标配置", "选择标的", "检查并模拟"] as const;
+const DEFAULT_RUNS = 10000;
+
+function defaultParameters(
+  totalAssets: number,
+  annualSpending: number,
+  annualSavings: number,
+  scenarioId: string,
+  ages: { current: number; retirement: number; end: number },
+): PlanParameters {
+  return {
+    plan_id: "",
+    current_age: ages.current,
+    retirement_age: ages.retirement,
+    end_age: ages.end,
+    total_assets_minor: totalAssets,
+    annual_savings_minor: annualSavings,
+    annual_savings_growth_rate: 0,
+    annual_spending_minor: annualSpending,
+    terminal_wealth_floor_minor: 0,
+    selected_scenario_id: scenarioId,
+    inflation_mode: "fixed_real",
+    fixed_inflation_rate: 0.03,
+    inflation_mu: 0.03,
+    inflation_phi: 0.5,
+    inflation_sigma: 0.01,
+    withdrawal_type: "fixed_real",
+    withdrawal_rate: 0.04,
+    withdrawal_floor_ratio: 0.7,
+    withdrawal_ceiling_ratio: 1.3,
+    withdrawal_tax_rate: 0,
+    taxable_withdrawal_ratio: 0,
+    rebalance_frequency: "annual",
+    rebalance_threshold: 0.03,
+    transaction_cost_rate: 0,
+    simulation_runs: DEFAULT_RUNS,
+    student_t_df: 7,
+    updated_at: Date.now(),
+  };
+}
 
 export default function NewPlanWizardPage() {
   const router = useRouter();
@@ -31,96 +73,58 @@ export default function NewPlanWizardPage() {
   const [annualSpending, setAnnualSpending] = useState(400_000_00);
   const [annualSavings, setAnnualSavings] = useState(200_000_00);
   const [scenarioId, setScenarioId] = useState("");
-  const [planId, setPlanId] = useState<string | null>(null);
-  const [configVersion, setConfigVersion] = useState(1);
   const [selectedInstruments, setSelectedInstruments] = useState<
     { inst: Instrument; weight: number; amount: number }[]
   >([]);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [gapToCash, setGapToCash] = useState(false);
-  const [savedParams, setSavedParams] = useState<import("@/types/api").PlanParameters | null>(null);
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
   const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: listInstruments });
 
   const jobState = useJobStatus(jobId, {
     onComplete: () => {
-      if (planId) router.push(`/plans/${planId}/dashboard`);
+      if (createdPlanId) router.push(`/plans/${createdPlanId}/dashboard`);
     },
   });
 
-  const createPlanMut = useMutation({
+  const finishMut = useMutation({
     mutationFn: async () => {
-      const plan = await createPlan({
+      const holdings = selectedInstruments.map((s, i) => ({
+        instrument_id: s.inst.id,
+        enabled: true,
+        weight_within_group: s.weight,
+        current_amount_minor: s.amount,
+        sort_order: i * 10,
+      }));
+      const plan = await createPlanWizard({
         name,
         valuation_date: valuationDate,
-        selected_scenario_id: scenarioId || undefined,
+        selected_scenario_id: scenarioId,
+        parameters: defaultParameters(totalAssets, annualSpending, annualSavings, scenarioId, {
+          current: currentAge,
+          retirement: retirementAge,
+          end: endAge,
+        }),
+        holdings,
+        apply_unallocated_to_cash: gapToCash && assetGap > 100,
       });
-      setPlanId(plan.id);
-      setConfigVersion(plan.config_version);
-      await updateParameters(plan.id, {
-        config_version: plan.config_version,
-        parameters: {
-          plan_id: plan.id,
-          current_age: currentAge,
-          retirement_age: retirementAge,
-          end_age: endAge,
-          total_assets_minor: totalAssets,
-          annual_savings_minor: annualSavings,
-          annual_savings_growth_rate: 0,
-          annual_spending_minor: annualSpending,
-          terminal_wealth_floor_minor: 0,
-          selected_scenario_id: scenarioId || null,
-          inflation_mode: "fixed_real",
-          fixed_inflation_rate: 0.03,
-          inflation_mu: 0.03,
-          inflation_phi: 0.5,
-          inflation_sigma: 0.01,
-          withdrawal_type: "fixed_real",
-          withdrawal_rate: 0.04,
-          withdrawal_floor_ratio: 0.7,
-          withdrawal_ceiling_ratio: 1.3,
-          withdrawal_tax_rate: 0,
-          taxable_withdrawal_ratio: 0,
-          rebalance_frequency: "annual",
-          rebalance_threshold: 0.03,
-          transaction_cost_rate: 0,
-          simulation_runs: 1000,
-          student_t_df: 7,
-          updated_at: Date.now(),
-        },
-      });
-      setSavedParams({
-        plan_id: plan.id,
-        current_age: currentAge,
-        retirement_age: retirementAge,
-        end_age: endAge,
-        total_assets_minor: totalAssets,
-        annual_savings_minor: annualSavings,
-        annual_savings_growth_rate: 0,
-        annual_spending_minor: annualSpending,
-        terminal_wealth_floor_minor: 0,
-        selected_scenario_id: scenarioId || null,
-        inflation_mode: "fixed_real",
-        fixed_inflation_rate: 0.03,
-        inflation_mu: 0.03,
-        inflation_phi: 0.5,
-        inflation_sigma: 0.01,
-        withdrawal_type: "fixed_real",
-        withdrawal_rate: 0.04,
-        withdrawal_floor_ratio: 0.7,
-        withdrawal_ceiling_ratio: 1.3,
-        withdrawal_tax_rate: 0,
-        taxable_withdrawal_ratio: 0,
-        rebalance_frequency: "annual",
-        rebalance_threshold: 0.03,
-        transaction_cost_rate: 0,
-        simulation_runs: 1000,
-        student_t_df: 7,
-        updated_at: Date.now(),
-      });
-      return plan;
+      const sim = await createSimulation(plan.id, { runs: DEFAULT_RUNS });
+      return { plan, sim };
+    },
+    onSuccess: ({ plan, sim }) => {
+      setCreatedPlanId(plan.id);
+      setJobId(sim.job_id);
+      setError(null);
+    },
+    onError: (e) => {
+      if (e instanceof ApiError) {
+        setError(e.message);
+        return;
+      }
+      setError(e instanceof Error ? e.message : "创建失败");
     },
   });
 
@@ -145,46 +149,21 @@ export default function NewPlanWizardPage() {
   );
   const assetGap = totalAssets - holdingsSum;
 
-  const finishWizard = async () => {
-    if (!planId || !savedParams) return;
-    setError(null);
-    try {
-      const holdings = selectedInstruments.map((s, i) => ({
-        instrument_id: s.inst.id,
-        enabled: true,
-        weight_within_group: s.weight,
-        current_amount_minor: s.amount,
-        sort_order: i * 10,
-      }));
-      if (assetGap < -100) {
-        setError("持仓合计不能超过总资产，请调整金额。");
-        return;
-      }
-      if (assetGap > 100 && !gapToCash) {
-        setError("存在未分配差额，请勾选「计入现金/其他」或调整持仓金额。");
-        return;
-      }
-      let version = configVersion;
-      await updateHoldings(planId, {
-        config_version: version,
-        holdings,
-      });
-      version += 1;
-      if (assetGap > 100 && gapToCash) {
-        await updateParameters(planId, {
-          config_version: version,
-          parameters: { ...savedParams, total_assets_minor: totalAssets },
-          apply_unallocated_to_cash: true,
-        });
-        version += 1;
-      }
-      setConfigVersion(version);
-      const sim = await createSimulation(planId, { runs: 1000 });
-      setJobId(sim.job_id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "创建失败");
-    }
-  };
+  const selectedScenario = useMemo(
+    () => scenariosQ.data?.scenarios.find((s) => s.id === scenarioId),
+    [scenariosQ.data?.scenarios, scenarioId],
+  );
+
+  const portfolioReview = useMemo(() => {
+    if (!selectedScenario) return null;
+    return buildWizardPortfolioReview({
+      scenarioWeights: selectedScenario.weights,
+      selectedInstruments,
+      totalAssetsMinor: totalAssets,
+      gapToCash,
+      assetGapMinor: assetGap,
+    });
+  }, [selectedScenario, selectedInstruments, totalAssets, gapToCash, assetGap]);
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -354,12 +333,86 @@ export default function NewPlanWizardPage() {
         {step === 3 && (
           <>
             <ul className="list-disc pl-5 text-sm text-slate-700">
-              <li>
-                组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}
-              </li>
+              <li>组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}</li>
+              <li>全组合目标权重：{portfolioReview?.passed ? "通过" : "未通过"}</li>
               <li>已选标的：{selectedInstruments.length} 个</li>
-              <li>预计模拟：1000 次（向导默认）</li>
+              <li>预计模拟：{DEFAULT_RUNS.toLocaleString()} 次</li>
             </ul>
+
+            {selectedScenario && (
+              <p className="mt-3 text-sm text-slate-600">
+                场景「{selectedScenario.name}」目标：
+                {selectedScenario.weights
+                  .map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`)
+                  .join(" / ")}
+              </p>
+            )}
+
+            {portfolioReview && (
+              <div className="mt-4 space-y-3">
+                <p
+                  className={`text-sm ${portfolioReview.passed ? "text-emerald-700" : "text-amber-800"}`}
+                  role="status"
+                >
+                  {portfolioReview.message}
+                </p>
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-left">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">方向</th>
+                        <th className="px-3 py-2 font-medium">资产名称</th>
+                        <th className="px-3 py-2 font-medium">编号</th>
+                        <th className="px-3 py-2 font-medium text-right">组内占比</th>
+                        <th className="px-3 py-2 font-medium text-right">全组合目标</th>
+                        <th className="px-3 py-2 font-medium">国别</th>
+                        <th className="px-3 py-2 font-medium text-right">已投入</th>
+                        <th className="px-3 py-2 font-medium text-right">待投入/减配</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {portfolioReview.rows.map((row) => (
+                        <tr key={row.key} className="border-t">
+                          <td className="px-3 py-2">{row.assetClassLabel}</td>
+                          <td className="px-3 py-2">{row.instrumentName}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{row.instrumentCode}</td>
+                          <td className="px-3 py-2 text-right">{formatPercent(row.groupWeight)}</td>
+                          <td className="px-3 py-2 text-right">
+                            {formatPercent(row.portfolioTargetWeight)}
+                          </td>
+                          <td className="px-3 py-2">{row.regionLabel}</td>
+                          <td className="px-3 py-2 text-right">
+                            {formatMoney(row.currentAmountMinor)}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {formatPendingAmount(row.pendingAmountMinor)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="border-t bg-slate-50">
+                      <tr>
+                        <td className="px-3 py-2 font-medium" colSpan={4}>
+                          合计
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium">
+                          {formatPercent(portfolioReview.portfolioSum)}
+                        </td>
+                        <td className="px-3 py-2" colSpan={3} />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                {!portfolioReview.passed && portfolioReview.missingClasses.length > 0 && (
+                  <p className="text-sm text-amber-800">
+                    建议：返回「选择标的」补充
+                    {portfolioReview.missingClasses.map((m) => m.label).join("、")}
+                    类资产；若暂时无法配置，可先调整场景或稍后在计划内完善持仓。
+                  </p>
+                )}
+              </div>
+            )}
+
             {assetGap > 100 && (
               <label className="mt-4 flex items-start gap-2 text-sm">
                 <input
@@ -400,11 +453,8 @@ export default function NewPlanWizardPage() {
           <button
             type="button"
             className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white"
-            onClick={async () => {
+            onClick={() => {
               setError(null);
-              if (step === 0 && !planId) {
-                await createPlanMut.mutateAsync();
-              }
               if (step === 1 && !scenarioId) {
                 setError("请选择资产配置场景。");
                 return;
@@ -444,12 +494,20 @@ export default function NewPlanWizardPage() {
             className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
             disabled={
               !groupWeightChecks.every((g) => g.passed) ||
+              !portfolioReview?.passed ||
               selectedInstruments.length === 0 ||
+              !scenarioId ||
               assetGap < -100 ||
               (assetGap > 100 && !gapToCash) ||
-              !!jobId
+              !!jobId ||
+              finishMut.isPending
             }
-            onClick={() => void finishWizard()}
+            title={
+              portfolioReview && !portfolioReview.passed
+                ? portfolioReview.message
+                : undefined
+            }
+            onClick={() => finishMut.mutate()}
           >
             创建并启动模拟
           </button>

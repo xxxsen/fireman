@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -53,12 +54,19 @@ func (s *InstrumentService) List(ctx context.Context) ([]repository.InstrumentRe
 		if items[i].IsSystem {
 			continue
 		}
-		last, _ := s.marketRepo.LastTradeDate(ctx, items[i].ID)
-		items[i].DataAsOf = last
-		items[i].QualityStatus = s.libraryQuality(ctx, items[i].ID)
-		applyDataStale(&items[i], last)
+		s.enrichMarketMeta(ctx, &items[i])
 	}
 	return items, nil
+}
+
+func (s *InstrumentService) enrichMarketMeta(ctx context.Context, inst *repository.InstrumentRecord) {
+	last, _ := s.marketRepo.LastTradeDate(ctx, inst.ID)
+	inst.DataAsOf = last
+	src, pt, _ := s.marketRepo.LatestPointMeta(ctx, inst.ID)
+	inst.DataSourceName = src
+	inst.PointType = pt
+	inst.QualityStatus = s.libraryQuality(ctx, inst.ID)
+	applyDataStale(inst, last)
 }
 
 func (s *InstrumentService) Get(ctx context.Context, id string) (repository.InstrumentRecord, error) {
@@ -69,11 +77,8 @@ func (s *InstrumentService) Get(ctx context.Context, id string) (repository.Inst
 		}
 		return repository.InstrumentRecord{}, err
 	}
-	last, _ := s.marketRepo.LastTradeDate(ctx, id)
-	inst.DataAsOf = last
 	if !inst.IsSystem {
-		inst.QualityStatus = s.libraryQuality(ctx, id)
-		applyDataStale(&inst, last)
+		s.enrichMarketMeta(ctx, &inst)
 	} else {
 		inst.QualityStatus = "available"
 	}
@@ -178,11 +183,18 @@ func (s *InstrumentService) Import(ctx context.Context, req InstrumentImportRequ
 	}
 	inst.QualityStatus = processed.Quality
 	inst.DataAsOf = lastDate(processed.Points)
+	inst.DataSourceName = data.SourceName
+	inst.PointType = data.PointType
 	applyDataStale(&inst, inst.DataAsOf)
 	return inst, nil
 }
 
-func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string) (repository.InstrumentRecord, error) {
+// InstrumentRefreshOptions controls instrument refresh behavior.
+type InstrumentRefreshOptions struct {
+	Force bool `json:"force"`
+}
+
+func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string, opts InstrumentRefreshOptions) (repository.InstrumentRecord, error) {
 	inst, err := s.instRepo.GetByID(ctx, instrumentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrInstrumentNotFound) {
@@ -194,21 +206,35 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string) (r
 		return repository.InstrumentRecord{}, newErr("instrument_not_refreshable", "only AKShare instruments can be refreshed", nil)
 	}
 	lastFetched, _ := s.marketRepo.LastFetchedAt(ctx, instrumentID)
-	if lastFetched > 0 && time.Now().UnixMilli()-lastFetched < 24*time.Hour.Milliseconds() {
+	namePlaceholder := inst.Name == "" || inst.Name == inst.Code
+	if !opts.Force && lastFetched > 0 && time.Now().UnixMilli()-lastFetched < 24*time.Hour.Milliseconds() && !namePlaceholder {
 		return inst, newErr("instrument_refresh_throttled", "instrument refreshed within last 24 hours", nil)
 	}
+	if opts.Force {
+		slog.InfoContext(ctx, "instrument force refresh",
+			"instrument_id", instrumentID,
+			"code", inst.Code,
+		)
+	}
+
+	existingRows, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
+	if err != nil {
+		return repository.InstrumentRecord{}, err
+	}
+	existing := repoToDataPoints(existingRows)
+	fullReplace := marketdata.ShouldFullReplaceOnRefresh(opts.Force, existing, "")
 
 	lastDate, _ := s.marketRepo.LastTradeDate(ctx, instrumentID)
 	end := time.Now().Format("2006-01-02")
 	var start *string
-	if lastDate != "" {
+	if !fullReplace && lastDate != "" {
 		overlap, err := marketdata.RefreshStartDate(lastDate)
 		if err == nil {
 			start = &overlap
 		}
 	}
 	req := InstrumentImportRequest{Market: inst.Market, InstrumentType: inst.InstrumentType, Code: inst.Code}
-	_, processed, err := s.fetchAndProcess(ctx, req, start)
+	data, processed, err := s.fetchAndProcess(ctx, req, start)
 	if err != nil {
 		// upstream failure: keep existing data
 		return inst, newErr("market_provider_unavailable", err.Error(), nil)
@@ -217,22 +243,49 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string) (r
 		return inst, newErr("provider_data_anomaly", "refresh rejected due to abnormal daily returns", nil)
 	}
 
-	existingRows, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
-	if err != nil {
-		return repository.InstrumentRecord{}, err
+	fullReplace = marketdata.ShouldFullReplaceOnRefresh(opts.Force, existing, processed.SourceName)
+	var reprocessed marketdata.ProcessFetchResult
+	if fullReplace {
+		reprocessed = processed
+		if opts.Force {
+			slog.InfoContext(ctx, "instrument full history replace on force refresh",
+				"instrument_id", instrumentID,
+				"source", processed.SourceName,
+				"points", len(processed.Points),
+			)
+		} else {
+			slog.InfoContext(ctx, "instrument full history replace on source change",
+				"instrument_id", instrumentID,
+				"from", marketdata.DominantSourceName(existing),
+				"to", processed.SourceName,
+			)
+		}
+	} else {
+		merged := marketdata.MergeRefreshedPoints(existing, processed.Points)
+		reprocessed = marketdata.ProcessProviderData(&marketdata.FetchData{
+			Points: toHistorical(merged), PointType: processed.PointType, SourceName: processed.SourceName,
+		}, end)
 	}
-	existing := repoToDataPoints(existingRows)
-	merged := marketdata.MergeRefreshedPoints(existing, processed.Points)
-	reprocessed := marketdata.ProcessProviderData(&marketdata.FetchData{
-		Points: toHistorical(merged), PointType: processed.PointType, SourceName: processed.SourceName,
-	}, end)
+
+	newName := strings.TrimSpace(data.Name)
+	shouldUpdateName := newName != "" && newName != inst.Code && newName != inst.Name
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if fullReplace {
+			if err := s.marketRepo.DeleteAllTx(ctx, tx, instrumentID); err != nil {
+				return err
+			}
+		}
 		if err := s.marketRepo.UpsertBatch(ctx, tx, instrumentID, toRepoPoints(instrumentID, reprocessed.Points)); err != nil {
 			return err
 		}
 		if err := s.annualRepo.ReplaceAll(ctx, tx, instrumentID, toRepoAnnual(instrumentID, reprocessed.Annual)); err != nil {
 			return err
+		}
+		if shouldUpdateName {
+			if err := s.instRepo.UpdateNameTx(ctx, tx, instrumentID, newName); err != nil {
+				return err
+			}
 		}
 		return s.instRepo.TouchUpdated(ctx, tx, instrumentID)
 	})
@@ -295,6 +348,76 @@ func (s *InstrumentService) AnnualReturns(ctx context.Context, instrumentID stri
 	return rows, nil
 }
 
+// InstrumentDetailView aggregates asset library detail for the UI.
+type InstrumentDetailView struct {
+	Instrument          repository.InstrumentRecord          `json:"instrument"`
+	AnnualReturns       []repository.AnnualReturnRecord      `json:"annual_returns"`
+	SimulationWindow    map[string]any                       `json:"simulation_window"`
+	HistoricalSnapshots []repository.SimulationSnapshot      `json:"historical_snapshots"`
+	ReferencingPlans    []repository.PlanInstrumentReference `json:"referencing_plans"`
+}
+
+func (s *InstrumentService) GetDetail(ctx context.Context, id string) (InstrumentDetailView, error) {
+	inst, err := s.Get(ctx, id)
+	if err != nil {
+		return InstrumentDetailView{}, err
+	}
+	inclusionDate := time.Now().Format("2006-01-02")
+	returns, err := s.AnnualReturns(ctx, id, inclusionDate)
+	if err != nil {
+		return InstrumentDetailView{}, err
+	}
+	points, _ := s.marketRepo.ListByInstrument(ctx, id)
+	annualRows := toMarketAnnualFromRepo(returns)
+	simYears := marketdata.SelectSimulationYears(repoToDataPoints(points), annualRows, inclusionDate)
+	simMetrics := marketdata.BuildSnapshotMetrics(repoToDataPoints(points), inclusionDate, "adjusted_close", "library")
+	excluded := excludedYearLabels(marketdata.ComputeAnnualReturns(repoToDataPoints(points)), simYears)
+	selectedYears := make([]int, len(simYears))
+	for i, y := range simYears {
+		selectedYears[i] = y.Year
+	}
+	snapRepo := repository.NewSnapshotRepo(s.sql)
+	snaps, _ := snapRepo.ListByInstrument(ctx, id)
+	holdRepo := repository.NewHoldingsRepo(s.sql)
+	refs, _ := holdRepo.ListReferencingPlans(ctx, id)
+	if snaps == nil {
+		snaps = []repository.SimulationSnapshot{}
+	}
+	if refs == nil {
+		refs = []repository.PlanInstrumentReference{}
+	}
+	if returns == nil {
+		returns = []repository.AnnualReturnRecord{}
+	}
+	if excluded == nil {
+		excluded = []int{}
+	}
+	return InstrumentDetailView{
+		Instrument: inst, AnnualReturns: returns,
+		SimulationWindow: map[string]any{
+			"inclusion_date": inclusionDate, "selected_years": selectedYears,
+			"excluded_years": excluded, "complete_year_count": simMetrics.CompleteYearCount,
+			"historical_cagr": simMetrics.HistoricalCAGR, "annual_volatility": simMetrics.AnnualVolatility,
+			"max_drawdown": simMetrics.MaxDrawdown, "observation_count": simMetrics.ObservationCount,
+			"fee_treatment": inst.FeeTreatment, "expense_ratio_status": inst.ExpenseRatioStatus,
+			"quality_status": simMetrics.QualityStatus,
+		},
+		HistoricalSnapshots: snaps, ReferencingPlans: refs,
+	}, nil
+}
+
+func toMarketAnnualFromRepo(rows []repository.AnnualReturnRecord) []marketdata.AnnualReturnRow {
+	out := make([]marketdata.AnnualReturnRow, len(rows))
+	for i, r := range rows {
+		out[i] = marketdata.AnnualReturnRow{
+			Year: r.Year, AnnualReturn: r.AnnualReturn,
+			StartDate: r.StartDate, EndDate: r.EndDate,
+			Observations: r.Observations, IsPartial: r.IsPartial,
+		}
+	}
+	return out
+}
+
 func (s *InstrumentService) fetchAndProcess(ctx context.Context, req InstrumentImportRequest, start *string) (*marketdata.FetchData, marketdata.ProcessFetchResult, error) {
 	end := time.Now().Format("2006-01-02")
 	fetchReq := marketdata.FetchRequest{
@@ -304,6 +427,12 @@ func (s *InstrumentService) fetchAndProcess(ctx context.Context, req InstrumentI
 	}
 	data, err := s.provider.Fetch(ctx, fetchReq)
 	if err != nil {
+		slog.WarnContext(ctx, "instrument fetch failed",
+			"market", req.Market,
+			"instrument_type", req.InstrumentType,
+			"code", req.Code,
+			"error", err,
+		)
 		return nil, marketdata.ProcessFetchResult{}, newErr("market_provider_unavailable", err.Error(), nil)
 	}
 	if _, err := marketdata.ResolveClassification(req.Market, req.InstrumentType, data); err != nil {

@@ -3,7 +3,7 @@ import { apiGet, apiPost } from "./client";
 
 export function createSimulation(
   planId: string,
-  body?: { runs?: number; seed?: number },
+  body?: { runs?: number; seed?: string },
 ): Promise<{ job_id: string; run_id: string; status: string }> {
   return apiPost(
     `/api/v1/plans/${planId}/simulations`,

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ func (s Services) registerInstrumentRoutes(rg *gin.RouterGroup) {
 	rg.POST("/instruments/import/preview", s.previewInstrumentImport)
 	rg.POST("/instruments/import", s.importInstrument)
 	rg.GET("/instruments/:instrument_id", s.getInstrument)
+	rg.GET("/instruments/:instrument_id/detail", s.getInstrumentDetail)
 	rg.POST("/instruments/:instrument_id/refresh", s.refreshInstrument)
 	rg.DELETE("/instruments/:instrument_id", s.deleteInstrument)
 	rg.GET("/instruments/:instrument_id/annual-returns", s.getInstrumentAnnualReturns)
@@ -86,8 +88,25 @@ func (s Services) getInstrument(c *gin.Context) {
 	OK(c, out)
 }
 
+func (s Services) getInstrumentDetail(c *gin.Context) {
+	out, err := s.Instruments.GetDetail(c.Request.Context(), c.Param("instrument_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
 func (s Services) refreshInstrument(c *gin.Context) {
-	out, err := s.Instruments.Refresh(c.Request.Context(), c.Param("instrument_id"))
+	var req service.InstrumentRefreshOptions
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	if c.Query("force") == "true" || c.Query("force") == "1" {
+		req.Force = true
+	}
+	out, err := s.Instruments.Refresh(c.Request.Context(), c.Param("instrument_id"), req)
 	if err != nil {
 		FailErr(c, err)
 		return

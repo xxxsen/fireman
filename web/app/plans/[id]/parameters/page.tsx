@@ -21,6 +21,17 @@ import { validatePercentSum } from "@/lib/percent";
 import type { AssetClassTarget, PlanCashFlow, PlanParameters, RegionTarget } from "@/types/api";
 
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
+const MAX_SEED = "9223372036854775807";
+const SEED_PATTERN = /^\d*$/;
+
+function normalizeSeedInput(raw: string): string | null {
+  if (raw === "") return null;
+  if (!SEED_PATTERN.test(raw)) return null;
+  if (raw.length > MAX_SEED.length || (raw.length === MAX_SEED.length && raw > MAX_SEED)) {
+    return null;
+  }
+  return raw;
+}
 
 export default function ParametersPage() {
   const planId = useParams().id as string;
@@ -333,7 +344,7 @@ export default function ParametersPage() {
               onChange={(e) => update("withdrawal_type", e.target.value)}
             >
               <option value="fixed_real">固定实际支出</option>
-              <option value="percent_of_portfolio">组合百分比</option>
+              <option value="fixed_portfolio">组合百分比</option>
               <option value="guardrail">护栏策略</option>
             </select>
           </label>
@@ -345,7 +356,7 @@ export default function ParametersPage() {
               onChange={(e) => update("inflation_mode", e.target.value)}
             >
               <option value="fixed_real">固定通胀率</option>
-              <option value="random">随机通胀</option>
+              <option value="random_ar1">随机通胀</option>
             </select>
           </label>
           <PercentInput
@@ -353,7 +364,7 @@ export default function ParametersPage() {
             value={params.fixed_inflation_rate}
             onChange={(v) => update("fixed_inflation_rate", v)}
           />
-          {params.inflation_mode === "random" && (
+          {params.inflation_mode === "random_ar1" && (
             <>
               <PercentInput
                 label="通胀均值 μ"
@@ -389,7 +400,7 @@ export default function ParametersPage() {
               确认固定通胀率超过 15%（非常规假设）
             </label>
           )}
-          {(params.withdrawal_type === "percent_of_portfolio" ||
+          {(params.withdrawal_type === "fixed_portfolio" ||
             params.withdrawal_type === "guardrail") && (
             <PercentInput
               label="提取率"
@@ -488,13 +499,18 @@ export default function ParametersPage() {
           <label className="block text-sm">
             随机种子（可选）
             <input
-              type="number"
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              className="mt-1 w-full rounded-md border px-3 py-2 font-mono"
               value={params.seed ?? ""}
-              onChange={(e) =>
-                update("seed", e.target.value === "" ? null : Number(e.target.value))
-              }
+              onChange={(e) => {
+                const next = normalizeSeedInput(e.target.value);
+                if (next === null && e.target.value !== "") return;
+                update("seed", next);
+              }}
             />
+            <span className="text-xs text-slate-500">0–{MAX_SEED}</span>
           </label>
         </div>
       </section>

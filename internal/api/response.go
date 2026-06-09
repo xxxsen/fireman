@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fireman/fireman/internal/jsonutil"
 	"github.com/fireman/fireman/internal/service"
 )
 
@@ -23,6 +24,9 @@ type errorBody struct {
 }
 
 func OK(c *gin.Context, data any) {
+	if data != nil {
+		jsonutil.NonNilSlices(data)
+	}
 	c.JSON(http.StatusOK, envelope{
 		Code: "ok", Message: "success", Data: data, RequestID: requestID(c),
 	})

@@ -1,4 +1,12 @@
 services:
+  data-init:
+    image: alpine:3.21
+    user: root
+    volumes:
+      - fireman-data:/data
+    entrypoint: ["sh", "-c", "mkdir -p /data && chown 65532:65532 /data"]
+    restart: "no"
+
   backend:
     image: fireman
     build:
@@ -10,6 +18,8 @@ services:
     volumes:
       - fireman-data:/data
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       market-provider:
         condition: service_healthy
     healthcheck:
@@ -24,6 +34,8 @@ services:
     build:
       context: ../web
       dockerfile: Dockerfile
+      args:
+        API_PROXY_TARGET: http://backend:8080
     container_name: fireman-web
     environment:
       NODE_ENV: "production"
@@ -34,7 +46,9 @@ services:
       backend:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test:
+        - "CMD-SHELL"
+        - "node -e \"const h=require('http');const ok=(u)=>new Promise(r=>h.get(u,res=>r(res.statusCode===200)).on('error',()=>r(false)));Promise.all([ok('http://127.0.0.1:3000/'),ok('http://127.0.0.1:3000/api/v1/plans')]).then(([a,b])=>process.exit(a&&b?0:1))\""
       interval: 30s
       timeout: 5s
       retries: 5

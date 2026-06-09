@@ -14,15 +14,20 @@ func ComputeMetrics(points []DataPoint, years []SimulationYear, pointType, sourc
 		return m
 	}
 
-	ws, we := WindowBounds(points, years)
-	m.WindowStart = &ws
-	m.WindowEnd = &we
+	pointSet := BuildSnapshotPointSet(points, years, pointType, sourceName)
+	ws, we := WindowBoundsFromPoints(pointSet)
+	if ws != "" {
+		m.WindowStart = &ws
+	}
+	if we != "" {
+		m.WindowEnd = &we
+	}
 	startY := years[0].Year
 	endY := years[len(years)-1].Year
 	m.CompleteYearStart = &startY
 	m.CompleteYearEnd = &endY
 	m.CompleteYearCount = len(years)
-	m.ObservationCount = CountObservationsInWindow(points, ws, we)
+	m.ObservationCount = len(pointSet)
 	m.Years = years
 
 	var logSum float64
@@ -53,7 +58,35 @@ func ComputeMetrics(points []DataPoint, years []SimulationYear, pointType, sourc
 	segments := ConsecutiveYearSegments(years)
 	var maxDD float64
 	for _, seg := range segments {
-		segPoints := PointsForSimulationWindow(points, seg)
+		segYears := make(map[int]struct{}, len(seg))
+		for _, y := range seg {
+			segYears[y.Year] = struct{}{}
+		}
+		var segPoints []DataPoint
+		for _, p := range pointSet {
+			if _, ok := segYears[yearOf(p.TradeDate)]; ok {
+				segPoints = append(segPoints, p)
+			}
+		}
+		if anchor, ok := anchorBefore(points, seg[0].Year); ok {
+			found := false
+			for _, p := range segPoints {
+				if p.TradeDate == anchor.TradeDate {
+					found = true
+					break
+				}
+			}
+			if !found {
+				ap := anchor
+				if ap.PointType == "" {
+					ap.PointType = pointType
+				}
+				if ap.SourceName == "" {
+					ap.SourceName = sourceName
+				}
+				segPoints = append([]DataPoint{ap}, segPoints...)
+			}
+		}
 		dd := blockMaxDrawdown(segPoints)
 		if dd > maxDD {
 			maxDD = dd
@@ -61,8 +94,7 @@ func ComputeMetrics(points []DataPoint, years []SimulationYear, pointType, sourc
 	}
 	m.MaxDrawdown = maxDD
 
-	windowPoints := PointsForSimulationWindow(points, years)
-	m.SourceHash = ComputeSourceHash(windowPoints, pointType, sourceName)
+	m.SourceHash = ComputeSourceHash(pointSet, pointType, sourceName)
 
 	if len(years) <= 4 {
 		m.Warnings = append(m.Warnings, "完整年度样本较少，估计不稳定")

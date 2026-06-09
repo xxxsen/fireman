@@ -11,7 +11,7 @@ export interface AnalysisJobView {
   created_at: number;
 }
 
-export function createStressTest(planId: string, body?: { runs?: number; seed?: number }) {
+export function createStressTest(planId: string, body?: { runs?: number; seed?: string }) {
   return apiPost<{ job_id: string; status: string }>(
     `/api/v1/plans/${planId}/stress-tests`,
     body ?? {},
@@ -26,7 +26,7 @@ export function getStressTest(jobId: string) {
   return apiGet<AnalysisJobView>(`/api/v1/stress-tests/${jobId}`);
 }
 
-export function createSensitivityTest(planId: string, body?: { runs?: number; seed?: number }) {
+export function createSensitivityTest(planId: string, body?: { runs?: number; seed?: string }) {
   return apiPost<{ job_id: string; status: string }>(
     `/api/v1/plans/${planId}/sensitivity-tests`,
     body ?? {},

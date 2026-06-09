@@ -80,3 +80,42 @@ func RefreshStartDate(lastDate string) (string, error) {
 	}
 	return t.AddDate(0, 0, -10).Format("2006-01-02"), nil
 }
+
+// DominantSourceName returns the most frequent source_name in stored points.
+func DominantSourceName(points []DataPoint) string {
+	counts := make(map[string]int)
+	for _, p := range points {
+		if p.SourceName == "" {
+			continue
+		}
+		counts[p.SourceName]++
+	}
+	best := ""
+	max := 0
+	for name, n := range counts {
+		if n > max {
+			max = n
+			best = name
+		}
+	}
+	return best
+}
+
+// ShouldFullReplaceOnRefresh reports when refresh should replace all stored history.
+func ShouldFullReplaceOnRefresh(force bool, existing []DataPoint, incomingSource string) bool {
+	if force {
+		return true
+	}
+	if len(existing) == 0 {
+		return false
+	}
+	dominant := DominantSourceName(existing)
+	if dominant == "" {
+		return false
+	}
+	if incomingSource != "" {
+		return dominant != incomingSource
+	}
+	// Pre-fetch: unadjusted sina ETF history must be replaced for adjusted pipelines.
+	return dominant == "ak.fund_etf_hist_sina"
+}

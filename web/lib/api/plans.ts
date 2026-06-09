@@ -9,6 +9,24 @@ export function getPlan(planId: string): Promise<Plan> {
   return apiGet<Plan>(`/api/v1/plans/${planId}`);
 }
 
+export function createPlanWizard(body: {
+  name: string;
+  base_currency?: string;
+  valuation_date: string;
+  selected_scenario_id: string;
+  parameters: PlanParameters;
+  holdings: {
+    instrument_id: string;
+    enabled: boolean;
+    weight_within_group: number;
+    current_amount_minor: number;
+    sort_order: number;
+  }[];
+  apply_unallocated_to_cash?: boolean;
+}): Promise<Plan> {
+  return apiPost<Plan>("/api/v1/plans/wizard", body);
+}
+
 export function createPlan(body: {
   name: string;
   base_currency?: string;

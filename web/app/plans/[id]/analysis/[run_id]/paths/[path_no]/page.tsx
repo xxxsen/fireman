@@ -3,19 +3,78 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState, type ReactNode } from "react";
 import { getPathDetail } from "@/lib/api/simulations";
-import { formatMoney, formatPercent } from "@/lib/format";
+import { failureReasonLabel, formatMoney, formatPercent } from "@/lib/format";
+import type { PathMonthRecord, PathYearRecord } from "@/types/api";
+
+const ROW_HEIGHT = 36;
+
+function VirtualTable<T>({
+  rows,
+  columns,
+  height = 480,
+}: {
+  rows: T[];
+  columns: { key: string; header: string; render: (row: T) => ReactNode; align?: "left" | "right" }[];
+  height?: number;
+}) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const visible = Math.ceil(height / ROW_HEIGHT) + 2;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT));
+  const slice = rows.slice(start, start + visible);
+  const offsetY = start * ROW_HEIGHT;
+
+  return (
+    <div
+      className="overflow-auto rounded-lg border"
+      style={{ height }}
+      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+    >
+      <table className="min-w-full text-sm">
+        <thead className="sticky top-0 z-10 bg-slate-50">
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key} className={`px-3 py-2 ${c.align === "right" ? "text-right" : "text-left"}`}>
+                {c.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody style={{ height: rows.length * ROW_HEIGHT }}>
+          <tr style={{ height: offsetY }} aria-hidden />
+          {slice.map((row, i) => (
+            <tr key={start + i} className="border-t" style={{ height: ROW_HEIGHT }}>
+              {columns.map((c) => (
+                <td key={c.key} className={`px-3 py-2 ${c.align === "right" ? "text-right" : ""}`}>
+                  {c.render(row)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="p-2 text-xs text-slate-500">共 {rows.length} 行</p>
+    </div>
+  );
+}
 
 export default function PathDetailPage() {
   const params = useParams();
   const planId = params.id as string;
   const runId = params.run_id as string;
   const pathNo = Number(params.path_no);
+  const [view, setView] = useState<"monthly" | "yearly">("monthly");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["path", runId, pathNo],
     queryFn: () => getPathDetail(runId, pathNo),
   });
+
+  const maxDrawdown = useMemo(
+    () => data?.monthly.reduce((max, m) => (m.drawdown > max ? m.drawdown : max), 0) ?? 0,
+    [data],
+  );
 
   if (isLoading) return <p>加载路径详情…</p>;
   if (error || !data) {
@@ -23,13 +82,42 @@ export default function PathDetailPage() {
   }
 
   const terminalWealth =
-    data.monthly.length > 0
-      ? data.monthly[data.monthly.length - 1].total_wealth_minor
-      : 0;
-  const maxDrawdown = data.monthly.reduce(
-    (max, m) => (m.drawdown > max ? m.drawdown : max),
-    0,
-  );
+    data.monthly.length > 0 ? data.monthly[data.monthly.length - 1].total_wealth_minor : 0;
+
+  const monthCols = [
+    { key: "m", header: "月份", render: (m: PathMonthRecord) => m.month_offset },
+    { key: "w", header: "资产", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.total_wealth_minor) },
+    { key: "i", header: "收入", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.income_minor) },
+    { key: "s", header: "支出", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.spending_minor) },
+    { key: "t", header: "税费", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.tax_minor) },
+    { key: "c", header: "交易成本", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.transaction_cost) },
+    { key: "d", header: "回撤", align: "right" as const, render: (m: PathMonthRecord) => formatPercent(m.drawdown) },
+    { key: "r", header: "调仓", render: (m: PathMonthRecord) => (m.rebalanced ? "是" : "否") },
+  ];
+
+  const yearCols = [
+    { key: "y", header: "年份", render: (y: PathYearRecord) => y.year },
+    { key: "sw", header: "年初资产", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.start_wealth_minor) },
+    { key: "i", header: "收入", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.income_minor) },
+    { key: "s", header: "支出", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.spending_minor) },
+    { key: "t", header: "税费", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.tax_minor) },
+    { key: "c", header: "交易成本", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.transaction_cost) },
+    { key: "g", header: "投资损益", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.investment_gain_loss) },
+    { key: "ew", header: "期末资产", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.end_wealth_minor) },
+    { key: "ydd", header: "年末回撤", align: "right" as const, render: (y: PathYearRecord) => formatPercent(y.year_end_drawdown) },
+    { key: "idd", header: "年内最大回撤", align: "right" as const, render: (y: PathYearRecord) => formatPercent(y.max_intra_year_dd) },
+    { key: "r", header: "调仓", render: (y: PathYearRecord) => (y.rebalanced ? "是" : "否") },
+    {
+      key: "wt",
+      header: "年末权重",
+      render: (y: PathYearRecord) =>
+        y.asset_weights
+          ? Object.entries(y.asset_weights)
+              .map(([k, v]) => `${k}: ${formatPercent(v)}`)
+              .join(" · ")
+          : "—",
+    },
+  ];
 
   return (
     <div className="space-y-4">
@@ -51,65 +139,44 @@ export default function PathDetailPage() {
           <dd>{formatMoney(terminalWealth)}</dd>
         </div>
         <div>
-          <dt className="text-sm text-slate-500">最大回撤</dt>
+          <dt className="text-sm text-slate-500">全路径最大回撤</dt>
           <dd>{formatPercent(maxDrawdown)}</dd>
         </div>
+        {data.failure_month != null && (
+          <div>
+            <dt className="text-sm text-slate-500">失败月份</dt>
+            <dd>{data.failure_month}</dd>
+          </div>
+        )}
         {data.failure_reason && (
           <div className="sm:col-span-2">
             <dt className="text-sm text-slate-500">失败原因</dt>
-            <dd>{data.failure_reason}</dd>
+            <dd>{failureReasonLabel(data.failure_reason)}</dd>
           </div>
         )}
       </dl>
-      <div className="overflow-x-auto rounded-lg border">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50">
-            <tr>
-              <th className="px-3 py-2">月份</th>
-              <th className="px-3 py-2 text-right">资产</th>
-              <th className="px-3 py-2 text-right">支出</th>
-              <th className="px-3 py-2 text-right">回撤</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.monthly.slice(0, 120).map((m) => (
-              <tr key={m.month_offset} className="border-t">
-                <td className="px-3 py-2">{m.month_offset}</td>
-                <td className="px-3 py-2 text-right">{formatMoney(m.total_wealth_minor)}</td>
-                <td className="px-3 py-2 text-right">{formatMoney(m.spending_minor)}</td>
-                <td className="px-3 py-2 text-right">{formatPercent(m.drawdown)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {data.monthly.length > 120 && (
-          <p className="p-2 text-xs text-slate-500">仅显示前 120 个月</p>
-        )}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          className={`rounded px-3 py-1 text-sm ${view === "monthly" ? "bg-slate-900 text-white" : "border"}`}
+          onClick={() => setView("monthly")}
+        >
+          月度 ({data.monthly.length})
+        </button>
+        <button
+          type="button"
+          className={`rounded px-3 py-1 text-sm ${view === "yearly" ? "bg-slate-900 text-white" : "border"}`}
+          onClick={() => setView("yearly")}
+        >
+          年度 ({data.yearly.length})
+        </button>
       </div>
-      {data.yearly.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border">
-          <h2 className="border-b px-3 py-2 text-sm font-medium">年度明细</h2>
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="px-3 py-2">年份</th>
-                <th className="px-3 py-2 text-right">收入</th>
-                <th className="px-3 py-2 text-right">支出</th>
-                <th className="px-3 py-2 text-right">期末资产</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.yearly.map((y) => (
-                <tr key={y.year} className="border-t">
-                  <td className="px-3 py-2">{y.year}</td>
-                  <td className="px-3 py-2 text-right">{formatMoney(y.income_minor)}</td>
-                  <td className="px-3 py-2 text-right">{formatMoney(y.spending_minor)}</td>
-                  <td className="px-3 py-2 text-right">{formatMoney(y.end_wealth_minor)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+
+      {view === "monthly" ? (
+        <VirtualTable rows={data.monthly} columns={monthCols} />
+      ) : (
+        <VirtualTable rows={data.yearly} columns={yearCols} height={400} />
       )}
     </div>
   );

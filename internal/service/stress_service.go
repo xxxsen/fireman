@@ -15,10 +15,10 @@ import (
 
 // CreateStressTestRequest starts a stress analysis job.
 type CreateStressTestRequest struct {
-	PlanID         string `json:"-"`
-	IdempotencyKey string `json:"-"`
-	Runs           *int   `json:"runs,omitempty"`
-	Seed           *int64 `json:"seed,omitempty"`
+	PlanID         string  `json:"-"`
+	IdempotencyKey string  `json:"-"`
+	Runs           *int    `json:"runs,omitempty"`
+	Seed           *string `json:"seed,omitempty"`
 }
 
 // CreateStressTestResponse returns the enqueued job.

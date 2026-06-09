@@ -29,7 +29,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
 	defer srv.Close()
 
-	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": 7})
+	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "7"})
 	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests", bytes.NewReader(stressBody))
 	stressReq.Header.Set("Content-Type", "application/json")
 	stressResp, err := http.DefaultClient.Do(stressReq)
@@ -53,7 +53,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 		t.Fatalf("stress job not succeeded: %+v", stressView)
 	}
 
-	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": 8})
+	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "8"})
 	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests", bytes.NewReader(sensBody))
 	sensReq.Header.Set("Content-Type", "application/json")
 	sensResp, err := http.DefaultClient.Do(sensReq)

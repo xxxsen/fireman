@@ -212,6 +212,68 @@ func (r *SnapshotRepo) GetSystemCashSnapshotID() string {
 	return SystemCashSnapshotID
 }
 
+// ListByInstrument returns plan-specific snapshots for an instrument, newest first.
+func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string) ([]SimulationSnapshot, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, instrument_id, plan_id, inclusion_date, as_of_date,
+			window_start, window_end, complete_year_start, complete_year_end,
+			complete_year_count, observation_count,
+			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
+			expense_ratio, expense_ratio_status, fee_treatment,
+			source_mode, quality_status, warnings_json, source_hash, created_at
+		FROM instrument_simulation_snapshots
+		WHERE instrument_id=? AND plan_id IS NOT NULL
+		ORDER BY created_at DESC LIMIT 50`, instrumentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SimulationSnapshot
+	for rows.Next() {
+		var snap SimulationSnapshot
+		var planID sql.NullString
+		var windowStart, windowEnd sql.NullString
+		var yearStart, yearEnd sql.NullInt64
+		var expenseRatio sql.NullFloat64
+		if err := rows.Scan(
+			&snap.ID, &snap.InstrumentID, &planID, &snap.InclusionDate, &snap.AsOfDate,
+			&windowStart, &windowEnd, &yearStart, &yearEnd,
+			&snap.CompleteYearCount, &snap.ObservationCount,
+			&snap.HistoricalCAGR, &snap.ModeledAnnualReturn, &snap.AnnualVolatility, &snap.MaxDrawdown,
+			&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
+			&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if planID.Valid {
+			v := planID.String
+			snap.PlanID = &v
+		}
+		if windowStart.Valid {
+			v := windowStart.String
+			snap.WindowStart = &v
+		}
+		if windowEnd.Valid {
+			v := windowEnd.String
+			snap.WindowEnd = &v
+		}
+		if yearStart.Valid {
+			v := int(yearStart.Int64)
+			snap.CompleteYearStart = &v
+		}
+		if yearEnd.Valid {
+			v := int(yearEnd.Int64)
+			snap.CompleteYearEnd = &v
+		}
+		if expenseRatio.Valid {
+			v := expenseRatio.Float64
+			snap.ExpenseRatio = &v
+		}
+		out = append(out, snap)
+	}
+	return out, rows.Err()
+}
+
 // WarningsToJSON serializes warning strings.
 func WarningsToJSON(warnings []string) string {
 	if len(warnings) == 0 {

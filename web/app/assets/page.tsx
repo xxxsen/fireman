@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listInstruments } from "@/lib/api/instruments";
 import {
   assetClassLabel,
+  dataSourceLabel,
   qualityStatusLabel,
   regionLabel,
 } from "@/lib/format";
@@ -42,6 +43,7 @@ export default function AssetsPage() {
               <th className="px-3 py-2">大类</th>
               <th className="px-3 py-2">地区</th>
               <th className="px-3 py-2">数据状态</th>
+              <th className="px-3 py-2">数据来源</th>
               <th className="px-3 py-2">操作</th>
             </tr>
           </thead>
@@ -55,6 +57,9 @@ export default function AssetsPage() {
                 <td className="px-3 py-2">{regionLabel(inst.region)}</td>
                 <td className="px-3 py-2">
                   {qualityStatusLabel(inst.quality_status ?? inst.status)}
+                </td>
+                <td className="px-3 py-2 text-xs text-slate-600">
+                  {dataSourceLabel(inst.data_source_name)}
                 </td>
                 <td className="px-3 py-2">
                   <Link href={`/assets/${inst.id}`} className="underline">

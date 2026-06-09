@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -25,32 +26,32 @@ func NewSnapshotService(
 	return &SnapshotService{snapRepo: snapRepo, instRepo: instRepo, marketRepo: marketRepo}
 }
 
-// CreateForHolding returns a simulation snapshot ID for a new plan holding.
-func (s *SnapshotService) CreateForHolding(ctx context.Context, planID, instrumentID, valuationDate string) (string, error) {
+// BuildSnapshotForHolding computes a plan-specific simulation snapshot without persisting.
+func (s *SnapshotService) BuildSnapshotForHolding(ctx context.Context, planID, instrumentID, valuationDate string) (repository.SimulationSnapshot, error) {
 	inst, err := s.instRepo.GetByID(ctx, instrumentID)
 	if err != nil {
-		return "", err
+		return repository.SimulationSnapshot{}, err
 	}
 	if inst.ID == "system_cash_cny" {
-		return s.snapRepo.GetSystemCashSnapshotID(), nil
+		return repository.SimulationSnapshot{ID: s.snapRepo.GetSystemCashSnapshotID()}, nil
 	}
 	if inst.IsSystem {
-		return "", fmt.Errorf("system instrument cannot be added to plan holdings")
+		return repository.SimulationSnapshot{}, fmt.Errorf("system instrument cannot be added to plan holdings")
 	}
 
 	points, err := s.loadPoints(ctx, instrumentID)
 	if err != nil {
-		return "", err
+		return repository.SimulationSnapshot{}, err
 	}
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, valuationDate, pointType, sourceName)
 	if metrics.QualityStatus != "available" {
-		return "", &SnapshotError{Code: "instrument_insufficient_history", Message: "instrument does not have enough complete years for simulation"}
+		return repository.SimulationSnapshot{}, &SnapshotError{Code: "instrument_insufficient_history", Message: "instrument does not have enough complete years for simulation"}
 	}
 
 	snapID := "sim_snap_" + uuid.New().String()
 	planRef := planID
-	snap := repository.SimulationSnapshot{
+	return repository.SimulationSnapshot{
 		ID: snapID, InstrumentID: instrumentID, PlanID: &planRef,
 		InclusionDate: valuationDate, AsOfDate: valuationDate,
 		WindowStart: metrics.WindowStart, WindowEnd: metrics.WindowEnd,
@@ -64,11 +65,27 @@ func (s *SnapshotService) CreateForHolding(ctx context.Context, planID, instrume
 		WarningsJSON:  repository.WarningsToJSON(metrics.Warnings),
 		SourceHash:    metrics.SourceHash,
 		Years:         toRepoYears(metrics.Years),
+	}, nil
+}
+
+// CreatePlanSnapshotTx persists a snapshot within an existing transaction.
+func (s *SnapshotService) CreatePlanSnapshotTx(ctx context.Context, tx *sql.Tx, snap repository.SimulationSnapshot) error {
+	return s.snapRepo.CreatePlanSnapshot(ctx, tx, snap)
+}
+
+// CreateForHolding returns a simulation snapshot ID for a new plan holding.
+func (s *SnapshotService) CreateForHolding(ctx context.Context, planID, instrumentID, valuationDate string) (string, error) {
+	snap, err := s.BuildSnapshotForHolding(ctx, planID, instrumentID, valuationDate)
+	if err != nil {
+		return "", err
+	}
+	if snap.ID == s.snapRepo.GetSystemCashSnapshotID() {
+		return snap.ID, nil
 	}
 	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {
 		return "", err
 	}
-	return snapID, nil
+	return snap.ID, nil
 }
 
 // SyncForHolding rebuilds snapshot for an existing holding.

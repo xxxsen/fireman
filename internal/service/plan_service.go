@@ -11,6 +11,7 @@ import (
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/domain"
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
@@ -54,6 +55,7 @@ type PlanService struct {
 	scenario *repository.ScenarioRepo
 	holdings *repository.HoldingsRepo
 	hash     *ConfigHashService
+	snapSvc  *marketdata.SnapshotService
 }
 
 func NewPlanService(
@@ -64,9 +66,11 @@ func NewPlanService(
 	scenario *repository.ScenarioRepo,
 	holdings *repository.HoldingsRepo,
 	hash *ConfigHashService,
+	snapSvc *marketdata.SnapshotService,
 ) *PlanService {
 	return &PlanService{
-		sql: sqlDB, plans: plans, params: params, alloc: alloc, scenario: scenario, holdings: holdings, hash: hash,
+		sql: sqlDB, plans: plans, params: params, alloc: alloc, scenario: scenario,
+		holdings: holdings, hash: hash, snapSvc: snapSvc,
 	}
 }
 
@@ -105,11 +109,8 @@ func defaultRegionTargets() []repository.RegionTarget {
 	var out []repository.RegionTarget
 	for _, ac := range domain.AssetClasses {
 		for _, region := range domain.Regions {
-			w := 0.5
-			if ac == domain.AssetClassCash && region == domain.RegionForeign {
-				w = 0.0
-			}
-			if ac == domain.AssetClassCash && region == domain.RegionDomestic {
+			w := 0.0
+			if region == domain.RegionDomestic {
 				w = 1.0
 			}
 			out = append(out, repository.RegionTarget{

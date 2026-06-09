@@ -29,7 +29,7 @@ export default function DashboardPage() {
   const pathsQ = useQuery({
     queryKey: ["paths", sim?.id],
     queryFn: () => listPaths(sim!.id),
-    enabled: !!sim?.id && (sim?.success_count ?? 0) > 0,
+    enabled: !!sim?.id && jobQ.data?.status === "succeeded",
   });
 
   if (isLoading) return <p className="text-slate-600">加载仪表盘…</p>;

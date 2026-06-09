@@ -152,3 +152,33 @@ func (r *HoldingsRepo) exec(tx *sql.Tx) dbExec {
 	}
 	return r.db
 }
+
+// PlanInstrumentReference links a plan holding to its simulation snapshot date.
+type PlanInstrumentReference struct {
+	PlanID                string `json:"plan_id"`
+	PlanName              string `json:"plan_name"`
+	SnapshotInclusionDate string `json:"snapshot_inclusion_date"`
+}
+
+func (r *HoldingsRepo) ListReferencingPlans(ctx context.Context, instrumentID string) ([]PlanInstrumentReference, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT p.id, p.name, COALESCE(s.inclusion_date, '')
+		FROM plan_holdings h
+		JOIN plans p ON p.id = h.plan_id
+		LEFT JOIN instrument_simulation_snapshots s ON s.id = h.simulation_snapshot_id
+		WHERE h.instrument_id=?
+		ORDER BY p.name`, instrumentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanInstrumentReference
+	for rows.Next() {
+		var ref PlanInstrumentReference
+		if err := rows.Scan(&ref.PlanID, &ref.PlanName, &ref.SnapshotInclusionDate); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}

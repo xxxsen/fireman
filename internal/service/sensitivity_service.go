@@ -14,10 +14,10 @@ import (
 
 // CreateSensitivityTestRequest starts a sensitivity analysis job.
 type CreateSensitivityTestRequest struct {
-	PlanID         string `json:"-"`
-	IdempotencyKey string `json:"-"`
-	Runs           *int   `json:"runs,omitempty"`
-	Seed           *int64 `json:"seed,omitempty"`
+	PlanID         string  `json:"-"`
+	IdempotencyKey string  `json:"-"`
+	Runs           *int    `json:"runs,omitempty"`
+	Seed           *string `json:"seed,omitempty"`
 }
 
 // CreateSensitivityTestResponse returns the enqueued job.

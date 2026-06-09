@@ -122,12 +122,17 @@ func ValidateHoldingGroupWeights(alloc AllocationWeights, holdings []HoldingWeig
 		if !pp {
 			allPassed = false
 		}
+		missing := PortfolioCoverageByClass(alloc, holdings)
+		msg := formatPortfolioWeightMessage(portfolioSum, 1.0, missing, holdings, alloc)
+		if pp {
+			msg = formatWeightGapMessage("已启用标的全组合目标权重", portfolioSum, 1.0, true)
+		}
 		checks = append(checks, WeightCheck{
 			Scope:   "portfolio",
 			Actual:  portfolioSum,
 			Target:  1.0,
 			Passed:  pp,
-			Message: formatWeightGapMessage("已启用标的全组合目标权重", portfolioSum, 1.0, pp),
+			Message: msg,
 		})
 	}
 

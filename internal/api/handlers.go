@@ -63,7 +63,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc,
 	)
 
-	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, hash)
+	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, hash, snapSvc)
 	return Services{
 		Plans:            planSvc,
 		Allocation:       service.NewAllocationService(db, plans, alloc, scenario),
@@ -85,6 +85,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 
 func (s Services) registerPlanRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans", s.createPlan)
+	rg.POST("/plans/wizard", s.createPlanWizard)
 	rg.GET("/plans", s.listPlans)
 	rg.GET("/plans/:plan_id", s.getPlan)
 	rg.PUT("/plans/:plan_id", s.updatePlan)
@@ -126,6 +127,20 @@ func (s Services) createPlan(c *gin.Context) {
 		return
 	}
 	out, err := s.Plans.Create(c.Request.Context(), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) createPlanWizard(c *gin.Context) {
+	var req service.PlanWizardRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Plans.CreateWizard(c.Request.Context(), req)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -179,21 +194,29 @@ func (s Services) getParameters(c *gin.Context) {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"parameters": params, "cash_flows": flows})
+	OK(c, gin.H{"parameters": service.ParametersToAPI(params), "cash_flows": flows})
 }
 
 func (s Services) updateParameters(c *gin.Context) {
-	var req service.ParametersUpdateRequest
+	var req service.ParametersUpdateAPIRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	params, flows, err := s.Plans.UpdateParameters(c.Request.Context(), c.Param("plan_id"), req)
+	params, err := service.ParametersFromAPI(req.Parameters)
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "parameters_invalid", err.Error(), nil)
+		return
+	}
+	updated, flows, err := s.Plans.UpdateParameters(c.Request.Context(), c.Param("plan_id"), service.ParametersUpdateRequest{
+		ConfigVersion: req.ConfigVersion, Parameters: params,
+		CashFlows: req.CashFlows, ApplyUnallocatedToCash: req.ApplyUnallocatedToCash,
+	})
 	if err != nil {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"parameters": params, "cash_flows": flows})
+	OK(c, gin.H{"parameters": service.ParametersToAPI(updated), "cash_flows": flows})
 }
 
 func (s Services) getAllocation(c *gin.Context) {

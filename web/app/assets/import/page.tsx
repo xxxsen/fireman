@@ -6,7 +6,7 @@ import { useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { importInstrument, previewImport } from "@/lib/api/instruments";
 import { ApiError } from "@/lib/api/client";
-import { assetClassLabel, formatPercent } from "@/lib/format";
+import { assetClassLabel, dataSourceLabel, formatPercent } from "@/lib/format";
 
 const MARKETS = [
   { value: "CN", label: "中国市场" },
@@ -180,8 +180,15 @@ export default function ImportAssetPage() {
               <dd>{String(inst.currency ?? "—")}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">数据来源</dt>
-              <dd>{String(preview.source_name ?? preview.provider_symbol ?? "AKShare")}</dd>
+              <dt className="text-slate-500">抓取数据源</dt>
+              <dd>
+                {dataSourceLabel(String(preview.source_name ?? ""))}
+                {preview.source_name ? (
+                  <span className="ml-1 font-mono text-xs text-slate-400">
+                    ({String(preview.source_name)})
+                  </span>
+                ) : null}
+              </dd>
             </div>
             <div>
               <dt className="text-slate-500">数据截止</dt>

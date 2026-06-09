@@ -26,6 +26,11 @@ type MarketDataPoint struct {
 	FetchedAt    int64
 }
 
+func (r *MarketDataRepo) DeleteAllTx(ctx context.Context, tx *sql.Tx, instrumentID string) error {
+	_, err := r.exec(tx).ExecContext(ctx, `DELETE FROM market_data_points WHERE instrument_id=?`, instrumentID)
+	return err
+}
+
 func (r *MarketDataRepo) UpsertBatch(ctx context.Context, tx *sql.Tx, instrumentID string, points []MarketDataPoint) error {
 	exec := r.exec(tx)
 	for _, p := range points {
@@ -82,6 +87,18 @@ func (r *MarketDataRepo) LastTradeDate(ctx context.Context, instrumentID string)
 		return "", nil
 	}
 	return d.String, nil
+}
+
+// LatestPointMeta returns metadata from the most recent stored observation.
+func (r *MarketDataRepo) LatestPointMeta(ctx context.Context, instrumentID string) (sourceName, pointType string, err error) {
+	err = r.db.QueryRowContext(ctx, `
+		SELECT source_name, point_type FROM market_data_points
+		WHERE instrument_id=?
+		ORDER BY trade_date DESC LIMIT 1`, instrumentID).Scan(&sourceName, &pointType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	return sourceName, pointType, err
 }
 
 func (r *MarketDataRepo) LastFetchedAt(ctx context.Context, instrumentID string) (int64, error) {

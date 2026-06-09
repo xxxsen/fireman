@@ -75,7 +75,7 @@ func TestSimulationJobPathAndStaleIntegration(t *testing.T) {
 	srv, db, client, _ := setupFullStackIntegration(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": 42})
+	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "42"})
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/simulations", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
@@ -216,7 +216,7 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	srv, db, client, _ := setupFullStackIntegration(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": 11})
+	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "11"})
 	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests", bytes.NewReader(stressBody))
 	stressReq.Header.Set("Content-Type", "application/json")
 	stressResp, err := client.Do(stressReq)
@@ -230,7 +230,7 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	stressJobID := stressEnv["data"].(map[string]any)["job_id"].(string)
 	waitJobSucceeded(t, srv, stressJobID)
 
-	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": 12})
+	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "12"})
 	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests", bytes.NewReader(sensBody))
 	sensReq.Header.Set("Content-Type", "application/json")
 	sensResp, err := client.Do(sensReq)

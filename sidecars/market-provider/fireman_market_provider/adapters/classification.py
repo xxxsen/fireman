@@ -47,6 +47,14 @@ def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str) -> FundMeta:
     if "基金类型" in df.columns and not df["基金类型"].empty:
         fund_type = str(df["基金类型"].iloc[0])
 
+    if "每万份收益" in df.columns and "累计净值" not in df.columns:
+        return FundMeta(
+            name=name,
+            asset_class="cash",
+            region="domestic",
+            components={"fund_type": fund_type or "货币基金", "region": "domestic"},
+        )
+
     text = f"{name} {fund_type}"
     for keyword in UNSUPPORTED_KEYWORDS:
         if keyword in text:

@@ -18,6 +18,7 @@ VALUE_CANDIDATES = (
     "adj_close",
     "单位净值",
     "累计净值",
+    "每万份收益",
     "净值",
     "value",
 )
@@ -36,11 +37,15 @@ def _pick_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
 def _parse_date(value: Any) -> str | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
+    if isinstance(value, pd.Timestamp):
+        return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
     text = str(value).strip()
     if not text:
         return None
+    if "T" in text:
+        text = text.split("T", 1)[0]
     if " " in text:
         text = text.split(" ", 1)[0]
     parsed = pd.to_datetime(text, errors="coerce")

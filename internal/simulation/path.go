@@ -383,21 +383,14 @@ func addCash(slots []assetSlot, cashIdx int, amount float64) {
 
 func withdrawAmount(slots []assetSlot, cashIdx int, amount float64, txRate float64) (bool, int64) {
 	remaining := amount
-	var tradeVolume float64
 
 	if cashIdx >= 0 && slots[cashIdx].balance >= remaining {
 		slots[cashIdx].balance -= remaining
-		tradeVolume = remaining
-		cost := int64(math.Round(tradeVolume * txRate))
-		if cost > 0 {
-			deductProRata(slots, float64(cost))
-		}
-		return true, cost
+		return true, 0
 	}
 
 	if cashIdx >= 0 {
 		remaining -= slots[cashIdx].balance
-		tradeVolume += slots[cashIdx].balance
 		slots[cashIdx].balance = 0
 	}
 
@@ -405,21 +398,24 @@ func withdrawAmount(slots []assetSlot, cashIdx int, amount float64, txRate float
 	for _, s := range slots {
 		total += s.balance
 	}
-	if total < remaining {
+	if remaining <= 0 {
+		return true, 0
+	}
+	if txRate >= 1 {
+		return false, 0
+	}
+	grossNeeded := remaining / (1 - txRate)
+	if total+1e-9 < grossNeeded {
 		return false, 0
 	}
 	for i := range slots {
 		if slots[i].balance <= 0 {
 			continue
 		}
-		share := remaining * (slots[i].balance / total)
+		share := grossNeeded * (slots[i].balance / total)
 		slots[i].balance -= share
-		tradeVolume += share
 	}
-	cost := int64(math.Round(tradeVolume * txRate))
-	if cost > 0 {
-		deductProRata(slots, float64(cost))
-	}
+	cost := int64(math.Round(grossNeeded * txRate))
 	return true, cost
 }
 
@@ -468,18 +464,47 @@ func needsRebalance(slots []assetSlot, threshold float64) bool {
 }
 
 func rebalanceToTarget(slots []assetSlot, txRate float64) int64 {
-	total := 0.0
+	const cent = 0.005
+	var recorded int64
+	for iter := 0; iter < 50; iter++ {
+		total := 0.0
+		for _, s := range slots {
+			total += s.balance
+		}
+		var tradeVolume float64
+		targets := make([]float64, len(slots))
+		for i := range slots {
+			targets[i] = total * slots[i].targetWeight
+			tradeVolume += math.Abs(targets[i] - slots[i].balance)
+		}
+		cost := int64(math.Round(tradeVolume * txRate))
+		if cost == 0 {
+			for i := range slots {
+				slots[i].balance = targets[i]
+			}
+			return recorded
+		}
+		newTotal := total - float64(cost)
+		if newTotal < 0 {
+			newTotal = 0
+		}
+		recorded += cost
+		for i := range slots {
+			slots[i].balance = newTotal * slots[i].targetWeight
+		}
+		if math.Abs(total-float64(recorded)-sumBalances(slots)) <= cent {
+			return recorded
+		}
+	}
+	return recorded
+}
+
+func sumBalances(slots []assetSlot) float64 {
+	sum := 0.0
 	for _, s := range slots {
-		total += s.balance
+		sum += s.balance
 	}
-	var tradeVolume float64
-	for i := range slots {
-		target := total * slots[i].targetWeight
-		diff := target - slots[i].balance
-		tradeVolume += math.Abs(diff)
-		slots[i].balance = target
-	}
-	return int64(math.Round(tradeVolume * txRate))
+	return sum
 }
 
 func cashFlowAmount(flows []SnapshotCashFlow, month int, inflCumulative float64, kind string) int64 {
