@@ -87,6 +87,7 @@ class ResolveCandidate(BaseModel):
     name: str
     exchange: str
     instrument_kind: str
+    candidate_id: str
 
 
 class ResolveData(BaseModel):

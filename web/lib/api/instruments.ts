@@ -7,8 +7,30 @@ export interface ResolveCandidate {
   name: string;
   exchange: string;
   instrument_kind: string;
+  candidate_id?: string;
   is_importable?: boolean;
   ticket_id?: string;
+}
+
+/** Stable unique key for a resolve candidate (list keys, selection, test ids). */
+export function candidateIdentity(candidate: ResolveCandidate): string {
+  if (candidate.candidate_id) {
+    return candidate.candidate_id;
+  }
+  if (candidate.ticket_id) {
+    return candidate.ticket_id;
+  }
+  return `${candidate.code}|${candidate.provider_symbol}|${candidate.instrument_kind}|${candidate.exchange}`;
+}
+
+export function isSameCandidate(
+  a: ResolveCandidate | null | undefined,
+  b: ResolveCandidate | null | undefined,
+): boolean {
+  if (!a || !b) {
+    return false;
+  }
+  return candidateIdentity(a) === candidateIdentity(b);
 }
 
 export interface ResolveResult {

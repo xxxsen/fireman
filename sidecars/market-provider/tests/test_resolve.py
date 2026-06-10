@@ -261,6 +261,8 @@ def test_resolve_cn_exchange_fund_prefixed_dual_etf_lof_candidates(
     assert kinds == {"etf", "lof"}
     codes = {c["code"] for c in body["data"]["candidates"]}
     assert codes == {"sz150001"}
+    ids = {c["candidate_id"] for c in body["data"]["candidates"]}
+    assert ids == {"sz150001|sz150001|etf|SZ", "sz150001|sz150001|lof|SZ"}
 
 
 def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(

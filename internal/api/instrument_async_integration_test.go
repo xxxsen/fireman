@@ -767,4 +767,11 @@ func TestResolveStockCandidateNoTicketForFundTypeIntegration(t *testing.T) {
 	if _, ok := stockCand["ticket_id"]; ok {
 		t.Fatal("stock candidate must not include ticket_id")
 	}
+	candidateID, ok := stockCand["candidate_id"].(string)
+	if !ok || candidateID == "" {
+		t.Fatalf("stock candidate missing candidate_id: %v", stockCand["candidate_id"])
+	}
+	if candidateID != "sz000510|sz000510|stock|SZ" {
+		t.Fatalf("stock candidate_id=%q want composite identity", candidateID)
+	}
 }

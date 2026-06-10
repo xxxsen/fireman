@@ -104,6 +104,21 @@ def _candidate_from_cn(parsed: CNExchangeCode, name: str, kind: str) -> _Candida
     )
 
 
+def _candidate_identity(code: str, provider_symbol: str, instrument_kind: str, exchange: str) -> str:
+    return f"{code}|{provider_symbol}|{instrument_kind}|{exchange}"
+
+
+def _to_resolve_candidate(c: _Candidate) -> ResolveCandidate:
+    return ResolveCandidate(
+        code=c.code,
+        provider_symbol=c.provider_symbol,
+        name=c.name,
+        exchange=c.exchange,
+        instrument_kind=c.instrument_kind,
+        candidate_id=_candidate_identity(c.code, c.provider_symbol, c.instrument_kind, c.exchange),
+    )
+
+
 def _dedupe_candidates(items: list[_Candidate]) -> list[_Candidate]:
     seen: set[tuple[str, str]] = set()
     out: list[_Candidate] = []
@@ -248,28 +263,9 @@ def resolve_instrument(req: ResolveRequest) -> ResolveData:
         raise ValueError("instrument_not_found")
 
     if len(found) == 1:
-        c = found[0]
-        return ResolveData(
-            ambiguous=False,
-            resolved=ResolveCandidate(
-                code=c.code,
-                provider_symbol=c.provider_symbol,
-                name=c.name,
-                exchange=c.exchange,
-                instrument_kind=c.instrument_kind,
-            ),
-        )
+        return ResolveData(ambiguous=False, resolved=_to_resolve_candidate(found[0]))
 
     return ResolveData(
         ambiguous=True,
-        candidates=[
-            ResolveCandidate(
-                code=c.code,
-                provider_symbol=c.provider_symbol,
-                name=c.name,
-                exchange=c.exchange,
-                instrument_kind=c.instrument_kind,
-            )
-            for c in found
-        ],
+        candidates=[_to_resolve_candidate(c) for c in found],
     )

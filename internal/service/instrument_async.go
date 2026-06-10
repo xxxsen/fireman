@@ -125,6 +125,10 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 	return out, nil
 }
 
+func resolveCandidateIdentity(code, providerSymbol, instrumentKind, exchange string) string {
+	return code + "|" + providerSymbol + "|" + instrumentKind + "|" + exchange
+}
+
 func (s *InstrumentService) buildResolveCandidate(
 	ctx context.Context,
 	market, instrumentType string,
@@ -137,6 +141,7 @@ func (s *InstrumentService) buildResolveCandidate(
 		"instrument_kind": c.InstrumentKind, "is_importable": importable,
 	}
 	if !importable {
+		out["candidate_id"] = resolveCandidateIdentity(c.Code, c.ProviderSymbol, c.InstrumentKind, c.Exchange)
 		return out, nil
 	}
 	ticketID, err := s.createResolutionTicket(ctx, market, instrumentType, c)
@@ -144,6 +149,7 @@ func (s *InstrumentService) buildResolveCandidate(
 		return nil, err
 	}
 	out["ticket_id"] = ticketID
+	out["candidate_id"] = ticketID
 	return out, nil
 }
 

@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
+  candidateIdentity,
   importAsync,
+  isSameCandidate,
   resolveImport,
   type ResolveCandidate,
 } from "@/lib/api/instruments";
@@ -181,10 +183,11 @@ export default function ImportAssetPage() {
           <div className="space-y-2" role="radiogroup" aria-label="候选标的">
             {candidates.map((c) => {
               const compatible = isCandidateCompatible(c);
+              const identity = candidateIdentity(c);
               return (
               <label
-                key={c.code}
-                data-testid={`candidate-${c.code}`}
+                key={identity}
+                data-testid={`candidate-${identity}`}
                 data-compatible={compatible ? "true" : "false"}
                 className={`flex items-start gap-3 rounded-md border p-3 ${
                   compatible
@@ -196,7 +199,7 @@ export default function ImportAssetPage() {
                   type="radio"
                   name="candidate"
                   disabled={!compatible}
-                  checked={compatible && selected?.code === c.code}
+                  checked={compatible && isSameCandidate(selected, c)}
                   onChange={() => compatible && setSelected(c)}
                 />
                 <span>
