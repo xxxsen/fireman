@@ -115,10 +115,10 @@ func (r *HoldingsRepo) GetInstrument(ctx context.Context, instrumentID string) (
 	var inst Instrument
 	var isSystem int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, code, name, market, asset_class, region, currency, is_system
+		SELECT id, code, name, market, asset_class, region, currency, status, is_system
 		FROM instruments WHERE id=?`, instrumentID).Scan(
 		&inst.ID, &inst.Code, &inst.Name, &inst.Market,
-		&inst.AssetClass, &inst.Region, &inst.Currency, &isSystem)
+		&inst.AssetClass, &inst.Region, &inst.Currency, &inst.Status, &isSystem)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Instrument{}, ErrInstrumentNotFound
 	}

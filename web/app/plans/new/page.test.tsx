@@ -71,6 +71,7 @@ vi.mock("@/lib/api/instruments", () => ({
           region: "domestic",
           currency: "CNY",
           quality_status: "available",
+          status: "active",
           is_system: false,
         },
       ],

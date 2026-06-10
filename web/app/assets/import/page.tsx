@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { MetricHelp } from "@/components/ui/MetricHelp";
-import { importInstrument, previewImport } from "@/lib/api/instruments";
+import {
+  importAsync,
+  resolveImport,
+  type ResolveCandidate,
+} from "@/lib/api/instruments";
 import { ApiError } from "@/lib/api/client";
-import { assetClassLabel, dataSourceLabel, formatPercent } from "@/lib/format";
 
 const MARKETS = [
   { value: "CN", label: "中国市场" },
@@ -31,7 +33,7 @@ const TYPES: Record<string, { value: string; label: string }[]> = {
 };
 
 const CODE_HINTS: Record<string, string> = {
-  cn_exchange_fund: "例如 510300",
+  cn_exchange_fund: "例如 510300 或 sh510300",
   cn_exchange_stock: "例如 600519",
   cn_mutual_fund: "例如 000001",
   hk_etf: "例如 02800",
@@ -40,7 +42,24 @@ const CODE_HINTS: Record<string, string> = {
   us_stock: "例如 AAPL",
 };
 
-type Stage = "search" | "preview" | "error";
+function isCandidateCompatible(instrumentType: string, instrumentKind: string): boolean {
+  if (instrumentType === "cn_exchange_fund") {
+    return instrumentKind !== "stock";
+  }
+  if (instrumentType === "cn_exchange_stock") {
+    return instrumentKind === "stock";
+  }
+  return true;
+}
+
+function firstCompatibleCandidate(
+  instrumentType: string,
+  candidates: ResolveCandidate[],
+): ResolveCandidate | null {
+  return candidates.find((c) => isCandidateCompatible(instrumentType, c.instrument_kind)) ?? null;
+}
+
+type Stage = "search" | "disambiguate" | "confirm" | "error";
 
 export default function ImportAssetPage() {
   const router = useRouter();
@@ -49,30 +68,48 @@ export default function ImportAssetPage() {
   const [instrumentType, setInstrumentType] = useState("cn_exchange_fund");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
+  const [candidates, setCandidates] = useState<ResolveCandidate[]>([]);
+  const [selected, setSelected] = useState<ResolveCandidate | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPreview = async () => {
+  const handleResolve = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await previewImport({ market, instrument_type: instrumentType, code });
-      setPreview(data);
-      setStage("preview");
+      const data = await resolveImport({ market, instrument_type: instrumentType, code });
+      if (data.ambiguous && data.candidates?.length) {
+        setCandidates(data.candidates);
+        setSelected(firstCompatibleCandidate(instrumentType, data.candidates));
+        setStage("disambiguate");
+        return;
+      }
+      if (data.resolved) {
+        setSelected(data.resolved);
+        setStage("confirm");
+        return;
+      }
+      setError("未找到匹配的标的");
+      setStage("error");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "AKShare 请求失败");
+      setError(e instanceof ApiError ? e.message : "解析失败");
       setStage("error");
     } finally {
       setLoading(false);
     }
   };
 
-  const confirmImport = async () => {
+  const handleImport = async () => {
+    if (!selected) return;
     setLoading(true);
     setError(null);
     try {
-      const inst = await importInstrument({ market, instrument_type: instrumentType, code });
-      router.push(`/assets/${inst.id}`);
+      const result = await importAsync({
+        market,
+        instrument_type: instrumentType,
+        code: selected.code,
+        provider_symbol: selected.provider_symbol,
+      });
+      router.push(`/assets/${result.instrument_id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "录入失败");
       setStage("error");
@@ -80,27 +117,6 @@ export default function ImportAssetPage() {
       setLoading(false);
     }
   };
-
-  const inst = (preview?.instrument as Record<string, unknown>) ?? {};
-  const quality = (preview?.quality_status as string) ?? "";
-  const canSave =
-    quality === "available" ||
-    quality === "insufficient_history";
-  const blockSave =
-    quality === "classification_failed" ||
-    quality === "metadata_conflict" ||
-    quality === "data_anomaly";
-
-  const simWindow = preview?.simulation_window as
-    | {
-        inclusion_date?: string;
-        complete_year_count?: number;
-        modeled_annual_return?: number;
-        annual_volatility?: number;
-        max_drawdown?: number;
-        excluded_years?: number[];
-      }
-    | undefined;
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -111,9 +127,9 @@ export default function ImportAssetPage() {
 
       {stage === "search" && (
         <div className="mt-6 space-y-4 rounded-lg border p-6">
-          <h2 className="font-medium">1. 查询标的</h2>
+          <h2 className="font-medium">1. 解析标的</h2>
           <p className="text-sm text-slate-600">
-            仅允许选择市场、标的类型并输入代码。名称、大类、收益风险均由 AKShare 或后端计算。
+            输入代码后轻量解析名称与交易所；确认后异步抓取全量历史，无需等待。
           </p>
           <label className="block text-sm">
             市场
@@ -157,141 +173,104 @@ export default function ImportAssetPage() {
           </label>
           <button
             type="button"
+            data-testid="resolve-button"
             className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
             disabled={!code.trim() || loading}
-            onClick={() => void fetchPreview()}
+            onClick={() => void handleResolve()}
           >
-            从 AKShare 获取
+            {loading ? "正在查询…" : "解析标的"}
           </button>
         </div>
       )}
 
-      {stage === "preview" && preview && (
+      {stage === "disambiguate" && (
         <div className="mt-6 space-y-4 rounded-lg border p-6">
-          <h2 className="font-medium">2. 核对 AKShare 数据（只读）</h2>
+          <h2 className="font-medium">2. 选择真实标的</h2>
+          <p className="text-sm text-amber-800">该代码存在多个候选，请选择正确的一项。</p>
+          <div className="space-y-2" role="radiogroup" aria-label="候选标的">
+            {candidates.map((c) => {
+              const compatible = isCandidateCompatible(instrumentType, c.instrument_kind);
+              return (
+              <label
+                key={c.code}
+                data-testid={`candidate-${c.code}`}
+                data-compatible={compatible ? "true" : "false"}
+                className={`flex items-start gap-3 rounded-md border p-3 ${
+                  compatible
+                    ? "cursor-pointer hover:bg-slate-50"
+                    : "cursor-not-allowed bg-slate-50 opacity-50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="candidate"
+                  disabled={!compatible}
+                  checked={compatible && selected?.code === c.code}
+                  onChange={() => compatible && setSelected(c)}
+                />
+                <span>
+                  <span className="font-mono font-medium">{c.code}</span>
+                  <span className="ml-2">{c.name}</span>
+                  <span className="ml-2 text-xs text-slate-500">
+                    {c.exchange} · {c.instrument_kind}
+                  </span>
+                  {!compatible && (
+                    <span className="ml-2 text-xs text-amber-700">与所选类型不匹配</span>
+                  )}
+                </span>
+              </label>
+            );
+            })}
+          </div>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+              disabled={!selected || !isCandidateCompatible(instrumentType, selected.instrument_kind)}
+              onClick={() => setStage("confirm")}
+            >
+              下一步
+            </button>
+            <button type="button" className="text-sm underline" onClick={() => setStage("search")}>
+              返回修改
+            </button>
+          </div>
+        </div>
+      )}
+
+      {stage === "confirm" && selected && (
+        <div className="mt-6 space-y-4 rounded-lg border p-6">
+          <h2 className="font-medium">3. 确认并开始抓取</h2>
           <dl className="grid gap-2 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-slate-500">名称</dt>
-              <dd>{String(inst.name ?? "—")}</dd>
+              <dd>{selected.name}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">代码</dt>
-              <dd>{code}</dd>
+              <dt className="text-slate-500">完整代码</dt>
+              <dd className="font-mono">{selected.code}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">大类</dt>
-              <dd>{assetClassLabel(String(inst.asset_class ?? ""))}</dd>
+              <dt className="text-slate-500">交易所</dt>
+              <dd>{selected.exchange || "—"}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">币种</dt>
-              <dd>{String(inst.currency ?? "—")}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">抓取数据源</dt>
-              <dd>
-                {dataSourceLabel(String(preview.source_name ?? ""))}
-                {preview.source_name ? (
-                  <span className="ml-1 font-mono text-xs text-slate-400">
-                    ({String(preview.source_name)})
-                  </span>
-                ) : null}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">数据截止</dt>
-              <dd>{String(preview.data_as_of ?? "—")}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">数据质量</dt>
-              <dd>{quality}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">费率状态</dt>
-              <dd>
-                {String(inst.expense_ratio_status ?? "—")}
-                <MetricHelp termKey="fee_included" />
-              </dd>
+              <dt className="text-slate-500">类型</dt>
+              <dd>{selected.instrument_kind}</dd>
             </div>
           </dl>
-          {simWindow && (
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-              <h3 className="font-medium">纳入计划后的模拟窗口预览</h3>
-              <p className="mt-1 text-slate-600">
-                纳入日 {simWindow.inclusion_date} · 完整年度 {simWindow.complete_year_count ?? 0} 个
-              </p>
-              <dl className="mt-2 grid gap-2 sm:grid-cols-3">
-                <div>
-                  <dt className="flex items-center text-slate-500">
-                    年化收益
-                    <MetricHelp termKey="annual_return" />
-                  </dt>
-                  <dd>{formatPercent(simWindow.modeled_annual_return ?? 0)}</dd>
-                </div>
-                <div>
-                  <dt className="flex items-center text-slate-500">
-                    年化波动
-                    <MetricHelp termKey="annual_volatility" />
-                  </dt>
-                  <dd>{formatPercent(simWindow.annual_volatility ?? 0)}</dd>
-                </div>
-                <div>
-                  <dt className="flex items-center text-slate-500">
-                    最大回撤
-                    <MetricHelp termKey="max_drawdown" />
-                  </dt>
-                  <dd>{formatPercent(simWindow.max_drawdown ?? 0)}</dd>
-                </div>
-              </dl>
-              {simWindow.excluded_years && simWindow.excluded_years.length > 0 && (
-                <p className="mt-2 text-xs text-slate-600">
-                  排除的不完整年度：{simWindow.excluded_years.join("、")}
-                </p>
-              )}
-            </div>
-          )}
-          {Array.isArray(preview.annual_returns) && (
-            <div className="max-h-48 overflow-auto rounded border text-xs">
-              <table className="w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-2 py-1">年份</th>
-                    <th className="px-2 py-1">收益</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(preview.annual_returns as { year: number; annual_return: number }[])
-                    .slice(-20)
-                    .map((r) => (
-                      <tr key={r.year} className="border-t">
-                        <td className="px-2 py-1">{r.year}</td>
-                        <td className="px-2 py-1">{formatPercent(r.annual_return)}</td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <h3 className="font-medium">3. 确认录入</h3>
-          {quality === "insufficient_history" && (
-            <p className="text-sm text-amber-800">
-              历史不足：可保存为不可用资料，暂不能用于计划模拟。
-            </p>
-          )}
-          {blockSave ? (
-            <p className="text-sm text-red-700">数据质量未通过，禁止保存。</p>
-          ) : (
-            <button
-              type="button"
-              data-testid="confirm-import"
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-              disabled={!canSave || loading}
-              onClick={() => void confirmImport()}
-            >
-              {quality === "insufficient_history"
-                ? "保存并等待更多历史数据"
-                : "确认录入资料库"}
-            </button>
-          )}
+          <p className="text-sm text-slate-600">
+            确认后将创建占位记录并在后台抓取历史数据；详情页可查看进度。
+          </p>
+          <button
+            type="button"
+            data-testid="confirm-import"
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+            disabled={loading}
+            onClick={() => void handleImport()}
+          >
+            {loading ? "提交中…" : "开始抓取"}
+          </button>
           <button
             type="button"
             className="ml-3 text-sm underline"
@@ -309,7 +288,7 @@ export default function ImportAssetPage() {
             <button
               type="button"
               className="rounded-md border px-3 py-2 text-sm"
-              onClick={() => void fetchPreview()}
+              onClick={() => void handleResolve()}
             >
               重试
             </button>

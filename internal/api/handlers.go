@@ -70,7 +70,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		Holdings:         service.NewHoldingsService(db, plans, holdings, snapSvc),
 		Targets:          targetSvc,
 		Rebalance:        rebalanceSvc,
-		Instruments:      service.NewInstrumentService(db, instRepo, marketRepo, annualRepo, provider),
+		Instruments:      service.NewInstrumentService(db, instRepo, marketRepo, annualRepo, jobRepo, provider),
 		HoldingSnapshots: service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
 		Simulations:      simSvc,
 		Stress:           stressSvc,

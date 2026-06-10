@@ -69,3 +69,37 @@ class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["ok"]
+
+
+class ResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    market: Market
+    instrument_type: InstrumentType
+    code: str = Field(min_length=1, max_length=64)
+
+
+class ResolveCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    provider_symbol: str
+    name: str
+    exchange: str
+    instrument_kind: str
+
+
+class ResolveData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ambiguous: bool
+    resolved: ResolveCandidate | None = None
+    candidates: list[ResolveCandidate] = Field(default_factory=list)
+
+
+class ResolveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: int
+    message: str
+    data: ResolveData

@@ -7,7 +7,7 @@ from collections.abc import Callable
 import pandas as pd
 
 from ..logutil import get_logger
-from ..timeout_util import call_with_timeout
+from ..timeout_util import call_with_timeout, fetch_timeout_seconds
 
 logger = get_logger(__name__)
 
@@ -21,7 +21,7 @@ def try_sources(
     logger.info("fetch %s: trying %d source(s)", label, len(sources))
     for source_name, fetch in sources:
         try:
-            df = call_with_timeout(fetch)
+            df = call_with_timeout(fetch, fetch_timeout_seconds())
             if df is not None and not df.empty:
                 logger.info(
                     "fetch %s: success via %s (%d rows)",

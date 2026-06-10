@@ -16,21 +16,49 @@ import (
 func mockProviderServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/instruments/fetch" {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			var req marketdata.ResolveRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			code := req.Code
+			if req.Market == "CN" && req.InstrumentType == "cn_exchange_fund" && !marketdata.HasCNExchangePrefix(code) {
+				code = "sh" + code
+			}
+			if req.Market == "HK" {
+				code = marketdata.NormalizeHKCode(code)
+			}
+			resp := marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: code, ProviderSymbol: code,
+						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
+					},
+				},
+			}
+			if req.Market == "HK" {
+				resp.Data.Resolved = &marketdata.ResolveCandidate{
+					Code: code, ProviderSymbol: code,
+					Name: "腾讯控股", Exchange: "HK", InstrumentKind: "stock",
+				}
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/v1/instruments/fetch":
+			resp := marketdata.FetchResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.FetchData{
+					Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
+					AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
+					ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
+					Points:     buildFixturePoints(),
+					SourceName: "test_fixture", SourceQuality: "full",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		resp := marketdata.FetchResponse{
-			Code: 0, Message: "success",
-			Data: marketdata.FetchData{
-				Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
-				AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
-				ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
-				Points:     buildFixturePoints(),
-				SourceName: "test_fixture", SourceQuality: "full",
-			},
-		}
-		_ = json.NewEncoder(w).Encode(resp)
 	}))
 }
 
@@ -56,21 +84,37 @@ func buildTwentyYearFixturePoints() []marketdata.HistoricalPoint {
 func mockHKProviderServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/instruments/fetch" {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			var req marketdata.ResolveRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			code := marketdata.NormalizeHKCode(req.Code)
+			resp := marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: code, ProviderSymbol: code,
+						Name: "腾讯控股", Exchange: "HK", InstrumentKind: "stock",
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/v1/instruments/fetch":
+			resp := marketdata.FetchResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.FetchData{
+					Provider: "akshare", ProviderSymbol: "00700", Name: "腾讯控股",
+					AssetClass: "equity", Currency: "HKD", PointType: "adjusted_close",
+					ExpenseRatioStatus: "unavailable",
+					Points:             buildTwentyYearFixturePoints(),
+					SourceName:         "test_hk_fixture", SourceQuality: "full",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		resp := marketdata.FetchResponse{
-			Code: 0, Message: "success",
-			Data: marketdata.FetchData{
-				Provider: "akshare", ProviderSymbol: "00700", Name: "腾讯控股",
-				AssetClass: "equity", Currency: "HKD", PointType: "adjusted_close",
-				ExpenseRatioStatus: "unavailable",
-				Points:             buildTwentyYearFixturePoints(),
-				SourceName:         "test_hk_fixture", SourceQuality: "full",
-			},
-		}
-		_ = json.NewEncoder(w).Encode(resp)
 	}))
 }
 
@@ -159,6 +203,9 @@ func TestInstrumentImportPreviewAndImport(t *testing.T) {
 	env := decodeEnvelope(t, readBody(t, resp))
 	inst := env["data"].(map[string]any)
 	id := inst["id"].(string)
+	if inst["status"] != "pending_fetch" {
+		t.Fatalf("import status=%v want pending_fetch", inst["status"])
+	}
 
 	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + id)
 	if err != nil {
@@ -174,6 +221,77 @@ func TestInstrumentImportPreviewAndImport(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("annual status=%d", resp.StatusCode)
+	}
+}
+
+func TestHKInstrumentDuplicateNormalizedCode(t *testing.T) {
+	provider := mockHKProviderServer(t)
+	defer provider.Close()
+	srv := testRouterWithProvider(t, provider.URL)
+	defer srv.Close()
+	client := srv.Client()
+
+	payload700, _ := json.Marshal(map[string]any{
+		"market": "HK", "instrument_type": "hk_stock", "code": "700",
+	})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload700))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("import 700 status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	first := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	if first["code"] != "00700" {
+		t.Fatalf("imported code=%v want 00700", first["code"])
+	}
+
+	payload00700, _ := json.Marshal(map[string]any{
+		"market": "HK", "instrument_type": "hk_stock", "code": "00700",
+	})
+	resp, err = client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload00700))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("duplicate import status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	body := decodeEnvelope(t, readBody(t, resp))
+	if body["code"] != "instrument_fetch_in_progress" && body["code"] != "instrument_already_exists" {
+		t.Fatalf("duplicate code=%v want instrument_fetch_in_progress or instrument_already_exists", body["code"])
+	}
+}
+
+func TestHKInstrumentPreviewNormalizesCode(t *testing.T) {
+	provider := mockHKProviderServer(t)
+	defer provider.Close()
+	srv := testRouterWithProvider(t, provider.URL)
+	defer srv.Close()
+	client := srv.Client()
+
+	for _, code := range []string{"700", "00700"} {
+		payload, _ := json.Marshal(map[string]any{
+			"market": "HK", "instrument_type": "hk_stock", "code": code,
+		})
+		resp, err := client.Post(srv.URL+"/api/v1/instruments/import/preview", "application/json", bytes.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("preview %s status=%d body=%s", code, resp.StatusCode, readBody(t, resp))
+		}
+		preview := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+		if preview["deprecated"] != true {
+			t.Fatalf("preview should be deprecated")
+		}
+		resolve := preview["resolve"].(map[string]any)
+		if resolve["ambiguous"] != false {
+			t.Fatalf("preview resolve should be unambiguous for %s", code)
+		}
+		resolved := resolve["resolved"].(map[string]any)
+		if resolved["code"] != "00700" {
+			t.Fatalf("preview code for %s=%v want 00700", code, resolved["code"])
+		}
 	}
 }
 

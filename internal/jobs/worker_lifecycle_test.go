@@ -10,6 +10,133 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
+func TestWorkerRequeuesRunningJobOnShutdown(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	repo := repository.NewJobRepo(db)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO plans (id,name,base_currency,valuation_date,status,config_version,created_at,updated_at)
+		VALUES ('plan_requeue','test','CNY','2026-06-09','active',1,0,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(ctx, nil, repository.Job{
+		ID: "job_requeue", PlanID: "plan_requeue", Type: repository.JobTypeSimulation,
+		Status: repository.JobStatusQueued, InputHash: "h",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO simulation_runs (id, job_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
+			engine_version, runs, seed, horizon_months, success_count, failure_count, summary_json, created_at)
+		VALUES ('run_requeue','job_requeue','plan_requeue','h','{}','m','v1',100,1,120,0,0,'{}',0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		w.Start(runCtx, 1)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err := repo.GetByID(ctx, "job_requeue")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == repository.JobStatusRunning {
+			cancel()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit after shutdown")
+	}
+
+	job, err := repo.GetByID(ctx, "job_requeue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != repository.JobStatusQueued {
+		t.Fatalf("expected job requeued, got status=%s", job.Status)
+	}
+}
+
+func TestWorkerStartBlocksUntilActiveJobExits(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	repo := repository.NewJobRepo(db)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO plans (id,name,base_currency,valuation_date,status,config_version,created_at,updated_at)
+		VALUES ('plan_block','test','CNY','2026-06-09','active',1,0,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(ctx, nil, repository.Job{
+		ID: "job_block", PlanID: "plan_block", Type: repository.JobTypeSimulation,
+		Status: repository.JobStatusQueued, InputHash: "h",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO simulation_runs (id, job_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
+			engine_version, runs, seed, horizon_months, success_count, failure_count, summary_json, created_at)
+		VALUES ('run_block','job_block','plan_block','h','{}','m','v1',100,1,120,0,0,'{}',0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		w.Start(runCtx, 1)
+		close(done)
+	}()
+	<-started
+
+	deadline := time.Now().Add(3 * time.Second)
+	claimed := false
+	for time.Now().Before(deadline) {
+		job, err := repo.GetByID(ctx, "job_block")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == repository.JobStatusRunning {
+			claimed = true
+			select {
+			case <-done:
+				t.Fatal("worker Start returned before active job exited")
+			default:
+			}
+			cancel()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !claimed {
+		t.Fatal("job was not claimed")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker Start did not return after cancel and job exit")
+	}
+}
+
 func TestWorkerLoopExitsOnContextCancel(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	repo := repository.NewJobRepo(db)
@@ -34,7 +161,7 @@ func TestWorkerLoopExitsOnContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil, NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
@@ -98,7 +225,7 @@ func TestWorkerHeartbeatStopsAfterJobCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, sims, NewSimulationRunner(db, sims), nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, sims, NewSimulationRunner(db, sims), nil, nil, NewEventHub(), nil, nil)
 	w.heartbeatInterval = 50 * time.Millisecond
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -154,7 +281,7 @@ func TestWorkerSingleHeartbeatTickerDuringLongTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil, NewEventHub(), nil, nil)
 	w.heartbeatInterval = 50 * time.Millisecond
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

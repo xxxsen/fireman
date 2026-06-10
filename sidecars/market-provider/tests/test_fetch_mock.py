@@ -6,6 +6,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from fireman_market_provider import create_app
+from fireman_market_provider.adapters.names import reset_name_caches
 
 
 def _client() -> TestClient:
@@ -13,8 +14,10 @@ def _client() -> TestClient:
 
 
 def test_fetch_hk_stock_mocked() -> None:
-    df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [300.0, 305.0], "名称": ["腾讯控股", "腾讯控股"]})
-    with patch("akshare.stock_hk_hist", return_value=df):
+    reset_name_caches()
+    df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [300.0, 305.0]})
+    spot = pd.DataFrame({"代码": ["00700"], "名称": ["腾讯控股"]})
+    with patch("akshare.stock_hk_hist", return_value=df), patch("akshare.stock_hk_spot_em", return_value=spot):
         response = _client().post(
             "/v1/instruments/fetch",
             json={
@@ -30,12 +33,61 @@ def test_fetch_hk_stock_mocked() -> None:
         assert body["code"] == 0
         assert body["data"]["currency"] == "HKD"
         assert body["data"]["name"] == "腾讯控股"
+        assert body["data"]["provider_symbol"] == "00700"
         assert body["data"]["expense_ratio_components"]["region"] == "foreign"
 
 
+def test_fetch_hk_stock_normalizes_code_and_name() -> None:
+    reset_name_caches()
+    df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [300.0]})
+    spot = pd.DataFrame({"代码": ["00700"], "名称": ["腾讯控股"]})
+    with patch("akshare.stock_hk_hist", return_value=df), patch("akshare.stock_hk_spot_em", return_value=spot):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "HK",
+                "instrument_type": "hk_stock",
+                "source_code": "700",
+                "end_date": "2026-06-09",
+                "adjust_policy": "qfq",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["data"]["provider_symbol"] == "00700"
+        assert body["data"]["name"] == "腾讯控股"
+
+
+def test_fetch_hk_stock_none_adjust_maps_to_empty_string() -> None:
+    reset_name_caches()
+    df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [300.0]})
+    spot = pd.DataFrame({"代码": ["00700"], "名称": ["腾讯控股"]})
+
+    def _hist(*, symbol: str, period: str, start_date: str, end_date: str, adjust: str) -> pd.DataFrame:
+        assert symbol == "00700"
+        assert adjust == ""
+        return df
+
+    with patch("akshare.stock_hk_hist", side_effect=_hist), patch("akshare.stock_hk_spot_em", return_value=spot):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "HK",
+                "instrument_type": "hk_stock",
+                "source_code": "700",
+                "end_date": "2026-06-09",
+                "adjust_policy": "none",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["points"]
+
+
 def test_fetch_hk_etf_mocked() -> None:
+    reset_name_caches()
     df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [20.0]})
-    with patch("akshare.stock_hk_hist", return_value=df):
+    spot = pd.DataFrame({"代码": ["02800"], "名称": ["盈富基金"]})
+    with patch("akshare.stock_hk_hist", return_value=df), patch("akshare.stock_hk_spot_em", return_value=spot):
         response = _client().post(
             "/v1/instruments/fetch",
             json={
@@ -50,6 +102,8 @@ def test_fetch_hk_etf_mocked() -> None:
         body = response.json()
         assert body["code"] == 0
         assert body["data"]["currency"] == "HKD"
+        assert body["data"]["name"] == "盈富基金"
+        assert body["data"]["provider_symbol"] == "02800"
 
 
 def test_fetch_cn_exchange_fund_mocked() -> None:

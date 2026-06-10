@@ -31,12 +31,16 @@ import {
 } from "@/lib/api/simulations";
 import { formatMoney, formatPercent } from "@/lib/format";
 
+type JobKind = "sim" | "stress" | "sensitivity";
+
 function AnalysisJobPanel({
   title,
   termKey,
   activeJobId,
   jobBusy,
   jobState,
+  panelError,
+  onRetry,
   onRun,
   running,
   onCancel,
@@ -47,6 +51,8 @@ function AnalysisJobPanel({
   activeJobId: string | null;
   jobBusy: boolean;
   jobState: ReturnType<typeof useJobStatus>;
+  panelError?: string | null;
+  onRetry?: () => void;
   onRun: () => void;
   running: boolean;
   onCancel?: () => void;
@@ -92,7 +98,21 @@ function AnalysisJobPanel({
           </>
         )}
       </div>
-      {jobState.error && <p className="mt-2 text-sm text-red-600">{jobState.error}</p>}
+      {panelError && (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-red-600">{panelError}</p>
+          {onRetry && (
+            <button
+              type="button"
+              className="text-sm underline"
+              disabled={jobBusy}
+              onClick={onRetry}
+            >
+              重试
+            </button>
+          )}
+        </div>
+      )}
       {latest?.result_stale && <StaleBanner />}
       {latest?.status === "succeeded" && report && (
         <div className="mt-4 space-y-3 text-sm">
@@ -284,7 +304,7 @@ export default function AnalysisPage() {
     null,
   );
   const [runs, setRuns] = useState(10000);
-  const [jobError, setJobError] = useState<string | null>(null);
+  const [jobErrors, setJobErrors] = useState<Partial<Record<JobKind, string>>>({});
 
   const paramsQ = useQuery({
     queryKey: ["parameters", planId],
@@ -337,64 +357,90 @@ export default function AnalysisPage() {
     void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
   };
 
-  const handleJobTerminal = (message?: string) => {
+  const clearJobError = (kind: JobKind) => {
+    setJobErrors((prev) => {
+      const next = { ...prev };
+      delete next[kind];
+      return next;
+    });
+  };
+
+  const handleJobTerminal = (kind: JobKind | null, message?: string) => {
     setActiveJobId(null);
     setActiveJobKind(null);
-    if (message) {
-      setJobError(message);
+    if (kind && message) {
+      setJobErrors((prev) => ({ ...prev, [kind]: message }));
     }
     invalidateAll();
   };
 
   const jobState = useJobStatus(activeJobId, {
     onComplete: async () => {
-      setJobError(null);
-      if (activeJobKind === "stress" && activeJobId) {
+      const kind = activeJobKind;
+      if (kind) {
+        clearJobError(kind);
+      }
+      if (kind === "stress" && activeJobId) {
         await getStressTest(activeJobId).catch(() => null);
       }
-      if (activeJobKind === "sensitivity" && activeJobId) {
+      if (kind === "sensitivity" && activeJobId) {
         await getSensitivityTest(activeJobId).catch(() => null);
       }
-      handleJobTerminal();
+      handleJobTerminal(null);
     },
-    onFailed: (msg) => handleJobTerminal(msg),
-    onCanceled: () => handleJobTerminal(),
+    onFailed: (msg) => handleJobTerminal(activeJobKind, msg),
+    onCanceled: () => handleJobTerminal(null),
   });
 
   const startMut = useMutation({
     mutationFn: () => createSimulation(planId, { runs }),
     onSuccess: (res) => {
-      setJobError(null);
+      clearJobError("sim");
       setActiveJobKind("sim");
       setActiveJobId(res.job_id);
     },
-    onError: (e) => setJobError(e instanceof Error ? e.message : "启动失败"),
+    onError: (e) =>
+      setJobErrors((prev) => ({
+        ...prev,
+        sim: e instanceof Error ? e.message : "启动失败",
+      })),
   });
 
   const stressMut = useMutation({
     mutationFn: () => createStressTest(planId, { runs }),
     onSuccess: (res) => {
-      setJobError(null);
+      clearJobError("stress");
       setActiveJobKind("stress");
       setActiveJobId(res.job_id);
     },
-    onError: (e) => setJobError(e instanceof Error ? e.message : "启动失败"),
+    onError: (e) =>
+      setJobErrors((prev) => ({
+        ...prev,
+        stress: e instanceof Error ? e.message : "启动失败",
+      })),
   });
 
   const sensMut = useMutation({
     mutationFn: () => createSensitivityTest(planId, { runs }),
     onSuccess: (res) => {
-      setJobError(null);
+      clearJobError("sensitivity");
       setActiveJobKind("sensitivity");
       setActiveJobId(res.job_id);
     },
-    onError: (e) => setJobError(e instanceof Error ? e.message : "启动失败"),
+    onError: (e) =>
+      setJobErrors((prev) => ({
+        ...prev,
+        sensitivity: e instanceof Error ? e.message : "启动失败",
+      })),
   });
 
   const repPaths =
     pathsQ.data?.paths.filter((p) => p.representative_percentile) ?? [];
 
   const jobBusy = !!activeJobId;
+
+  const simPanelError =
+    jobErrors.sim ?? (activeJobKind === "sim" ? jobState.error : null);
 
   return (
     <div className="space-y-8">
@@ -442,15 +488,15 @@ export default function AnalysisPage() {
             </>
           )}
         </div>
-        {(jobState.error || jobError) && (
+        {simPanelError && (
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <p className="text-sm text-red-600">{jobState.error ?? jobError}</p>
+            <p className="text-sm text-red-600">{simPanelError}</p>
             <button
               type="button"
               className="text-sm underline"
               disabled={jobBusy}
               onClick={() => {
-                setJobError(null);
+                clearJobError("sim");
                 startMut.mutate();
               }}
             >
@@ -520,6 +566,13 @@ export default function AnalysisPage() {
         activeJobId={activeJobKind === "stress" ? activeJobId : null}
         jobBusy={jobBusy}
         jobState={jobState}
+        panelError={
+          jobErrors.stress ?? (activeJobKind === "stress" ? jobState.error : null)
+        }
+        onRetry={() => {
+          clearJobError("stress");
+          stressMut.mutate();
+        }}
         onRun={() => stressMut.mutate()}
         running={stressMut.isPending}
         onCancel={activeJobId && activeJobKind === "stress" ? () => void cancelJob(activeJobId) : undefined}
@@ -532,6 +585,14 @@ export default function AnalysisPage() {
         activeJobId={activeJobKind === "sensitivity" ? activeJobId : null}
         jobBusy={jobBusy}
         jobState={jobState}
+        panelError={
+          jobErrors.sensitivity ??
+          (activeJobKind === "sensitivity" ? jobState.error : null)
+        }
+        onRetry={() => {
+          clearJobError("sensitivity");
+          sensMut.mutate();
+        }}
         onRun={() => sensMut.mutate()}
         running={sensMut.isPending}
         onCancel={

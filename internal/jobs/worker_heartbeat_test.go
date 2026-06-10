@@ -47,7 +47,7 @@ func TestWorkerHeartbeatDuringLongTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 25 * time.Second}, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 25 * time.Second}, nil, nil, NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go w.Start(runCtx, 1)

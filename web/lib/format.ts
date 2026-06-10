@@ -66,6 +66,18 @@ export function qualityStatusLabel(status: string): string {
     pending_sync: "待同步",
     classification_failed: "分类失败",
     data_anomaly: "数据异常",
+    pending_fetch: "抓取中",
+    fetch_failed: "抓取失败",
+    active: "正常",
+  };
+  return map[status] ?? status;
+}
+
+export function instrumentStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    pending_fetch: "抓取中",
+    fetch_failed: "抓取失败",
+    active: "正常",
   };
   return map[status] ?? status;
 }

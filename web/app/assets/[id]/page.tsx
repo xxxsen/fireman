@@ -3,20 +3,24 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import {
   deleteInstrument,
+  getFetchStatus,
   getInstrumentDetail,
   refreshInstrument,
+  retryFetch,
 } from "@/lib/api/instruments";
 import { ApiError } from "@/lib/api/client";
+import { useJobStatus } from "@/hooks/useJobStatus";
 import {
   annualCompletenessLabel,
   assetClassLabel,
   dataSourceLabel,
   formatAnnualPeriod,
   formatPercent,
+  instrumentStatusLabel,
   pointTypeLabel,
   qualityStatusLabel,
   regionLabel,
@@ -47,10 +51,28 @@ export default function AssetDetailPage() {
   const [refreshNotice, setRefreshNotice] = useState<{ kind: "success" | "error"; text: string } | null>(
     null,
   );
+  const [showFetchDrawer, setShowFetchDrawer] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["instrument-detail", id],
     queryFn: () => getInstrumentDetail(id),
+  });
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.instrument.status === "pending_fetch" || data.instrument.status === "fetch_failed") {
+      void getFetchStatus(id).then((s) => {
+        if (s.job_id) setActiveJobId(s.job_id);
+      });
+    }
+  }, [data, id]);
+
+  const jobState = useJobStatus(activeJobId, {
+    onComplete: () => {
+      void refetch();
+      void qc.invalidateQueries({ queryKey: ["instruments"] });
+    },
   });
 
   const refreshMut = useMutation({
@@ -89,6 +111,15 @@ export default function AssetDetailPage() {
     onSuccess: () => router.push("/assets"),
   });
 
+  const retryMut = useMutation({
+    mutationFn: () => retryFetch(id),
+    onSuccess: (result) => {
+      setActiveJobId(result.job_id);
+      void refetch();
+      void qc.invalidateQueries({ queryKey: ["instruments"] });
+    },
+  });
+
   if (isLoading) return <p>加载资产详情…</p>;
   if (error) {
     return (
@@ -100,6 +131,9 @@ export default function AssetDetailPage() {
   if (!data) return <p>加载资产详情…</p>;
 
   const inst = data.instrument;
+  const isPending = inst.status === "pending_fetch";
+  const isFailed = inst.status === "fetch_failed";
+  const isActive = inst.status === "active";
   const win = data.simulation_window;
   const annualReturns = data.annual_returns ?? [];
   const historicalSnapshots = data.historical_snapshots ?? [];
@@ -113,6 +147,35 @@ export default function AssetDetailPage() {
       <h1 className="mt-4 text-2xl font-semibold">
         {inst.name} <span className="font-mono text-lg text-slate-500">({inst.code})</span>
       </h1>
+
+      {isPending && (
+        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+          <p className="font-medium">历史数据抓取中</p>
+          <p className="mt-1">后台任务正在拉取全量历史，完成后将自动刷新本页。</p>
+          <button
+            type="button"
+            className="mt-2 underline"
+            onClick={() => setShowFetchDrawer(true)}
+          >
+            查看抓取状态
+          </button>
+        </div>
+      )}
+
+      {isFailed && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-medium">历史数据抓取失败</p>
+          <p className="mt-1">{jobState.error ?? "请重试抓取或检查数据源。"}</p>
+          <button
+            type="button"
+            className="mt-2 rounded-md bg-red-800 px-3 py-1.5 text-white disabled:opacity-50"
+            disabled={retryMut.isPending}
+            onClick={() => retryMut.mutate()}
+          >
+            {retryMut.isPending ? "提交中…" : "重试抓取"}
+          </button>
+        </div>
+      )}
 
       <dl className="mt-6 grid gap-3 sm:grid-cols-2 text-sm">
         <div>
@@ -129,7 +192,11 @@ export default function AssetDetailPage() {
         </div>
         <div>
           <dt className="text-slate-500">数据状态</dt>
-          <dd>{qualityStatusLabel(inst.quality_status ?? inst.status)}</dd>
+          <dd>
+            {isPending || isFailed
+              ? instrumentStatusLabel(inst.status)
+              : qualityStatusLabel(inst.quality_status ?? inst.status)}
+          </dd>
         </div>
         <div>
           <dt className="text-slate-500">数据截止</dt>
@@ -162,6 +229,7 @@ export default function AssetDetailPage() {
         </div>
       </dl>
 
+      {isActive && (
       <section className="mt-6 rounded-lg border p-4 text-sm">
         <h2 className="font-medium">模拟窗口预览（最近完整年度）</h2>
         <dl className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -191,123 +259,161 @@ export default function AssetDetailPage() {
           </div>
         </dl>
       </section>
+      )}
 
-      <div className="mt-6 space-y-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={refreshMut.isPending || inst.is_system}
-            onClick={() => refreshMut.mutate(false)}
-          >
-            {refreshMut.isPending && !refreshMut.variables ? "刷新中…" : "刷新 AKShare 数据"}
-          </button>
-          {!inst.is_system && (
-            <button
-              type="button"
-              className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={refreshMut.isPending}
-              onClick={handleForceRefresh}
-            >
-              {refreshMut.isPending && refreshMut.variables ? "强制刷新中…" : "强制刷新"}
-            </button>
-          )}
-          {!inst.is_system && (
-            <button
-              type="button"
-              className="rounded-md border border-red-200 px-3 py-2 text-sm text-red-700 disabled:opacity-50"
-              disabled={deleteMut.isPending || referencingPlans.length > 0}
-              title={referencingPlans.length > 0 ? "被计划引用时不可删除" : undefined}
-              onClick={() => {
-                if (window.confirm("确定删除此标的？")) deleteMut.mutate();
-              }}
-            >
-              {deleteMut.isPending ? "删除中…" : "删除"}
-            </button>
-          )}
-        </div>
-        {!inst.is_system && (
-          <p className="text-xs text-slate-500">
-            常规刷新 24 小时内限一次；强制刷新跳过该限制，适合验证数据源或排查数据问题。
-          </p>
-        )}
-      </div>
-      {refreshNotice && (
-        <p
-          className={`mt-3 text-sm ${refreshNotice.kind === "success" ? "text-emerald-700" : "text-red-600"}`}
-          role="status"
-        >
-          {refreshNotice.text}
-          {refreshNotice.kind === "error" &&
-            refreshNotice.text.includes("24 小时内") && (
+      {isActive && (
+        <>
+          <div className="mt-6 space-y-2">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                className="ml-2 underline"
-                disabled={refreshMut.isPending}
-                onClick={handleForceRefresh}
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={refreshMut.isPending || inst.is_system}
+                onClick={() => refreshMut.mutate(false)}
               >
-                立即强制刷新
+                {refreshMut.isPending && !refreshMut.variables ? "刷新中…" : "刷新 AKShare 数据"}
               </button>
+              {!inst.is_system && (
+                <button
+                  type="button"
+                  className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={refreshMut.isPending}
+                  onClick={handleForceRefresh}
+                >
+                  {refreshMut.isPending && refreshMut.variables ? "强制刷新中…" : "强制刷新"}
+                </button>
+              )}
+              {!inst.is_system && (
+                <button
+                  type="button"
+                  className="rounded-md border border-red-200 px-3 py-2 text-sm text-red-700 disabled:opacity-50"
+                  disabled={deleteMut.isPending || referencingPlans.length > 0}
+                  title={referencingPlans.length > 0 ? "被计划引用时不可删除" : undefined}
+                  onClick={() => {
+                    if (window.confirm("确定删除此标的？")) deleteMut.mutate();
+                  }}
+                >
+                  {deleteMut.isPending ? "删除中…" : "删除"}
+                </button>
+              )}
+            </div>
+            {!inst.is_system && (
+              <p className="text-xs text-slate-500">
+                常规刷新 24 小时内限一次；强制刷新跳过该限制，适合验证数据源或排查数据问题。
+              </p>
             )}
-        </p>
-      )}
+          </div>
+          {refreshNotice && (
+            <p
+              className={`mt-3 text-sm ${refreshNotice.kind === "success" ? "text-emerald-700" : "text-red-600"}`}
+              role="status"
+            >
+              {refreshNotice.text}
+              {refreshNotice.kind === "error" &&
+                refreshNotice.text.includes("24 小时内") && (
+                  <button
+                    type="button"
+                    className="ml-2 underline"
+                    disabled={refreshMut.isPending}
+                    onClick={handleForceRefresh}
+                  >
+                    立即强制刷新
+                  </button>
+                )}
+            </p>
+          )}
 
-      <h2 className="mt-8 font-medium">年度收益</h2>
-      <div className="mt-2 max-h-96 overflow-auto rounded-lg border">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-slate-50">
-            <tr>
-              <th className="px-3 py-2 text-left">年份</th>
-              <th className="px-3 py-2 text-right">年化收益</th>
-              <th className="px-3 py-2 text-left">完整性</th>
-              <th className="px-3 py-2 text-left">统计区间</th>
-              <th className="px-3 py-2 text-left">预览窗口</th>
-            </tr>
-          </thead>
-          <tbody>
-            {annualReturns.map((r) => (
-              <tr key={r.year} className="border-t">
-                <td className="px-3 py-2">{r.year}</td>
-                <td className="px-3 py-2 text-right">{formatPercent(r.annual_return)}</td>
-                <td className="px-3 py-2">{annualCompletenessLabel(r)}</td>
-                <td className="px-3 py-2 font-mono text-xs text-slate-600">
-                  {formatAnnualPeriod(r.start_date, r.end_date)}
-                </td>
-                <td className="px-3 py-2">{r.in_simulation ? "参与" : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          <h2 className="mt-8 font-medium">年度收益</h2>
+          <div className="mt-2 max-h-96 overflow-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr>
+                  <th className="px-3 py-2 text-left">年份</th>
+                  <th className="px-3 py-2 text-right">年化收益</th>
+                  <th className="px-3 py-2 text-left">完整性</th>
+                  <th className="px-3 py-2 text-left">统计区间</th>
+                  <th className="px-3 py-2 text-left">预览窗口</th>
+                </tr>
+              </thead>
+              <tbody>
+                {annualReturns.map((r) => (
+                  <tr key={r.year} className="border-t">
+                    <td className="px-3 py-2">{r.year}</td>
+                    <td className="px-3 py-2 text-right">{formatPercent(r.annual_return)}</td>
+                    <td className="px-3 py-2">{annualCompletenessLabel(r)}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">
+                      {formatAnnualPeriod(r.start_date, r.end_date)}
+                    </td>
+                    <td className="px-3 py-2">{r.in_simulation ? "参与" : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-      {historicalSnapshots.length > 0 && (
-        <>
-          <h2 className="mt-8 font-medium">历史计划快照</h2>
-          <ul className="mt-2 space-y-1 text-sm">
-            {historicalSnapshots.map((s) => (
-              <li key={s.id} className="rounded border px-3 py-2">
-                {s.inclusion_date} · {s.complete_year_count} 完整年 ·{" "}
-                {new Date(s.created_at).toLocaleString("zh-CN")}
-              </li>
-            ))}
-          </ul>
+          {historicalSnapshots.length > 0 && (
+            <>
+              <h2 className="mt-8 font-medium">历史计划快照</h2>
+              <ul className="mt-2 space-y-1 text-sm">
+                {historicalSnapshots.map((s) => (
+                  <li key={s.id} className="rounded border px-3 py-2">
+                    {s.inclusion_date} · {s.complete_year_count} 完整年 ·{" "}
+                    {new Date(s.created_at).toLocaleString("zh-CN")}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {referencingPlans.length > 0 && (
+            <>
+              <h2 className="mt-8 font-medium">引用计划</h2>
+              <ul className="mt-2 space-y-1 text-sm">
+                {referencingPlans.map((p) => (
+                  <li key={p.plan_id}>
+                    <Link href={`/plans/${p.plan_id}/dashboard`} className="underline">
+                      {p.plan_name}
+                    </Link>
+                    <span className="text-slate-500"> · 快照纳入 {p.snapshot_inclusion_date || "—"}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </>
       )}
 
-      {referencingPlans.length > 0 && (
-        <>
-          <h2 className="mt-8 font-medium">引用计划</h2>
-          <ul className="mt-2 space-y-1 text-sm">
-            {referencingPlans.map((p) => (
-              <li key={p.plan_id}>
-                <Link href={`/plans/${p.plan_id}/dashboard`} className="underline">
-                  {p.plan_name}
-                </Link>
-                <span className="text-slate-500"> · 快照纳入 {p.snapshot_inclusion_date || "—"}</span>
-              </li>
-            ))}
-          </ul>
-        </>
+      {showFetchDrawer && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
+          <div className="flex h-full w-full max-w-md flex-col bg-white p-4 shadow-xl">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-medium">抓取状态</h3>
+              <button type="button" onClick={() => setShowFetchDrawer(false)}>
+                关闭
+              </button>
+            </div>
+            <dl className="mt-4 space-y-2 text-sm">
+              <div>
+                <dt className="text-slate-500">任务状态</dt>
+                <dd>{jobState.job?.status ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">阶段</dt>
+                <dd>{jobState.job?.phase ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">进度</dt>
+                <dd>{Math.round(jobState.progress * 100)}%</dd>
+              </div>
+              {jobState.error && (
+                <div>
+                  <dt className="text-slate-500">错误</dt>
+                  <dd className="text-red-700">{jobState.error}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </div>
       )}
     </div>
   );

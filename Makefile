@@ -4,6 +4,7 @@
 BIN ?= fireman
 BACKEND_IMAGE ?= fireman
 WEB_IMAGE ?= fireman-web
+MARKET_PROVIDER_IMAGE ?= fireman-market-provider
 WEB_API_PROXY_TARGET ?= http://backend:8080
 
 GO ?= go

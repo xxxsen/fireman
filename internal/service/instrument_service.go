@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
@@ -29,6 +27,7 @@ type InstrumentService struct {
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
 	annualRepo *repository.AnnualReturnsRepo
+	jobs       *repository.JobRepo
 	provider   *marketdata.ProviderClient
 }
 
@@ -37,11 +36,12 @@ func NewInstrumentService(
 	instRepo *repository.InstrumentRepo,
 	marketRepo *repository.MarketDataRepo,
 	annualRepo *repository.AnnualReturnsRepo,
+	jobs *repository.JobRepo,
 	provider *marketdata.ProviderClient,
 ) *InstrumentService {
 	return &InstrumentService{
 		sql: sqlDB, instRepo: instRepo, marketRepo: marketRepo,
-		annualRepo: annualRepo, provider: provider,
+		annualRepo: annualRepo, jobs: jobs, provider: provider,
 	}
 }
 
@@ -85,107 +85,77 @@ func (s *InstrumentService) Get(ctx context.Context, id string) (repository.Inst
 	return inst, nil
 }
 
+func normalizeInstrumentImport(req *InstrumentImportRequest) {
+	req.Code = strings.TrimSpace(req.Code)
+	if strings.EqualFold(req.Market, "HK") {
+		req.Code = marketdata.NormalizeHKCode(req.Code)
+	}
+}
+
 func (s *InstrumentService) Preview(ctx context.Context, req InstrumentImportRequest) (map[string]any, error) {
+	normalizeInstrumentImport(&req)
 	if err := validateImportRequest(req); err != nil {
 		return nil, err
 	}
-	data, processed, err := s.fetchAndProcess(ctx, req, nil)
+	resolved, err := s.Resolve(ctx, InstrumentResolveRequest{
+		Market: req.Market, InstrumentType: req.InstrumentType, Code: req.Code,
+	})
 	if err != nil {
 		return nil, err
 	}
-	inclusionDate := time.Now().Format("2006-01-02")
-	simMetrics := marketdata.BuildSnapshotMetrics(processed.Points, inclusionDate, data.PointType, data.SourceName)
-	simYears := marketdata.SelectSimulationYears(processed.Points, processed.Annual, inclusionDate)
-	excludedYears := excludedYearLabels(processed.Annual, simYears)
-	return map[string]any{
-		"preview": true,
-		"instrument": map[string]any{
-			"code": req.Code, "name": data.Name, "market": req.Market,
-			"instrument_type":      req.InstrumentType,
-			"asset_class":          classifyPreview(data),
-			"currency":             data.Currency,
-			"point_type":           data.PointType,
-			"expense_ratio_status": data.ExpenseRatioStatus,
-			"fee_treatment":        marketdata.FeeTreatmentForType(req.InstrumentType),
-		},
-		"quality_status":    processed.Quality,
-		"point_count":       len(processed.Points),
-		"annual_returns":    toAnnualDTO(processed.Annual),
-		"data_as_of":        lastDate(processed.Points),
-		"provider_symbol":   data.ProviderSymbol,
-		"source_name":       data.SourceName,
-		"has_daily_anomaly": processed.HasAnomaly,
-		"simulation_window": map[string]any{
-			"inclusion_date":        inclusionDate,
-			"complete_year_count":   simMetrics.CompleteYearCount,
-			"complete_year_start":   simMetrics.CompleteYearStart,
-			"complete_year_end":     simMetrics.CompleteYearEnd,
-			"excluded_years":        excludedYears,
-			"modeled_annual_return": simMetrics.ModeledAnnualReturn,
-			"annual_volatility":     simMetrics.AnnualVolatility,
-			"max_drawdown":          simMetrics.MaxDrawdown,
-			"quality_status":        simMetrics.QualityStatus,
-		},
-	}, nil
+	out := map[string]any{
+		"deprecated": true,
+		"preview":    true,
+		"message":    "preview no longer fetches full history; use resolve + import-async",
+		"resolve":    resolved,
+	}
+	if amb, ok := resolved["ambiguous"].(bool); ok && !amb {
+		if r, ok := resolved["resolved"].(map[string]any); ok {
+			out["instrument"] = map[string]any{
+				"code": r["code"], "name": r["name"], "market": req.Market,
+				"instrument_type": req.InstrumentType,
+				"currency":        defaultCurrency(req.Market),
+			}
+			out["provider_symbol"] = r["provider_symbol"]
+		}
+	}
+	return out, nil
 }
 
 func (s *InstrumentService) Import(ctx context.Context, req InstrumentImportRequest) (repository.InstrumentRecord, error) {
+	normalizeInstrumentImport(&req)
 	if err := validateImportRequest(req); err != nil {
 		return repository.InstrumentRecord{}, err
 	}
-	adjust := marketdata.DefaultAdjustPolicy(req.InstrumentType)
-	if existing, err := s.instRepo.FindByKey(ctx, req.Market, req.InstrumentType, req.Code, adjust); err == nil {
-		return existing, newErr("instrument_already_exists", "instrument already imported", map[string]any{"instrument_id": existing.ID})
-	} else if !errors.Is(err, repository.ErrInstrumentNotFound) {
-		return repository.InstrumentRecord{}, err
+	code := req.Code
+	providerSymbol := req.Code
+	if marketdata.RequiresCNResolve(req.Market, req.InstrumentType, req.Code) {
+		resolved, err := s.Resolve(ctx, InstrumentResolveRequest{
+			Market: req.Market, InstrumentType: req.InstrumentType, Code: req.Code,
+		})
+		if err != nil {
+			return repository.InstrumentRecord{}, err
+		}
+		if amb, _ := resolved["ambiguous"].(bool); amb {
+			return repository.InstrumentRecord{}, newErr("instrument_ambiguous", "code is ambiguous; use import-async after resolve", nil)
+		}
+		if r, ok := resolved["resolved"].(map[string]any); ok {
+			code, _ = r["code"].(string)
+			providerSymbol, _ = r["provider_symbol"].(string)
+		}
 	}
-
-	data, processed, err := s.fetchAndProcess(ctx, req, nil)
-	if err != nil {
-		return repository.InstrumentRecord{}, err
-	}
-	class, err := marketdata.ResolveClassification(req.Market, req.InstrumentType, data)
-	if err != nil {
-		return repository.InstrumentRecord{}, mapClassifyError(err)
-	}
-	if processed.HasAnomaly {
-		return repository.InstrumentRecord{}, newErr("provider_data_anomaly", "provider data contains abnormal daily returns", nil)
-	}
-	if processed.Quality == "insufficient_history" {
-		// Partial annual rows remain visible in history but are excluded from simulation.
-	}
-
-	id := "ins_" + uuid.New().String()
-	inst := repository.InstrumentRecord{
-		ID: id, Code: strings.TrimSpace(req.Code), Name: data.Name,
+	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{
 		Market: req.Market, InstrumentType: req.InstrumentType,
-		AssetClass: class.AssetClass, Region: class.Region, Currency: class.Currency,
-		Provider: "akshare", ProviderSymbol: data.ProviderSymbol, AdjustPolicy: adjust,
-		ExpenseRatio:       marketdata.ExpenseRatioFromComponents(data.ExpenseRatioComponents),
-		ExpenseRatioStatus: data.ExpenseRatioStatus,
-		FeeTreatment:       marketdata.FeeTreatmentForType(req.InstrumentType),
-		Status:             "active",
-	}
-	points := toRepoPoints(id, processed.Points)
-	annual := toRepoAnnual(id, processed.Annual)
-
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.instRepo.Create(ctx, tx, inst); err != nil {
-			return err
-		}
-		if err := s.marketRepo.UpsertBatch(ctx, tx, id, points); err != nil {
-			return err
-		}
-		return s.annualRepo.ReplaceAll(ctx, tx, id, annual)
+		Code: code, ProviderSymbol: providerSymbol,
 	})
 	if err != nil {
 		return repository.InstrumentRecord{}, err
 	}
-	inst.QualityStatus = processed.Quality
-	inst.DataAsOf = lastDate(processed.Points)
-	inst.DataSourceName = data.SourceName
-	inst.PointType = data.PointType
-	applyDataStale(&inst, inst.DataAsOf)
+	inst, err := s.instRepo.GetByID(ctx, result.InstrumentID)
+	if err != nil {
+		return repository.InstrumentRecord{}, err
+	}
+	inst.QualityStatus = "pending_sync"
 	return inst, nil
 }
 
@@ -204,6 +174,9 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string, op
 	}
 	if inst.IsSystem || inst.Provider != "akshare" {
 		return repository.InstrumentRecord{}, newErr("instrument_not_refreshable", "only AKShare instruments can be refreshed", nil)
+	}
+	if err := s.ensureNoFetchInProgress(ctx, inst); err != nil {
+		return repository.InstrumentRecord{}, err
 	}
 	lastFetched, _ := s.marketRepo.LastFetchedAt(ctx, instrumentID)
 	namePlaceholder := inst.Name == "" || inst.Name == inst.Code
@@ -422,7 +395,7 @@ func (s *InstrumentService) fetchAndProcess(ctx context.Context, req InstrumentI
 	end := time.Now().Format("2006-01-02")
 	fetchReq := marketdata.FetchRequest{
 		Market: req.Market, InstrumentType: req.InstrumentType,
-		SourceCode: strings.TrimSpace(req.Code), StartDate: start, EndDate: end,
+		SourceCode: req.Code, StartDate: start, EndDate: end,
 		AdjustPolicy: marketdata.DefaultAdjustPolicy(req.InstrumentType),
 	}
 	data, err := s.provider.Fetch(ctx, fetchReq)
@@ -443,7 +416,6 @@ func (s *InstrumentService) fetchAndProcess(ctx context.Context, req InstrumentI
 }
 
 func validateImportRequest(req InstrumentImportRequest) error {
-	req.Code = strings.TrimSpace(req.Code)
 	if req.Market == "" || req.InstrumentType == "" || req.Code == "" {
 		return newErr("invalid_request", "market, instrument_type and code are required", nil)
 	}

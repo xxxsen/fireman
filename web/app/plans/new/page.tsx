@@ -291,7 +291,7 @@ export default function NewPlanWizardPage() {
             </Link>
             <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto">
               {instrumentsQ.data?.instruments
-                .filter((i) => !i.is_system)
+                .filter((i) => !i.is_system && i.status === "active")
                 .map((inst) => {
                   const sel = selectedInstruments.find((s) => s.inst.id === inst.id);
                   return (

@@ -184,9 +184,68 @@ describe("AnalysisPage zero success", () => {
     expect(screen.getByText("模拟引擎错误")).toBeInTheDocument();
     expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "运行压力测试" })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(2));
+    expect(createStressTest).not.toHaveBeenCalled();
+    expect(createSensitivityTest).not.toHaveBeenCalled();
   });
 
-  it("clears active job after canceled terminal state", async () => {
+  it("shows stress failure only in stress panel and retries stress test", async () => {
+    useJobStatusMock.mockImplementation((jobId, options) => {
+      jobStatusCallbacks = options ?? {};
+      if (jobId === "job_stress") {
+        return { job: { status: "failed" }, progress: 0, error: "压力测试失败" };
+      }
+      return { job: null, progress: 0, error: null };
+    });
+
+    renderAnalysis();
+    fireEvent.click(await screen.findByRole("button", { name: "运行压力测试" }));
+    await waitFor(() => expect(createStressTest).toHaveBeenCalled());
+
+    await act(async () => {
+      jobStatusCallbacks.onFailed?.("压力测试失败");
+    });
+
+    expect(screen.getByText("压力测试失败")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeDisabled();
+
+    const retryButtons = screen.getAllByRole("button", { name: "重试" });
+    fireEvent.click(retryButtons[retryButtons.length - 1]!);
+    await waitFor(() => expect(createStressTest).toHaveBeenCalledTimes(2));
+    expect(createSimulation).not.toHaveBeenCalled();
+    expect(createSensitivityTest).not.toHaveBeenCalled();
+  });
+
+  it("shows sensitivity failure only in sensitivity panel and retries sensitivity test", async () => {
+    useJobStatusMock.mockImplementation((jobId, options) => {
+      jobStatusCallbacks = options ?? {};
+      if (jobId === "job_sens") {
+        return { job: { status: "failed" }, progress: 0, error: "敏感性测试失败" };
+      }
+      return { job: null, progress: 0, error: null };
+    });
+
+    renderAnalysis();
+    fireEvent.click(await screen.findByRole("button", { name: "运行敏感性测试" }));
+    await waitFor(() => expect(createSensitivityTest).toHaveBeenCalled());
+
+    await act(async () => {
+      jobStatusCallbacks.onFailed?.("敏感性测试失败");
+    });
+
+    expect(screen.getByText("敏感性测试失败")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeDisabled();
+
+    const retryButtons = screen.getAllByRole("button", { name: "重试" });
+    fireEvent.click(retryButtons[retryButtons.length - 1]!);
+    await waitFor(() => expect(createSensitivityTest).toHaveBeenCalledTimes(2));
+    expect(createSimulation).not.toHaveBeenCalled();
+    expect(createStressTest).not.toHaveBeenCalled();
+  });
+
+  it("clears active job after canceled terminal state without cross-panel retry", async () => {
     renderAnalysis();
     fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
     await waitFor(() => expect(createSimulation).toHaveBeenCalled());
@@ -197,5 +256,6 @@ describe("AnalysisPage zero success", () => {
 
     expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
   });
 });

@@ -21,6 +21,7 @@ import (
 	"github.com/fireman/fireman/internal/config"
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/jobs"
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 )
@@ -40,9 +41,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
 
 	if err := fdb.Migrate(ctx, pool, cfg.DBPath, logger); err != nil {
+		pool.Close()
 		return fmt.Errorf("migrate: %w", err)
 	}
 
@@ -50,13 +51,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 	services := api.NewServices(pool, cfg.DBPath, cfg.MarketProviderURL, maintenance)
 	jobRepo := repository.NewJobRepo(pool)
 	simRepo := repository.NewSimulationRepo(pool)
+	instRepo := repository.NewInstrumentRepo(pool)
+	marketRepo := repository.NewMarketDataRepo(pool)
+	annualRepo := repository.NewAnnualReturnsRepo(pool)
+	fetchProvider := marketdata.NewProviderClient(cfg.MarketProviderURL).FetchClient()
+	instrumentFetchRunner := jobs.NewInstrumentFetchRunner(pool, instRepo, marketRepo, annualRepo, fetchProvider)
 	runner := jobs.NewSimulationRunner(pool, simRepo)
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(pool))
-	worker := jobs.NewWorker(pool, jobRepo, simRepo, runner, analysisRunner, services.EventHub, logger, maintenance.Active)
+	worker := jobs.NewWorker(pool, jobRepo, simRepo, runner, analysisRunner, instrumentFetchRunner, services.EventHub, logger, maintenance.Active)
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
-	defer workerCancel()
-	go worker.Start(workerCtx, cfg.WorkerConcurrency)
+	workerDone := make(chan struct{})
+	go func() {
+		worker.Start(workerCtx, cfg.WorkerConcurrency)
+		close(workerDone)
+	}()
 
 	router := api.NewRouter(api.Deps{DB: pool, DBPath: cfg.DBPath, Logger: logger, MarketProviderURL: cfg.MarketProviderURL, Services: services})
 
@@ -66,10 +75,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	return runServer(ctx, server, pool, logger)
+	return runServer(ctx, server, pool, logger, workerCancel, workerDone)
 }
 
-func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *slog.Logger) error {
+func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *slog.Logger, workerCancel context.CancelFunc, workerDone <-chan struct{}) error {
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -88,8 +97,14 @@ func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *s
 		logger.Info("shutdown requested")
 	case err := <-serverErr:
 		if err != nil {
+			workerCancel()
+			<-workerDone
+			_ = pool.Close()
 			return fmt.Errorf("http server: %w", err)
 		}
+		workerCancel()
+		<-workerDone
+		_ = pool.Close()
 		return nil
 	}
 
@@ -98,6 +113,16 @@ func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *s
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", "error", err)
 	}
+
+	logger.Info("stopping worker")
+	workerCancel()
+	select {
+	case <-workerDone:
+		logger.Info("worker stopped")
+	case <-time.After(30 * time.Second):
+		logger.Error("worker shutdown timeout")
+	}
+
 	if err := pool.Close(); err != nil {
 		logger.Error("db close error", "error", err)
 	}

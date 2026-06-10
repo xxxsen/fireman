@@ -10,11 +10,11 @@ import pandas as pd
 from ..logutil import get_logger
 from ..normalize import normalize_dataframe
 from ..schemas import AssetClass, FetchData, FetchRequest, PointType
-from ..timeout_util import call_with_timeout
+from ..timeout_util import call_with_timeout, fetch_timeout_seconds
 from .classification import FundMeta, classify_cn_mutual_fund, classify_us_symbol, default_region
 from .fallback import try_sources
-from .names import resolve_cn_exchange_fund_name
-from .symbols import cn_exchange_symbol, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
+from .names import resolve_cn_exchange_fund_name, resolve_hk_name
+from .symbols import cn_exchange_symbol, hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
 
 
 @dataclass(frozen=True)
@@ -262,7 +262,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
 
     for _label, point_type, source_name, fetch in attempts:
         try:
-            df = call_with_timeout(fetch)
+            df = call_with_timeout(fetch, fetch_timeout_seconds())
             if df is None or df.empty:
                 errors.append(f"{source_name}: empty")
                 logger.warning("fetch cn_mutual_fund %s: %s returned empty", symbol, source_name)
@@ -362,7 +362,7 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
     import akshare as ak
 
     symbol = hk_exchange_symbol(req.source_code)
-    adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
+    adjust = hk_adjust_policy(req.adjust_policy)
     sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
         (
             "ak.stock_hk_hist",
@@ -377,11 +377,7 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
         ("ak.stock_hk_daily", lambda: _filter_df_by_date(ak.stock_hk_daily(symbol=symbol, adjust=adjust), start, end)),
     ]
     df, source_name = try_sources("hk equity", sources)
-    name = symbol
-    if "名称" in df.columns and not df["名称"].empty:
-        name = str(df["名称"].iloc[0])
-    elif "股票名称" in df.columns and not df["股票名称"].empty:
-        name = str(df["股票名称"].iloc[0])
+    name = resolve_hk_name(symbol)
     meta = classify_us_symbol(name, default_type)
     return AdapterResult(
         df=df,
@@ -476,9 +472,13 @@ def fetch_instrument(req: FetchRequest) -> FetchData:
     if points and req.start_date and points[0].date > req.start_date:
         quality = "partial"
 
+    provider_symbol = req.source_code
+    if req.instrument_type in ("hk_stock", "hk_etf"):
+        provider_symbol = hk_exchange_symbol(req.source_code)
+
     return FetchData(
         provider="akshare",
-        provider_symbol=req.source_code,
+        provider_symbol=provider_symbol,
         name=result.name,
         asset_class=result.asset_class,
         currency=result.currency,

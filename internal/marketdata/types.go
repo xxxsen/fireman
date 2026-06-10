@@ -38,6 +38,36 @@ type FetchResponse struct {
 	Data    FetchData `json:"data"`
 }
 
+// ResolveRequest is the market-provider resolve request body.
+type ResolveRequest struct {
+	Market         string `json:"market"`
+	InstrumentType string `json:"instrument_type"`
+	Code           string `json:"code"`
+}
+
+// ResolveCandidate is one resolved instrument option.
+type ResolveCandidate struct {
+	Code           string `json:"code"`
+	ProviderSymbol string `json:"provider_symbol"`
+	Name           string `json:"name"`
+	Exchange       string `json:"exchange"`
+	InstrumentKind string `json:"instrument_kind"`
+}
+
+// ResolveData is the resolve payload.
+type ResolveData struct {
+	Ambiguous  bool               `json:"ambiguous"`
+	Resolved   *ResolveCandidate  `json:"resolved,omitempty"`
+	Candidates []ResolveCandidate `json:"candidates,omitempty"`
+}
+
+// ResolveResponse is the sidecar resolve envelope.
+type ResolveResponse struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    ResolveData `json:"data"`
+}
+
 // DataPoint is a persisted market observation.
 type DataPoint struct {
 	TradeDate  string

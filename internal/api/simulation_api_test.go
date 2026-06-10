@@ -93,7 +93,7 @@ func TestSimulationJobFlow(t *testing.T) {
 
 	services := buildServices(db, "")
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.EventHub, nil, nil)
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -176,7 +176,7 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	jobsRepo := repository.NewJobRepo(db)
 	simsRepo := repository.NewSimulationRepo(db)
 	runner := persistFailingRunner{db: db, sims: simsRepo}
-	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), jobs.NewEventHub(), nil, nil)
+	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, jobs.NewEventHub(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)

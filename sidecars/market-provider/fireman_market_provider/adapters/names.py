@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..timeout_util import call_with_timeout
+from ..timeout_util import call_with_timeout, resolve_timeout_seconds
 
 _ETF_NAME_MAP: dict[str, str] | None = None
 _LOF_NAME_MAP: dict[str, str] | None = None
+_HK_NAME_MAP: dict[str, str] | None = None
 
 _NAME_COLUMNS = (
     "基金简称",
@@ -20,9 +21,10 @@ _NAME_COLUMNS = (
 
 def reset_name_caches() -> None:
     """Clear cached spot tables (for tests)."""
-    global _ETF_NAME_MAP, _LOF_NAME_MAP
+    global _ETF_NAME_MAP, _LOF_NAME_MAP, _HK_NAME_MAP
     _ETF_NAME_MAP = None
     _LOF_NAME_MAP = None
+    _HK_NAME_MAP = None
 
 
 def _normalize_code(code: str) -> str:
@@ -50,7 +52,7 @@ def _load_etf_name_map() -> dict[str, str]:
         return _ETF_NAME_MAP
     import akshare as ak
 
-    df = call_with_timeout(lambda: ak.fund_etf_spot_em())
+    df = call_with_timeout(lambda: ak.fund_etf_spot_em(), resolve_timeout_seconds())
     _ETF_NAME_MAP = {
         _normalize_code(str(row["代码"])): str(row["名称"]).strip()
         for _, row in df.iterrows()
@@ -68,7 +70,7 @@ def _load_lof_name_map() -> dict[str, str]:
     if not hasattr(ak, "fund_lof_spot_em"):
         _LOF_NAME_MAP = {}
         return _LOF_NAME_MAP
-    df = call_with_timeout(lambda: ak.fund_lof_spot_em())
+    df = call_with_timeout(lambda: ak.fund_lof_spot_em(), resolve_timeout_seconds())
     code_col = "代码" if "代码" in df.columns else None
     name_col = "名称" if "名称" in df.columns else None
     if code_col is None or name_col is None:
@@ -104,3 +106,38 @@ def resolve_cn_exchange_fund_name(symbol: str, df: pd.DataFrame) -> str:
     if looked_up:
         return looked_up
     return symbol
+
+
+def _load_hk_name_map() -> dict[str, str]:
+    global _HK_NAME_MAP
+    if _HK_NAME_MAP is not None:
+        return _HK_NAME_MAP
+    import akshare as ak
+
+    from .symbols import hk_exchange_symbol
+
+    df = call_with_timeout(lambda: ak.stock_hk_spot_em(), resolve_timeout_seconds())
+    code_col = "代码" if "代码" in df.columns else None
+    name_col = "名称" if "名称" in df.columns else None
+    if code_col is None or name_col is None:
+        _HK_NAME_MAP = {}
+        return _HK_NAME_MAP
+    _HK_NAME_MAP = {
+        hk_exchange_symbol(str(row[code_col])): str(row[name_col]).strip()
+        for _, row in df.iterrows()
+        if str(row.get(code_col, "")).strip() and str(row.get(name_col, "")).strip()
+    }
+    return _HK_NAME_MAP
+
+
+def resolve_hk_name(symbol: str) -> str:
+    from .symbols import hk_exchange_symbol
+
+    normalized = hk_exchange_symbol(symbol)
+    try:
+        name = _load_hk_name_map().get(normalized)
+        if name:
+            return name
+    except Exception:  # noqa: BLE001 - name lookup is best-effort
+        pass
+    return normalized

@@ -6,6 +6,7 @@ import { listInstruments } from "@/lib/api/instruments";
 import {
   assetClassLabel,
   dataSourceLabel,
+  instrumentStatusLabel,
   qualityStatusLabel,
   regionLabel,
 } from "@/lib/format";
@@ -56,15 +57,27 @@ export default function AssetsPage() {
                 <td className="px-3 py-2">{assetClassLabel(inst.asset_class)}</td>
                 <td className="px-3 py-2">{regionLabel(inst.region)}</td>
                 <td className="px-3 py-2">
-                  {qualityStatusLabel(inst.quality_status ?? inst.status)}
+                  {inst.status === "pending_fetch" || inst.status === "fetch_failed"
+                    ? instrumentStatusLabel(inst.status)
+                    : qualityStatusLabel(inst.quality_status ?? inst.status)}
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">
                   {dataSourceLabel(inst.data_source_name)}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 space-x-2">
                   <Link href={`/assets/${inst.id}`} className="underline">
                     详情
                   </Link>
+                  {inst.status === "pending_fetch" && (
+                    <Link href={`/assets/${inst.id}`} className="text-xs underline">
+                      查看进度
+                    </Link>
+                  )}
+                  {inst.status === "fetch_failed" && (
+                    <Link href={`/assets/${inst.id}`} className="text-xs text-red-700 underline">
+                      重试抓取
+                    </Link>
+                  )}
                 </td>
               </tr>
             ))}

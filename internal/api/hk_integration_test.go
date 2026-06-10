@@ -22,9 +22,28 @@ func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) 
 	provider := mockHKProviderServer(t)
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
 	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client()
+}
+
+func importActiveHKInstrument(t *testing.T, client *http.Client, baseURL string) string {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]any{
+		"market": "HK", "instrument_type": "hk_stock",
+		"code": "00700", "provider_symbol": "00700",
+	})
+	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("import-async status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	id := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)["instrument_id"].(string)
+	waitForInstrumentActive(t, client, baseURL, id)
+	return id
 }
 
 func TestHKInstrumentImportPreviewAndImportIntegration(t *testing.T) {
@@ -43,26 +62,26 @@ func TestHKInstrumentImportPreviewAndImportIntegration(t *testing.T) {
 	}
 	previewEnv := decodeEnvelope(t, readBody(t, resp))
 	preview := previewEnv["data"].(map[string]any)
-	instPreview := preview["instrument"].(map[string]any)
-	if instPreview["currency"] != "HKD" {
-		t.Fatalf("preview currency=%v want HKD", instPreview["currency"])
+	resolve := preview["resolve"].(map[string]any)
+	resolved := resolve["resolved"].(map[string]any)
+	if preview["deprecated"] != true {
+		t.Fatal("expected deprecated preview")
 	}
 
-	resp, err = client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload))
+	instID := importActiveHKInstrument(t, client, srv.URL)
+	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + instID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	env := decodeEnvelope(t, readBody(t, resp))
-	inst := env["data"].(map[string]any)
-	instID := inst["id"].(string)
+	inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
 	if inst["currency"] != "HKD" {
 		t.Fatalf("imported currency=%v want HKD", inst["currency"])
 	}
 	if inst["region"] != "foreign" {
 		t.Fatalf("imported region=%v want foreign", inst["region"])
+	}
+	if resolved["code"] != "00700" {
+		t.Fatalf("preview code=%v want 00700", resolved["code"])
 	}
 
 	var pointCount int
@@ -87,17 +106,7 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 	srv, db, client := setupHKIntegration(t)
 	seedHKDCNYMarketData(t, db)
 
-	payload, _ := json.Marshal(map[string]any{
-		"market": "HK", "instrument_type": "hk_stock", "code": "700",
-	})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	instID := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)["id"].(string)
+	instID := importActiveHKInstrument(t, client, srv.URL)
 
 	plan := createPlanWithValuationDate(t, db, "2026-06-09")
 	version := setForeignEquityAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
@@ -108,7 +117,7 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err = client.Get(srv.URL + "/api/v1/plans/" + plan.ID + "/holdings/" + holdingID + "/simulation-snapshot")
+	resp, err := client.Get(srv.URL + "/api/v1/plans/" + plan.ID + "/holdings/" + holdingID + "/simulation-snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +127,7 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 
 	services := buildServices(db, "")
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.EventHub, nil, nil)
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)

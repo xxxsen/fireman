@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from .adapters import fetch_instrument
+from .adapters import fetch_instrument, resolve_instrument
 from .logutil import configure_logging, get_logger
-from .schemas import FetchData, FetchRequest, FetchResponse, HealthResponse
+from .schemas import (
+    FetchData,
+    FetchRequest,
+    FetchResponse,
+    HealthResponse,
+    ResolveRequest,
+    ResolveResponse,
+)
 
 logger = get_logger(__name__)
 
@@ -24,6 +31,26 @@ def create_app() -> FastAPI:
     @app.get("/healthz", response_model=HealthResponse)
     def healthz() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    @app.post("/v1/instruments/resolve", response_model=ResolveResponse)
+    def resolve(payload: ResolveRequest) -> ResolveResponse:
+        logger.info(
+            "POST /v1/instruments/resolve market=%s type=%s code=%s",
+            payload.market,
+            payload.instrument_type,
+            payload.code,
+        )
+        try:
+            data = resolve_instrument(payload)
+            return ResolveResponse(code=0, message="success", data=data)
+        except ValueError as exc:
+            logger.warning(
+                "resolve rejected code=%s type=%s: %s",
+                payload.code,
+                payload.instrument_type,
+                exc,
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/v1/instruments/fetch", response_model=FetchResponse)
     def fetch(payload: FetchRequest) -> FetchResponse:

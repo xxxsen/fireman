@@ -8,14 +8,15 @@ import (
 )
 
 const (
-	JobTypeSimulation  = "simulation"
-	JobTypeStress      = "stress"
-	JobTypeSensitivity = "sensitivity"
-	JobStatusQueued    = "queued"
-	JobStatusRunning   = "running"
-	JobStatusSucceeded = "succeeded"
-	JobStatusFailed    = "failed"
-	JobStatusCanceled  = "canceled"
+	JobTypeSimulation      = "simulation"
+	JobTypeStress          = "stress"
+	JobTypeSensitivity     = "sensitivity"
+	JobTypeInstrumentFetch = "instrument_fetch"
+	JobStatusQueued        = "queued"
+	JobStatusRunning       = "running"
+	JobStatusSucceeded     = "succeeded"
+	JobStatusFailed        = "failed"
+	JobStatusCanceled      = "canceled"
 )
 
 // Job is a queued background task.
@@ -25,6 +26,7 @@ type Job struct {
 	Type            string `json:"type"`
 	Status          string `json:"status"`
 	InputHash       string `json:"input_hash"`
+	PayloadJSON     string `json:"payload_json,omitempty"`
 	ProgressCurrent int    `json:"progress_current"`
 	ProgressTotal   int    `json:"progress_total"`
 	Phase           string `json:"phase"`
@@ -53,13 +55,17 @@ func (r *JobRepo) Create(ctx context.Context, tx *sql.Tx, job Job) error {
 	if job.CreatedAt == 0 {
 		job.CreatedAt = now
 	}
+	var planID any
+	if job.PlanID != "" {
+		planID = job.PlanID
+	}
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO jobs (
-			id, plan_id, type, status, input_hash,
+			id, plan_id, type, status, input_hash, payload_json,
 			progress_current, progress_total, phase,
 			cancel_requested, retry_count, created_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		job.ID, job.PlanID, job.Type, job.Status, job.InputHash,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, planID, job.Type, job.Status, job.InputHash, job.PayloadJSON,
 		job.ProgressCurrent, job.ProgressTotal, job.Phase,
 		boolToInt(job.CancelRequested), job.RetryCount, job.CreatedAt)
 	return err
@@ -67,7 +73,7 @@ func (r *JobRepo) Create(ctx context.Context, tx *sql.Tx, job Job) error {
 
 func (r *JobRepo) GetByID(ctx context.Context, id string) (Job, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, plan_id, type, status, input_hash,
+		SELECT id, plan_id, type, status, input_hash, payload_json,
 			progress_current, progress_total, phase, cancel_requested, retry_count,
 			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
 		FROM jobs WHERE id=?`, id)
@@ -161,6 +167,18 @@ func (r *JobRepo) Finish(ctx context.Context, id, status, errCode, errMsg string
 	return err
 }
 
+func (r *JobRepo) RequeueIfRunning(ctx context.Context, id string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status=?, started_at=NULL, heartbeat_at=NULL, phase='', cancel_requested=0
+		WHERE id=? AND status=?`,
+		JobStatusQueued, id, JobStatusRunning)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 func (r *JobRepo) RequeueStaleRunning(ctx context.Context, staleBefore int64, maxRetries int) (int, error) {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE jobs SET status=?, retry_count=retry_count+1, started_at=NULL, heartbeat_at=NULL, phase=''
@@ -203,7 +221,7 @@ func (r *JobRepo) ListByPlanAndType(ctx context.Context, planID, jobType string,
 		limit = 20
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, plan_id, type, status, input_hash,
+		SELECT id, plan_id, type, status, input_hash, payload_json,
 			progress_current, progress_total, phase, cancel_requested, retry_count,
 			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
 		FROM jobs WHERE plan_id=? AND type=? ORDER BY created_at DESC LIMIT ?`,
@@ -223,12 +241,38 @@ func (r *JobRepo) ListByPlanAndType(ctx context.Context, planID, jobType string,
 	return out, rows.Err()
 }
 
+func (r *JobRepo) FindInProgressByInputHash(ctx context.Context, jobType, inputHash string) (Job, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, plan_id, type, status, input_hash, payload_json,
+			progress_current, progress_total, phase, cancel_requested, retry_count,
+			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
+		FROM jobs
+		WHERE type=? AND input_hash=? AND status IN (?, ?)
+		ORDER BY created_at DESC LIMIT 1`,
+		jobType, inputHash, JobStatusQueued, JobStatusRunning)
+	return scanJob(row)
+}
+
+func (r *JobRepo) FindLatestInstrumentFetch(ctx context.Context, instrumentID string) (Job, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, plan_id, type, status, input_hash, payload_json,
+			progress_current, progress_total, phase, cancel_requested, retry_count,
+			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
+		FROM jobs
+		WHERE type=? AND json_extract(payload_json, '$.instrument_id')=?
+		ORDER BY created_at DESC LIMIT 1`,
+		JobTypeInstrumentFetch, instrumentID)
+	return scanJob(row)
+}
+
 func scanJob(row *sql.Row) (Job, error) {
 	var j Job
 	var cancel int
 	var hb, started, finished sql.NullInt64
+	var payload sql.NullString
+	var planID sql.NullString
 	err := row.Scan(
-		&j.ID, &j.PlanID, &j.Type, &j.Status, &j.InputHash,
+		&j.ID, &planID, &j.Type, &j.Status, &j.InputHash, &payload,
 		&j.ProgressCurrent, &j.ProgressTotal, &j.Phase, &cancel, &j.RetryCount,
 		&hb, &j.ErrorCode, &j.ErrorMessage, &j.CreatedAt, &started, &finished,
 	)
@@ -237,6 +281,12 @@ func scanJob(row *sql.Row) (Job, error) {
 	}
 	if err != nil {
 		return Job{}, err
+	}
+	if payload.Valid {
+		j.PayloadJSON = payload.String
+	}
+	if planID.Valid {
+		j.PlanID = planID.String
 	}
 	j.CancelRequested = cancel == 1
 	if hb.Valid {
@@ -258,13 +308,21 @@ func scanJobRows(rows *sql.Rows) (Job, error) {
 	var j Job
 	var cancel int
 	var hb, started, finished sql.NullInt64
+	var payload sql.NullString
+	var planID sql.NullString
 	err := rows.Scan(
-		&j.ID, &j.PlanID, &j.Type, &j.Status, &j.InputHash,
+		&j.ID, &planID, &j.Type, &j.Status, &j.InputHash, &payload,
 		&j.ProgressCurrent, &j.ProgressTotal, &j.Phase, &cancel, &j.RetryCount,
 		&hb, &j.ErrorCode, &j.ErrorMessage, &j.CreatedAt, &started, &finished,
 	)
 	if err != nil {
 		return Job{}, err
+	}
+	if payload.Valid {
+		j.PayloadJSON = payload.String
+	}
+	if planID.Valid {
+		j.PlanID = planID.String
 	}
 	j.CancelRequested = cancel == 1
 	if hb.Valid {

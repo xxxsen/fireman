@@ -8,6 +8,14 @@ from fireman_market_provider.adapters.symbols import (
 )
 
 
+def test_hk_adjust_policy() -> None:
+    from fireman_market_provider.adapters.symbols import hk_adjust_policy
+
+    assert hk_adjust_policy("qfq") == "qfq"
+    assert hk_adjust_policy("hfq") == "hfq"
+    assert hk_adjust_policy("none") == ""
+
+
 def test_hk_exchange_symbol() -> None:
     assert hk_exchange_symbol("700") == "00700"
     assert hk_exchange_symbol("00700") == "00700"

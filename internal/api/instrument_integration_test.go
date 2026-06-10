@@ -12,17 +12,57 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
+func startInstrumentFetchWorker(t *testing.T, db *sql.DB, providerURL string) context.CancelFunc {
+	t.Helper()
+	fetchProvider := marketdata.NewProviderClient(providerURL).FetchClient()
+	fetchRunner := jobs.NewInstrumentFetchRunner(
+		db,
+		repository.NewInstrumentRepo(db),
+		repository.NewMarketDataRepo(db),
+		repository.NewAnnualReturnsRepo(db),
+		fetchProvider,
+	)
+	worker := jobs.NewWorker(
+		db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
+		jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db)),
+		nil, fetchRunner, jobs.NewEventHub(), nil, nil,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	go worker.Start(ctx, 1)
+	t.Cleanup(cancel)
+	return cancel
+}
+
+func waitForInstrumentActive(t *testing.T, client *http.Client, baseURL, instrumentID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(baseURL + "/api/v1/instruments/" + instrumentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+		if inst["status"] == "active" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("instrument %s did not become active", instrumentID)
+}
+
 func setupInstrumentIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {
 	t.Helper()
 	provider := mockProviderServer(t)
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
 	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client()
@@ -31,17 +71,20 @@ func setupInstrumentIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.
 func importFixtureInstrument(t *testing.T, client *http.Client, baseURL string) string {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund", "code": "510300",
+		"market": "CN", "instrument_type": "cn_exchange_fund",
+		"code": "sh510300", "provider_symbol": "sh510300",
 	})
-	resp, err := client.Post(baseURL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload))
+	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import status=%d body=%s", resp.StatusCode, readBody(t, resp))
+		t.Fatalf("import-async status=%d body=%s", resp.StatusCode, readBody(t, resp))
 	}
 	env := decodeEnvelope(t, readBody(t, resp))
-	return env["data"].(map[string]any)["id"].(string)
+	id := env["data"].(map[string]any)["instrument_id"].(string)
+	waitForInstrumentActive(t, client, baseURL, id)
+	return id
 }
 
 func createPlanWithValuationDate(t *testing.T, db *sql.DB, valuationDate string) service.PlanDetail {
@@ -222,6 +265,24 @@ func TestInstrumentRefreshThrottleIntegration(t *testing.T) {
 func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {
 	fetchCount := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: "sh510300", ProviderSymbol: "sh510300",
+						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
+					},
+				},
+			})
+			return
+		case "/v1/instruments/fetch":
+		default:
+			http.NotFound(w, r)
+			return
+		}
 		fetchCount++
 		var req struct {
 			StartDate *string `json:"start_date"`
@@ -253,6 +314,7 @@ func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {
 	t.Cleanup(provider.Close)
 
 	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
 	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()

@@ -98,6 +98,9 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 			}
 			return nil, err
 		}
+		if err := EnsureInstrumentReadyForPlan(inst); err != nil {
+			return nil, err
+		}
 		snapID, ok := existingSnap[item.InstrumentID]
 		if !ok {
 			snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, item.InstrumentID, plan.ValuationDate)

@@ -102,6 +102,7 @@ type Instrument struct {
 	AssetClass string `json:"asset_class"`
 	Region     string `json:"region"`
 	Currency   string `json:"currency"`
+	Status     string `json:"status"`
 	IsSystem   bool   `json:"is_system"`
 }
 

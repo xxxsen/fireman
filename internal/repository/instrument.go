@@ -107,6 +107,26 @@ func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst Instrument
 	return nil
 }
 
+func (r *InstrumentRepo) UpdateStatusTx(ctx context.Context, tx *sql.Tx, id, status string) error {
+	now := time.Now().UnixMilli()
+	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET status=?, updated_at=? WHERE id=?`, status, now, id)
+	return err
+}
+
+func (r *InstrumentRepo) UpdateAfterFetchTx(ctx context.Context, tx *sql.Tx, inst InstrumentRecord) error {
+	now := time.Now().UnixMilli()
+	_, err := r.exec(tx).ExecContext(ctx, `
+		UPDATE instruments SET
+			name=?, asset_class=?, region=?, currency=?,
+			provider_symbol=?, expense_ratio=?, expense_ratio_status=?,
+			fee_treatment=?, status=?, updated_at=?
+		WHERE id=?`,
+		inst.Name, inst.AssetClass, inst.Region, inst.Currency,
+		inst.ProviderSymbol, inst.ExpenseRatio, inst.ExpenseRatioStatus,
+		inst.FeeTreatment, inst.Status, now, inst.ID)
+	return err
+}
+
 func (r *InstrumentRepo) TouchUpdated(ctx context.Context, tx *sql.Tx, id string) error {
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
 	return err

@@ -12,6 +12,10 @@ import (
 
 func (s Services) registerInstrumentRoutes(rg *gin.RouterGroup) {
 	rg.GET("/instruments", s.listInstruments)
+	rg.POST("/instruments/resolve", s.resolveInstrument)
+	rg.POST("/instruments/import-async", s.importInstrumentAsync)
+	rg.GET("/instruments/:instrument_id/fetch-status", s.getInstrumentFetchStatus)
+	rg.POST("/instruments/:instrument_id/retry-fetch", s.retryInstrumentFetch)
 	rg.POST("/instruments/import/preview", s.previewInstrumentImport)
 	rg.POST("/instruments/import", s.importInstrument)
 	rg.GET("/instruments/:instrument_id", s.getInstrument)
@@ -72,6 +76,61 @@ func (s Services) importInstrument(c *gin.Context) {
 		return
 	}
 	out, err := s.Instruments.Import(c.Request.Context(), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) resolveInstrument(c *gin.Context) {
+	var req service.InstrumentResolveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Instruments.Resolve(c.Request.Context(), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) importInstrumentAsync(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	if roErr := service.CheckInstrumentReadOnlyFields(body); roErr != nil {
+		FailErr(c, roErr)
+		return
+	}
+	var req service.InstrumentImportAsyncRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Instruments.ImportAsync(c.Request.Context(), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) getInstrumentFetchStatus(c *gin.Context) {
+	out, err := s.Instruments.GetFetchStatus(c.Request.Context(), c.Param("instrument_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) retryInstrumentFetch(c *gin.Context) {
+	out, err := s.Instruments.RetryFetch(c.Request.Context(), c.Param("instrument_id"))
 	if err != nil {
 		FailErr(c, err)
 		return
