@@ -2,30 +2,18 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { listPlans } from "@/lib/api/plans";
-import { getRecentPlanId, setRecentPlanId } from "@/lib/recentPlan";
+
+function formatPlanDate(ts: number): string {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleDateString("zh-CN");
+}
 
 export default function HomePage() {
-  const router = useRouter();
   const { data: plans, isLoading, error } = useQuery({
     queryKey: ["plans"],
     queryFn: listPlans,
   });
-
-  useEffect(() => {
-    if (!plans?.length) return;
-    if (plans.length === 1) {
-      setRecentPlanId(plans[0].id);
-      router.replace(`/plans/${plans[0].id}/dashboard`);
-      return;
-    }
-    const recent = getRecentPlanId();
-    if (recent && plans.some((p) => p.id === recent)) {
-      router.replace(`/plans/${recent}/dashboard`);
-    }
-  }, [plans, router]);
 
   if (isLoading) {
     return <p className="text-slate-600">加载计划列表…</p>;
@@ -42,7 +30,7 @@ export default function HomePage() {
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">计划列表</h1>
+        <h1 className="text-2xl font-semibold">我的 FIRE 计划</h1>
         <Link
           href="/plans/new"
           className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
@@ -59,24 +47,36 @@ export default function HomePage() {
           </Link>
         </div>
       ) : (
-        <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans.map((plan) => (
-            <li key={plan.id}>
-              <Link
-                href={`/plans/${plan.id}/dashboard`}
-                className="flex items-center justify-between px-4 py-4 hover:bg-slate-50"
-              >
-                <div>
-                  <div className="font-medium">{plan.name}</div>
-                  <div className="text-sm text-slate-500">
-                    估值日 {plan.valuation_date} · {plan.base_currency}
-                  </div>
+            <Link
+              key={plan.id}
+              href={`/plans/${plan.id}/dashboard`}
+              className="group flex flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300 hover:shadow-md"
+            >
+              <h2 className="text-lg font-semibold text-slate-900 group-hover:text-slate-700">
+                {plan.name}
+              </h2>
+              <dl className="mt-3 space-y-1.5 text-sm text-slate-600">
+                <div className="flex justify-between gap-2">
+                  <dt>估值日</dt>
+                  <dd className="text-slate-900">{plan.valuation_date}</dd>
                 </div>
-                <span className="text-sm text-slate-400">→</span>
-              </Link>
-            </li>
+                <div className="flex justify-between gap-2">
+                  <dt>基准货币</dt>
+                  <dd className="text-slate-900">{plan.base_currency}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>更新于</dt>
+                  <dd className="text-slate-900">{formatPlanDate(plan.updated_at)}</dd>
+                </div>
+              </dl>
+              <span className="mt-4 text-sm font-medium text-slate-500 group-hover:text-slate-900">
+                查看详情 →
+              </span>
+            </Link>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );
