@@ -23,13 +23,14 @@ type WizardHoldingItem struct {
 
 // PlanWizardRequest atomically creates a plan with parameters, allocation and holdings.
 type PlanWizardRequest struct {
-	Name                   string              `json:"name"`
-	BaseCurrency           string              `json:"base_currency"`
-	ValuationDate          string              `json:"valuation_date"`
-	SelectedScenarioID     string              `json:"selected_scenario_id"`
-	Parameters             PlanParametersAPI   `json:"parameters"`
-	Holdings               []WizardHoldingItem `json:"holdings"`
-	ApplyUnallocatedToCash bool                `json:"apply_unallocated_to_cash"`
+	Name                   string                    `json:"name"`
+	BaseCurrency           string                    `json:"base_currency"`
+	ValuationDate          string                    `json:"valuation_date"`
+	SelectedScenarioID     string                    `json:"selected_scenario_id"`
+	Parameters             PlanParametersAPI         `json:"parameters"`
+	Holdings               []WizardHoldingItem       `json:"holdings"`
+	RegionTargets          []repository.RegionTarget `json:"region_targets"`
+	ApplyUnallocatedToCash bool                      `json:"apply_unallocated_to_cash"`
 }
 
 // CreateWizard creates a complete plan in a single transaction.
@@ -45,6 +46,9 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 	}
 	if len(req.Holdings) == 0 {
 		return PlanDetail{}, newErr("validation_failed", "at least one holding is required", nil)
+	}
+	if err := validateRegionTargets(req.RegionTargets); err != nil {
+		return PlanDetail{}, newErr("validation_failed", err.Error(), nil)
 	}
 
 	scenarioID := req.SelectedScenarioID
@@ -119,7 +123,7 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 
 	alloc := repository.PlanAllocation{
 		AssetClassTargets: scn.Weights,
-		RegionTargets:     defaultRegionTargets(),
+		RegionTargets:     req.RegionTargets,
 	}
 
 	var built []repository.PlanHolding

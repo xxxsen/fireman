@@ -45,6 +45,29 @@ func validateParameters(p repository.PlanParameters) error {
 	return nil
 }
 
+func validateRegionTargets(targets []repository.RegionTarget) error {
+	if len(targets) == 0 {
+		return fmt.Errorf("region_targets is required")
+	}
+	byClass := make(map[string]float64)
+	for _, t := range targets {
+		if t.WeightWithinClass < 0 || t.WeightWithinClass > 1 {
+			return fmt.Errorf("region weight must be in [0, 1]")
+		}
+		byClass[t.AssetClass] += t.WeightWithinClass
+	}
+	for _, ac := range domain.AssetClasses {
+		sum, ok := byClass[ac]
+		if !ok {
+			return fmt.Errorf("region_targets missing asset_class %s", ac)
+		}
+		if sum < 1.0-domain.WeightTolerance || sum > 1.0+domain.WeightTolerance {
+			return fmt.Errorf("region targets for %s must sum to 100%%", ac)
+		}
+	}
+	return nil
+}
+
 func validateScenarioWeights(weights []repository.AssetClassTarget) error {
 	sum := 0.0
 	for _, w := range weights {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { formatMoneyInput, parseMoneyInput } from "@/lib/format";
 
 interface MoneyInputProps {
@@ -10,6 +11,11 @@ interface MoneyInputProps {
   disabled?: boolean;
 }
 
+function draftFromMinor(minor: number): string {
+  if (minor === 0) return "";
+  return String(minor / 100);
+}
+
 export function MoneyInput({
   valueMinor,
   onChange,
@@ -17,6 +23,9 @@ export function MoneyInput({
   label,
   disabled,
 }: MoneyInputProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
   return (
     <label className="block">
       {label && <span className="mb-1 block text-sm text-slate-600">{label}</span>}
@@ -28,9 +37,25 @@ export function MoneyInput({
           disabled={disabled}
           data-testid="money-input"
           className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          value={formatMoneyInput(valueMinor)}
+          value={editing ? draft : formatMoneyInput(valueMinor)}
+          onFocus={() => {
+            setEditing(true);
+            setDraft(draftFromMinor(valueMinor));
+          }}
+          onBlur={() => {
+            setEditing(false);
+            const trimmed = draft.trim();
+            if (trimmed === "") {
+              onChange(0);
+              return;
+            }
+            const minor = parseMoneyInput(trimmed);
+            if (minor !== null) onChange(minor);
+          }}
           onChange={(e) => {
-            const minor = parseMoneyInput(e.target.value);
+            const next = e.target.value;
+            setDraft(next);
+            const minor = parseMoneyInput(next);
             if (minor !== null) onChange(minor);
           }}
         />

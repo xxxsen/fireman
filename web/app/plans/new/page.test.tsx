@@ -75,13 +75,26 @@ vi.mock("@/lib/api/instruments", () => ({
     Promise.resolve({
       instruments: [
         {
-          id: "ins_equity",
+          id: "ins_equity_domestic",
           code: "T1",
           name: "测试权益基金",
           market: "CN",
           instrument_type: "fund",
           asset_class: "equity",
           region: "domestic",
+          currency: "CNY",
+          quality_status: "available",
+          status: "active",
+          is_system: false,
+        },
+        {
+          id: "ins_equity_foreign",
+          code: "F1",
+          name: "测试国外权益基金",
+          market: "CN",
+          instrument_type: "fund",
+          asset_class: "equity",
+          region: "foreign",
           currency: "CNY",
           quality_status: "available",
           status: "active",
@@ -113,21 +126,33 @@ function renderWizard() {
   );
 }
 
-async function goToInstrumentStep(scenarioId: string) {
+async function goToScenarioStep() {
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
   await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+}
+
+async function goToInstrumentStep(scenarioId: string, regionEdits?: { equityForeign?: string }) {
+  await goToScenarioStep();
+  const scenarioLabel = scenarioId === "scn_a" ? "测试场景" : "保守";
   await waitFor(() =>
-    expect(screen.getByRole("option", { name: new RegExp(scenarioId === "scn_a" ? "测试场景" : "保守") })).toBeInTheDocument(),
+    expect(screen.getByRole("option", { name: new RegExp(scenarioLabel) })).toBeInTheDocument(),
   );
   fireEvent.change(screen.getByRole("combobox"), { target: { value: scenarioId } });
+
+  if (regionEdits?.equityForeign !== undefined) {
+    await waitFor(() => expect(screen.getByText("地区组内权重")).toBeInTheDocument());
+    const percentInputs = screen.getAllByTestId("percent-input");
+    fireEvent.change(percentInputs[1]!, { target: { value: regionEdits.equityForeign } });
+  }
+
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
   await waitFor(() =>
-    expect(screen.getByText(/按场景大类分别搜索并添加标的/)).toBeInTheDocument(),
+    expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
   );
 }
 
 async function selectEquityInstrument() {
-  const search = await screen.findByLabelText("权益搜索");
+  const search = await screen.findByLabelText("权益国内搜索");
   fireEvent.change(search, { target: { value: "T1" } });
   fireEvent.click(await screen.findByRole("button", { name: /测试权益基金/ }));
 }
@@ -146,39 +171,74 @@ describe("NewPlanWizardPage", () => {
     await waitFor(() => expect(createPlanWizard).not.toHaveBeenCalled());
   });
 
-  it("shows asset-class containers for conservative scenario and filters search", async () => {
+  it("shows tabs for equity and bond without cash container", async () => {
     renderWizard();
     await goToInstrumentStep("scn_conservative");
 
-    expect(await screen.findByLabelText("权益选标")).toBeInTheDocument();
-    expect(screen.getByLabelText("债券选标")).toBeInTheDocument();
-    expect(screen.getByLabelText("现金/其他选标")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /权益/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /债券/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("现金/其他选标")).not.toBeInTheDocument();
 
-    const equitySearch = screen.getByLabelText("权益搜索");
+    const equitySearch = screen.getByLabelText("权益国内搜索");
     fireEvent.change(equitySearch, { target: { value: "B1" } });
     expect(screen.queryByRole("button", { name: /测试债券基金/ })).not.toBeInTheDocument();
     expect(screen.getByText("未找到匹配的权益标的。")).toBeInTheDocument();
   });
 
-  it("shows expected amount after entering weight", async () => {
+  it("auto-complements region allocation when editing domestic", async () => {
     renderWizard();
-    await goToInstrumentStep("scn_a");
-    await selectEquityInstrument();
-    fireEvent.change(screen.getByTestId("percent-input"), { target: { value: "50" } });
-    expect(await screen.findByText("¥500,000.00")).toBeInTheDocument();
+    await goToScenarioStep();
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /保守/ })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "scn_conservative" } });
+    await waitFor(() => expect(screen.getByText("地区组内权重")).toBeInTheDocument());
+
+    const percentInputs = screen.getAllByTestId("percent-input");
+    fireEvent.change(percentInputs[0]!, { target: { value: "70" } });
+    expect(percentInputs[1]).toHaveValue("30");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() =>
+      expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
+    );
   });
 
-  it("calls wizard once with 10000 runs on finish", async () => {
+  it("shows domestic and foreign sub-containers when equity foreign > 0", async () => {
+    renderWizard();
+    await goToInstrumentStep("scn_conservative", { equityForeign: "30" });
+
+    expect(screen.getByLabelText("国内（占权益 70%）搜索")).toBeInTheDocument();
+    expect(screen.getByLabelText("国外（占权益 30%）搜索")).toBeInTheDocument();
+
+    const domesticSearch = screen.getByLabelText("国内（占权益 70%）搜索");
+    fireEvent.change(domesticSearch, { target: { value: "F1" } });
+    expect(screen.queryByRole("button", { name: /测试国外权益基金/ })).not.toBeInTheDocument();
+
+    const foreignSearch = screen.getByLabelText("国外（占权益 30%）搜索");
+    fireEvent.change(foreignSearch, { target: { value: "T1" } });
+    expect(screen.queryByRole("button", { name: /测试权益基金/ })).not.toBeInTheDocument();
+  });
+
+  it("defaults weight to 100% when selecting first instrument", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument();
-    fireEvent.change(screen.getByTestId("percent-input"), { target: { value: "100" } });
+    expect(await screen.findByText("¥1,000,000.00")).toBeInTheDocument();
+  });
+
+  it("calls wizard once with region_targets on finish", async () => {
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByText(/10,000/)).toBeInTheDocument());
-    const gapBoxes = screen.getAllByRole("checkbox");
-    fireEvent.click(gapBoxes[gapBoxes.length - 1]!);
     fireEvent.click(screen.getByRole("button", { name: "创建并启动模拟" }));
     await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    const body = createPlanWizard.mock.calls[0]![0] as {
+      region_targets: unknown[];
+      apply_unallocated_to_cash: boolean;
+    };
+    expect(body.region_targets).toHaveLength(6);
     expect(createSimulation).toHaveBeenCalledWith("plan_new", { runs: 10000 });
   });
 
@@ -186,11 +246,8 @@ describe("NewPlanWizardPage", () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument();
-    fireEvent.change(screen.getByTestId("percent-input"), { target: { value: "100" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByText(/10,000/)).toBeInTheDocument());
-    const gapBoxes = screen.getAllByRole("checkbox");
-    fireEvent.click(gapBoxes[gapBoxes.length - 1]!);
     fireEvent.click(screen.getByRole("button", { name: "创建并启动模拟" }));
 
     await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));

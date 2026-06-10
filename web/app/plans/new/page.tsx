@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { PercentInput } from "@/components/ui/PercentInput";
 import { createPlanWizard } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
 import { listInstruments } from "@/lib/api/instruments";
@@ -13,11 +14,21 @@ import { createSimulation } from "@/lib/api/simulations";
 import { assetClassLabel, formatMoney, formatPercent } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
 import {
+  buildRegionTargetsPayload,
   buildWizardPortfolioReview,
+  complementRegionWeight,
+  defaultWizardRegionTargets,
   formatPendingAmount,
+  formatRegionTargetsSummary,
+  getWizardAllocationGroups,
+  pruneSelectedByRegionTargets,
   pruneSelectedByScenario,
+  summarizeHoldingsByRegion,
+  validateWizardGroupWeights,
   WIZARD_ASSET_CLASS_ORDER,
   type WizardHoldingSelection,
+  type WizardRegionEditableClass,
+  type WizardRegionTargets,
 } from "@/lib/wizard-allocation";
 import type { PlanParameters } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
@@ -76,11 +87,12 @@ export default function NewPlanWizardPage() {
   const [annualSpending, setAnnualSpending] = useState(400_000_00);
   const [annualSavings, setAnnualSavings] = useState(200_000_00);
   const [scenarioId, setScenarioId] = useState("");
+  const [regionTargets, setRegionTargets] = useState<WizardRegionTargets>(defaultWizardRegionTargets);
   const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [gapToCash, setGapToCash] = useState(false);
+  const [holdingTab, setHoldingTab] = useState<string>("equity");
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
   const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: () => listInstruments() });
@@ -139,7 +151,8 @@ export default function NewPlanWizardPage() {
           end: endAge,
         }),
         holdings,
-        apply_unallocated_to_cash: gapToCash && assetGap > 100,
+        region_targets: buildRegionTargetsPayload(regionTargets),
+        apply_unallocated_to_cash: assetGap > 100,
       });
       const sim = await createSimulation(plan.id, { runs: DEFAULT_RUNS });
       return { plan, sim };
@@ -169,31 +182,46 @@ export default function NewPlanWizardPage() {
     [instrumentsQ.data?.instruments],
   );
 
-  const groupWeightChecks = useMemo(() => {
-    const groups = new Map<string, { label: string; items: { label: string; value: number }[] }>();
-    for (const s of selectedInstruments) {
-      const key = s.inst.asset_class;
-      const label = assetClassLabel(s.inst.asset_class);
-      const g = groups.get(key) ?? { label, items: [] };
-      g.items.push({ label: s.inst.code, value: s.weight });
-      groups.set(key, g);
-    }
-    return [...groups.values()].map((g) => ({
-      label: g.label,
-      ...validatePercentSum(g.items),
-    }));
-  }, [selectedInstruments]);
+  const selectedScenario = useMemo(
+    () => scenariosQ.data?.scenarios.find((s) => s.id === scenarioId),
+    [scenariosQ.data?.scenarios, scenarioId],
+  );
+
+  const allocationGroups = useMemo(() => {
+    if (!selectedScenario) return [];
+    return getWizardAllocationGroups(selectedScenario.weights, regionTargets);
+  }, [selectedScenario, regionTargets]);
+
+  const groupWeightChecks = useMemo(
+    () =>
+      validateWizardGroupWeights(selectedInstruments, allocationGroups, {
+        skipImplicitCash: true,
+      }),
+    [selectedInstruments, allocationGroups],
+  );
+
+  const regionTargetChecks = useMemo(() => {
+    if (!selectedScenario) return [];
+    const weightByClass = new Map(
+      selectedScenario.weights.map((w) => [w.asset_class, w.weight]),
+    );
+    return (["equity", "bond"] as WizardRegionEditableClass[])
+      .filter((ac) => (weightByClass.get(ac) ?? 0) > 0.0001)
+      .map((ac) => {
+        const rt = regionTargets[ac];
+        const check = validatePercentSum([
+          { label: "国内", value: rt.domestic },
+          { label: "国外", value: rt.foreign },
+        ]);
+        return { assetClass: ac, label: assetClassLabel(ac), ...check };
+      });
+  }, [selectedScenario, regionTargets]);
 
   const holdingsSum = useMemo(
     () => selectedInstruments.reduce((a, s) => a + s.amount, 0),
     [selectedInstruments],
   );
   const assetGap = totalAssets - holdingsSum;
-
-  const selectedScenario = useMemo(
-    () => scenariosQ.data?.scenarios.find((s) => s.id === scenarioId),
-    [scenariosQ.data?.scenarios, scenarioId],
-  );
 
   const activeScenarioClasses = useMemo(() => {
     if (!selectedScenario) return [];
@@ -208,16 +236,35 @@ export default function NewPlanWizardPage() {
     );
   }, [selectedScenario]);
 
+  const instrumentTabs = useMemo(
+    () => activeScenarioClasses.filter((c) => c.assetClass !== "cash"),
+    [activeScenarioClasses],
+  );
+
+  useEffect(() => {
+    if (instrumentTabs.length === 0) return;
+    if (!instrumentTabs.some((t) => t.assetClass === holdingTab)) {
+      setHoldingTab(instrumentTabs[0]!.assetClass);
+    }
+  }, [instrumentTabs, holdingTab]);
+
   const portfolioReview = useMemo(() => {
     if (!selectedScenario) return null;
     return buildWizardPortfolioReview({
       scenarioWeights: selectedScenario.weights,
+      regionTargets,
       selectedInstruments,
       totalAssetsMinor: totalAssets,
-      gapToCash,
+      gapToCash: true,
       assetGapMinor: assetGap,
+      implicitCash: true,
     });
-  }, [selectedScenario, selectedInstruments, totalAssets, gapToCash, assetGap]);
+  }, [selectedScenario, regionTargets, selectedInstruments, totalAssets, assetGap]);
+
+  const holdingsByRegion = useMemo(
+    () => summarizeHoldingsByRegion(selectedInstruments),
+    [selectedInstruments],
+  );
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -303,38 +350,167 @@ export default function NewPlanWizardPage() {
               </select>
             </label>
             <p className="text-sm text-slate-600">
-              场景只定义大类权重；地区权重使用计划默认值，创建后可在「参数」页调整。
+              权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
             </p>
+            {selectedScenario && regionTargetChecks.length > 0 && (
+              <div className="mt-4 space-y-4 rounded-lg border border-slate-200 p-4">
+                <h3 className="text-sm font-medium">地区组内权重</h3>
+                {regionTargetChecks.map((check) => {
+                  const ac = check.assetClass as WizardRegionEditableClass;
+                  const rt = regionTargets[ac];
+                  return (
+                    <div key={ac} className="space-y-2">
+                      <p className="text-sm font-medium">{check.label}</p>
+                      <div className="flex flex-wrap items-end gap-4">
+                        <PercentInput
+                          label="国内"
+                          value={rt.domestic}
+                          onChange={(v) =>
+                            setRegionTargets((prev) => ({
+                              ...prev,
+                              [ac]: { domestic: v, foreign: complementRegionWeight(v) },
+                            }))
+                          }
+                        />
+                        <PercentInput
+                          label="国外"
+                          value={rt.foreign}
+                          onChange={(v) =>
+                            setRegionTargets((prev) => ({
+                              ...prev,
+                              [ac]: { domestic: complementRegionWeight(v), foreign: v },
+                            }))
+                          }
+                        />
+                      </div>
+                      <p
+                        className={`text-xs ${check.passed ? "text-emerald-700" : "text-red-700"}`}
+                      >
+                        {check.label} 地区配比：{check.message}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
 
         {step === 2 && (
           <>
             <p className="text-sm text-slate-600">
-              按场景大类分别搜索并添加标的，填写组内占比与已分配金额；预期资金按总资产 × 大类权重 ×
-              组内占比计算。
+              按大类分标签页搜索并添加标的；组内占比将自动均分，手动调整后其余标的自动补齐。未配置资金默认计入
+              现金/其他。预期资金 = 总资产 × 大类权重 × 地区权重 × 组内占比。
             </p>
             <Link href="/assets/import" className="text-sm underline">
               需要新标的？从 AKShare 录入
             </Link>
-            <div className="mt-4 space-y-4">
-              {activeScenarioClasses.map(({ assetClass, classWeight }) => (
-                <AssetClassHoldingPicker
-                  key={assetClass}
-                  assetClass={assetClass}
-                  classWeight={classWeight}
-                  totalAssetsMinor={totalAssets}
-                  instruments={selectableInstruments}
-                  selected={selectedInstruments.filter((s) => s.inst.asset_class === assetClass)}
-                  onSelectedChange={(next) => {
-                    const other = selectedInstruments.filter(
-                      (s) => s.inst.asset_class !== assetClass,
+            {instrumentTabs.length > 0 && (
+              <>
+                <div
+                  className="mt-4 flex gap-1 border-b border-slate-200"
+                  role="tablist"
+                  aria-label="资产大类"
+                >
+                  {instrumentTabs.map(({ assetClass, classWeight }) => (
+                    <button
+                      key={assetClass}
+                      type="button"
+                      role="tab"
+                      aria-selected={holdingTab === assetClass}
+                      className={`px-4 py-2 text-sm font-medium ${
+                        holdingTab === assetClass
+                          ? "border-b-2 border-slate-900 text-slate-900"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                      onClick={() => setHoldingTab(assetClass)}
+                    >
+                      {assetClassLabel(assetClass)}（{formatPercent(classWeight)}）
+                    </button>
+                  ))}
+                </div>
+                {instrumentTabs
+                  .filter((t) => t.assetClass === holdingTab)
+                  .map(({ assetClass, classWeight }) => {
+                    const classSelected = selectedInstruments.filter(
+                      (s) => s.inst.asset_class === assetClass,
                     );
-                    setSelectedInstruments([...other, ...next]);
-                  }}
-                />
-              ))}
-            </div>
+                    const mergeSelected = (next: WizardHoldingSelection[]) => {
+                      const other = selectedInstruments.filter(
+                        (s) => s.inst.asset_class !== assetClass,
+                      );
+                      setSelectedInstruments([...other, ...next]);
+                    };
+
+                    const rt =
+                      regionTargets[assetClass as WizardRegionEditableClass] ??
+                      defaultWizardRegionTargets()[assetClass as WizardRegionEditableClass];
+                    const splitForeign = rt.foreign > 0.0001;
+
+                    return (
+                      <section
+                        key={assetClass}
+                        className="mt-4 rounded-lg border border-slate-200 p-4"
+                        role="tabpanel"
+                        aria-label={`${assetClassLabel(assetClass)}选标`}
+                      >
+                        {!splitForeign ? (
+                          <AssetClassHoldingPicker
+                            assetClass={assetClass}
+                            classWeight={classWeight}
+                            regionWeight={rt.domestic}
+                            region="domestic"
+                            totalAssetsMinor={totalAssets}
+                            instruments={selectableInstruments}
+                            selected={classSelected}
+                            onSelectedChange={mergeSelected}
+                          />
+                        ) : (
+                          <>
+                            <p className="mb-3 text-sm text-slate-600">
+                              国内 {formatPercent(rt.domestic)} / 国外 {formatPercent(rt.foreign)}
+                            </p>
+                            <AssetClassHoldingPicker
+                              assetClass={assetClass}
+                              classWeight={classWeight}
+                              regionWeight={rt.domestic}
+                              region="domestic"
+                              totalAssetsMinor={totalAssets}
+                              instruments={selectableInstruments}
+                              selected={classSelected.filter((s) => s.inst.region === "domestic")}
+                              onSelectedChange={(domesticNext) => {
+                                const foreign = classSelected.filter(
+                                  (s) => s.inst.region === "foreign",
+                                );
+                                mergeSelected([...domesticNext, ...foreign]);
+                              }}
+                              subTitle={`国内（占${assetClassLabel(assetClass)} ${formatPercent(rt.domestic)}）`}
+                              nested
+                            />
+                            <AssetClassHoldingPicker
+                              assetClass={assetClass}
+                              classWeight={classWeight}
+                              regionWeight={rt.foreign}
+                              region="foreign"
+                              totalAssetsMinor={totalAssets}
+                              instruments={selectableInstruments}
+                              selected={classSelected.filter((s) => s.inst.region === "foreign")}
+                              onSelectedChange={(foreignNext) => {
+                                const domestic = classSelected.filter(
+                                  (s) => s.inst.region === "domestic",
+                                );
+                                mergeSelected([...domestic, ...foreignNext]);
+                              }}
+                              subTitle={`国外（占${assetClassLabel(assetClass)} ${formatPercent(rt.foreign)}）`}
+                              nested
+                            />
+                          </>
+                        )}
+                      </section>
+                    );
+                  })}
+              </>
+            )}
             {groupWeightChecks.map((g) => (
               <p
                 key={g.label}
@@ -346,7 +522,7 @@ export default function NewPlanWizardPage() {
             <p className="text-sm text-slate-600">
               持仓合计：{(holdingsSum / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })}{" "}
               元 / 总资产 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
-              {assetGap > 100 && "（存在未分配差额，下一步可计入现金/其他）"}
+              {assetGap > 100 && "（未配置部分将自动计入现金/其他）"}
             </p>
           </>
         )}
@@ -361,12 +537,25 @@ export default function NewPlanWizardPage() {
             </ul>
 
             {selectedScenario && (
-              <p className="mt-3 text-sm text-slate-600">
-                场景「{selectedScenario.name}」目标：
-                {selectedScenario.weights
-                  .map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`)
-                  .join(" / ")}
-              </p>
+              <>
+                <p className="mt-3 text-sm text-slate-600">
+                  场景「{selectedScenario.name}」目标：
+                  {selectedScenario.weights
+                    .map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`)
+                    .join(" / ")}
+                </p>
+                <p className="text-sm text-slate-600">
+                  地区目标：{formatRegionTargetsSummary(selectedScenario.weights, regionTargets)}
+                </p>
+                {selectedInstruments.length > 0 && (
+                  <p className="text-sm text-slate-600">
+                    已选持仓：国内 {formatMoney(holdingsByRegion.domesticMinor)}（
+                    {formatPercent(holdingsByRegion.domesticPct)}）· 国外{" "}
+                    {formatMoney(holdingsByRegion.foreignMinor)}（
+                    {formatPercent(holdingsByRegion.foreignPct)}）
+                  </p>
+                )}
+              </>
             )}
 
             {portfolioReview && (
@@ -435,18 +624,11 @@ export default function NewPlanWizardPage() {
             )}
 
             {assetGap > 100 && (
-              <label className="mt-4 flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={gapToCash}
-                  onChange={(e) => setGapToCash(e.target.checked)}
-                />
-                <span>
-                  将未分配差额{" "}
-                  {(assetGap / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元计入
-                  「现金/其他」
-                </span>
-              </label>
+              <p className="mt-4 text-sm text-slate-600">
+                未配置差额{" "}
+                {(assetGap / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元将自动计入
+                「现金/其他」。
+              </p>
             )}
             {assetGap < -100 && (
               <p className="text-sm text-red-600">持仓合计超过总资产，请返回上一步调整。</p>
@@ -479,6 +661,12 @@ export default function NewPlanWizardPage() {
         )}
       </div>
 
+      {error && step < 3 && (
+        <p className="mt-4 text-sm text-red-600" role="alert">
+          {error}
+        </p>
+      )}
+
       <div className="mt-6 flex justify-between">
         <button
           type="button"
@@ -498,10 +686,19 @@ export default function NewPlanWizardPage() {
                 setError("请选择资产配置场景。");
                 return;
               }
-              if (step === 1 && selectedScenario) {
-                setSelectedInstruments((prev) =>
-                  pruneSelectedByScenario(prev, selectedScenario.weights),
-                );
+              if (step === 1) {
+                if (!regionTargetChecks.every((c) => c.passed)) {
+                  setError("各「大类」国内与国外配比须合计 100%。");
+                  return;
+                }
+                if (selectedScenario) {
+                  setSelectedInstruments((prev) =>
+                    pruneSelectedByRegionTargets(
+                      pruneSelectedByScenario(prev, selectedScenario.weights),
+                      regionTargets,
+                    ),
+                  );
+                }
               }
               if (step === 2) {
                 if (selectedInstruments.length === 0) {
@@ -509,7 +706,7 @@ export default function NewPlanWizardPage() {
                   return;
                 }
                 if (!groupWeightChecks.every((g) => g.passed)) {
-                  setError("各「大类」组内权重须合计 100%。");
+                  setError("各「大类 × 地区」组内权重须合计 100%。");
                   return;
                 }
                 const unavailable = selectedInstruments.filter(
@@ -542,7 +739,6 @@ export default function NewPlanWizardPage() {
               selectedInstruments.length === 0 ||
               !scenarioId ||
               assetGap < -100 ||
-              (assetGap > 100 && !gapToCash) ||
               !!jobId ||
               !!createdPlanId ||
               finishMut.isPending

@@ -1,4 +1,4 @@
-import type { Plan, PlanCashFlow, PlanParameters } from "@/types/api";
+import type { Plan, PlanCashFlow, PlanParameters, RegionTarget } from "@/types/api";
 import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export function listPlans(): Promise<Plan[]> {
@@ -23,6 +23,7 @@ export function createPlanWizard(body: {
     sort_order: number;
   }[];
   apply_unallocated_to_cash?: boolean;
+  region_targets: RegionTarget[];
 }): Promise<Plan> {
   return apiPost<Plan>("/api/v1/plans/wizard", body);
 }

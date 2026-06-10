@@ -22,6 +22,17 @@ func countTable(t *testing.T, db *sql.DB, table string) int {
 	return n
 }
 
+func wizardRegionTargets() []map[string]any {
+	return []map[string]any{
+		{"asset_class": "equity", "region": "domestic", "weight_within_class": 1.0},
+		{"asset_class": "equity", "region": "foreign", "weight_within_class": 0.0},
+		{"asset_class": "bond", "region": "domestic", "weight_within_class": 1.0},
+		{"asset_class": "bond", "region": "foreign", "weight_within_class": 0.0},
+		{"asset_class": "cash", "region": "domestic", "weight_within_class": 1.0},
+		{"asset_class": "cash", "region": "foreign", "weight_within_class": 0.0},
+	}
+}
+
 func wizardParams(total int64) map[string]any {
 	return map[string]any{
 		"current_age": 30, "retirement_age": 55, "end_age": 90,
@@ -70,6 +81,7 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 		"name": "向导集成测试", "base_currency": "CNY", "valuation_date": "2026-06-09",
 		"selected_scenario_id": "scn_builtin_near_fire",
 		"parameters":           wizardParams(total),
+		"region_targets":       wizardRegionTargets(),
 		"holdings": []map[string]any{
 			{"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 7_000_000_00, "sort_order": 1},
 			{"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00, "sort_order": 2},
@@ -151,6 +163,68 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 	}
 }
 
+func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+
+	instEquityDomestic := importInstrumentCode(t, client, srv.URL, "510300")
+	instEquityForeign := importInstrumentCode(t, client, srv.URL, "510500")
+	instBond := importInstrumentCode(t, client, srv.URL, "159915")
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE instruments SET region='foreign' WHERE id=?`, instEquityForeign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
+		t.Fatal(err)
+	}
+
+	const total = int64(10_000_000_00)
+	customTargets := []map[string]any{
+		{"asset_class": "equity", "region": "domestic", "weight_within_class": 0.7},
+		{"asset_class": "equity", "region": "foreign", "weight_within_class": 0.3},
+		{"asset_class": "bond", "region": "domestic", "weight_within_class": 1.0},
+		{"asset_class": "bond", "region": "foreign", "weight_within_class": 0.0},
+		{"asset_class": "cash", "region": "domestic", "weight_within_class": 1.0},
+		{"asset_class": "cash", "region": "foreign", "weight_within_class": 0.0},
+	}
+	body := map[string]any{
+		"name": "向导-地区目标", "base_currency": "CNY", "valuation_date": "2026-06-09",
+		"selected_scenario_id": "scn_builtin_near_fire",
+		"parameters":           wizardParams(total),
+		"region_targets":       customTargets,
+		"holdings": []map[string]any{
+			{"instrument_id": instEquityDomestic, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 4_900_000_00, "sort_order": 1},
+			{"instrument_id": instEquityForeign, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_100_000_00, "sort_order": 2},
+			{"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00, "sort_order": 3},
+		},
+	}
+
+	resp, raw := postWizard(t, client, srv.URL, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wizard status=%d body=%s", resp.StatusCode, string(raw))
+	}
+	env := decodeEnvelope(t, raw)
+	planID := env["data"].(map[string]any)["id"].(string)
+
+	allocResp, err := client.Get(srv.URL + "/api/v1/plans/" + planID + "/allocation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocEnv := decodeEnvelope(t, readBody(t, allocResp))
+	regionTargets := allocEnv["data"].(map[string]any)["region_targets"].([]any)
+
+	equityForeign := -1.0
+	for _, tg := range regionTargets {
+		row := tg.(map[string]any)
+		if row["asset_class"].(string) == "equity" && row["region"].(string) == "foreign" {
+			equityForeign = row["weight_within_class"].(float64)
+		}
+	}
+	if equityForeign != 0.3 {
+		t.Fatalf("expected equity foreign target 0.30, got %v", equityForeign)
+	}
+}
+
 func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
@@ -168,6 +242,7 @@ func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 		"name": "向导-差额入现金", "base_currency": "CNY", "valuation_date": "2026-06-09",
 		"selected_scenario_id":      "scn_builtin_near_fire",
 		"parameters":                wizardParams(total),
+		"region_targets":            wizardRegionTargets(),
 		"apply_unallocated_to_cash": true,
 		"holdings": []map[string]any{
 			{"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": equityAmt, "sort_order": 1},
@@ -227,6 +302,7 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"name": "失败-组内权重", "valuation_date": "2026-06-09",
 				"selected_scenario_id":      "scn_builtin_near_fire",
 				"parameters":                wizardParams(1_000_000_00),
+				"region_targets":            wizardRegionTargets(),
 				"apply_unallocated_to_cash": true,
 				"holdings": []map[string]any{
 					{"instrument_id": inst, "enabled": true, "weight_within_group": 0.4, "current_amount_minor": 700_000_00, "sort_order": 1},
@@ -240,6 +316,7 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"name": "失败-超总资产", "valuation_date": "2026-06-09",
 				"selected_scenario_id": "scn_builtin_near_fire",
 				"parameters":           wizardParams(1_000_000_00),
+				"region_targets":       wizardRegionTargets(),
 				"holdings": []map[string]any{
 					{"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_000_000_00, "sort_order": 1},
 				},
@@ -252,6 +329,7 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"name": "失败-历史不足", "valuation_date": "2026-06-09",
 				"selected_scenario_id":      "scn_builtin_near_fire",
 				"parameters":                wizardParams(1_000_000_00),
+				"region_targets":            wizardRegionTargets(),
 				"apply_unallocated_to_cash": true,
 				"holdings": []map[string]any{
 					{"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 700_000_00, "sort_order": 1},
