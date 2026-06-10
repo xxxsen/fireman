@@ -33,11 +33,14 @@
 | 持仓快照 | 创建快照时可回写 `current_amount_minor`（td/003 返工） |
 | 只读字段校验 | 持仓/标的 metadata 客户端不可写（`holding_fields_read_only` 等） |
 
-### 2.1 新建计划向导（td/003 P0-1）
+### 2.1 新建计划向导（td/003 P0-1；td/013 选标改造）
 
 - 原子接口 `POST /api/v1/plans/wizard`：一次提交 FIRE 参数、场景、持仓、未分配现金处理
 - 前端四步向导：前三步本地草稿，最后一步单次提交并启动默认 10000 次模拟
 - 失败时不残留半成品计划或快照
+- **step 2 按大类分组**（td/013）：权益/债券/现金容器、大类内搜索、预期资金公式、大类组内权重 100%、场景切换 prune
+
+详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md)。
 
 ---
 
@@ -62,13 +65,14 @@
 - 显式前缀 LOF 独立解析路径（td/010）
 - 子进程硬超时 + 进程内 spot 表 TTL 缓存（td/005～td/007）
 
-### 3.2 公募基金名称缓存（近期增强，未单独 td）
+### 3.2 公募基金名称缓存（td/013）
 
-- 名称表 **永久进程内缓存** + 磁盘快照（Docker volume `/cache`）
-- 启动后台预热；`POST /v1/metadata/refresh` 手动刷新
+- **1 天 TTL**（`MARKET_PROVIDER_MUTUAL_FUND_CACHE_TTL`，默认 86400s）+ 磁盘快照（Docker volume `/cache`）
+- 过期同步刷新 + **singleflight** 去重；失败时未过期旧数据继续服务
+- 启动后台预热；`POST /v1/metadata/refresh` 手动强制刷新
 - `fund_name_em` 专用 60s 超时，不受 5s resolve deadline 限制
 
-详见 [asset-import.md](./asset-import.md)。
+详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md) 与 [001-asset-import.md](./001-asset-import.md)。
 
 ---
 
@@ -166,6 +170,7 @@
 | td/009 | ROW_NUMBER 去重、LOF deadline | P1 已关 |
 | td/010 | 显式前缀 LOF | P1 已关 |
 | td/011 | candidate_id 唯一标识 | **全部关闭** |
+| td/013 | 公募缓存 TTL、删除刷新、向导大类选标 | **全部关闭**（见本地 `td/014` 复审） |
 
 ---
 

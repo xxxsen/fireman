@@ -77,17 +77,20 @@ Content-Type: application/json
 ### Resolve
 
 - 中国场内：并行加载 ETF/LOF/股票 spot（5s 总 deadline）
-- 公募基金：独立名称 lookup（磁盘/内存永久缓存，60s 上游超时）
+- 公募基金：独立名称 lookup（1 天 TTL 磁盘/内存缓存 + singleflight，60s 上游超时）
 - 类型检测：裸码不在场内表但在公募表 → `instrument_type_mismatch`
 
 ### 公募基金名称缓存
 
 | 项 | 说明 |
 | --- | --- |
-| 环境变量 | `MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH`（默认 `/tmp/fireman/...`，Compose 为 `/cache/mutual_fund_names.json`） |
-| 加载顺序 | 内存 → 磁盘快照 → AKShare `fund_name_em` |
+| TTL | `MARKET_PROVIDER_MUTUAL_FUND_CACHE_TTL`（默认 86400s）；过期忽略磁盘并同步刷新 |
+| 路径 | `MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH`（Compose 为 `/cache/mutual_fund_names.json`） |
+| 加载顺序 | 内存（fresh）→ 磁盘（fresh）→ AKShare `fund_name_em`（singleflight） |
 | 手动刷新 | `POST /v1/metadata/refresh` body `{"target":"cn_mutual_fund_names"}` |
 | 启动预热 | sidecar startup 后台线程加载 |
+
+完整说明见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md)。
 
 ### Fetch
 
