@@ -6,7 +6,7 @@ import time
 
 import pandas as pd
 
-from ..timeout_util import call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
+from ..timeout_util import UpstreamCall, call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
 
 _ETF_NAME_MAP: dict[str, str] | None = None
 _LOF_NAME_MAP: dict[str, str] | None = None
@@ -41,6 +41,8 @@ def _cache_ttl() -> float:
 
 def reset_name_caches() -> None:
     """Clear cached spot tables (for tests only)."""
+    from .cn_code import reset_cn_code_caches
+
     global _ETF_NAME_MAP, _LOF_NAME_MAP, _STOCK_NAME_MAP, _HK_NAME_MAP
     global _ETF_LOADED_AT, _LOF_LOADED_AT, _STOCK_LOADED_AT, _HK_LOADED_AT
     _ETF_NAME_MAP = None
@@ -51,6 +53,7 @@ def reset_name_caches() -> None:
     _LOF_LOADED_AT = 0.0
     _STOCK_LOADED_AT = 0.0
     _HK_LOADED_AT = 0.0
+    reset_cn_code_caches()
 
 
 def _normalize_code(code: str) -> str:
@@ -90,7 +93,7 @@ def _load_etf_name_map(deadline: float | None = None) -> dict[str, str]:
     import akshare as ak
 
     timeout = _remaining_deadline(deadline)
-    df = call_with_timeout(lambda: ak.fund_etf_spot_em(), timeout)
+    df = call_with_timeout(UpstreamCall("fund_etf_spot_em"), timeout)
     _ETF_NAME_MAP = {
         _normalize_code(str(row["代码"])): str(row["名称"]).strip()
         for _, row in df.iterrows()
@@ -113,7 +116,7 @@ def _load_lof_name_map(deadline: float | None = None) -> dict[str, str]:
         _LOF_LOADED_AT = now
         return _LOF_NAME_MAP
     timeout = _remaining_deadline(deadline)
-    df = call_with_timeout(lambda: ak.fund_lof_spot_em(), timeout)
+    df = call_with_timeout(UpstreamCall("fund_lof_spot_em"), timeout)
     code_col = "代码" if "代码" in df.columns else None
     name_col = "名称" if "名称" in df.columns else None
     if code_col is None or name_col is None:
@@ -138,7 +141,7 @@ def _load_stock_name_map(deadline: float | None = None) -> dict[str, str]:
     import akshare as ak
 
     timeout = _remaining_deadline(deadline)
-    df = call_with_timeout(lambda: ak.stock_zh_a_spot_em(), timeout)
+    df = call_with_timeout(UpstreamCall("stock_zh_a_spot_em"), timeout)
     code_col = "代码" if "代码" in df.columns else None
     name_col = "名称" if "名称" in df.columns else None
     if code_col is None or name_col is None:
@@ -189,7 +192,7 @@ def _load_hk_name_map(deadline: float | None = None) -> dict[str, str]:
     from .symbols import hk_exchange_symbol
 
     timeout = _remaining_deadline(deadline)
-    df = call_with_timeout(lambda: ak.stock_hk_spot_em(), timeout)
+    df = call_with_timeout(UpstreamCall("stock_hk_spot_em"), timeout)
     code_col = "代码" if "代码" in df.columns else None
     name_col = "名称" if "名称" in df.columns else None
     if code_col is None or name_col is None:

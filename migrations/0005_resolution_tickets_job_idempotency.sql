@@ -15,6 +15,33 @@ CREATE TABLE resolution_tickets (
     consumed_at INTEGER
 );
 
+CREATE INDEX idx_resolution_tickets_expires_at ON resolution_tickets(expires_at);
+
+-- Cancel duplicate active instrument_fetch jobs before partial unique index.
+UPDATE jobs
+SET status = 'canceled',
+    finished_at = (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    error_code = 'duplicate_instrument_fetch_migrated',
+    error_message = 'Canceled during migration: duplicate active instrument_fetch job',
+    cancel_requested = 1,
+    phase = ''
+WHERE type = 'instrument_fetch'
+  AND status IN ('queued', 'running')
+  AND id IN (
+    SELECT j2.id
+    FROM jobs j2
+    WHERE j2.type = 'instrument_fetch'
+      AND j2.status IN ('queued', 'running')
+      AND EXISTS (
+        SELECT 1
+        FROM jobs j1
+        WHERE j1.type = j2.type
+          AND j1.input_hash = j2.input_hash
+          AND j1.status IN ('queued', 'running')
+          AND j1.created_at < j2.created_at
+      )
+  );
+
 CREATE UNIQUE INDEX uq_jobs_instrument_fetch_active
 ON jobs(type, input_hash)
 WHERE type = 'instrument_fetch' AND status IN ('queued', 'running');

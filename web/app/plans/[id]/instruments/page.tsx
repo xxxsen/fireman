@@ -41,8 +41,12 @@ export default function InstrumentsPage() {
     queryFn: () => getHoldings(planId),
   });
   const instrumentsQ = useQuery({
-    queryKey: ["instruments"],
-    queryFn: listInstruments,
+    queryKey: ["instruments", planQ.data?.valuation_date],
+    queryFn: () =>
+      listInstruments(
+        planQ.data?.valuation_date ? { valuationDate: planQ.data.valuation_date } : undefined,
+      ),
+    enabled: !!planQ.data,
   });
   const targetsQ = useQuery({
     queryKey: ["targets", planId],

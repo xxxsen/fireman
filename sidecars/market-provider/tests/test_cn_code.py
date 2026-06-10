@@ -1,11 +1,28 @@
 """Tests for China on-exchange code parsing."""
 
+import pandas as pd
+import pytest
+
 from fireman_market_provider.adapters.cn_code import (
     eastmoney_symbol_from_canonical,
     parse_cn_etf_code,
     parse_cn_stock_code,
     prefixed_symbol_from_canonical,
+    reset_cn_code_caches,
 )
+from fireman_market_provider.timeout_util import clear_test_dispatch, register_test_dispatch
+
+
+pytestmark = pytest.mark.usefixtures("inline_upstream_calls")
+
+
+@pytest.fixture(autouse=True)
+def _reset_caches() -> None:
+    reset_cn_code_caches()
+    clear_test_dispatch()
+    yield
+    reset_cn_code_caches()
+    clear_test_dispatch()
 
 
 def test_etf_510300_sh() -> None:
@@ -34,6 +51,10 @@ def test_eastmoney_vs_prefixed() -> None:
 
 
 def test_stock_600519() -> None:
+    register_test_dispatch(
+        "stock_zh_a_spot_em",
+        lambda: pd.DataFrame({"代码": ["600519"], "名称": ["贵州茅台"]}),
+    )
     parsed = parse_cn_stock_code("600519")
     assert parsed is not None
     assert parsed.canonical_code == "sh600519"

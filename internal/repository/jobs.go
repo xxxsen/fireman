@@ -135,11 +135,18 @@ func (r *JobRepo) RequestCancel(ctx context.Context, id string) error {
 
 // CancelQueued marks a queued job as canceled immediately.
 func (r *JobRepo) CancelQueued(ctx context.Context, id string) error {
+	return r.CancelQueuedWithError(ctx, nil, id, "", "")
+}
+
+// CancelQueuedWithError marks a queued job canceled with optional error metadata.
+func (r *JobRepo) CancelQueuedWithError(ctx context.Context, tx *sql.Tx, id, errCode, errMsg string) error {
+	exec := r.exec(tx)
 	now := time.Now().UnixMilli()
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE jobs SET status=?, finished_at=?, cancel_requested=1, phase=''
+	res, err := exec.ExecContext(ctx, `
+		UPDATE jobs SET status=?, finished_at=?, cancel_requested=1, phase='',
+			error_code=?, error_message=?
 		WHERE id=? AND status=?`,
-		JobStatusCanceled, now, id, JobStatusQueued)
+		JobStatusCanceled, now, errCode, errMsg, id, JobStatusQueued)
 	if err != nil {
 		return err
 	}
@@ -160,8 +167,13 @@ func (r *JobRepo) IsCancelRequested(ctx context.Context, id string) (bool, error
 }
 
 func (r *JobRepo) Finish(ctx context.Context, id, status, errCode, errMsg string) error {
+	return r.FinishTx(ctx, nil, id, status, errCode, errMsg)
+}
+
+func (r *JobRepo) FinishTx(ctx context.Context, tx *sql.Tx, id, status, errCode, errMsg string) error {
+	exec := r.exec(tx)
 	now := time.Now().UnixMilli()
-	_, err := r.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 		UPDATE jobs SET status=?, finished_at=?, error_code=?, error_message=?, phase=''
 		WHERE id=?`, status, now, errCode, errMsg, id)
 	return err

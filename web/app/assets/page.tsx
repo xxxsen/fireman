@@ -14,7 +14,7 @@ import {
 export default function AssetsPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["instruments"],
-    queryFn: listInstruments,
+    queryFn: () => listInstruments(),
   });
 
   if (isLoading) return <p>加载资产资料库…</p>;

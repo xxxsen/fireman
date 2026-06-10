@@ -7,6 +7,7 @@ export interface ResolveCandidate {
   name: string;
   exchange: string;
   instrument_kind: string;
+  is_importable?: boolean;
   ticket_id?: string;
 }
 
@@ -34,8 +35,11 @@ export interface FetchStatusResult {
   error_message?: string;
 }
 
-export function listInstruments(): Promise<{ instruments: Instrument[] }> {
-  return apiGet("/api/v1/instruments");
+export function listInstruments(options?: { valuationDate?: string }): Promise<{ instruments: Instrument[] }> {
+  const query = options?.valuationDate
+    ? `?valuation_date=${encodeURIComponent(options.valuationDate)}`
+    : "";
+  return apiGet(`/api/v1/instruments${query}`);
 }
 
 export function getInstrumentDetail(id: string) {

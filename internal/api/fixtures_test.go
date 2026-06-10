@@ -31,6 +31,7 @@ func createTestPlan(t *testing.T, db *sql.DB) service.PlanDetail {
 		repository.NewAllocationRepo(db),
 		repository.NewScenarioRepo(db),
 		repository.NewHoldingsRepo(db),
+		repository.NewInstrumentRepo(db),
 		service.NewConfigHashService(
 			repository.NewPlanRepo(db),
 			repository.NewParametersRepo(db),

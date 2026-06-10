@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from ..schemas import ResolveCandidate, ResolveData, ResolveRequest
-from ..timeout_util import call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
+from ..timeout_util import UpstreamCall, call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
 from .cn_code import (
     CNExchangeCode,
     parse_cn_etf_code,
@@ -57,7 +57,7 @@ def _load_us_name(symbol: str, deadline: float) -> str | None:
 
     remaining = max(1, int(deadline - time.monotonic()))
     try:
-        df = call_with_timeout(lambda: ak.stock_us_spot_em(), remaining)
+        df = call_with_timeout(UpstreamCall("stock_us_spot_em"), remaining)
     except Exception:  # noqa: BLE001
         return None
     code_col = "symbol" if "symbol" in df.columns else "代码" if "代码" in df.columns else None
@@ -79,7 +79,7 @@ def _load_cn_mutual_fund_name(symbol: str, deadline: float) -> str | None:
     bare = _bare_digits(symbol)
     remaining = max(1, int(deadline - time.monotonic()))
     try:
-        df = call_with_timeout(lambda: ak.fund_name_em(), remaining)
+        df = call_with_timeout(UpstreamCall("fund_name_em"), remaining)
     except Exception:  # noqa: BLE001
         return None
     code_col = "基金代码" if "基金代码" in df.columns else "代码" if "代码" in df.columns else None
@@ -166,9 +166,10 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
         if parsed_lof:
             out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
     if bare in stock_map:
-        parsed_stock = parse_cn_stock_code(bare)
-        if parsed_stock:
-            out.append(_candidate_from_cn(parsed_stock, stock_map[bare], "stock"))
+        for prefix in ("sh", "sz", "bj"):
+            parsed_stock = parse_cn_stock_code(f"{prefix}{bare}")
+            if parsed_stock:
+                out.append(_candidate_from_cn(parsed_stock, stock_map[bare], "stock"))
 
     return _dedupe_candidates(out)
 
@@ -184,7 +185,7 @@ def _resolve_cn_exchange_stock(code: str, deadline: float) -> list[_Candidate]:
         return [_candidate_from_cn(prefixed, stock_map[bare], "stock")]
 
     out: list[_Candidate] = []
-    for prefix in ("sh", "sz"):
+    for prefix in ("sh", "sz", "bj"):
         candidate_code = f"{prefix}{bare}"
         parsed = parse_cn_stock_code(candidate_code)
         if parsed is not None:

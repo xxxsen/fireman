@@ -98,15 +98,18 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 		if item.AssetClass != nil || item.Region != nil || item.SimulationSnapshotID != nil {
 			return nil, newErr("holding_fields_read_only", "asset_class, region and simulation_snapshot_id are read-only", nil)
 		}
-		inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
+		instRec, err := s.instRepo.GetByID(ctx, item.InstrumentID)
 		if err != nil {
 			if errors.Is(err, repository.ErrInstrumentNotFound) {
 				return nil, newErr("instrument_not_found", "instrument not found", map[string]any{"instrument_id": item.InstrumentID})
 			}
 			return nil, err
 		}
-		quality := LibraryQualityFromRepos(ctx, s.marketRepo, item.InstrumentID)
-		if err := EnsureInstrumentReadyForPlan(inst, quality); err != nil {
+		if _, err := EvaluateInstrumentForPlan(ctx, instRec, s.marketRepo, plan.ValuationDate); err != nil {
+			return nil, err
+		}
+		inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
+		if err != nil {
 			return nil, err
 		}
 		snapID, ok := existingSnap[item.InstrumentID]

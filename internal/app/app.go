@@ -55,10 +55,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 	marketRepo := repository.NewMarketDataRepo(pool)
 	annualRepo := repository.NewAnnualReturnsRepo(pool)
 	fetchProvider := marketdata.NewProviderClient(cfg.MarketProviderURL).FetchClient()
-	instrumentFetchRunner := jobs.NewInstrumentFetchRunner(pool, instRepo, marketRepo, annualRepo, fetchProvider)
+	instrumentFetchRunner := jobs.NewInstrumentFetchRunner(pool, jobRepo, instRepo, marketRepo, annualRepo, fetchProvider)
 	runner := jobs.NewSimulationRunner(pool, simRepo)
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(pool))
 	worker := jobs.NewWorker(pool, jobRepo, simRepo, runner, analysisRunner, instrumentFetchRunner, services.EventHub, logger, maintenance.Active)
+
+	ticketRepo := repository.NewResolutionTicketRepo(pool)
+	runTicketCleanup(ctx, ticketRepo, logger)
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	workerDone := make(chan struct{})

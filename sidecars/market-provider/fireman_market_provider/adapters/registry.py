@@ -10,7 +10,7 @@ import pandas as pd
 from ..logutil import get_logger
 from ..normalize import normalize_dataframe
 from ..schemas import AssetClass, FetchData, FetchRequest, PointType
-from ..timeout_util import call_with_timeout, fetch_timeout_seconds
+from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds
 from .classification import FundMeta, classify_cn_mutual_fund, classify_us_symbol, default_region
 from .cn_code import eastmoney_symbol_from_canonical, prefixed_symbol_from_canonical
 from .fallback import try_sources
@@ -86,33 +86,42 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     tx_adjust = tx_adjust_policy(policy)
     sina_adjust = sina_adjust_policy(policy)
 
-    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
+    sources: list[tuple[str, UpstreamCall]] = [
         (
             "ak.stock_zh_a_hist",
-            lambda: ak.stock_zh_a_hist(
-                symbol=em_symbol,
-                period="daily",
-                start_date=start,
-                end_date=end,
-                adjust=em_adjust,
+            UpstreamCall(
+                "stock_zh_a_hist",
+                kwargs=(
+                    ("symbol", em_symbol),
+                    ("period", "daily"),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", em_adjust),
+                ),
             ),
         ),
         (
             "ak.stock_zh_a_hist_tx",
-            lambda: ak.stock_zh_a_hist_tx(
-                symbol=prefixed,
-                start_date=start,
-                end_date=end,
-                adjust=tx_adjust,
+            UpstreamCall(
+                "stock_zh_a_hist_tx",
+                kwargs=(
+                    ("symbol", prefixed),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", tx_adjust),
+                ),
             ),
         ),
         (
             "ak.stock_zh_a_daily",
-            lambda: ak.stock_zh_a_daily(
-                symbol=prefixed,
-                start_date=start,
-                end_date=end,
-                adjust=sina_adjust,
+            UpstreamCall(
+                "stock_zh_a_daily",
+                kwargs=(
+                    ("symbol", prefixed),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", sina_adjust),
+                ),
             ),
         ),
     ]
@@ -141,54 +150,69 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
     tx_adjust = tx_adjust_policy(adjust)
 
-    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
+    sources: list[tuple[str, UpstreamCall]] = [
         (
             "ak.fund_etf_hist_em",
-            lambda: ak.fund_etf_hist_em(
-                symbol=em_symbol,
-                period="daily",
-                start_date=start,
-                end_date=end,
-                adjust=adjust,
+            UpstreamCall(
+                "fund_etf_hist_em",
+                kwargs=(
+                    ("symbol", em_symbol),
+                    ("period", "daily"),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", adjust),
+                ),
             ),
         ),
         (
             "ak.stock_zh_a_hist_tx",
-            lambda: _filter_df_by_date(
-                ak.stock_zh_a_hist_tx(
-                    symbol=prefixed,
-                    start_date=start,
-                    end_date=end,
-                    adjust=tx_adjust,
+            UpstreamCall(
+                "stock_zh_a_hist_tx",
+                kwargs=(
+                    ("symbol", prefixed),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", tx_adjust),
                 ),
-                start,
-                end,
             ),
         ),
     ]
     # fund_etf_hist_sina has no qfq/hfq; skip when adjusted close is required.
     if adjust == "none":
-        sources.append(("ak.fund_etf_hist_sina", lambda: ak.fund_etf_hist_sina(symbol=prefixed)))
+        sources.append(
+            (
+                "ak.fund_etf_hist_sina",
+                UpstreamCall("fund_etf_hist_sina", kwargs=(("symbol", prefixed),)),
+            ),
+        )
     sources.extend(
         [
             (
                 "ak.fund_lof_hist_em",
-                lambda: ak.fund_lof_hist_em(
-                    symbol=em_symbol,
-                    period="daily",
-                    start_date=start,
-                    end_date=end,
-                    adjust=adjust if adjust != "none" else "",
+                UpstreamCall(
+                    "fund_lof_hist_em",
+                    kwargs=(
+                        ("symbol", em_symbol),
+                        ("period", "daily"),
+                        ("start_date", start),
+                        ("end_date", end),
+                        ("adjust", adjust if adjust != "none" else ""),
+                    ),
                 ),
             ),
             (
                 "ak.fund_etf_fund_info_em",
-                lambda: ak.fund_etf_fund_info_em(fund=em_symbol, start_date=start, end_date=end),
+                UpstreamCall(
+                    "fund_etf_fund_info_em",
+                    kwargs=(("fund", em_symbol), ("start_date", start), ("end_date", end)),
+                ),
             ),
         ]
     )
 
     df, source_name = try_sources("cn_exchange_fund", sources)
+    if source_name == "ak.stock_zh_a_hist_tx":
+        df = _filter_df_by_date(df, start, end)
     name = resolve_cn_exchange_fund_name(canonical, df)
     return AdapterResult(
         df=df,
@@ -201,19 +225,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     )
 
 
-def _fetch_open_fund_em(
-    symbol: str,
-    indicator: str,
-    period: str = "成立来",
-) -> pd.DataFrame:
-    import akshare as ak
-
-    return ak.fund_open_fund_info_em(symbol=symbol, indicator=indicator, period=period)
-
-
 def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
-    import akshare as ak
-
     symbol = req.source_code
     errors: list[str] = []
     logger.info(
@@ -224,48 +236,57 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
         5,
     )
 
-    attempts: list[tuple[str, str, PointType, Callable[[], pd.DataFrame | None]]] = [
+    attempts: list[tuple[str, str, str, UpstreamCall]] = [
         (
             "累计净值走势",
             "total_return_index",
             "ak.fund_open_fund_info_em:累计净值走势",
-            lambda: _fetch_open_fund_em(symbol, "累计净值走势"),
+            UpstreamCall(
+                "fund_open_fund_info_em",
+                kwargs=(("symbol", symbol), ("indicator", "累计净值走势"), ("period", "成立来")),
+            ),
         ),
         (
             "单位净值走势",
             "nav",
             "ak.fund_open_fund_info_em:单位净值走势",
-            lambda: _fetch_open_fund_em(symbol, "单位净值走势"),
+            UpstreamCall(
+                "fund_open_fund_info_em",
+                kwargs=(("symbol", symbol), ("indicator", "单位净值走势"), ("period", "成立来")),
+            ),
         ),
         (
             "money",
             "nav",
             "ak.fund_money_fund_info_em",
-            lambda: ak.fund_money_fund_info_em(symbol=symbol),
+            UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", symbol),)),
         ),
         (
             "financial",
             "nav",
             "ak.fund_financial_fund_info_em",
-            lambda: ak.fund_financial_fund_info_em(symbol=symbol),
+            UpstreamCall("fund_financial_fund_info_em", kwargs=(("symbol", symbol),)),
         ),
         (
             "lof",
             "total_return_index",
             "ak.fund_lof_hist_em",
-            lambda: ak.fund_lof_hist_em(
-                symbol=symbol,
-                period="daily",
-                start_date=start,
-                end_date=end,
-                adjust="",
+            UpstreamCall(
+                "fund_lof_hist_em",
+                kwargs=(
+                    ("symbol", symbol),
+                    ("period", "daily"),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", ""),
+                ),
             ),
         ),
     ]
 
-    for _label, point_type, source_name, fetch in attempts:
+    for _label, point_type, source_name, call in attempts:
         try:
-            df = call_with_timeout(fetch, fetch_timeout_seconds())
+            df = call_with_timeout(call, fetch_timeout_seconds())
             if df is None or df.empty:
                 errors.append(f"{source_name}: empty")
                 logger.warning("fetch cn_mutual_fund %s: %s returned empty", symbol, source_name)
@@ -336,15 +357,21 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: Asse
     import akshare as ak
 
     symbol = req.source_code
-    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
-        ("ak.stock_us_daily", lambda: ak.stock_us_daily(symbol=symbol, adjust="qfq")),
+    sources: list[tuple[str, UpstreamCall]] = [
+        (
+            "ak.stock_us_daily",
+            UpstreamCall("stock_us_daily", kwargs=(("symbol", symbol), ("adjust", "qfq"))),
+        ),
         (
             "ak.stock_us_hist",
-            lambda: ak.stock_us_hist(
-                symbol=symbol,
-                start_date=start,
-                end_date=end,
-                adjust="qfq",
+            UpstreamCall(
+                "stock_us_hist",
+                kwargs=(
+                    ("symbol", symbol),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", "qfq"),
+                ),
             ),
         ),
     ]
@@ -366,20 +393,28 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
 
     symbol = hk_exchange_symbol(req.source_code)
     adjust = hk_adjust_policy(req.adjust_policy)
-    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
+    sources: list[tuple[str, UpstreamCall]] = [
         (
             "ak.stock_hk_hist",
-            lambda: ak.stock_hk_hist(
-                symbol=symbol,
-                period="daily",
-                start_date=start,
-                end_date=end,
-                adjust=adjust,
+            UpstreamCall(
+                "stock_hk_hist",
+                kwargs=(
+                    ("symbol", symbol),
+                    ("period", "daily"),
+                    ("start_date", start),
+                    ("end_date", end),
+                    ("adjust", adjust),
+                ),
             ),
         ),
-        ("ak.stock_hk_daily", lambda: _filter_df_by_date(ak.stock_hk_daily(symbol=symbol, adjust=adjust), start, end)),
+        (
+            "ak.stock_hk_daily",
+            UpstreamCall("stock_hk_daily", kwargs=(("symbol", symbol), ("adjust", adjust))),
+        ),
     ]
     df, source_name = try_sources("hk equity", sources)
+    if source_name == "ak.stock_hk_daily":
+        df = _filter_df_by_date(df, start, end)
     name = resolve_hk_name(symbol)
     meta = classify_us_symbol(name, default_type)
     return AdapterResult(
@@ -404,9 +439,9 @@ def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
     if code not in pair_map:
         raise ValueError(f"unsupported fx code {code}")
     label, _ = pair_map[code]
-    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]] = [
-        ("ak.currency_boc_sina", lambda: ak.currency_boc_sina(symbol=label)),
-        ("ak.fx_pair_quote", lambda: ak.fx_pair_quote(symbol=code)),
+    sources: list[tuple[str, UpstreamCall]] = [
+        ("ak.currency_boc_sina", UpstreamCall("currency_boc_sina", kwargs=(("symbol", label),))),
+        ("ak.fx_pair_quote", UpstreamCall("fx_pair_quote", kwargs=(("symbol", code),))),
     ]
     df, source_name = try_sources("fx_rate", sources)
     return AdapterResult(

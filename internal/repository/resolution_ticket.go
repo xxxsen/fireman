@@ -107,6 +107,35 @@ func scanResolutionTicket(row *sql.Row) (ResolutionTicket, error) {
 	return t, nil
 }
 
+// CleanupExpired deletes consumed or expired tickets older than retention.
+func (r *ResolutionTicketRepo) CleanupExpired(ctx context.Context, beforeMillis int64, batchSize int) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 200
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM resolution_tickets
+		WHERE id IN (
+			SELECT id FROM resolution_tickets
+			WHERE (consumed_at IS NOT NULL AND consumed_at < ?)
+			   OR (expires_at < ?)
+			LIMIT ?
+		)`, beforeMillis, beforeMillis, batchSize)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 func (r *ResolutionTicketRepo) exec(tx *sql.Tx) dbExec {
 	if tx != nil {
 		return tx

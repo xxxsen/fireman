@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -410,5 +411,360 @@ func TestConcurrentRetryFetchIntegration(t *testing.T) {
 	}
 	if inProgressCount != workers-1 {
 		t.Fatalf("inProgressCount=%d want %d", inProgressCount, workers-1)
+	}
+}
+
+func mockSlowFetchProvider(t *testing.T) *httptest.Server {
+	t.Helper()
+	return mockBlockingFetchProvider(t, nil)
+}
+
+func mockSlowThenSuccessFetchProvider(t *testing.T) *httptest.Server {
+	t.Helper()
+	var fetchCount atomic.Int32
+	return mockBlockingFetchProvider(t, &fetchCount)
+}
+
+func mockBlockingFetchProvider(t *testing.T, fetchCount *atomic.Int32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			var req marketdata.ResolveRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			code := req.Code
+			if req.Market == "CN" && req.InstrumentType == "cn_exchange_fund" && !marketdata.HasCNExchangePrefix(code) {
+				code = "sh" + code
+			}
+			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: code, ProviderSymbol: code,
+						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
+					},
+				},
+			})
+		case "/v1/instruments/fetch":
+			delay := 5 * time.Second
+			if fetchCount != nil && fetchCount.Add(1) > 1 {
+				delay = 0
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(delay):
+			}
+			_ = json.NewEncoder(w).Encode(marketdata.FetchResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.FetchData{
+					Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
+					AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
+					ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
+					Points: buildFixturePoints(), SourceName: "test_fixture", SourceQuality: "full",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func waitForJobStatus(t *testing.T, db *sql.DB, jobID, wantStatus string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var status string
+		if err := db.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id=?`, jobID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == wantStatus {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("job %s did not reach status %s", jobID, wantStatus)
+}
+
+func waitForFetchStatus(t *testing.T, client *http.Client, baseURL, instrumentID string, check func(map[string]any) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(baseURL + "/api/v1/instruments/" + instrumentID + "/fetch-status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("fetch-status status=%d body=%s", resp.StatusCode, readBody(t, resp))
+		}
+		status := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+		if check(status) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("fetch-status did not reach expected state")
+}
+
+func closeProvider(t *testing.T, provider *httptest.Server) {
+	t.Helper()
+	t.Cleanup(func() {
+		provider.CloseClientConnections()
+		provider.Close()
+	})
+}
+
+func TestInstrumentFetchRunningCancelIntegration(t *testing.T) {
+	provider := mockSlowThenSuccessFetchProvider(t)
+	closeProvider(t, provider)
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	var jobID string
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT id FROM jobs WHERE json_extract(payload_json, '$.instrument_id')=? ORDER BY created_at DESC LIMIT 1`,
+		instID).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	waitForJobStatus(t, db, jobID, "running")
+
+	resp, err := client.Post(srv.URL+"/api/v1/jobs/"+jobID+"/cancel", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+
+	waitForJobStatus(t, db, jobID, "canceled")
+	var jobStatus, errorCode string
+	if err := db.QueryRowContext(context.Background(), `SELECT status, COALESCE(error_code, '') FROM jobs WHERE id=?`, jobID).Scan(&jobStatus, &errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "canceled" {
+		t.Fatalf("job status=%q want canceled", jobStatus)
+	}
+	if errorCode != "fetch_canceled" {
+		t.Fatalf("job error_code=%q want fetch_canceled", errorCode)
+	}
+
+	var instStatus string
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&instStatus); err != nil {
+		t.Fatal(err)
+	}
+	if instStatus != "fetch_failed" {
+		t.Fatalf("instrument status=%q want fetch_failed", instStatus)
+	}
+
+	waitForFetchStatus(t, client, srv.URL, instID, func(st map[string]any) bool {
+		return st["job_status"] == "canceled" && st["error_code"] == "fetch_canceled" && st["instrument_status"] == "fetch_failed"
+	})
+
+	retryResp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/retry-fetch", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryResp.StatusCode != http.StatusOK {
+		t.Fatalf("retry-fetch status=%d body=%s", retryResp.StatusCode, readBody(t, retryResp))
+	}
+	waitForInstrumentActive(t, client, srv.URL, instID)
+}
+
+func TestInstrumentFetchShutdownRequeueIntegration(t *testing.T) {
+	provider := mockSlowFetchProvider(t)
+	closeProvider(t, provider)
+	db := testutil.OpenTestDB(t)
+	stopWorker := startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	var jobID string
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT id FROM jobs WHERE json_extract(payload_json, '$.instrument_id')=? ORDER BY created_at DESC LIMIT 1`,
+		instID).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	waitForJobStatus(t, db, jobID, "running")
+
+	stopWorker()
+	waitForJobStatus(t, db, jobID, "queued")
+
+	var instStatus string
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&instStatus); err != nil {
+		t.Fatal(err)
+	}
+	if instStatus != "pending_fetch" {
+		t.Fatalf("instrument status=%q want pending_fetch after shutdown requeue", instStatus)
+	}
+}
+
+func TestInstrumentFetchQueuedCancelIntegration(t *testing.T) {
+	provider := mockProviderServer(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	var jobID string
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT id FROM jobs WHERE json_extract(payload_json, '$.instrument_id')=? ORDER BY created_at DESC LIMIT 1`,
+		instID).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.Post(srv.URL+"/api/v1/jobs/"+jobID+"/cancel", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+
+	var status string
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "fetch_failed" {
+		t.Fatalf("instrument status=%q want fetch_failed", status)
+	}
+
+	retryResp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/retry-fetch", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryResp.StatusCode != http.StatusOK {
+		t.Fatalf("retry-fetch status=%d body=%s", retryResp.StatusCode, readBody(t, retryResp))
+	}
+}
+
+func TestHoldingsWithSystemCashIntegration(t *testing.T) {
+	provider := mockProviderServer(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instEquity := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	waitForInstrumentActive(t, client, srv.URL, instEquity)
+	plan := createPlanWithValuationDate(t, db, "2026-06-09")
+	allocBody, _ := json.Marshal(map[string]any{
+		"config_version": plan.ConfigVersion,
+		"asset_class_targets": []map[string]any{
+			{"asset_class": "equity", "weight": 0.7},
+			{"asset_class": "bond", "weight": 0.0},
+			{"asset_class": "cash", "weight": 0.3},
+		},
+		"region_targets": []map[string]any{
+			{"asset_class": "equity", "region": "domestic", "weight_within_class": 1.0},
+			{"asset_class": "equity", "region": "foreign", "weight_within_class": 0.0},
+			{"asset_class": "bond", "region": "domestic", "weight_within_class": 1.0},
+			{"asset_class": "bond", "region": "foreign", "weight_within_class": 0.0},
+			{"asset_class": "cash", "region": "domestic", "weight_within_class": 1.0},
+			{"asset_class": "cash", "region": "foreign", "weight_within_class": 0.0},
+		},
+	})
+	allocReq, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/plans/"+plan.ID+"/allocation", bytes.NewReader(allocBody))
+	allocReq.Header.Set("Content-Type", "application/json")
+	allocResp, err := client.Do(allocReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocResp.StatusCode != http.StatusOK {
+		t.Fatalf("allocation status=%d body=%s", allocResp.StatusCode, readBody(t, allocResp))
+	}
+	_ = readBody(t, allocResp)
+	version := plan.ConfigVersion + 1
+
+	body, _ := json.Marshal(map[string]any{
+		"config_version": version,
+		"holdings": []map[string]any{
+			{
+				"instrument_id": instEquity, "enabled": true,
+				"weight_within_group": 1.0, "current_amount_minor": 7_000_000_00, "sort_order": 1,
+			},
+			{
+				"instrument_id": "system_cash_cny", "enabled": true,
+				"weight_within_group": 1.0, "current_amount_minor": 3_000_000_00, "sort_order": 2,
+			},
+		},
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/plans/"+plan.ID+"/holdings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("holdings status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+func mockAmbiguousFundProviderServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/instruments/resolve" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
+			Code: 0, Message: "success",
+			Data: marketdata.ResolveData{
+				Ambiguous: true,
+				Candidates: []marketdata.ResolveCandidate{
+					{Code: "sh000510", ProviderSymbol: "sh000510", Name: "中证A500", Exchange: "SH", InstrumentKind: "index_etf"},
+					{Code: "sz000510", ProviderSymbol: "sz000510", Name: "新金路", Exchange: "SZ", InstrumentKind: "stock"},
+				},
+			},
+		})
+	}))
+}
+
+func TestResolveStockCandidateNoTicketForFundTypeIntegration(t *testing.T) {
+	provider := mockAmbiguousFundProviderServer(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	raw, _ := json.Marshal(map[string]any{
+		"market": "CN", "instrument_type": "cn_exchange_fund", "code": "000510",
+	})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/resolve", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolve status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	data := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	cands := data["candidates"].([]any)
+	var stockCand map[string]any
+	for _, c := range cands {
+		row := c.(map[string]any)
+		if row["instrument_kind"] == "stock" {
+			stockCand = row
+			break
+		}
+	}
+	if stockCand == nil {
+		t.Fatal("expected stock candidate")
+	}
+	if stockCand["is_importable"] != false {
+		t.Fatalf("stock candidate is_importable=%v want false", stockCand["is_importable"])
+	}
+	if _, ok := stockCand["ticket_id"]; ok {
+		t.Fatal("stock candidate must not include ticket_id")
 	}
 }

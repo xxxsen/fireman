@@ -22,7 +22,7 @@ func TestUpdateParameters_ApplyUnallocatedGapToCash(t *testing.T) {
 		repository.NewInstrumentRepo(db),
 		repository.NewMarketDataRepo(db),
 	)
-	svc := NewPlanService(db, plans, params, alloc, scenario, holdings, hash, snapSvc, repository.NewMarketDataRepo(db))
+	svc := NewPlanService(db, plans, params, alloc, scenario, holdings, repository.NewInstrumentRepo(db), hash, snapSvc, repository.NewMarketDataRepo(db))
 
 	scn := "scn_builtin_near_fire"
 	plan, err := svc.Create(context.Background(), CreatePlanRequest{

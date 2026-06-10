@@ -42,21 +42,12 @@ const CODE_HINTS: Record<string, string> = {
   us_stock: "例如 AAPL",
 };
 
-function isCandidateCompatible(instrumentType: string, instrumentKind: string): boolean {
-  if (instrumentType === "cn_exchange_fund") {
-    return instrumentKind !== "stock";
-  }
-  if (instrumentType === "cn_exchange_stock") {
-    return instrumentKind === "stock";
-  }
-  return true;
+function isCandidateCompatible(candidate: ResolveCandidate): boolean {
+  return candidate.is_importable ?? false;
 }
 
-function firstCompatibleCandidate(
-  instrumentType: string,
-  candidates: ResolveCandidate[],
-): ResolveCandidate | null {
-  return candidates.find((c) => isCandidateCompatible(instrumentType, c.instrument_kind)) ?? null;
+function firstCompatibleCandidate(candidates: ResolveCandidate[]): ResolveCandidate | null {
+  return candidates.find((c) => isCandidateCompatible(c)) ?? null;
 }
 
 type Stage = "search" | "disambiguate" | "confirm" | "error";
@@ -79,7 +70,7 @@ export default function ImportAssetPage() {
       const data = await resolveImport({ market, instrument_type: instrumentType, code });
       if (data.ambiguous && data.candidates?.length) {
         setCandidates(data.candidates);
-        setSelected(firstCompatibleCandidate(instrumentType, data.candidates));
+        setSelected(firstCompatibleCandidate(data.candidates));
         setStage("disambiguate");
         return;
       }
@@ -189,7 +180,7 @@ export default function ImportAssetPage() {
           <p className="text-sm text-amber-800">该代码存在多个候选，请选择正确的一项。</p>
           <div className="space-y-2" role="radiogroup" aria-label="候选标的">
             {candidates.map((c) => {
-              const compatible = isCandidateCompatible(instrumentType, c.instrument_kind);
+              const compatible = isCandidateCompatible(c);
               return (
               <label
                 key={c.code}
@@ -226,7 +217,7 @@ export default function ImportAssetPage() {
             <button
               type="button"
               className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-              disabled={!selected || !isCandidateCompatible(instrumentType, selected.instrument_kind)}
+              disabled={!selected || !isCandidateCompatible(selected)}
               onClick={() => setStage("confirm")}
             >
               下一步

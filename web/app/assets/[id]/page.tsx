@@ -54,7 +54,7 @@ export default function AssetDetailPage() {
   const [showFetchDrawer, setShowFetchDrawer] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [fetchStatusError, setFetchStatusError] = useState<string | null>(null);
-  const [fetchCanceled, setFetchCanceled] = useState(false);
+  const [fetchErrorCode, setFetchErrorCode] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["instrument-detail", id],
@@ -63,13 +63,11 @@ export default function AssetDetailPage() {
 
   useEffect(() => {
     if (!data) return;
-    if (data.instrument.status !== "pending_fetch") {
-      setFetchCanceled(false);
-    }
     if (data.instrument.status === "pending_fetch" || data.instrument.status === "fetch_failed") {
       void getFetchStatus(id)
         .then((s) => {
           setFetchStatusError(null);
+          setFetchErrorCode(s.error_code ?? null);
           if (s.job_id) setActiveJobId(s.job_id);
         })
         .catch((err) => {
@@ -88,7 +86,7 @@ export default function AssetDetailPage() {
     onComplete: handleJobTerminal,
     onFailed: () => handleJobTerminal(),
     onCanceled: () => {
-      setFetchCanceled(true);
+      setFetchErrorCode("fetch_canceled");
       handleJobTerminal();
     },
   });
@@ -173,7 +171,7 @@ export default function AssetDetailPage() {
         </div>
       )}
 
-      {isPending && !fetchCanceled && (
+      {isPending && (
         <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
           <p className="font-medium">历史数据抓取中</p>
           <p className="mt-1">后台任务正在拉取全量历史，完成后将自动刷新本页。</p>
@@ -187,14 +185,22 @@ export default function AssetDetailPage() {
         </div>
       )}
 
-      {isPending && fetchCanceled && (
+      {isFailed && fetchErrorCode === "fetch_canceled" && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-medium">历史数据抓取已取消</p>
-          <p className="mt-1">抓取任务已取消，标的仍处于待抓取状态。请从资料库重新导入或联系管理员。</p>
+          <p className="mt-1">抓取任务已取消，可点击下方按钮重试。</p>
+          <button
+            type="button"
+            className="mt-2 rounded-md bg-amber-900 px-3 py-1.5 text-white disabled:opacity-50"
+            disabled={retryMut.isPending}
+            onClick={() => retryMut.mutate()}
+          >
+            {retryMut.isPending ? "提交中…" : "重试抓取"}
+          </button>
         </div>
       )}
 
-      {isFailed && (
+      {isFailed && fetchErrorCode !== "fetch_canceled" && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-medium">历史数据抓取失败</p>
           <p className="mt-1">{jobState.error ?? "请重试抓取或检查数据源。"}</p>

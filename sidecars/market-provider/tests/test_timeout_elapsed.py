@@ -4,17 +4,14 @@ import time
 
 import pytest
 
-from fireman_market_provider.timeout_util import call_with_timeout
+pytestmark = pytest.mark.subprocess
+
+from fireman_market_provider.timeout_util import UpstreamCall, call_with_timeout
 
 
-def _sleep_two_seconds() -> None:
-    time.sleep(2)
-
-
-def test_timeout_returns_within_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MARKET_PROVIDER_DISABLE_SUBPROCESS", "0")
+def test_timeout_returns_within_deadline() -> None:
     start = time.monotonic()
     with pytest.raises(TimeoutError):
-        call_with_timeout(_sleep_two_seconds, 1)
+        call_with_timeout(UpstreamCall("time.sleep", (2,)), 1)
     elapsed = time.monotonic() - start
     assert elapsed < 1.5

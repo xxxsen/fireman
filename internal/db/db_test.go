@@ -2,11 +2,63 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/fireman/fireman/migrations"
 )
+
+func applyMigrationsThrough(t *testing.T, pool *sql.DB, dbPath string, maxVersion int) {
+	t.Helper()
+	SetMigrations(migrations.FS)
+	ctx := context.Background()
+	if _, err := pool.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		filename TEXT NOT NULL,
+		applied_at INTEGER NOT NULL
+	)`); err != nil {
+		t.Fatalf("ensure schema_migrations: %v", err)
+	}
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	type mig struct {
+		version int
+		name    string
+	}
+	var files []mig
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		idx := strings.IndexByte(e.Name(), '_')
+		v, err := strconv.Atoi(e.Name()[:idx])
+		if err != nil {
+			t.Fatalf("parse version %s: %v", e.Name(), err)
+		}
+		if v > maxVersion {
+			continue
+		}
+		files = append(files, mig{version: v, name: e.Name()})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].version < files[j].version })
+	for _, f := range files {
+		body, err := fs.ReadFile(migrations.FS, f.name)
+		if err != nil {
+			t.Fatalf("read %s: %v", f.name, err)
+		}
+		if err := applyMigration(ctx, pool, migrationFile{version: f.version, filename: f.name}, body); err != nil {
+			t.Fatalf("apply %s: %v", f.name, err)
+		}
+	}
+}
 
 func TestOpenAndPing(t *testing.T) {
 	dir := t.TempDir()
@@ -115,6 +167,66 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 	}
 	if migrationCount != 5 {
 		t.Errorf("expected 5 migration records after idempotent re-run, got %d", migrationCount)
+	}
+}
+
+func TestMigrate_0004To0005_DeduplicatesDuplicateInstrumentFetch(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fireman.db")
+	pool, err := Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pool.Close()
+
+	applyMigrationsThrough(t, pool, dbPath, 4)
+
+	inputHash := "dup_hash_0004_upgrade"
+	now := int64(1_700_000_000_000)
+	_, err = pool.ExecContext(context.Background(), `
+		INSERT INTO jobs (
+			id, type, status, input_hash, payload_json,
+			progress_current, progress_total, phase,
+			cancel_requested, retry_count, created_at
+		) VALUES
+		('job_dup_q', 'instrument_fetch', 'queued', ?, '{"instrument_id":"ins_dup"}', 0, 1, 'queued', 0, 0, ?),
+		('job_dup_r', 'instrument_fetch', 'running', ?, '{"instrument_id":"ins_dup2"}', 0, 1, 'fetching_history', 0, 0, ?)
+	`, inputHash, now, inputHash, now+1000)
+	if err != nil {
+		t.Fatalf("seed duplicate jobs: %v", err)
+	}
+
+	if err := Migrate(context.Background(), pool, dbPath, nil); err != nil {
+		t.Fatalf("migrate to 0005: %v", err)
+	}
+
+	var activeCount int
+	if err := pool.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM jobs
+		WHERE type='instrument_fetch' AND input_hash=? AND status IN ('queued', 'running')`,
+		inputHash).Scan(&activeCount); err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active duplicate jobs=%d want 1", activeCount)
+	}
+
+	var canceledCount int
+	if err := pool.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM jobs
+		WHERE type='instrument_fetch' AND input_hash=? AND status='canceled'
+		  AND error_code='duplicate_instrument_fetch_migrated' AND finished_at IS NOT NULL`,
+		inputHash).Scan(&canceledCount); err != nil {
+		t.Fatal(err)
+	}
+	if canceledCount != 1 {
+		t.Fatalf("canceled migrated jobs=%d want 1", canceledCount)
+	}
+
+	var idxName string
+	if err := pool.QueryRowContext(context.Background(),
+		`SELECT name FROM sqlite_master WHERE type='index' AND name='uq_jobs_instrument_fetch_active'`).Scan(&idxName); err != nil {
+		t.Fatalf("expected unique index: %v", err)
 	}
 }
 

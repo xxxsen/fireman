@@ -47,16 +47,25 @@ func NewInstrumentService(
 	}
 }
 
-func (s *InstrumentService) List(ctx context.Context) ([]repository.InstrumentRecord, error) {
+func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]repository.InstrumentRecord, error) {
 	items, err := s.instRepo.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for i := range items {
-		if items[i].IsSystem {
+		if items[i].ID == repository.SystemCashInstrumentID {
+			items[i].QualityStatus = "available"
 			continue
 		}
-		s.enrichMarketMeta(ctx, &items[i])
+		if items[i].IsSystem {
+			items[i].QualityStatus = "unavailable"
+			continue
+		}
+		if valuationDate != "" {
+			items[i].QualityStatus = LibraryQualityAtDate(ctx, s.marketRepo, items[i].ID, valuationDate)
+		} else {
+			s.enrichMarketMeta(ctx, &items[i])
+		}
 	}
 	return items, nil
 }

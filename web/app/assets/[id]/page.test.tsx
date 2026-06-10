@@ -222,10 +222,13 @@ describe("AssetDetailPage job terminal states", () => {
   });
 
   it("shows canceled notice instead of permanent fetching banner", async () => {
-    getInstrumentDetailMock.mockResolvedValue(pendingDetail());
+    getInstrumentDetailMock
+      .mockResolvedValueOnce(pendingDetail())
+      .mockResolvedValue(failedDetail());
     getFetchStatusMock.mockResolvedValue({
       job_id: "job_pending",
-      instrument_status: "pending_fetch",
+      instrument_status: "fetch_failed",
+      error_code: "fetch_canceled",
     });
     useJobStatusMock.mockImplementation((jobId, options) => {
       jobStatusCallbacks = options ?? {};

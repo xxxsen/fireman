@@ -40,6 +40,7 @@ describe("ImportAssetPage", () => {
           name: "中证A500",
           exchange: "SH",
           instrument_kind: "index_etf",
+          is_importable: true,
         },
         {
           code: "sz000510",
@@ -47,6 +48,7 @@ describe("ImportAssetPage", () => {
           name: "新金路",
           exchange: "SZ",
           instrument_kind: "stock",
+          is_importable: false,
         },
       ],
     });
@@ -71,6 +73,7 @@ describe("ImportAssetPage", () => {
           name: "中证A500",
           exchange: "SH",
           instrument_kind: "index_etf",
+          is_importable: false,
         },
         {
           code: "sz000510",
@@ -78,6 +81,7 @@ describe("ImportAssetPage", () => {
           name: "新金路",
           exchange: "SZ",
           instrument_kind: "stock",
+          is_importable: true,
         },
       ],
     });

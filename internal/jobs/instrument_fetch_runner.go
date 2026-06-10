@@ -31,9 +31,13 @@ func errorCode(err error) (string, bool) {
 	return "", false
 }
 
+// ErrFetchCanceled indicates the job was finalized as canceled by markFetchCanceled.
+var ErrFetchCanceled = errors.New("instrument fetch canceled")
+
 // InstrumentFetchRunner executes background instrument history fetches.
 type InstrumentFetchRunner struct {
 	db         *sql.DB
+	jobs       *repository.JobRepo
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
 	annualRepo *repository.AnnualReturnsRepo
@@ -42,23 +46,65 @@ type InstrumentFetchRunner struct {
 
 func NewInstrumentFetchRunner(
 	db *sql.DB,
+	jobs *repository.JobRepo,
 	instRepo *repository.InstrumentRepo,
 	marketRepo *repository.MarketDataRepo,
 	annualRepo *repository.AnnualReturnsRepo,
 	provider *marketdata.ProviderClient,
 ) *InstrumentFetchRunner {
 	return &InstrumentFetchRunner{
-		db: db, instRepo: instRepo, marketRepo: marketRepo,
+		db: db, jobs: jobs, instRepo: instRepo, marketRepo: marketRepo,
 		annualRepo: annualRepo, provider: provider,
 	}
 }
 
-func (r *InstrumentFetchRunner) Run(ctx context.Context, job repository.Job, progress func(done, total int, phase string)) error {
+func (r *InstrumentFetchRunner) markFetchCanceled(ctx context.Context, jobID string, payload repository.InstrumentFetchPayload) error {
+	if err := fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
+		if err := r.instRepo.UpdateStatusTx(ctx, tx, payload.InstrumentID, "fetch_failed"); err != nil {
+			return err
+		}
+		return r.jobs.FinishTx(ctx, tx, jobID, repository.JobStatusCanceled, "fetch_canceled", "instrument fetch canceled by user")
+	}); err != nil {
+		return err
+	}
+	return ErrFetchCanceled
+}
+
+func (r *InstrumentFetchRunner) Run(
+	ctx context.Context,
+	job repository.Job,
+	cancelCheck func() bool,
+	progress func(done, total int, phase string),
+) error {
 	var payload repository.InstrumentFetchPayload
 	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
 		return err
 	}
 	progress(0, 1, "fetching_history")
+
+	if cancelCheck != nil && cancelCheck() {
+		return r.markFetchCanceled(ctx, job.ID, payload)
+	}
+
+	fetchCtx, cancelFetch := context.WithCancel(ctx)
+	defer cancelFetch()
+	if cancelCheck != nil {
+		go func() {
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-fetchCtx.Done():
+					return
+				case <-ticker.C:
+					if cancelCheck() {
+						cancelFetch()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	end := time.Now().Format("2006-01-02")
 	fetchReq := marketdata.FetchRequest{
@@ -66,11 +112,17 @@ func (r *InstrumentFetchRunner) Run(ctx context.Context, job repository.Job, pro
 		SourceCode: payload.ProviderSymbol, EndDate: end,
 		AdjustPolicy: payload.AdjustPolicy,
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	data, err := r.provider.Fetch(fetchCtx, fetchReq)
+	if cancelCheck != nil && cancelCheck() {
+		return r.markFetchCanceled(ctx, job.ID, payload)
 	}
-	data, err := r.provider.Fetch(ctx, fetchReq)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if cancelCheck != nil && cancelCheck() {
+				return r.markFetchCanceled(ctx, job.ID, payload)
+			}
+			return err
+		}
 		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")
 		return err
 	}

@@ -24,6 +24,7 @@ func startInstrumentFetchWorker(t *testing.T, db *sql.DB, providerURL string) co
 	fetchProvider := marketdata.NewProviderClient(providerURL).FetchClient()
 	fetchRunner := jobs.NewInstrumentFetchRunner(
 		db,
+		repository.NewJobRepo(db),
 		repository.NewInstrumentRepo(db),
 		repository.NewMarketDataRepo(db),
 		repository.NewAnnualReturnsRepo(db),
@@ -84,6 +85,7 @@ func createPlanWithValuationDate(t *testing.T, db *sql.DB, valuationDate string)
 		repository.NewAllocationRepo(db),
 		repository.NewScenarioRepo(db),
 		repository.NewHoldingsRepo(db),
+		repository.NewInstrumentRepo(db),
 		service.NewConfigHashService(
 			repository.NewPlanRepo(db),
 			repository.NewParametersRepo(db),

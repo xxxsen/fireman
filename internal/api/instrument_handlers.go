@@ -29,7 +29,7 @@ func (s Services) registerInstrumentRoutes(rg *gin.RouterGroup) {
 }
 
 func (s Services) listInstruments(c *gin.Context) {
-	out, err := s.Instruments.List(c.Request.Context())
+	out, err := s.Instruments.List(c.Request.Context(), c.Query("valuation_date"))
 	if err != nil {
 		FailErr(c, err)
 		return

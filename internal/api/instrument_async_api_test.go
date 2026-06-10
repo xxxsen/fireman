@@ -87,6 +87,7 @@ func TestInstrumentFetchWorkerActivates(t *testing.T) {
 	fetchProvider := marketdata.NewProviderClient(provider.URL).FetchClient()
 	fetchRunner := jobs.NewInstrumentFetchRunner(
 		db,
+		repository.NewJobRepo(db),
 		repository.NewInstrumentRepo(db),
 		repository.NewMarketDataRepo(db),
 		repository.NewAnnualReturnsRepo(db),

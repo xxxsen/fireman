@@ -87,15 +87,18 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 
 	instruments := make(map[string]repository.Instrument, len(req.Holdings))
 	for _, item := range req.Holdings {
-		inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
+		instRec, err := s.instRepo.GetByID(ctx, item.InstrumentID)
 		if err != nil {
 			if errors.Is(err, repository.ErrInstrumentNotFound) {
 				return PlanDetail{}, newErr("instrument_not_found", "instrument not found", map[string]any{"instrument_id": item.InstrumentID})
 			}
 			return PlanDetail{}, err
 		}
-		quality := LibraryQualityFromRepos(ctx, s.marketRepo, item.InstrumentID)
-		if err := EnsureInstrumentReadyForPlan(inst, quality); err != nil {
+		if _, err := EvaluateInstrumentForPlan(ctx, instRec, s.marketRepo, req.ValuationDate); err != nil {
+			return PlanDetail{}, err
+		}
+		inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
+		if err != nil {
 			return PlanDetail{}, err
 		}
 		instruments[item.InstrumentID] = inst

@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import pandas as pd
 
 from ..logutil import get_logger
-from ..timeout_util import call_with_timeout, fetch_timeout_seconds
+from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds
 
 logger = get_logger(__name__)
 
 
 def try_sources(
     label: str,
-    sources: list[tuple[str, Callable[[], pd.DataFrame | None]]],
+    sources: list[tuple[str, UpstreamCall]],
 ) -> tuple[pd.DataFrame, str]:
     """Try providers in order until one returns a non-empty DataFrame."""
     errors: list[str] = []
     logger.info("fetch %s: trying %d source(s)", label, len(sources))
-    for source_name, fetch in sources:
+    for source_name, call in sources:
         try:
-            df = call_with_timeout(fetch, fetch_timeout_seconds())
+            df = call_with_timeout(call, fetch_timeout_seconds())
             if df is not None and not df.empty:
                 logger.info(
                     "fetch %s: success via %s (%d rows)",

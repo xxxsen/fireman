@@ -54,6 +54,7 @@ type PlanService struct {
 	alloc      *repository.AllocationRepo
 	scenario   *repository.ScenarioRepo
 	holdings   *repository.HoldingsRepo
+	instRepo   *repository.InstrumentRepo
 	hash       *ConfigHashService
 	snapSvc    *marketdata.SnapshotService
 	marketRepo *repository.MarketDataRepo
@@ -66,13 +67,14 @@ func NewPlanService(
 	alloc *repository.AllocationRepo,
 	scenario *repository.ScenarioRepo,
 	holdings *repository.HoldingsRepo,
+	instRepo *repository.InstrumentRepo,
 	hash *ConfigHashService,
 	snapSvc *marketdata.SnapshotService,
 	marketRepo *repository.MarketDataRepo,
 ) *PlanService {
 	return &PlanService{
 		sql: sqlDB, plans: plans, params: params, alloc: alloc, scenario: scenario,
-		holdings: holdings, hash: hash, snapSvc: snapSvc, marketRepo: marketRepo,
+		holdings: holdings, instRepo: instRepo, hash: hash, snapSvc: snapSvc, marketRepo: marketRepo,
 	}
 }
 

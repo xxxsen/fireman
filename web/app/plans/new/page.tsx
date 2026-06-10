@@ -82,7 +82,7 @@ export default function NewPlanWizardPage() {
   const [gapToCash, setGapToCash] = useState(false);
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
-  const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: listInstruments });
+  const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: () => listInstruments() });
 
   const [simFailed, setSimFailed] = useState(false);
 

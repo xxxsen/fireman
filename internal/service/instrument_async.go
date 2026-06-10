@@ -105,31 +105,45 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 	}
 	out := map[string]any{"ambiguous": data.Ambiguous}
 	if data.Resolved != nil {
-		ticketID, err := s.createResolutionTicket(ctx, req.Market, req.InstrumentType, *data.Resolved)
+		resolved, err := s.buildResolveCandidate(ctx, req.Market, req.InstrumentType, *data.Resolved)
 		if err != nil {
 			return nil, err
 		}
-		out["resolved"] = map[string]any{
-			"code": data.Resolved.Code, "provider_symbol": data.Resolved.ProviderSymbol,
-			"name": data.Resolved.Name, "exchange": data.Resolved.Exchange,
-			"instrument_kind": data.Resolved.InstrumentKind, "ticket_id": ticketID,
-		}
+		out["resolved"] = resolved
 	}
 	if len(data.Candidates) > 0 {
 		cands := make([]map[string]any, len(data.Candidates))
 		for i, c := range data.Candidates {
-			ticketID, err := s.createResolutionTicket(ctx, req.Market, req.InstrumentType, c)
+			item, err := s.buildResolveCandidate(ctx, req.Market, req.InstrumentType, c)
 			if err != nil {
 				return nil, err
 			}
-			cands[i] = map[string]any{
-				"code": c.Code, "provider_symbol": c.ProviderSymbol,
-				"name": c.Name, "exchange": c.Exchange,
-				"instrument_kind": c.InstrumentKind, "ticket_id": ticketID,
-			}
+			cands[i] = item
 		}
 		out["candidates"] = cands
 	}
+	return out, nil
+}
+
+func (s *InstrumentService) buildResolveCandidate(
+	ctx context.Context,
+	market, instrumentType string,
+	c marketdata.ResolveCandidate,
+) (map[string]any, error) {
+	importable := IsImportableCandidate(instrumentType, c.InstrumentKind)
+	out := map[string]any{
+		"code": c.Code, "provider_symbol": c.ProviderSymbol,
+		"name": c.Name, "exchange": c.Exchange,
+		"instrument_kind": c.InstrumentKind, "is_importable": importable,
+	}
+	if !importable {
+		return out, nil
+	}
+	ticketID, err := s.createResolutionTicket(ctx, market, instrumentType, c)
+	if err != nil {
+		return nil, err
+	}
+	out["ticket_id"] = ticketID
 	return out, nil
 }
 
@@ -214,6 +228,11 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		ticket, err = s.tickets.Consume(ctx, tx, req.TicketID)
 		if err != nil {
 			return mapTicketError(err)
+		}
+		if !IsImportableCandidate(ticket.InstrumentType, ticket.InstrumentKind) {
+			return newErr("invalid_request", "instrument kind is not compatible with instrument type", map[string]any{
+				"instrument_type": ticket.InstrumentType, "instrument_kind": ticket.InstrumentKind,
+			})
 		}
 		providerSymbol = ticket.ProviderSymbol
 		inst = repository.InstrumentRecord{
@@ -402,6 +421,14 @@ func (s *InstrumentService) ensureNoFetchInProgress(ctx context.Context, inst re
 
 // EnsureInstrumentReadyForPlan rejects instruments that are not active with available library quality.
 func EnsureInstrumentReadyForPlan(inst repository.Instrument, qualityStatus string) error {
+	if inst.ID == repository.SystemCashInstrumentID && inst.Status == "active" && qualityStatus == "available" {
+		return nil
+	}
+	if inst.IsSystem {
+		return newErr("instrument_not_ready", "system instrument cannot be used as a plan holding", map[string]any{
+			"instrument_id": inst.ID,
+		})
+	}
 	if inst.Status != "active" {
 		return newErr("instrument_not_ready", fmt.Sprintf("instrument status is %s", inst.Status), map[string]any{
 			"instrument_id": inst.ID, "status": inst.Status,

@@ -63,7 +63,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc,
 	)
 
-	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, hash, snapSvc, marketRepo)
+	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, instRepo, hash, snapSvc, marketRepo)
 	return Services{
 		Plans:            planSvc,
 		Allocation:       service.NewAllocationService(db, plans, alloc, scenario),
@@ -75,7 +75,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		Simulations:      simSvc,
 		Stress:           stressSvc,
 		Sensitivity:      sensitivitySvc,
-		Jobs:             service.NewJobService(jobRepo, simRepo, eventHub),
+		Jobs:             service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),
 		Dashboard:        dashboardSvc,
 		System:           service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
 		EventHub:         eventHub,

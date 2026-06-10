@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -287,6 +288,10 @@ func (w *Worker) executeInstrumentFetch(ctx context.Context, job repository.Job)
 		w.fail(ctx, job.ID, "runner_missing", "instrument fetch runner not configured")
 		return
 	}
+	cancelCheck := func() bool {
+		ok, _ := w.jobs.IsCancelRequested(context.Background(), job.ID)
+		return ok
+	}
 	progress := func(done, total int, phase string) {
 		_ = w.jobs.UpdateProgress(ctx, job.ID, done, total, phase)
 		w.events.Publish(Event{
@@ -294,9 +299,22 @@ func (w *Worker) executeInstrumentFetch(ctx context.Context, job repository.Job)
 			Phase: phase, ProgressCurrent: done, ProgressTotal: total,
 		})
 	}
-	progress(0, 1, "fetching_history")
-	if err := w.instrumentFetch.Run(ctx, job, progress); err != nil {
-		if ctx.Err() != nil {
+	if err := w.instrumentFetch.Run(ctx, job, cancelCheck, progress); err != nil {
+		if errors.Is(err, ErrFetchCanceled) {
+			w.events.Publish(Event{
+				JobID: job.ID, Status: repository.JobStatusCanceled,
+				ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
+			})
+			return
+		}
+		if ctx.Err() != nil && !cancelCheck() {
+			return
+		}
+		if cancelCheck() {
+			w.events.Publish(Event{
+				JobID: job.ID, Status: repository.JobStatusCanceled,
+				ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
+			})
 			return
 		}
 		code, msg := "fetch_failed", err.Error()
