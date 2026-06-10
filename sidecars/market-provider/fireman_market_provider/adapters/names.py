@@ -2,20 +2,36 @@
 
 from __future__ import annotations
 
+import json
+import os
+import threading
 import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
-from ..timeout_util import UpstreamCall, call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
+from ..timeout_util import (
+    UpstreamCall,
+    call_with_timeout,
+    mutual_fund_name_fetch_timeout_seconds,
+    resolve_deadline_seconds,
+    resolve_timeout_seconds,
+)
 
 _ETF_NAME_MAP: dict[str, str] | None = None
 _LOF_NAME_MAP: dict[str, str] | None = None
 _STOCK_NAME_MAP: dict[str, str] | None = None
 _HK_NAME_MAP: dict[str, str] | None = None
+_MUTUAL_FUND_NAME_MAP: dict[str, str] | None = None
 _ETF_LOADED_AT: float = 0.0
 _LOF_LOADED_AT: float = 0.0
 _STOCK_LOADED_AT: float = 0.0
 _HK_LOADED_AT: float = 0.0
+_MUTUAL_FUND_LOADED_AT: float = 0.0
+_MUTUAL_FUND_REFRESHED_AT: str | None = None
+_MUTUAL_FUND_REFRESH_LOCK = threading.Lock()
+_MUTUAL_FUND_REFRESH_EVENT: threading.Event | None = None
 
 _NAME_COLUMNS = (
     "基金简称",
@@ -26,6 +42,7 @@ _NAME_COLUMNS = (
 )
 
 _DEFAULT_CACHE_TTL = 300.0
+_DEFAULT_MUTUAL_FUND_CACHE_TTL = 86400.0
 
 
 def _cache_ttl() -> float:
@@ -43,17 +60,134 @@ def reset_name_caches() -> None:
     """Clear cached spot tables (for tests only)."""
     from .cn_code import reset_cn_code_caches
 
-    global _ETF_NAME_MAP, _LOF_NAME_MAP, _STOCK_NAME_MAP, _HK_NAME_MAP
-    global _ETF_LOADED_AT, _LOF_LOADED_AT, _STOCK_LOADED_AT, _HK_LOADED_AT
+    global _ETF_NAME_MAP, _LOF_NAME_MAP, _STOCK_NAME_MAP, _HK_NAME_MAP, _MUTUAL_FUND_NAME_MAP
+    global _ETF_LOADED_AT, _LOF_LOADED_AT, _STOCK_LOADED_AT, _HK_LOADED_AT, _MUTUAL_FUND_LOADED_AT
+    global _MUTUAL_FUND_REFRESHED_AT, _MUTUAL_FUND_REFRESH_EVENT
     _ETF_NAME_MAP = None
     _LOF_NAME_MAP = None
     _STOCK_NAME_MAP = None
     _HK_NAME_MAP = None
+    _MUTUAL_FUND_NAME_MAP = None
     _ETF_LOADED_AT = 0.0
     _LOF_LOADED_AT = 0.0
     _STOCK_LOADED_AT = 0.0
     _HK_LOADED_AT = 0.0
+    _MUTUAL_FUND_LOADED_AT = 0.0
+    _MUTUAL_FUND_REFRESHED_AT = None
+    with _MUTUAL_FUND_REFRESH_LOCK:
+        if _MUTUAL_FUND_REFRESH_EVENT is not None:
+            _MUTUAL_FUND_REFRESH_EVENT.set()
+        _MUTUAL_FUND_REFRESH_EVENT = None
+    _clear_mutual_fund_disk_cache()
     reset_cn_code_caches()
+
+
+def _mutual_fund_cache_path() -> Path:
+    raw = os.environ.get("MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH", "").strip()
+    if raw:
+        return Path(raw)
+    return Path("/tmp/fireman/mutual_fund_names.json")
+
+
+def _clear_mutual_fund_disk_cache() -> None:
+    path = _mutual_fund_cache_path()
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _mutual_fund_cache_ttl() -> float:
+    raw = os.environ.get("MARKET_PROVIDER_MUTUAL_FUND_CACHE_TTL", "").strip()
+    if not raw:
+        return _DEFAULT_MUTUAL_FUND_CACHE_TTL
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_MUTUAL_FUND_CACHE_TTL
+    return value if value > 0 else _DEFAULT_MUTUAL_FUND_CACHE_TTL
+
+
+def _parse_refreshed_at(iso: str) -> datetime | None:
+    text = iso.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _is_mutual_fund_cache_fresh(refreshed_at: str | None) -> bool:
+    if not refreshed_at:
+        return False
+    parsed = _parse_refreshed_at(refreshed_at)
+    if parsed is None:
+        return False
+    age = datetime.now(UTC) - parsed
+    return age < timedelta(seconds=_mutual_fund_cache_ttl())
+
+
+def _mutual_fund_cache_expires_at(refreshed_at: str | None) -> str | None:
+    parsed = _parse_refreshed_at(refreshed_at or "")
+    if parsed is None:
+        return None
+    return (parsed + timedelta(seconds=_mutual_fund_cache_ttl())).replace(microsecond=0).isoformat()
+
+
+def _read_mutual_fund_cache_from_disk() -> dict[str, str] | None:
+    path = _mutual_fund_cache_path()
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    refreshed_at = payload.get("refreshed_at")
+    refreshed_text = refreshed_at.strip() if isinstance(refreshed_at, str) else ""
+    if not _is_mutual_fund_cache_fresh(refreshed_text):
+        return None
+    names = payload.get("names")
+    if not isinstance(names, dict) or not names:
+        return None
+    global _MUTUAL_FUND_REFRESHED_AT
+    _MUTUAL_FUND_REFRESHED_AT = refreshed_text
+    return {
+        _normalize_code(str(code)): str(name).strip()
+        for code, name in names.items()
+        if str(code).strip() and str(name).strip()
+    }
+
+
+def _write_mutual_fund_cache_to_disk(names: dict[str, str]) -> None:
+    path = _mutual_fund_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    refreshed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    global _MUTUAL_FUND_REFRESHED_AT
+    _MUTUAL_FUND_REFRESHED_AT = refreshed_at
+    payload = {"version": 1, "refreshed_at": refreshed_at, "names": names}
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _fetch_mutual_fund_name_map_from_upstream() -> dict[str, str]:
+    timeout = mutual_fund_name_fetch_timeout_seconds()
+    df = call_with_timeout(UpstreamCall("fund_name_em"), timeout)
+    code_col = "基金代码" if "基金代码" in df.columns else "代码" if "代码" in df.columns else None
+    name_col = "基金简称" if "基金简称" in df.columns else "名称" if "名称" in df.columns else None
+    if code_col is None or name_col is None:
+        return {}
+    return {
+        _normalize_code(str(row[code_col])): str(row[name_col]).strip()
+        for _, row in df.iterrows()
+        if str(row.get(code_col, "")).strip() and str(row.get(name_col, "")).strip()
+    }
 
 
 def _normalize_code(code: str) -> str:
@@ -206,6 +340,104 @@ def _load_hk_name_map(deadline: float | None = None) -> dict[str, str]:
     }
     _HK_LOADED_AT = now
     return _HK_NAME_MAP
+
+
+def _memory_mutual_fund_cache_fresh() -> bool:
+    return _MUTUAL_FUND_NAME_MAP is not None and _is_mutual_fund_cache_fresh(_MUTUAL_FUND_REFRESHED_AT)
+
+
+def _refresh_mutual_fund_name_map_sync(deadline: float | None = None) -> dict[str, str]:
+    """Synchronously refresh mutual fund names; coalesced via singleflight."""
+    global _MUTUAL_FUND_NAME_MAP, _MUTUAL_FUND_LOADED_AT, _MUTUAL_FUND_REFRESH_EVENT
+
+    with _MUTUAL_FUND_REFRESH_LOCK:
+        if _MUTUAL_FUND_REFRESH_EVENT is not None:
+            event = _MUTUAL_FUND_REFRESH_EVENT
+            is_leader = False
+        else:
+            _MUTUAL_FUND_REFRESH_EVENT = threading.Event()
+            event = _MUTUAL_FUND_REFRESH_EVENT
+            is_leader = True
+
+    if not is_leader:
+        event.wait()
+        if _MUTUAL_FUND_NAME_MAP is not None:
+            return _MUTUAL_FUND_NAME_MAP
+        raise RuntimeError("mutual fund cache refresh failed")
+
+    stale_fallback = _MUTUAL_FUND_NAME_MAP
+    stale_refreshed_at = _MUTUAL_FUND_REFRESHED_AT
+    try:
+        names = _fetch_mutual_fund_name_map_from_upstream()
+        _MUTUAL_FUND_NAME_MAP = names
+        _MUTUAL_FUND_LOADED_AT = time.monotonic()
+        _write_mutual_fund_cache_to_disk(names)
+        return names
+    except Exception:
+        # On upstream failure, serve only still-valid cache; expired cache must not be returned.
+        if stale_fallback and _is_mutual_fund_cache_fresh(stale_refreshed_at):
+            return stale_fallback
+        raise
+    finally:
+        with _MUTUAL_FUND_REFRESH_LOCK:
+            if _MUTUAL_FUND_REFRESH_EVENT is not None:
+                _MUTUAL_FUND_REFRESH_EVENT.set()
+                _MUTUAL_FUND_REFRESH_EVENT = None
+
+
+def _load_mutual_fund_name_map(deadline: float | None = None, *, force: bool = False) -> dict[str, str]:
+    """Load CN mutual fund names with 1-day TTL and disk persistence."""
+    global _MUTUAL_FUND_NAME_MAP, _MUTUAL_FUND_LOADED_AT
+
+    if not force and _memory_mutual_fund_cache_fresh():
+        return _MUTUAL_FUND_NAME_MAP  # type: ignore[return-value]
+
+    if not force and _MUTUAL_FUND_NAME_MAP is None:
+        cached = _read_mutual_fund_cache_from_disk()
+        if cached is not None:
+            _MUTUAL_FUND_NAME_MAP = cached
+            _MUTUAL_FUND_LOADED_AT = time.monotonic()
+            return _MUTUAL_FUND_NAME_MAP
+
+    return _refresh_mutual_fund_name_map_sync(deadline)
+
+
+def refresh_cn_mutual_fund_names(deadline: float | None = None) -> dict[str, str]:
+    """Force refresh mutual fund names from upstream and overwrite disk snapshot."""
+    return _refresh_mutual_fund_name_map_sync(deadline)
+
+
+def cn_mutual_fund_name_cache_status() -> dict[str, int | str | bool | None]:
+    loaded = _MUTUAL_FUND_NAME_MAP is not None
+    is_fresh = _is_mutual_fund_cache_fresh(_MUTUAL_FUND_REFRESHED_AT)
+    return {
+        "entry_count": len(_MUTUAL_FUND_NAME_MAP or {}),
+        "loaded": loaded,
+        "refreshed_at": _MUTUAL_FUND_REFRESHED_AT,
+        "cache_path": str(_mutual_fund_cache_path()),
+        "ttl_seconds": int(_mutual_fund_cache_ttl()),
+        "expires_at": _mutual_fund_cache_expires_at(_MUTUAL_FUND_REFRESHED_AT),
+        "is_fresh": is_fresh,
+    }
+
+
+def lookup_cn_mutual_fund_name(symbol: str, deadline: float | None = None) -> str | None:
+    code = _normalize_code(symbol)
+    try:
+        return _load_mutual_fund_name_map(deadline).get(code)
+    except Exception:  # noqa: BLE001 - best-effort lookup
+        return None
+
+
+def get_cn_mutual_fund_name(symbol: str) -> str | None:
+    """Resolve CN mutual fund name; propagates upstream errors (for instrument resolve)."""
+    code = _normalize_code(symbol)
+    return _load_mutual_fund_name_map().get(code)
+
+
+def warm_cn_mutual_fund_name_cache() -> None:
+    """Load mutual fund names from disk or upstream (for sidecar startup)."""
+    _load_mutual_fund_name_map()
 
 
 def resolve_hk_name(symbol: str) -> str:

@@ -7,6 +7,26 @@ export const WIZARD_DEFAULT_REGION_WEIGHT = {
   foreign: 0,
 } as const;
 
+export const WIZARD_ASSET_CLASS_ORDER = ["equity", "bond", "cash"] as const;
+
+export function computeExpectedAmountMinor(
+  totalAssetsMinor: number,
+  classWeight: number,
+  weightWithinClass: number,
+): number {
+  return Math.round(totalAssetsMinor * classWeight * weightWithinClass);
+}
+
+export function pruneSelectedByScenario(
+  selected: WizardHoldingSelection[],
+  scenarioWeights: AssetClassTarget[],
+): WizardHoldingSelection[] {
+  const active = new Set(
+    scenarioWeights.filter((w) => w.weight > 0.0001).map((w) => w.asset_class),
+  );
+  return selected.filter((s) => active.has(s.inst.asset_class));
+}
+
 export interface WizardHoldingSelection {
   inst: Instrument;
   weight: number;

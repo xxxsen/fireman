@@ -126,7 +126,7 @@ func (r *InstrumentFetchRunner) Run(
 		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")
 		return err
 	}
-	class, err := marketdata.ResolveClassification(payload.Market, payload.InstrumentType, data)
+	class, err := resolveFetchClassification(payload, data)
 	if err != nil {
 		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")
 		return err
@@ -138,7 +138,8 @@ func (r *InstrumentFetchRunner) Run(
 	}
 
 	inst := repository.InstrumentRecord{
-		ID: payload.InstrumentID, Code: payload.Code, Name: data.Name,
+		ID: payload.InstrumentID, Code: payload.Code,
+		Name:   marketdata.PreferInstrumentName(payload.Code, payload.ResolvedName, data.Name),
 		Market: payload.Market, InstrumentType: payload.InstrumentType,
 		AssetClass: class.AssetClass, Region: class.Region, Currency: class.Currency,
 		ProviderSymbol:     payload.ProviderSymbol,
@@ -194,4 +195,11 @@ func toRepoAnnual(instrumentID string, rows []marketdata.AnnualReturnRow) []repo
 		}
 	}
 	return out
+}
+
+func resolveFetchClassification(payload repository.InstrumentFetchPayload, data *marketdata.FetchData) (marketdata.Classification, error) {
+	if payload.UserAssetClass != "" {
+		return marketdata.UserClassification(payload.Market, payload.InstrumentType, payload.UserAssetClass, data.Currency)
+	}
+	return marketdata.ResolveClassification(payload.Market, payload.InstrumentType, data)
 }

@@ -4,19 +4,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
-import { PercentInput } from "@/components/ui/PercentInput";
 import { createPlanWizard } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
 import { listInstruments } from "@/lib/api/instruments";
 import { createSimulation } from "@/lib/api/simulations";
-import { assetClassLabel, formatMoney, formatPercent, regionLabel } from "@/lib/format";
+import { assetClassLabel, formatMoney, formatPercent } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
 import {
   buildWizardPortfolioReview,
   formatPendingAmount,
+  pruneSelectedByScenario,
+  WIZARD_ASSET_CLASS_ORDER,
+  type WizardHoldingSelection,
 } from "@/lib/wizard-allocation";
-import type { Instrument, PlanParameters } from "@/types/api";
+import type { PlanParameters } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
 import { useJobStatus } from "@/hooks/useJobStatus";
 
@@ -73,9 +76,7 @@ export default function NewPlanWizardPage() {
   const [annualSpending, setAnnualSpending] = useState(400_000_00);
   const [annualSavings, setAnnualSavings] = useState(200_000_00);
   const [scenarioId, setScenarioId] = useState("");
-  const [selectedInstruments, setSelectedInstruments] = useState<
-    { inst: Instrument; weight: number; amount: number }[]
-  >([]);
+  const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,11 +158,22 @@ export default function NewPlanWizardPage() {
     },
   });
 
+  const selectableInstruments = useMemo(
+    () =>
+      instrumentsQ.data?.instruments.filter(
+        (i) =>
+          !i.is_system &&
+          i.status === "active" &&
+          (i.quality_status ?? "available") === "available",
+      ) ?? [],
+    [instrumentsQ.data?.instruments],
+  );
+
   const groupWeightChecks = useMemo(() => {
     const groups = new Map<string, { label: string; items: { label: string; value: number }[] }>();
     for (const s of selectedInstruments) {
-      const key = `${s.inst.asset_class}:${s.inst.region}`;
-      const label = `${regionLabel(s.inst.region)}${assetClassLabel(s.inst.asset_class)}`;
+      const key = s.inst.asset_class;
+      const label = assetClassLabel(s.inst.asset_class);
       const g = groups.get(key) ?? { label, items: [] };
       g.items.push({ label: s.inst.code, value: s.weight });
       groups.set(key, g);
@@ -182,6 +194,19 @@ export default function NewPlanWizardPage() {
     () => scenariosQ.data?.scenarios.find((s) => s.id === scenarioId),
     [scenariosQ.data?.scenarios, scenarioId],
   );
+
+  const activeScenarioClasses = useMemo(() => {
+    if (!selectedScenario) return [];
+    const weightByClass = new Map(
+      selectedScenario.weights.map((w) => [w.asset_class, w.weight]),
+    );
+    return WIZARD_ASSET_CLASS_ORDER.filter((ac) => (weightByClass.get(ac) ?? 0) > 0.0001).map(
+      (ac) => ({
+        assetClass: ac,
+        classWeight: weightByClass.get(ac) ?? 0,
+      }),
+    );
+  }, [selectedScenario]);
 
   const portfolioReview = useMemo(() => {
     if (!selectedScenario) return null;
@@ -285,69 +310,31 @@ export default function NewPlanWizardPage() {
 
         {step === 2 && (
           <>
-            <p className="text-sm text-slate-600">从资料库选择标的并填写组内占比与当前金额。</p>
+            <p className="text-sm text-slate-600">
+              按场景大类分别搜索并添加标的，填写组内占比与已分配金额；预期资金按总资产 × 大类权重 ×
+              组内占比计算。
+            </p>
             <Link href="/assets/import" className="text-sm underline">
               需要新标的？从 AKShare 录入
             </Link>
-            <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto">
-              {instrumentsQ.data?.instruments
-                .filter(
-                  (i) =>
-                    !i.is_system &&
-                    i.status === "active" &&
-                    (i.quality_status ?? "available") === "available",
-                )
-                .map((inst) => {
-                  const sel = selectedInstruments.find((s) => s.inst.id === inst.id);
-                  return (
-                    <li key={inst.id} className="flex items-center gap-2 rounded border p-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={!!sel}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedInstruments((prev) => [
-                              ...prev,
-                              { inst, weight: 0, amount: 0 },
-                            ]);
-                          } else {
-                            setSelectedInstruments((prev) =>
-                              prev.filter((s) => s.inst.id !== inst.id),
-                            );
-                          }
-                        }}
-                      />
-                      <span className="flex-1">
-                        {inst.name} ({inst.code})
-                      </span>
-                      {sel && (
-                        <>
-                          <PercentInput
-                            value={sel.weight}
-                            onChange={(w) =>
-                              setSelectedInstruments((prev) =>
-                                prev.map((s) =>
-                                  s.inst.id === inst.id ? { ...s, weight: w } : s,
-                                ),
-                              )
-                            }
-                          />
-                          <MoneyInput
-                            valueMinor={sel.amount}
-                            onChange={(a) =>
-                              setSelectedInstruments((prev) =>
-                                prev.map((s) =>
-                                  s.inst.id === inst.id ? { ...s, amount: a } : s,
-                                ),
-                              )
-                            }
-                          />
-                        </>
-                      )}
-                    </li>
-                  );
-                })}
-            </ul>
+            <div className="mt-4 space-y-4">
+              {activeScenarioClasses.map(({ assetClass, classWeight }) => (
+                <AssetClassHoldingPicker
+                  key={assetClass}
+                  assetClass={assetClass}
+                  classWeight={classWeight}
+                  totalAssetsMinor={totalAssets}
+                  instruments={selectableInstruments}
+                  selected={selectedInstruments.filter((s) => s.inst.asset_class === assetClass)}
+                  onSelectedChange={(next) => {
+                    const other = selectedInstruments.filter(
+                      (s) => s.inst.asset_class !== assetClass,
+                    );
+                    setSelectedInstruments([...other, ...next]);
+                  }}
+                />
+              ))}
+            </div>
             {groupWeightChecks.map((g) => (
               <p
                 key={g.label}
@@ -511,13 +498,18 @@ export default function NewPlanWizardPage() {
                 setError("请选择资产配置场景。");
                 return;
               }
+              if (step === 1 && selectedScenario) {
+                setSelectedInstruments((prev) =>
+                  pruneSelectedByScenario(prev, selectedScenario.weights),
+                );
+              }
               if (step === 2) {
                 if (selectedInstruments.length === 0) {
                   setError("请至少选择一个标的。");
                   return;
                 }
                 if (!groupWeightChecks.every((g) => g.passed)) {
-                  setError("各「大类+地区」组内权重须合计 100%。");
+                  setError("各「大类」组内权重须合计 100%。");
                   return;
                 }
                 const unavailable = selectedInstruments.filter(

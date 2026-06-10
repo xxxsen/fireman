@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import threading
+
 from fastapi import FastAPI, HTTPException
 
 from .adapters import fetch_instrument, resolve_instrument
+from .adapters.names import (
+    cn_mutual_fund_name_cache_status,
+    refresh_cn_mutual_fund_names,
+    warm_cn_mutual_fund_name_cache,
+)
 from .logutil import configure_logging, get_logger
 from .schemas import (
     FetchData,
     FetchRequest,
     FetchResponse,
     HealthResponse,
+    MetadataRefreshData,
+    MetadataRefreshRequest,
+    MetadataRefreshResponse,
     ResolveRequest,
     ResolveResponse,
 )
@@ -27,6 +37,22 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
+
+    @app.on_event("startup")
+    def start_mutual_fund_cache_warm() -> None:
+        def _warm() -> None:
+            try:
+                warm_cn_mutual_fund_name_cache()
+                status = cn_mutual_fund_name_cache_status()
+                logger.info(
+                    "mutual fund name cache warm complete entries=%s refreshed_at=%s",
+                    status.get("entry_count"),
+                    status.get("refreshed_at"),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("mutual fund name cache warm failed")
+
+        threading.Thread(target=_warm, daemon=True, name="mutual-fund-cache-warm").start()
 
     @app.get("/healthz", response_model=HealthResponse)
     def healthz() -> HealthResponse:
@@ -51,6 +77,28 @@ def create_app() -> FastAPI:
                 exc,
             )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            logger.error(
+                "resolve timeout code=%s type=%s",
+                payload.code,
+                payload.instrument_type,
+            )
+            raise HTTPException(status_code=504, detail="upstream timeout") from exc
+        except RuntimeError as exc:
+            logger.error(
+                "resolve upstream failed code=%s type=%s: %s",
+                payload.code,
+                payload.instrument_type,
+                exc,
+            )
+            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "resolve failed code=%s type=%s",
+                payload.code,
+                payload.instrument_type,
+            )
+            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
 
     @app.post("/v1/instruments/fetch", response_model=FetchResponse)
     def fetch(payload: FetchRequest) -> FetchResponse:
@@ -93,6 +141,42 @@ def create_app() -> FastAPI:
                 payload.market,
             )
             return FetchResponse(code=1, message=str(exc), data=_empty_data(payload))
+
+    @app.post("/v1/metadata/refresh", response_model=MetadataRefreshResponse)
+    def refresh_metadata(payload: MetadataRefreshRequest) -> MetadataRefreshResponse:
+        logger.info("POST /v1/metadata/refresh target=%s", payload.target)
+        try:
+            if payload.target == "cn_mutual_fund_names":
+                names = refresh_cn_mutual_fund_names()
+                status = cn_mutual_fund_name_cache_status()
+                refreshed_at = status.get("refreshed_at")
+                if not isinstance(refreshed_at, str) or not refreshed_at:
+                    refreshed_at = ""
+                cache_path = status.get("cache_path")
+                if not isinstance(cache_path, str):
+                    cache_path = ""
+                return MetadataRefreshResponse(
+                    code=0,
+                    message="success",
+                    data=MetadataRefreshData(
+                        target=payload.target,
+                        entry_count=len(names),
+                        refreshed_at=refreshed_at,
+                        cache_path=cache_path,
+                    ),
+                )
+            raise ValueError(f"unsupported refresh target: {payload.target}")
+        except TimeoutError as exc:
+            logger.error("metadata refresh timeout target=%s", payload.target)
+            raise HTTPException(status_code=504, detail="upstream timeout") from exc
+        except RuntimeError as exc:
+            logger.error("metadata refresh upstream failed target=%s: %s", payload.target, exc)
+            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("metadata refresh failed target=%s", payload.target)
+            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
 
     return app
 

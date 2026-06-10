@@ -43,7 +43,8 @@ func resolveTicket(t *testing.T, client *http.Client, baseURL string, market, in
 
 func importAsyncNoWait(t *testing.T, client *http.Client, baseURL string, ticketID string) string {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
+	assetClass := "equity"
+	raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": assetClass})
 	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +307,7 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ticketID := resolveTicket(t, client, srv.URL, tc.market, tc.instrumentType, tc.code)
-			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
+			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity"})
 			resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 			if err != nil {
 				t.Fatal(err)
@@ -332,7 +333,7 @@ func TestConcurrentImportAsyncIntegration(t *testing.T) {
 	results := make(chan int, workers)
 	for i := 0; i < workers; i++ {
 		go func() {
-			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
+			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity"})
 			resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 			if err != nil {
 				results <- 0

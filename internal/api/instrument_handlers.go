@@ -103,7 +103,7 @@ func (s Services) importInstrumentAsync(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	if roErr := service.CheckInstrumentReadOnlyFields(body); roErr != nil {
+	if roErr := service.CheckInstrumentImportAsyncFields(body); roErr != nil {
 		FailErr(c, roErr)
 		return
 	}

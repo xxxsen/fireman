@@ -124,7 +124,11 @@ export default function AssetDetailPage() {
 
   const deleteMut = useMutation({
     mutationFn: () => deleteInstrument(id),
-    onSuccess: () => router.push("/assets"),
+    onSuccess: async () => {
+      qc.removeQueries({ queryKey: ["instrument-detail", id] });
+      await qc.invalidateQueries({ queryKey: ["instruments"] });
+      router.push("/assets");
+    },
   });
 
   const retryMut = useMutation({

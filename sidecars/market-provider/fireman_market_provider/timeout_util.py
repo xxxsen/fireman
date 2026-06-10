@@ -15,6 +15,7 @@ DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_FETCH_TIMEOUT_SECONDS = 180
 DEFAULT_RESOLVE_TIMEOUT_SECONDS = 5
 DEFAULT_RESOLVE_DEADLINE_SECONDS = 5
+DEFAULT_MUTUAL_FUND_NAME_FETCH_TIMEOUT_SECONDS = 60
 
 # Registry of test-only dispatch overrides (keyed by operation name).
 _TEST_DISPATCH_OVERRIDES: dict[str, Any] = {}
@@ -139,3 +140,10 @@ def resolve_timeout_seconds() -> int:
 
 def resolve_deadline_seconds() -> float:
     return float(_env_timeout("MARKET_PROVIDER_RESOLVE_DEADLINE", DEFAULT_RESOLVE_DEADLINE_SECONDS))
+
+
+def mutual_fund_name_fetch_timeout_seconds() -> int:
+    return _env_timeout(
+        "MARKET_PROVIDER_MUTUAL_FUND_FETCH_TIMEOUT",
+        DEFAULT_MUTUAL_FUND_NAME_FETCH_TIMEOUT_SECONDS,
+    )

@@ -8,4 +8,6 @@ type InstrumentFetchPayload struct {
 	Code           string `json:"code"`
 	ProviderSymbol string `json:"provider_symbol"`
 	AdjustPolicy   string `json:"adjust_policy"`
+	ResolvedName   string `json:"resolved_name,omitempty"`
+	UserAssetClass string `json:"user_asset_class,omitempty"`
 }

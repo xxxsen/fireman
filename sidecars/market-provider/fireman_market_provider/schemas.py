@@ -104,3 +104,29 @@ class ResolveResponse(BaseModel):
     code: int
     message: str
     data: ResolveData
+
+
+MetadataRefreshTarget = Literal["cn_mutual_fund_names"]
+
+
+class MetadataRefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: MetadataRefreshTarget
+
+
+class MetadataRefreshData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: MetadataRefreshTarget
+    entry_count: int
+    refreshed_at: str
+    cache_path: str
+
+
+class MetadataRefreshResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: int
+    message: str
+    data: MetadataRefreshData

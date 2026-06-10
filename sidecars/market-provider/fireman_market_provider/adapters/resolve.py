@@ -14,7 +14,13 @@ from .cn_code import (
     parse_cn_lof_code,
     parse_cn_stock_code,
 )
-from .names import _load_etf_name_map, _load_hk_name_map, _load_lof_name_map, _load_stock_name_map
+from .names import (
+    _load_etf_name_map,
+    _load_hk_name_map,
+    _load_lof_name_map,
+    _load_stock_name_map,
+    get_cn_mutual_fund_name,
+)
 from .symbols import hk_exchange_symbol
 
 _VALID_MARKET_TYPES: dict[str, frozenset[str]] = {
@@ -73,25 +79,46 @@ def _load_us_name(symbol: str, deadline: float) -> str | None:
     return None
 
 
-def _load_cn_mutual_fund_name(symbol: str, deadline: float) -> str | None:
-    import akshare as ak
+def _maybe_raise_mutual_fund_mismatch(
+    code: str,
+    bare: str,
+    etf_map: dict[str, str],
+    lof_map: dict[str, str],
+    stock_map: dict[str, str],
+) -> None:
+    if _has_exchange_prefix(code):
+        return
+    if bare in etf_map or bare in lof_map or bare in stock_map:
+        return
+    if get_cn_mutual_fund_name(bare):
+        raise ValueError("instrument_type_mismatch")
 
-    bare = _bare_digits(symbol)
-    remaining = max(1, int(deadline - time.monotonic()))
-    try:
-        df = call_with_timeout(UpstreamCall("fund_name_em"), remaining)
-    except Exception:  # noqa: BLE001
-        return None
-    code_col = "基金代码" if "基金代码" in df.columns else "代码" if "代码" in df.columns else None
-    name_col = "基金简称" if "基金简称" in df.columns else "名称" if "名称" in df.columns else None
-    if code_col is None or name_col is None:
-        return None
-    for _, row in df.iterrows():
-        code = str(row.get(code_col, "")).strip().zfill(6)
-        if code == bare:
-            name = str(row.get(name_col, "")).strip()
-            return name or bare
-    return None
+
+def _load_cn_exchange_spot_maps(deadline: float) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    etf_map: dict[str, str] = {}
+    lof_map: dict[str, str] = {}
+    stock_map: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {
+            pool.submit(_load_etf_name_map, deadline): "etf",
+            pool.submit(_load_lof_name_map, deadline): "lof",
+            pool.submit(_load_stock_name_map, deadline): "stock",
+        }
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                result = fut.result()
+            except (TimeoutError, RuntimeError):
+                continue
+            except Exception:  # noqa: BLE001 - partial spot data is acceptable
+                continue
+            if key == "etf":
+                etf_map = result
+            elif key == "lof":
+                lof_map = result
+            else:
+                stock_map = result
+    return etf_map, lof_map, stock_map
 
 
 def _candidate_from_cn(parsed: CNExchangeCode, name: str, kind: str) -> _Candidate:
@@ -131,31 +158,9 @@ def _dedupe_candidates(items: list[_Candidate]) -> list[_Candidate]:
     return out
 
 
-def _load_cn_spot_maps(deadline: float) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    etf_map: dict[str, str] = {}
-    lof_map: dict[str, str] = {}
-    stock_map: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {
-            pool.submit(_load_etf_name_map, deadline): "etf",
-            pool.submit(_load_lof_name_map, deadline): "lof",
-            pool.submit(_load_stock_name_map, deadline): "stock",
-        }
-        for fut in as_completed(futures):
-            key = futures[fut]
-            result = fut.result()
-            if key == "etf":
-                etf_map = result
-            elif key == "lof":
-                lof_map = result
-            else:
-                stock_map = result
-    return etf_map, lof_map, stock_map
-
-
 def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
     bare = _bare_digits(code)
-    etf_map, lof_map, stock_map = _load_cn_spot_maps(deadline)
+    etf_map, lof_map, stock_map = _load_cn_exchange_spot_maps(deadline)
 
     if _has_exchange_prefix(code):
         out: list[_Candidate] = []
@@ -188,12 +193,15 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
             if parsed_stock:
                 out.append(_candidate_from_cn(parsed_stock, stock_map[bare], "stock"))
 
-    return _dedupe_candidates(out)
+    result = _dedupe_candidates(out)
+    if not result:
+        _maybe_raise_mutual_fund_mismatch(code, bare, etf_map, lof_map, stock_map)
+    return result
 
 
 def _resolve_cn_exchange_stock(code: str, deadline: float) -> list[_Candidate]:
     bare = _bare_digits(code)
-    _, _, stock_map = _load_cn_spot_maps(deadline)
+    _, _, stock_map = _load_cn_exchange_spot_maps(deadline)
     if bare not in stock_map:
         return []
 
@@ -212,7 +220,7 @@ def _resolve_cn_exchange_stock(code: str, deadline: float) -> list[_Candidate]:
 
 def _resolve_cn_mutual_fund(code: str, deadline: float) -> list[_Candidate]:
     bare = _bare_digits(code)
-    name = _load_cn_mutual_fund_name(bare, deadline)
+    name = get_cn_mutual_fund_name(bare)
     if not name:
         return []
     return [_Candidate(bare, bare, name, "", "mutual_fund")]

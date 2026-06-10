@@ -13,6 +13,7 @@ from fireman_market_provider.adapters.names import reset_name_caches
 from fireman_market_provider.adapters.resolve import resolve_instrument
 from fireman_market_provider.schemas import ResolveRequest
 from fireman_market_provider.timeout_util import (
+    clear_test_dispatch,
     dispatch_upstream_call,
     register_test_dispatch,
     resolve_timeout_seconds,
@@ -283,7 +284,7 @@ def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
         )
 
     monkeypatch.setattr(
-        "fireman_market_provider.adapters.resolve._load_cn_spot_maps",
+        "fireman_market_provider.adapters.resolve._load_cn_exchange_spot_maps",
         slow_spot_maps,
     )
 
@@ -310,3 +311,73 @@ def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
     assert lof_timeouts[0] <= 1
     assert lof_timeouts[0] < resolve_timeout_seconds()
     assert elapsed < 3.0
+
+
+def test_resolve_cn_exchange_fund_mutual_fund_code_type_mismatch() -> None:
+    reset_name_caches()
+    clear_test_dispatch()
+    etf = pd.DataFrame({"代码": [], "名称": []})
+    lof = pd.DataFrame({"代码": [], "名称": []})
+    stock = pd.DataFrame({"代码": [], "名称": []})
+    mutual = pd.DataFrame({"基金代码": ["007194"], "基金简称": ["长城短债A"]})
+    register_test_dispatch("fund_name_em", lambda: mutual)
+    with patch("akshare.fund_etf_spot_em", return_value=etf), patch(
+        "akshare.fund_lof_spot_em", return_value=lof
+    ), patch("akshare.stock_zh_a_spot_em", return_value=stock):
+        response = _client().post(
+            "/v1/instruments/resolve",
+            json={
+                "market": "CN",
+                "instrument_type": "cn_exchange_fund",
+                "code": "007194",
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "instrument_type_mismatch"
+
+
+def test_resolve_cn_mutual_fund_007194() -> None:
+    reset_name_caches()
+    clear_test_dispatch()
+    mutual = pd.DataFrame({"基金代码": ["007194"], "基金简称": ["长城短债A"]})
+    register_test_dispatch("fund_name_em", lambda: mutual)
+    response = _client().post(
+        "/v1/instruments/resolve",
+        json={
+            "market": "CN",
+            "instrument_type": "cn_mutual_fund",
+            "code": "007194",
+        },
+    )
+    assert response.status_code == 200
+    resolved = response.json()["data"]["resolved"]
+    assert resolved["code"] == "007194"
+    assert resolved["name"] == "长城短债A"
+    assert resolved["instrument_kind"] == "mutual_fund"
+    response_again = _client().post(
+        "/v1/instruments/resolve",
+        json={
+            "market": "CN",
+            "instrument_type": "cn_mutual_fund",
+            "code": "007194",
+        },
+    )
+    assert response_again.status_code == 200
+    assert response_again.json()["data"]["resolved"]["name"] == "长城短债A"
+
+
+def test_resolve_upstream_timeout_returns_504() -> None:
+    with patch(
+        "fireman_market_provider.app.resolve_instrument",
+        side_effect=TimeoutError("resolve deadline exceeded"),
+    ):
+        response = _client().post(
+            "/v1/instruments/resolve",
+            json={
+                "market": "CN",
+                "instrument_type": "cn_exchange_fund",
+                "code": "510300",
+            },
+        )
+    assert response.status_code == 504
+    assert response.json()["detail"] == "upstream timeout"

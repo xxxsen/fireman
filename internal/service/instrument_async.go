@@ -29,7 +29,8 @@ type InstrumentResolveRequest struct {
 
 // InstrumentImportAsyncRequest creates a placeholder instrument and fetch job.
 type InstrumentImportAsyncRequest struct {
-	TicketID string `json:"ticket_id"`
+	TicketID   string `json:"ticket_id"`
+	AssetClass string `json:"asset_class"`
 }
 
 // InstrumentImportAsyncResult is returned immediately after enqueue.
@@ -79,6 +80,20 @@ func validateMarketInstrumentType(market, instrumentType string) error {
 	return nil
 }
 
+func validateUserAssetClass(assetClass string) error {
+	if err := marketdata.ValidateUserAssetClass(assetClass); err != nil {
+		return newErr("invalid_request", "asset_class must be equity, bond, or cash", nil)
+	}
+	return nil
+}
+
+func defaultImportAssetClass(instrumentType string) string {
+	if instrumentType == "cn_mutual_fund" {
+		return "bond"
+	}
+	return "equity"
+}
+
 func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRequest) (map[string]any, error) {
 	req.Code = strings.TrimSpace(req.Code)
 	if req.Market == "" || req.InstrumentType == "" || req.Code == "" {
@@ -97,6 +112,11 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 		msg := err.Error()
 		if strings.Contains(msg, "instrument_not_found") {
 			return nil, newErr("instrument_not_found", "instrument not found", nil)
+		}
+		if strings.Contains(msg, "instrument_type_mismatch") {
+			return nil, newErr("instrument_type_mismatch", "code belongs to a different instrument type; try cn_mutual_fund for off-exchange funds", map[string]any{
+				"suggested_instrument_type": "cn_mutual_fund",
+			})
 		}
 		if strings.Contains(msg, "invalid_request") {
 			return nil, newErr("invalid_request", msg, nil)
@@ -179,8 +199,12 @@ func (s *InstrumentService) createResolutionTicket(ctx context.Context, market, 
 
 func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImportAsyncRequest) (InstrumentImportAsyncResult, error) {
 	req.TicketID = strings.TrimSpace(req.TicketID)
+	req.AssetClass = strings.TrimSpace(req.AssetClass)
 	if req.TicketID == "" {
 		return InstrumentImportAsyncResult{}, newErr("invalid_request", "ticket_id is required", nil)
+	}
+	if err := validateUserAssetClass(req.AssetClass); err != nil {
+		return InstrumentImportAsyncResult{}, err
 	}
 	if s.tickets == nil {
 		return InstrumentImportAsyncResult{}, errors.New("resolution ticket repo not configured")
@@ -241,10 +265,14 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 			})
 		}
 		providerSymbol = ticket.ProviderSymbol
+		region := "domestic"
+		if strings.EqualFold(market, "HK") || strings.EqualFold(market, "US") {
+			region = "foreign"
+		}
 		inst = repository.InstrumentRecord{
 			ID: instID, Code: code, Name: ticket.Name,
 			Market: market, InstrumentType: instrumentType,
-			AssetClass: "equity", Region: "domestic", Currency: defaultCurrency(market),
+			AssetClass: req.AssetClass, Region: region, Currency: defaultCurrency(market),
 			Provider: "akshare", ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
 			ExpenseRatioStatus: "unavailable",
 			FeeTreatment:       marketdata.FeeTreatmentForType(instrumentType),
@@ -253,6 +281,7 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		payload = InstrumentFetchPayload{
 			InstrumentID: instID, Market: market, InstrumentType: instrumentType,
 			Code: code, ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
+			ResolvedName: ticket.Name, UserAssetClass: req.AssetClass,
 		}
 		payloadJSON, err = json.Marshal(payload)
 		if err != nil {
@@ -378,6 +407,7 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 	payload := InstrumentFetchPayload{
 		InstrumentID: inst.ID, Market: inst.Market, InstrumentType: inst.InstrumentType,
 		Code: inst.Code, ProviderSymbol: inst.ProviderSymbol, AdjustPolicy: inst.AdjustPolicy,
+		ResolvedName: inst.Name, UserAssetClass: inst.AssetClass,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

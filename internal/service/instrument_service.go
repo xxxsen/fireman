@@ -155,7 +155,10 @@ func (s *InstrumentService) Import(ctx context.Context, req InstrumentImportRequ
 	if ticketID == "" {
 		return repository.InstrumentRecord{}, newErr("invalid_request", "resolve did not return ticket_id", nil)
 	}
-	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{TicketID: ticketID})
+	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{
+		TicketID:   ticketID,
+		AssetClass: defaultImportAssetClass(req.InstrumentType),
+	})
 	if err != nil {
 		return repository.InstrumentRecord{}, err
 	}
@@ -566,6 +569,15 @@ func applyDataStale(inst *repository.InstrumentRecord, lastTradeDate string) {
 
 // CheckInstrumentReadOnlyFields rejects client metadata in import payloads.
 func CheckInstrumentReadOnlyFields(body []byte) error {
+	return checkInstrumentReadOnlyFields(body, nil)
+}
+
+// CheckInstrumentImportAsyncFields allows user-selected asset_class on import-async.
+func CheckInstrumentImportAsyncFields(body []byte) error {
+	return checkInstrumentReadOnlyFields(body, map[string]struct{}{"asset_class": {}})
+}
+
+func checkInstrumentReadOnlyFields(body []byte, allowed map[string]struct{}) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil
@@ -575,9 +587,15 @@ func CheckInstrumentReadOnlyFields(body []byte) error {
 		"historical_cagr", "annual_volatility", "max_drawdown", "correlation",
 	}
 	for _, f := range readOnly {
-		if _, ok := raw[f]; ok {
-			return newErr("instrument_fields_read_only", "instrument metadata and metrics are read-only", map[string]any{"field": f})
+		if _, ok := raw[f]; !ok {
+			continue
 		}
+		if allowed != nil {
+			if _, ok := allowed[f]; ok {
+				continue
+			}
+		}
+		return newErr("instrument_fields_read_only", "instrument metadata and metrics are read-only", map[string]any{"field": f})
 	}
 	return nil
 }

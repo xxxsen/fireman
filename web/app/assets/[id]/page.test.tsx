@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const useJobStatusMock = vi.hoisted(() => vi.fn());
 const getInstrumentDetailMock = vi.hoisted(() => vi.fn());
 const getFetchStatusMock = vi.hoisted(() => vi.fn());
+const deleteInstrumentMock = vi.hoisted(() => vi.fn());
+const routerPushMock = vi.hoisted(() => vi.fn());
 
 let jobStatusCallbacks: {
   onComplete?: () => void;
@@ -77,7 +79,7 @@ function activeDetail() {
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "ins_test" }),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: routerPushMock }),
 }));
 
 vi.mock("@/lib/api/instruments", () => ({
@@ -85,7 +87,7 @@ vi.mock("@/lib/api/instruments", () => ({
   getFetchStatus: (...args: unknown[]) => getFetchStatusMock(...args),
   retryFetch: vi.fn(),
   refreshInstrument: vi.fn(),
-  deleteInstrument: vi.fn(),
+  deleteInstrument: (...args: unknown[]) => deleteInstrumentMock(...args),
 }));
 
 vi.mock("@/hooks/useJobStatus", () => ({
@@ -253,5 +255,38 @@ describe("AssetDetailPage job terminal states", () => {
     await waitFor(() => expect(getInstrumentDetailMock).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("历史数据抓取已取消")).toBeInTheDocument();
     expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();
+  });
+});
+
+describe("AssetDetailPage delete", () => {
+  beforeEach(() => {
+    deleteInstrumentMock.mockReset();
+    routerPushMock.mockReset();
+    getInstrumentDetailMock.mockReset();
+    getFetchStatusMock.mockReset();
+    useJobStatusMock.mockReset();
+    deleteInstrumentMock.mockResolvedValue({ deleted: true });
+    getInstrumentDetailMock.mockResolvedValue(activeDetail());
+    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
+  });
+
+  it("invalidates instruments cache and navigates home after delete", async () => {
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    const removeSpy = vi.spyOn(QueryClient.prototype, "removeQueries");
+    window.confirm = vi.fn(() => true);
+
+    renderPage();
+    expect(await screen.findByRole("button", { name: "删除" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("ins_test"));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["instruments"] }),
+    );
+    expect(removeSpy).toHaveBeenCalledWith({ queryKey: ["instrument-detail", "ins_test"] });
+    expect(routerPushMock).toHaveBeenCalledWith("/assets");
+
+    invalidateSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });

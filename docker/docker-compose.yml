@@ -17,6 +17,8 @@ services:
       - "8080:8080"
     volumes:
       - fireman-data:/data
+    environment:
+      MARKET_PROVIDER_RESOLVE_TIMEOUT: "90s"
     depends_on:
       data-init:
         condition: service_completed_successfully
@@ -62,6 +64,10 @@ services:
     container_name: fireman-market-provider
     environment:
       TZ: "Asia/Shanghai"
+      MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH: /cache/mutual_fund_names.json
+      MARKET_PROVIDER_MUTUAL_FUND_FETCH_TIMEOUT: "60"
+    volumes:
+      - fireman-provider-cache:/cache
     ports:
       - "18081:18081"
     healthcheck:
@@ -75,3 +81,4 @@ services:
 
 volumes:
   fireman-data:
+  fireman-provider-cache:

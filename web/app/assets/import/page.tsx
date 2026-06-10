@@ -11,6 +11,17 @@ import {
   type ResolveCandidate,
 } from "@/lib/api/instruments";
 import { ApiError } from "@/lib/api/client";
+import { assetClassLabel } from "@/lib/format";
+
+const ASSET_CLASSES = [
+  { value: "equity", label: "股票 / 权益" },
+  { value: "bond", label: "债券" },
+  { value: "cash", label: "现金 / 货币" },
+] as const;
+
+function defaultAssetClassForType(instrumentType: string): string {
+  return instrumentType === "cn_mutual_fund" ? "" : "equity";
+}
 
 const MARKETS = [
   { value: "CN", label: "中国市场" },
@@ -63,7 +74,14 @@ export default function ImportAssetPage() {
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<ResolveCandidate[]>([]);
   const [selected, setSelected] = useState<ResolveCandidate | null>(null);
+  const [assetClass, setAssetClass] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const beginConfirm = (candidate: ResolveCandidate) => {
+    setSelected(candidate);
+    setAssetClass(defaultAssetClassForType(instrumentType));
+    setStage("confirm");
+  };
 
   const handleResolve = async () => {
     setLoading(true);
@@ -77,14 +95,23 @@ export default function ImportAssetPage() {
         return;
       }
       if (data.resolved) {
-        setSelected(data.resolved);
-        setStage("confirm");
+        beginConfirm(data.resolved);
         return;
       }
       setError("未找到匹配的标的");
       setStage("error");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "解析失败");
+      if (e instanceof ApiError && e.code === "instrument_type_mismatch") {
+        const suggested = e.details?.suggested_instrument_type;
+        if (suggested === "cn_mutual_fund") {
+          setInstrumentType("cn_mutual_fund");
+          setError("该代码属于场外公募基金，已切换为「公募基金」，请再次查询");
+        } else {
+          setError(e.message);
+        }
+      } else {
+        setError(e instanceof ApiError ? e.message : "解析失败");
+      }
       setStage("error");
     } finally {
       setLoading(false);
@@ -101,7 +128,11 @@ export default function ImportAssetPage() {
         setStage("error");
         return;
       }
-      const result = await importAsync({ ticket_id: selected.ticket_id });
+      if (!assetClass) {
+        setError("请选择资产类别");
+        return;
+      }
+      const result = await importAsync({ ticket_id: selected.ticket_id, asset_class: assetClass });
       router.push(`/assets/${result.instrument_id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "录入失败");
@@ -221,7 +252,7 @@ export default function ImportAssetPage() {
               type="button"
               className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
               disabled={!selected || !isCandidateCompatible(selected)}
-              onClick={() => setStage("confirm")}
+              onClick={() => selected && beginConfirm(selected)}
             >
               下一步
             </button>
@@ -253,6 +284,31 @@ export default function ImportAssetPage() {
               <dd>{selected.instrument_kind}</dd>
             </div>
           </dl>
+          <label className="block text-sm">
+            资产类别
+            <span className="ml-1 text-slate-500">（用于组合配置，请手动确认）</span>
+            <select
+              className="mt-1 w-full rounded-md border px-3 py-2"
+              value={assetClass}
+              onChange={(e) => setAssetClass(e.target.value)}
+              data-testid="asset-class-select"
+            >
+              <option value="">请选择…</option>
+              {ASSET_CLASSES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {assetClass && (
+            <p className="text-sm text-slate-600">
+              已选择：{assetClassLabel(assetClass)}
+              {instrumentType === "cn_mutual_fund" && assetClass === "bond" && (
+                <span>（短债/纯债等场外公募基金通常归入债券）</span>
+              )}
+            </p>
+          )}
           <p className="text-sm text-slate-600">
             确认后将创建占位记录并在后台抓取历史数据；详情页可查看进度。
           </p>
@@ -260,7 +316,7 @@ export default function ImportAssetPage() {
             type="button"
             data-testid="confirm-import"
             className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-            disabled={loading}
+            disabled={loading || !assetClass}
             onClick={() => void handleImport()}
           >
             {loading ? "提交中…" : "开始抓取"}

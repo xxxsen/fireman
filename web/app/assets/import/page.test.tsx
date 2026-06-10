@@ -206,7 +206,8 @@ describe("ImportAssetPage", () => {
     expect(await screen.findByText("3. 确认并开始抓取")).toBeInTheDocument();
     expect(screen.getByText("测试LOF")).toBeInTheDocument();
 
+    fireEvent.change(screen.getByTestId("asset-class-select"), { target: { value: "equity" } });
     fireEvent.click(screen.getByTestId("confirm-import"));
-    expect(importAsyncMock).toHaveBeenCalledWith({ ticket_id: "tkt_lof" });
+    expect(importAsyncMock).toHaveBeenCalledWith({ ticket_id: "tkt_lof", asset_class: "equity" });
   });
 });

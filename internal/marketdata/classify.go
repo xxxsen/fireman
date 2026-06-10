@@ -16,6 +16,29 @@ var supportedAssetClasses = map[string]struct{}{
 	"equity": {}, "bond": {}, "cash": {},
 }
 
+// ValidateUserAssetClass reports whether the user-selected asset class is supported.
+func ValidateUserAssetClass(assetClass string) error {
+	if _, ok := supportedAssetClasses[assetClass]; !ok {
+		return fmt.Errorf("instrument_classification_unsupported")
+	}
+	return nil
+}
+
+// UserClassification builds persisted classification from an explicit user asset class.
+func UserClassification(market, instrumentType, assetClass, currency string) (Classification, error) {
+	if err := ValidateUserAssetClass(assetClass); err != nil {
+		return Classification{}, err
+	}
+	if currency == "" {
+		return Classification{}, fmt.Errorf("instrument_metadata_conflict")
+	}
+	return Classification{
+		AssetClass: assetClass,
+		Region:     defaultRegion(market, instrumentType),
+		Currency:   currency,
+	}, nil
+}
+
 // ResolveClassification maps provider metadata to persisted classification fields.
 func ResolveClassification(market, instrumentType string, data *FetchData) (Classification, error) {
 	if data.AssetClass == "fx" {

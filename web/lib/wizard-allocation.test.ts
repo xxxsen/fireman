@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildWizardPortfolioReview } from "./wizard-allocation";
+import { buildWizardPortfolioReview, computeExpectedAmountMinor } from "./wizard-allocation";
+
+describe("computeExpectedAmountMinor", () => {
+  it("computes nested allocation amount", () => {
+    const totalMinor = 400_000_000_00;
+    expect(computeExpectedAmountMinor(totalMinor, 0.2, 0.5)).toBe(40_000_000_00);
+  });
+});
 
 describe("buildWizardPortfolioReview", () => {
   const postFire = [

@@ -62,3 +62,27 @@ def test_fetch_rejects_unknown_fields() -> None:
     }
     response = client.post("/v1/instruments/fetch", json=payload)
     assert response.status_code == 422
+
+
+def test_metadata_refresh_cn_mutual_fund_names(tmp_path, monkeypatch) -> None:
+    from fireman_market_provider.adapters.names import reset_name_caches
+    from fireman_market_provider.timeout_util import clear_test_dispatch, register_test_dispatch
+
+    cache_path = tmp_path / "mutual_fund_names.json"
+    monkeypatch.setenv("MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH", str(cache_path))
+    reset_name_caches()
+    clear_test_dispatch()
+    mutual = pd.DataFrame({"基金代码": ["007194"], "基金简称": ["长城短债A"]})
+    register_test_dispatch("fund_name_em", lambda: mutual)
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/metadata/refresh",
+        json={"target": "cn_mutual_fund_names"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["data"]["target"] == "cn_mutual_fund_names"
+    assert body["data"]["entry_count"] == 1
+    assert body["data"]["refreshed_at"]
+    assert body["data"]["cache_path"] == str(cache_path)

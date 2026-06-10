@@ -48,7 +48,7 @@ func FailErr(c *gin.Context, err error) {
 		case "instrument_fields_read_only", "holding_fields_read_only", "instrument_classification_unsupported",
 			"instrument_metadata_conflict", "provider_data_anomaly", "instrument_not_deletable",
 			"instrument_in_use", "instrument_not_refreshable", "instrument_refresh_throttled",
-			"instrument_insufficient_history", "instrument_already_exists":
+			"instrument_insufficient_history", "instrument_already_exists", "instrument_type_mismatch":
 			status = http.StatusBadRequest
 		case "market_provider_unavailable":
 			status = http.StatusBadGateway
