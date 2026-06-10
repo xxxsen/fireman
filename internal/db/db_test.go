@@ -171,6 +171,16 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 }
 
 func TestMigrate_0004To0005_DeduplicatesDuplicateInstrumentFetch(t *testing.T) {
+	testMigrate0004To0005Deduplicates(t, int64(1_700_000_000_000), int64(1_700_000_000_000+1000))
+}
+
+func TestMigrate_0004To0005_DeduplicatesSameTimestampDuplicateInstrumentFetch(t *testing.T) {
+	sameTs := int64(1_700_000_000_000)
+	testMigrate0004To0005Deduplicates(t, sameTs, sameTs)
+}
+
+func testMigrate0004To0005Deduplicates(t *testing.T, createdAtFirst, createdAtSecond int64) {
+	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "fireman.db")
 	pool, err := Open(context.Background(), dbPath)
@@ -182,7 +192,6 @@ func TestMigrate_0004To0005_DeduplicatesDuplicateInstrumentFetch(t *testing.T) {
 	applyMigrationsThrough(t, pool, dbPath, 4)
 
 	inputHash := "dup_hash_0004_upgrade"
-	now := int64(1_700_000_000_000)
 	_, err = pool.ExecContext(context.Background(), `
 		INSERT INTO jobs (
 			id, type, status, input_hash, payload_json,
@@ -191,7 +200,7 @@ func TestMigrate_0004To0005_DeduplicatesDuplicateInstrumentFetch(t *testing.T) {
 		) VALUES
 		('job_dup_q', 'instrument_fetch', 'queued', ?, '{"instrument_id":"ins_dup"}', 0, 1, 'queued', 0, 0, ?),
 		('job_dup_r', 'instrument_fetch', 'running', ?, '{"instrument_id":"ins_dup2"}', 0, 1, 'fetching_history', 0, 0, ?)
-	`, inputHash, now, inputHash, now+1000)
+	`, inputHash, createdAtFirst, inputHash, createdAtSecond)
 	if err != nil {
 		t.Fatalf("seed duplicate jobs: %v", err)
 	}
@@ -209,6 +218,23 @@ func TestMigrate_0004To0005_DeduplicatesDuplicateInstrumentFetch(t *testing.T) {
 	}
 	if activeCount != 1 {
 		t.Fatalf("active duplicate jobs=%d want 1", activeCount)
+	}
+
+	var keptID string
+	if err := pool.QueryRowContext(context.Background(), `
+		SELECT id FROM jobs
+		WHERE type='instrument_fetch' AND input_hash=? AND status IN ('queued', 'running')`,
+		inputHash).Scan(&keptID); err != nil {
+		t.Fatal(err)
+	}
+	if createdAtFirst < createdAtSecond {
+		if keptID != "job_dup_q" {
+			t.Fatalf("kept job=%q want job_dup_q", keptID)
+		}
+	} else if createdAtFirst == createdAtSecond {
+		if keptID != "job_dup_q" {
+			t.Fatalf("same timestamp kept job=%q want job_dup_q (id ASC)", keptID)
+		}
 	}
 
 	var canceledCount int

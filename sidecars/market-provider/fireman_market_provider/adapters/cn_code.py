@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 from ..timeout_util import UpstreamCall, call_with_timeout, resolve_timeout_seconds
+from .names import _remaining_deadline
 
 _PREFIXES = ("sh", "sz", "bj")
 
@@ -125,14 +126,23 @@ def _load_stock_canonical_cache(timeout_seconds: int | None = None) -> dict[str,
     return mapping
 
 
-def _load_lof_market_id_cache(timeout_seconds: int | None = None) -> dict[str, int]:
+def _load_lof_market_id_cache(
+    *,
+    deadline: float | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, int]:
     global _LOF_MARKET_ID_CACHE, _LOF_MARKET_ID_LOADED_AT
     ttl = _cache_ttl()
     now = time.monotonic()
     if _LOF_MARKET_ID_CACHE is not None and now - _LOF_MARKET_ID_LOADED_AT < ttl:
         return _LOF_MARKET_ID_CACHE
 
-    timeout = timeout_seconds if timeout_seconds is not None else resolve_timeout_seconds()
+    if deadline is not None:
+        timeout = _remaining_deadline(deadline)
+    elif timeout_seconds is not None:
+        timeout = timeout_seconds
+    else:
+        timeout = resolve_timeout_seconds()
     raw_map = call_with_timeout(UpstreamCall("fund_lof_code_id_map_em"), timeout)
     mapping = {str(code).zfill(6): int(market_id) for code, market_id in raw_map.items()}
     _LOF_MARKET_ID_CACHE = mapping
@@ -154,8 +164,11 @@ def stock_market_id(bare: str) -> int | None:
     return entry[1]
 
 
-def lof_market_id(bare: str) -> int | None:
-    market_id = _load_lof_market_id_cache().get(bare)
+def lof_market_id(bare: str, *, deadline: float | None = None) -> int | None:
+    try:
+        market_id = _load_lof_market_id_cache(deadline=deadline).get(bare)
+    except TimeoutError:
+        return None
     if market_id is None:
         return None
     return int(market_id)
@@ -194,8 +207,8 @@ def parse_cn_stock_code(code: str) -> CNExchangeCode | None:
     return parse_cn_exchange_code(code, stock_market_id)
 
 
-def parse_cn_lof_code(code: str) -> CNExchangeCode | None:
-    return parse_cn_exchange_code(code, lof_market_id)
+def parse_cn_lof_code(code: str, *, deadline: float | None = None) -> CNExchangeCode | None:
+    return parse_cn_exchange_code(code, lambda bare: lof_market_id(bare, deadline=deadline))
 
 
 def eastmoney_symbol_from_canonical(canonical: str) -> str:

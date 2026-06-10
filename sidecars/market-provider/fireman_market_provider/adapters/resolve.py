@@ -162,7 +162,7 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
     else:
         out = []
     if bare in lof_map:
-        parsed_lof = parse_cn_lof_code(bare)
+        parsed_lof = parse_cn_lof_code(bare, deadline=deadline)
         if parsed_lof:
             out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
     if bare in stock_map:

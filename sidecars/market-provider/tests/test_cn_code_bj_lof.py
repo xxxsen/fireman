@@ -45,8 +45,7 @@ def test_lof_market_id_uses_cached_timeout_call(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("MARKET_PROVIDER_RESOLVE_TIMEOUT", "1")
     reset_cn_code_caches()
     start = time.monotonic()
-    with pytest.raises(TimeoutError):
-        lof_market_id("166009")
+    assert lof_market_id("166009") is None
     assert time.monotonic() - start < 2.5
 
 

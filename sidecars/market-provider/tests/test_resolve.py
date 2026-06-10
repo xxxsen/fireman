@@ -1,12 +1,18 @@
 """Resolve endpoint tests with mocked AKShare spot tables."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from fireman_market_provider import create_app
+from fireman_market_provider.adapters.cn_code import reset_cn_code_caches
 from fireman_market_provider.adapters.names import reset_name_caches
+from fireman_market_provider.adapters.resolve import resolve_instrument
+from fireman_market_provider.schemas import ResolveRequest
+from fireman_market_provider.timeout_util import dispatch_upstream_call, resolve_timeout_seconds
 
 
 def _client() -> TestClient:
@@ -144,3 +150,50 @@ def test_resolve_cn_stock_spot_cached_within_ttl() -> None:
             )
             assert response.status_code == 200
     assert stock_spot.call_count == 1
+
+
+def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
+    inline_upstream_calls,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LOF market-id map must not start a fresh resolve timeout after spot loading."""
+    monkeypatch.setenv("MARKET_PROVIDER_RESOLVE_DEADLINE", "2")
+    reset_name_caches()
+    reset_cn_code_caches()
+
+    def slow_spot_maps(deadline: float):
+        time.sleep(1.5)
+        return (
+            {},
+            {"166009": "测试LOF"},
+            {},
+        )
+
+    monkeypatch.setattr(
+        "fireman_market_provider.adapters.resolve._load_cn_spot_maps",
+        slow_spot_maps,
+    )
+
+    lof_timeouts: list[int] = []
+
+    def track_lof_timeout(call, timeout_seconds: int = 30):
+        if call.operation == "fund_lof_code_id_map_em":
+            lof_timeouts.append(timeout_seconds)
+            raise TimeoutError("lof map blocked")
+        return dispatch_upstream_call(call)
+
+    monkeypatch.setattr(
+        "fireman_market_provider.adapters.cn_code.call_with_timeout",
+        track_lof_timeout,
+    )
+
+    req = ResolveRequest(market="CN", instrument_type="cn_exchange_fund", code="166009")
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="instrument_not_found"):
+        resolve_instrument(req)
+    elapsed = time.monotonic() - start
+
+    assert len(lof_timeouts) == 1
+    assert lof_timeouts[0] <= 1
+    assert lof_timeouts[0] < resolve_timeout_seconds()
+    assert elapsed < 3.0

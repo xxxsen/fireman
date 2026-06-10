@@ -18,6 +18,7 @@ CREATE TABLE resolution_tickets (
 CREATE INDEX idx_resolution_tickets_expires_at ON resolution_tickets(expires_at);
 
 -- Cancel duplicate active instrument_fetch jobs before partial unique index.
+-- Keep one job per (type, input_hash) by created_at ASC, id ASC; cancel the rest.
 UPDATE jobs
 SET status = 'canceled',
     finished_at = (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
@@ -28,18 +29,18 @@ SET status = 'canceled',
 WHERE type = 'instrument_fetch'
   AND status IN ('queued', 'running')
   AND id IN (
-    SELECT j2.id
-    FROM jobs j2
-    WHERE j2.type = 'instrument_fetch'
-      AND j2.status IN ('queued', 'running')
-      AND EXISTS (
-        SELECT 1
-        FROM jobs j1
-        WHERE j1.type = j2.type
-          AND j1.input_hash = j2.input_hash
-          AND j1.status IN ('queued', 'running')
-          AND j1.created_at < j2.created_at
-      )
+    SELECT id
+    FROM (
+      SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY type, input_hash
+               ORDER BY created_at ASC, id ASC
+             ) AS rn
+      FROM jobs
+      WHERE type = 'instrument_fetch'
+        AND status IN ('queued', 'running')
+    )
+    WHERE rn > 1
   );
 
 CREATE UNIQUE INDEX uq_jobs_instrument_fetch_active
