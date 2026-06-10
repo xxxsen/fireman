@@ -101,6 +101,7 @@ describe("ImportAssetPage", () => {
         name: "沪深300ETF",
         exchange: "SH",
         instrument_kind: "etf",
+        ticket_id: "tkt_test",
       },
     });
     render(<ImportAssetPage />);

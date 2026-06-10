@@ -108,12 +108,18 @@ def test_fetch_hk_etf_mocked() -> None:
 
 def test_fetch_cn_exchange_fund_mocked() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [1.0, 1.1]})
-    with patch("akshare.fund_etf_hist_em", return_value=df):
+    captured: dict[str, str] = {}
+
+    def _etf_hist(**kwargs: str) -> pd.DataFrame:
+        captured["etf_symbol"] = kwargs["symbol"]
+        return df
+
+    with patch("akshare.fund_etf_hist_em", side_effect=_etf_hist):
         client = _client()
         payload = {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
-            "source_code": "510300",
+            "source_code": "sh510300",
             "start_date": None,
             "end_date": "2026-06-09",
             "adjust_policy": "qfq",
@@ -124,6 +130,8 @@ def test_fetch_cn_exchange_fund_mocked() -> None:
         assert body["code"] == 0
         assert len(body["data"]["points"]) == 2
         assert body["data"]["source_name"].startswith("ak.")
+        assert captured["etf_symbol"] == "510300"
+        assert body["data"]["provider_symbol"] == "sh510300"
 
 
 def test_fetch_cn_exchange_fund_resolves_display_name() -> None:

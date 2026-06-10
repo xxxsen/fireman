@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
+
+const resolutionTicketTTL = 15 * time.Minute
 
 // InstrumentResolveRequest resolves a symbol before async import.
 type InstrumentResolveRequest struct {
@@ -26,10 +29,7 @@ type InstrumentResolveRequest struct {
 
 // InstrumentImportAsyncRequest creates a placeholder instrument and fetch job.
 type InstrumentImportAsyncRequest struct {
-	Market         string `json:"market"`
-	InstrumentType string `json:"instrument_type"`
-	Code           string `json:"code"`
-	ProviderSymbol string `json:"provider_symbol"`
+	TicketID string `json:"ticket_id"`
 }
 
 // InstrumentImportAsyncResult is returned immediately after enqueue.
@@ -61,30 +61,31 @@ func instrumentFetchInputHash(market, instrumentType, code, adjustPolicy string)
 	return hex.EncodeToString(sum[:])
 }
 
-func normalizeAsyncImport(req *InstrumentImportAsyncRequest) {
-	req.Code = strings.TrimSpace(req.Code)
-	req.ProviderSymbol = strings.TrimSpace(req.ProviderSymbol)
-	if strings.EqualFold(req.Market, "HK") {
-		req.Code = marketdata.NormalizeHKCode(req.Code)
-		if req.ProviderSymbol != "" {
-			req.ProviderSymbol = marketdata.NormalizeHKCode(req.ProviderSymbol)
-		}
+func validateMarketInstrumentType(market, instrumentType string) error {
+	valid := map[string]map[string]bool{
+		"CN": {
+			"cn_exchange_fund":  true,
+			"cn_exchange_stock": true,
+			"cn_mutual_fund":    true,
+			"fx_rate":           true,
+		},
+		"HK": {"hk_stock": true, "hk_etf": true},
+		"US": {"us_stock": true, "us_etf": true},
 	}
-	if strings.EqualFold(req.Market, "CN") && marketdata.HasCNExchangePrefix(req.Code) {
-		req.Code = marketdata.NormalizeCNExchangeCode(req.Code)
+	types, ok := valid[strings.ToUpper(market)]
+	if !ok || !types[instrumentType] {
+		return newErr("invalid_request", "market and instrument_type combination is not supported", nil)
 	}
-	if strings.EqualFold(req.Market, "CN") && marketdata.HasCNExchangePrefix(req.ProviderSymbol) {
-		req.ProviderSymbol = marketdata.NormalizeCNExchangeCode(req.ProviderSymbol)
-	}
-	if req.ProviderSymbol == "" {
-		req.ProviderSymbol = req.Code
-	}
+	return nil
 }
 
 func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRequest) (map[string]any, error) {
 	req.Code = strings.TrimSpace(req.Code)
 	if req.Market == "" || req.InstrumentType == "" || req.Code == "" {
 		return nil, newErr("invalid_request", "market, instrument_type and code are required", nil)
+	}
+	if err := validateMarketInstrumentType(req.Market, req.InstrumentType); err != nil {
+		return nil, err
 	}
 	if strings.EqualFold(req.Market, "HK") {
 		req.Code = marketdata.NormalizeHKCode(req.Code)
@@ -97,23 +98,34 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 		if strings.Contains(msg, "instrument_not_found") {
 			return nil, newErr("instrument_not_found", "instrument not found", nil)
 		}
+		if strings.Contains(msg, "invalid_request") {
+			return nil, newErr("invalid_request", msg, nil)
+		}
 		return nil, newErr("market_provider_unavailable", msg, nil)
 	}
 	out := map[string]any{"ambiguous": data.Ambiguous}
 	if data.Resolved != nil {
+		ticketID, err := s.createResolutionTicket(ctx, req.Market, req.InstrumentType, *data.Resolved)
+		if err != nil {
+			return nil, err
+		}
 		out["resolved"] = map[string]any{
 			"code": data.Resolved.Code, "provider_symbol": data.Resolved.ProviderSymbol,
 			"name": data.Resolved.Name, "exchange": data.Resolved.Exchange,
-			"instrument_kind": data.Resolved.InstrumentKind,
+			"instrument_kind": data.Resolved.InstrumentKind, "ticket_id": ticketID,
 		}
 	}
 	if len(data.Candidates) > 0 {
 		cands := make([]map[string]any, len(data.Candidates))
 		for i, c := range data.Candidates {
+			ticketID, err := s.createResolutionTicket(ctx, req.Market, req.InstrumentType, c)
+			if err != nil {
+				return nil, err
+			}
 			cands[i] = map[string]any{
 				"code": c.Code, "provider_symbol": c.ProviderSymbol,
 				"name": c.Name, "exchange": c.Exchange,
-				"instrument_kind": c.InstrumentKind,
+				"instrument_kind": c.InstrumentKind, "ticket_id": ticketID,
 			}
 		}
 		out["candidates"] = cands
@@ -121,22 +133,50 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 	return out, nil
 }
 
+func (s *InstrumentService) createResolutionTicket(ctx context.Context, market, instrumentType string, c marketdata.ResolveCandidate) (string, error) {
+	if s.tickets == nil {
+		return "", errors.New("resolution ticket repo not configured")
+	}
+	id := "tkt_" + uuid.New().String()
+	now := time.Now()
+	ticket := repository.ResolutionTicket{
+		ID:             id,
+		Market:         market,
+		InstrumentType: instrumentType,
+		Code:           c.Code,
+		ProviderSymbol: c.ProviderSymbol,
+		Name:           c.Name,
+		Exchange:       c.Exchange,
+		InstrumentKind: c.InstrumentKind,
+		CreatedAt:      now.UnixMilli(),
+		ExpiresAt:      now.Add(resolutionTicketTTL).UnixMilli(),
+	}
+	if err := s.tickets.Create(ctx, nil, ticket); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImportAsyncRequest) (InstrumentImportAsyncResult, error) {
-	normalizeAsyncImport(&req)
-	if req.Market == "" || req.InstrumentType == "" || req.Code == "" {
-		return InstrumentImportAsyncResult{}, newErr("invalid_request", "market, instrument_type and code are required", nil)
+	req.TicketID = strings.TrimSpace(req.TicketID)
+	if req.TicketID == "" {
+		return InstrumentImportAsyncResult{}, newErr("invalid_request", "ticket_id is required", nil)
 	}
-	if marketdata.RequiresCNResolve(req.Market, req.InstrumentType, req.Code) {
-		return InstrumentImportAsyncResult{}, newErr("instrument_resolve_required", "resolve and select a prefixed code before import", nil)
-	}
-	if req.Code != req.ProviderSymbol {
-		return InstrumentImportAsyncResult{}, newErr("instrument_resolve_required", "code and provider_symbol must match after resolve", nil)
+	if s.tickets == nil {
+		return InstrumentImportAsyncResult{}, errors.New("resolution ticket repo not configured")
 	}
 
-	adjust := marketdata.DefaultAdjustPolicy(req.InstrumentType)
-	inputHash := instrumentFetchInputHash(req.Market, req.InstrumentType, req.Code, adjust)
+	ticketPreview, err := s.tickets.GetByID(ctx, req.TicketID)
+	if err != nil {
+		return InstrumentImportAsyncResult{}, mapTicketError(err)
+	}
+	market := ticketPreview.Market
+	instrumentType := ticketPreview.InstrumentType
+	code := ticketPreview.Code
+	adjust := marketdata.DefaultAdjustPolicy(instrumentType)
+	inputHash := instrumentFetchInputHash(market, instrumentType, code, adjust)
 
-	if existing, err := s.instRepo.FindByKey(ctx, req.Market, req.InstrumentType, req.Code, adjust); err == nil {
+	if existing, err := s.instRepo.FindByKey(ctx, market, instrumentType, code, adjust); err == nil {
 		if existing.Status == "active" || existing.Status == "fetch_failed" {
 			return InstrumentImportAsyncResult{}, newErr("instrument_already_exists", "instrument already imported", map[string]any{"instrument_id": existing.ID})
 		}
@@ -163,39 +203,37 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		return InstrumentImportAsyncResult{}, err
 	}
 
-	resolveData, err := s.provider.Resolve(ctx, marketdata.ResolveRequest{
-		Market: req.Market, InstrumentType: req.InstrumentType, Code: req.Code,
-	})
-	if err == nil && resolveData.Ambiguous {
-		return InstrumentImportAsyncResult{}, newErr("instrument_ambiguous", "code is still ambiguous; resolve and select a candidate", nil)
-	}
-
 	instID := "ins_" + uuid.New().String()
 	jobID := "job_" + uuid.New().String()
-	name := req.Code
-	if resolveData != nil && resolveData.Resolved != nil && resolveData.Resolved.Name != "" {
-		name = resolveData.Resolved.Name
-	}
-	inst := repository.InstrumentRecord{
-		ID: instID, Code: req.Code, Name: name,
-		Market: req.Market, InstrumentType: req.InstrumentType,
-		AssetClass: "equity", Region: "domestic", Currency: defaultCurrency(req.Market),
-		Provider: "akshare", ProviderSymbol: req.ProviderSymbol, AdjustPolicy: adjust,
-		ExpenseRatioStatus: "unavailable",
-		FeeTreatment:       marketdata.FeeTreatmentForType(req.InstrumentType),
-		Status:             "pending_fetch",
-	}
-	payload := InstrumentFetchPayload{
-		InstrumentID: instID, Market: req.Market, InstrumentType: req.InstrumentType,
-		Code: req.Code, ProviderSymbol: req.ProviderSymbol, AdjustPolicy: adjust,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return InstrumentImportAsyncResult{}, err
-	}
-
+	var ticket repository.ResolutionTicket
+	var providerSymbol string
+	inst := repository.InstrumentRecord{}
+	payload := InstrumentFetchPayload{}
+	payloadJSON := []byte{}
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if _, findErr := s.instRepo.FindByKey(ctx, req.Market, req.InstrumentType, req.Code, adjust); findErr == nil {
+		ticket, err = s.tickets.Consume(ctx, tx, req.TicketID)
+		if err != nil {
+			return mapTicketError(err)
+		}
+		providerSymbol = ticket.ProviderSymbol
+		inst = repository.InstrumentRecord{
+			ID: instID, Code: code, Name: ticket.Name,
+			Market: market, InstrumentType: instrumentType,
+			AssetClass: "equity", Region: "domestic", Currency: defaultCurrency(market),
+			Provider: "akshare", ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
+			ExpenseRatioStatus: "unavailable",
+			FeeTreatment:       marketdata.FeeTreatmentForType(instrumentType),
+			Status:             "pending_fetch",
+		}
+		payload = InstrumentFetchPayload{
+			InstrumentID: instID, Market: market, InstrumentType: instrumentType,
+			Code: code, ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
+		}
+		payloadJSON, err = json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		if _, findErr := s.instRepo.FindByKey(ctx, market, instrumentType, code, adjust); findErr == nil {
 			return newErr("instrument_already_exists", "instrument already imported", nil)
 		} else if !errors.Is(findErr, repository.ErrInstrumentNotFound) {
 			return findErr
@@ -203,11 +241,17 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		if err := s.instRepo.Create(ctx, tx, inst); err != nil {
 			return err
 		}
-		return s.jobs.Create(ctx, tx, repository.Job{
+		if err := s.jobs.Create(ctx, tx, repository.Job{
 			ID: jobID, Type: repository.JobTypeInstrumentFetch, Status: repository.JobStatusQueued,
 			InputHash: inputHash, PayloadJSON: string(payloadJSON),
 			ProgressTotal: 1, Phase: "queued",
-		})
+		}); err != nil {
+			if repository.IsJobUniqueConstraint(err) {
+				return s.returnFetchInProgress(ctx, inputHash)
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		var ae *AppError
@@ -217,6 +261,33 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		return InstrumentImportAsyncResult{}, err
 	}
 	return InstrumentImportAsyncResult{InstrumentID: instID, JobID: jobID, Status: "pending_fetch"}, nil
+}
+
+func mapTicketError(err error) error {
+	switch {
+	case errors.Is(err, repository.ErrResolutionTicketNotFound):
+		return newErr("invalid_request", "resolution ticket not found", nil)
+	case errors.Is(err, repository.ErrResolutionTicketExpired):
+		return newErr("invalid_request", "resolution ticket expired", nil)
+	case errors.Is(err, repository.ErrResolutionTicketConsumed):
+		return newErr("invalid_request", "resolution ticket already consumed", nil)
+	default:
+		return err
+	}
+}
+
+func (s *InstrumentService) returnFetchInProgress(ctx context.Context, inputHash string) error {
+	job, err := s.jobs.FindInProgressByInputHash(ctx, repository.JobTypeInstrumentFetch, inputHash)
+	if err != nil {
+		return err
+	}
+	var payload InstrumentFetchPayload
+	_ = json.Unmarshal([]byte(job.PayloadJSON), &payload)
+	details := map[string]any{"job_id": job.ID}
+	if payload.InstrumentID != "" {
+		details["instrument_id"] = payload.InstrumentID
+	}
+	return newErr("instrument_fetch_in_progress", "instrument fetch already in progress", details)
 }
 
 func defaultCurrency(market string) string {
@@ -292,13 +363,23 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 		if err := s.instRepo.UpdateStatusTx(ctx, tx, instrumentID, "pending_fetch"); err != nil {
 			return err
 		}
-		return s.jobs.Create(ctx, tx, repository.Job{
+		if err := s.jobs.Create(ctx, tx, repository.Job{
 			ID: jobID, Type: repository.JobTypeInstrumentFetch, Status: repository.JobStatusQueued,
 			InputHash: inputHash, PayloadJSON: string(payloadJSON),
 			ProgressTotal: 1, Phase: "queued",
-		})
+		}); err != nil {
+			if repository.IsJobUniqueConstraint(err) {
+				return s.returnFetchInProgress(ctx, inputHash)
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
+		var ae *AppError
+		if errors.As(err, &ae) {
+			return InstrumentImportAsyncResult{}, ae
+		}
 		return InstrumentImportAsyncResult{}, err
 	}
 	return InstrumentImportAsyncResult{InstrumentID: instrumentID, JobID: jobID, Status: "pending_fetch"}, nil
@@ -319,12 +400,31 @@ func (s *InstrumentService) ensureNoFetchInProgress(ctx context.Context, inst re
 	return nil
 }
 
-// EnsureInstrumentReadyForPlan rejects non-active instruments in plan holdings.
-func EnsureInstrumentReadyForPlan(inst repository.Instrument) error {
+// EnsureInstrumentReadyForPlan rejects instruments that are not active with available library quality.
+func EnsureInstrumentReadyForPlan(inst repository.Instrument, qualityStatus string) error {
 	if inst.Status != "active" {
 		return newErr("instrument_not_ready", fmt.Sprintf("instrument status is %s", inst.Status), map[string]any{
 			"instrument_id": inst.ID, "status": inst.Status,
 		})
 	}
+	if qualityStatus != "available" {
+		return newErr("instrument_insufficient_history", "instrument does not have enough complete years for simulation", map[string]any{
+			"instrument_id": inst.ID, "quality_status": qualityStatus,
+		})
+	}
 	return nil
+}
+
+// EnsureInstrumentRecordReadyForPlan checks an enriched instrument record.
+func EnsureInstrumentRecordReadyForPlan(inst repository.InstrumentRecord) error {
+	return EnsureInstrumentReadyForPlan(repository.Instrument{
+		ID: inst.ID, Code: inst.Code, Name: inst.Name, Market: inst.Market,
+		AssetClass: inst.AssetClass, Region: inst.Region, Currency: inst.Currency,
+		Status: inst.Status, IsSystem: inst.IsSystem,
+	}, inst.QualityStatus)
+}
+
+// LibraryQuality returns the current library quality status for an instrument.
+func (s *InstrumentService) LibraryQuality(ctx context.Context, instrumentID string) string {
+	return s.libraryQuality(ctx, instrumentID)
 }

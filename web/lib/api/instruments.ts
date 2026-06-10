@@ -7,6 +7,7 @@ export interface ResolveCandidate {
   name: string;
   exchange: string;
   instrument_kind: string;
+  ticket_id?: string;
 }
 
 export interface ResolveResult {
@@ -94,7 +95,7 @@ export function resolveImport(body: InstrumentImportRequest): Promise<ResolveRes
   return apiPost("/api/v1/instruments/resolve", body);
 }
 
-export function importAsync(body: InstrumentImportRequest & { provider_symbol: string }): Promise<ImportAsyncResult> {
+export function importAsync(body: { ticket_id: string }): Promise<ImportAsyncResult> {
   return apiPost("/api/v1/instruments/import-async", body);
 }
 

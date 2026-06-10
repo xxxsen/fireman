@@ -70,19 +70,7 @@ func setupInstrumentIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.
 
 func importFixtureInstrument(t *testing.T, client *http.Client, baseURL string) string {
 	t.Helper()
-	payload, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": "sh510300", "provider_symbol": "sh510300",
-	})
-	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import-async status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	env := decodeEnvelope(t, readBody(t, resp))
-	id := env["data"].(map[string]any)["instrument_id"].(string)
+	id := resolveAndImportAsync(t, client, baseURL, "CN", "cn_exchange_fund", "510300")
 	waitForInstrumentActive(t, client, baseURL, id)
 	return id
 }
@@ -107,6 +95,7 @@ func createPlanWithValuationDate(t *testing.T, db *sql.DB, valuationDate string)
 			repository.NewInstrumentRepo(db),
 			repository.NewMarketDataRepo(db),
 		),
+		repository.NewMarketDataRepo(db),
 	)
 	scn := "scn_builtin_near_fire"
 	plan, err := svc.Create(context.Background(), service.CreatePlanRequest{

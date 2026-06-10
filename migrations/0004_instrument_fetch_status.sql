@@ -1,4 +1,4 @@
--- Instrument async fetch lifecycle (td/006).
+-- Instrument async fetch lifecycle: status column and job payload routing.
 -- instruments.status: pending_fetch | active | fetch_failed (SQLite TEXT, no ALTER enum).
 -- jobs.payload_json stores instrument_fetch job parameters for Worker routing.
 

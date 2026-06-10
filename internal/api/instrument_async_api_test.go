@@ -36,11 +36,10 @@ func TestInstrumentResolveAndImportAsync(t *testing.T) {
 	if resolve["ambiguous"] != false {
 		t.Fatalf("expected unambiguous resolve")
 	}
+	resolved := resolve["resolved"].(map[string]any)
+	ticketID := resolved["ticket_id"].(string)
 
-	importPayload, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": "sh510300", "provider_symbol": "sh510300",
-	})
+	importPayload, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
 	resp, err = client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(importPayload))
 	if err != nil {
 		t.Fatal(err)
@@ -106,11 +105,16 @@ func TestInstrumentFetchWorkerActivates(t *testing.T) {
 	defer srv.Close()
 	client := srv.Client()
 
-	payload, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": "sh510300", "provider_symbol": "sh510300",
+	ticketPayload, _ := json.Marshal(map[string]any{
+		"market": "CN", "instrument_type": "cn_exchange_fund", "code": "510300",
 	})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/resolve", "application/json", bytes.NewReader(ticketPayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticketID := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)["resolved"].(map[string]any)["ticket_id"].(string)
+	payload, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
+	resp, err = client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +129,11 @@ func TestInstrumentFetchWorkerActivates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
-		if inst["status"] == "active" {
+		inst := decodeEnvelope(t, readBody(t, resp))
+		if inst["data"].(map[string]any)["status"] == "active" {
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("instrument did not become active after worker fetch")
+	t.Fatalf("instrument %s did not become active", instID)
 }

@@ -30,18 +30,7 @@ func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) 
 
 func importActiveHKInstrument(t *testing.T, client *http.Client, baseURL string) string {
 	t.Helper()
-	payload, _ := json.Marshal(map[string]any{
-		"market": "HK", "instrument_type": "hk_stock",
-		"code": "00700", "provider_symbol": "00700",
-	})
-	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import-async status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	id := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)["instrument_id"].(string)
+	id := resolveAndImportAsync(t, client, baseURL, "HK", "hk_stock", "00700")
 	waitForInstrumentActive(t, client, baseURL, id)
 	return id
 }

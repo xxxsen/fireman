@@ -168,6 +168,7 @@ export default function InstrumentsPage() {
     instrumentsQ.data?.instruments.filter((i) => {
       if (i.is_system) return false;
       if (i.status !== "active") return false;
+      if ((i.quality_status ?? "available") !== "available") return false;
       const q = filter.toLowerCase();
       return (
         i.code.toLowerCase().includes(q) ||

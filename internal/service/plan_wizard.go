@@ -94,7 +94,8 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 			}
 			return PlanDetail{}, err
 		}
-		if err := EnsureInstrumentReadyForPlan(inst); err != nil {
+		quality := LibraryQualityFromRepos(ctx, s.marketRepo, item.InstrumentID)
+		if err := EnsureInstrumentReadyForPlan(inst, quality); err != nil {
 			return PlanDetail{}, err
 		}
 		instruments[item.InstrumentID] = inst

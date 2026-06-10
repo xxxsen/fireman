@@ -50,20 +50,7 @@ func postWizard(t *testing.T, client *http.Client, baseURL string, body map[stri
 
 func importInstrumentCode(t *testing.T, client *http.Client, baseURL, code string) string {
 	t.Helper()
-	prefixed := "sh" + code
-	payload, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": prefixed, "provider_symbol": prefixed,
-	})
-	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import-async %s status=%d body=%s", code, resp.StatusCode, readBody(t, resp))
-	}
-	env := decodeEnvelope(t, readBody(t, resp))
-	id := env["data"].(map[string]any)["instrument_id"].(string)
+	id := resolveAndImportAsync(t, client, baseURL, "CN", "cn_exchange_fund", code)
 	waitForInstrumentActive(t, client, baseURL, id)
 	return id
 }

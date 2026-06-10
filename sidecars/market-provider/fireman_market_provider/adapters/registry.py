@@ -12,9 +12,10 @@ from ..normalize import normalize_dataframe
 from ..schemas import AssetClass, FetchData, FetchRequest, PointType
 from ..timeout_util import call_with_timeout, fetch_timeout_seconds
 from .classification import FundMeta, classify_cn_mutual_fund, classify_us_symbol, default_region
+from .cn_code import eastmoney_symbol_from_canonical, prefixed_symbol_from_canonical
 from .fallback import try_sources
 from .names import resolve_cn_exchange_fund_name, resolve_hk_name
-from .symbols import cn_exchange_symbol, hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
+from .symbols import hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
 
 
 @dataclass(frozen=True)
@@ -77,8 +78,9 @@ def _cn_stock_em_adjust(adjust_policy: str) -> str:
 def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> AdapterResult:
     import akshare as ak
 
-    symbol = req.source_code
-    prefixed = cn_exchange_symbol(symbol)
+    canonical = req.source_code.strip().lower()
+    em_symbol = eastmoney_symbol_from_canonical(canonical)
+    prefixed = prefixed_symbol_from_canonical(canonical)
     policy = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
     em_adjust = _cn_stock_em_adjust(policy)
     tx_adjust = tx_adjust_policy(policy)
@@ -88,7 +90,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
         (
             "ak.stock_zh_a_hist",
             lambda: ak.stock_zh_a_hist(
-                symbol=symbol,
+                symbol=em_symbol,
                 period="daily",
                 start_date=start,
                 end_date=end,
@@ -116,7 +118,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     ]
 
     df, source_name = try_sources("cn_exchange_stock", sources)
-    name = symbol
+    name = canonical
     if "股票名称" in df.columns and not df["股票名称"].empty:
         name = str(df["股票名称"].iloc[0])
     return AdapterResult(
@@ -133,8 +135,9 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
 def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
     import akshare as ak
 
-    symbol = req.source_code
-    prefixed = cn_exchange_symbol(symbol)
+    canonical = req.source_code.strip().lower()
+    em_symbol = eastmoney_symbol_from_canonical(canonical)
+    prefixed = prefixed_symbol_from_canonical(canonical)
     adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
     tx_adjust = tx_adjust_policy(adjust)
 
@@ -142,7 +145,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
         (
             "ak.fund_etf_hist_em",
             lambda: ak.fund_etf_hist_em(
-                symbol=symbol,
+                symbol=em_symbol,
                 period="daily",
                 start_date=start,
                 end_date=end,
@@ -171,7 +174,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
             (
                 "ak.fund_lof_hist_em",
                 lambda: ak.fund_lof_hist_em(
-                    symbol=symbol,
+                    symbol=em_symbol,
                     period="daily",
                     start_date=start,
                     end_date=end,
@@ -180,13 +183,13 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
             ),
             (
                 "ak.fund_etf_fund_info_em",
-                lambda: ak.fund_etf_fund_info_em(fund=symbol, start_date=start, end_date=end),
+                lambda: ak.fund_etf_fund_info_em(fund=em_symbol, start_date=start, end_date=end),
             ),
         ]
     )
 
     df, source_name = try_sources("cn_exchange_fund", sources)
-    name = resolve_cn_exchange_fund_name(symbol, df)
+    name = resolve_cn_exchange_fund_name(canonical, df)
     return AdapterResult(
         df=df,
         source_name=source_name,
@@ -472,8 +475,10 @@ def fetch_instrument(req: FetchRequest) -> FetchData:
     if points and req.start_date and points[0].date > req.start_date:
         quality = "partial"
 
-    provider_symbol = req.source_code
-    if req.instrument_type in ("hk_stock", "hk_etf"):
+    provider_symbol = req.source_code.strip().lower()
+    if req.instrument_type in ("cn_exchange_stock", "cn_exchange_fund"):
+        provider_symbol = prefixed_symbol_from_canonical(provider_symbol)
+    elif req.instrument_type in ("hk_stock", "hk_etf"):
         provider_symbol = hk_exchange_symbol(req.source_code)
 
     return FetchData(

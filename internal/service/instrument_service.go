@@ -28,6 +28,7 @@ type InstrumentService struct {
 	marketRepo *repository.MarketDataRepo
 	annualRepo *repository.AnnualReturnsRepo
 	jobs       *repository.JobRepo
+	tickets    *repository.ResolutionTicketRepo
 	provider   *marketdata.ProviderClient
 }
 
@@ -37,11 +38,12 @@ func NewInstrumentService(
 	marketRepo *repository.MarketDataRepo,
 	annualRepo *repository.AnnualReturnsRepo,
 	jobs *repository.JobRepo,
+	tickets *repository.ResolutionTicketRepo,
 	provider *marketdata.ProviderClient,
 ) *InstrumentService {
 	return &InstrumentService{
 		sql: sqlDB, instRepo: instRepo, marketRepo: marketRepo,
-		annualRepo: annualRepo, jobs: jobs, provider: provider,
+		annualRepo: annualRepo, jobs: jobs, tickets: tickets, provider: provider,
 	}
 }
 
@@ -127,27 +129,24 @@ func (s *InstrumentService) Import(ctx context.Context, req InstrumentImportRequ
 	if err := validateImportRequest(req); err != nil {
 		return repository.InstrumentRecord{}, err
 	}
-	code := req.Code
-	providerSymbol := req.Code
-	if marketdata.RequiresCNResolve(req.Market, req.InstrumentType, req.Code) {
-		resolved, err := s.Resolve(ctx, InstrumentResolveRequest{
-			Market: req.Market, InstrumentType: req.InstrumentType, Code: req.Code,
-		})
-		if err != nil {
-			return repository.InstrumentRecord{}, err
-		}
-		if amb, _ := resolved["ambiguous"].(bool); amb {
-			return repository.InstrumentRecord{}, newErr("instrument_ambiguous", "code is ambiguous; use import-async after resolve", nil)
-		}
-		if r, ok := resolved["resolved"].(map[string]any); ok {
-			code, _ = r["code"].(string)
-			providerSymbol, _ = r["provider_symbol"].(string)
-		}
-	}
-	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{
-		Market: req.Market, InstrumentType: req.InstrumentType,
-		Code: code, ProviderSymbol: providerSymbol,
+	resolved, err := s.Resolve(ctx, InstrumentResolveRequest{
+		Market: req.Market, InstrumentType: req.InstrumentType, Code: req.Code,
 	})
+	if err != nil {
+		return repository.InstrumentRecord{}, err
+	}
+	if amb, _ := resolved["ambiguous"].(bool); amb {
+		return repository.InstrumentRecord{}, newErr("instrument_ambiguous", "code is ambiguous; use import-async after resolve", nil)
+	}
+	r, ok := resolved["resolved"].(map[string]any)
+	if !ok {
+		return repository.InstrumentRecord{}, newErr("instrument_not_found", "instrument not found", nil)
+	}
+	ticketID, _ := r["ticket_id"].(string)
+	if ticketID == "" {
+		return repository.InstrumentRecord{}, newErr("invalid_request", "resolve did not return ticket_id", nil)
+	}
+	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{TicketID: ticketID})
 	if err != nil {
 		return repository.InstrumentRecord{}, err
 	}
@@ -438,7 +437,12 @@ func mapClassifyError(err error) *AppError {
 }
 
 func (s *InstrumentService) libraryQuality(ctx context.Context, instrumentID string) string {
-	points, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
+	return LibraryQualityFromRepos(ctx, s.marketRepo, instrumentID)
+}
+
+// LibraryQualityFromRepos computes library quality from stored market data points.
+func LibraryQualityFromRepos(ctx context.Context, marketRepo *repository.MarketDataRepo, instrumentID string) string {
+	points, err := marketRepo.ListByInstrument(ctx, instrumentID)
 	if err != nil || len(points) == 0 {
 		return "insufficient_history"
 	}

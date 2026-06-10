@@ -34,10 +34,12 @@ type HoldingsUpdateRequest struct {
 
 // HoldingsService manages plan holdings.
 type HoldingsService struct {
-	sql      *sql.DB
-	plans    *repository.PlanRepo
-	holdings *repository.HoldingsRepo
-	snapSvc  *marketdata.SnapshotService
+	sql        *sql.DB
+	plans      *repository.PlanRepo
+	holdings   *repository.HoldingsRepo
+	snapSvc    *marketdata.SnapshotService
+	instRepo   *repository.InstrumentRepo
+	marketRepo *repository.MarketDataRepo
 }
 
 func NewHoldingsService(
@@ -45,8 +47,13 @@ func NewHoldingsService(
 	plans *repository.PlanRepo,
 	holdings *repository.HoldingsRepo,
 	snapSvc *marketdata.SnapshotService,
+	instRepo *repository.InstrumentRepo,
+	marketRepo *repository.MarketDataRepo,
 ) *HoldingsService {
-	return &HoldingsService{sql: sqlDB, plans: plans, holdings: holdings, snapSvc: snapSvc}
+	return &HoldingsService{
+		sql: sqlDB, plans: plans, holdings: holdings, snapSvc: snapSvc,
+		instRepo: instRepo, marketRepo: marketRepo,
+	}
 }
 
 func (s *HoldingsService) GetHoldings(ctx context.Context, planID string) ([]repository.PlanHolding, error) {
@@ -98,7 +105,8 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 			}
 			return nil, err
 		}
-		if err := EnsureInstrumentReadyForPlan(inst); err != nil {
+		quality := LibraryQualityFromRepos(ctx, s.marketRepo, item.InstrumentID)
+		if err := EnsureInstrumentReadyForPlan(inst, quality); err != nil {
 			return nil, err
 		}
 		snapID, ok := existingSnap[item.InstrumentID]

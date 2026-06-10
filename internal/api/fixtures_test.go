@@ -42,6 +42,7 @@ func createTestPlan(t *testing.T, db *sql.DB) service.PlanDetail {
 			repository.NewInstrumentRepo(db),
 			repository.NewMarketDataRepo(db),
 		),
+		repository.NewMarketDataRepo(db),
 	)
 	scn := "scn_builtin_near_fire"
 	plan, err := svc.Create(context.Background(), service.CreatePlanRequest{

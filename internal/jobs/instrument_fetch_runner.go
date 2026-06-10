@@ -66,6 +66,9 @@ func (r *InstrumentFetchRunner) Run(ctx context.Context, job repository.Job, pro
 		SourceCode: payload.ProviderSymbol, EndDate: end,
 		AdjustPolicy: payload.AdjustPolicy,
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	data, err := r.provider.Fetch(ctx, fetchReq)
 	if err != nil {
 		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")

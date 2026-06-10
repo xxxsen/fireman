@@ -92,41 +92,42 @@ func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *s
 		serverErr <- nil
 	}()
 
+	shutdownHTTP := false
 	select {
 	case <-signalCtx.Done():
 		logger.Info("shutdown requested")
+		shutdownHTTP = true
 	case err := <-serverErr:
 		if err != nil {
-			workerCancel()
-			<-workerDone
-			_ = pool.Close()
+			shutdownApp(logger, server, pool, workerCancel, workerDone, false)
 			return fmt.Errorf("http server: %w", err)
 		}
-		workerCancel()
-		<-workerDone
-		_ = pool.Close()
+		shutdownApp(logger, server, pool, workerCancel, workerDone, false)
 		return nil
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("http server shutdown error", "error", err)
+	shutdownApp(logger, server, pool, workerCancel, workerDone, shutdownHTTP)
+	return nil
+}
+
+// shutdownApp stops HTTP (when still serving), waits for worker exit, then closes the database.
+func shutdownApp(logger *slog.Logger, server *http.Server, pool *sql.DB, workerCancel context.CancelFunc, workerDone <-chan struct{}, shutdownHTTP bool) {
+	if shutdownHTTP {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("http server shutdown error", "error", err)
+		}
 	}
 
 	logger.Info("stopping worker")
 	workerCancel()
-	select {
-	case <-workerDone:
-		logger.Info("worker stopped")
-	case <-time.After(30 * time.Second):
-		logger.Error("worker shutdown timeout")
-	}
+	<-workerDone
+	logger.Info("worker stopped")
 
 	if err := pool.Close(); err != nil {
 		logger.Error("db close error", "error", err)
 	}
-	return nil
 }
 
 func buildLogger(level string) *slog.Logger {

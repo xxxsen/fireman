@@ -103,12 +103,12 @@ export default function ImportAssetPage() {
     setLoading(true);
     setError(null);
     try {
-      const result = await importAsync({
-        market,
-        instrument_type: instrumentType,
-        code: selected.code,
-        provider_symbol: selected.provider_symbol,
-      });
+      if (!selected.ticket_id) {
+        setError("缺少 resolution ticket，请重新解析标的");
+        setStage("error");
+        return;
+      }
+      const result = await importAsync({ ticket_id: selected.ticket_id });
       router.push(`/assets/${result.instrument_id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "录入失败");

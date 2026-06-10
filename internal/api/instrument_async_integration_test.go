@@ -16,9 +16,33 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-func importAsyncNoWait(t *testing.T, client *http.Client, baseURL string, payload map[string]any) string {
+func resolveTicket(t *testing.T, client *http.Client, baseURL string, market, instrumentType, code string) string {
 	t.Helper()
-	raw, _ := json.Marshal(payload)
+	raw, _ := json.Marshal(map[string]any{
+		"market": market, "instrument_type": instrumentType, "code": code,
+	})
+	resp, err := client.Post(baseURL+"/api/v1/instruments/resolve", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolve status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	data := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	resolved, ok := data["resolved"].(map[string]any)
+	if !ok {
+		t.Fatalf("resolve missing resolved: %v", data)
+	}
+	ticketID, ok := resolved["ticket_id"].(string)
+	if !ok || ticketID == "" {
+		t.Fatalf("resolve missing ticket_id: %v", resolved)
+	}
+	return ticketID
+}
+
+func importAsyncNoWait(t *testing.T, client *http.Client, baseURL string, ticketID string) string {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
 	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +52,12 @@ func importAsyncNoWait(t *testing.T, client *http.Client, baseURL string, payloa
 	}
 	env := decodeEnvelope(t, readBody(t, resp))
 	return env["data"].(map[string]any)["instrument_id"].(string)
+}
+
+func resolveAndImportAsync(t *testing.T, client *http.Client, baseURL, market, instrumentType, code string) string {
+	t.Helper()
+	ticketID := resolveTicket(t, client, baseURL, market, instrumentType, code)
+	return importAsyncNoWait(t, client, baseURL, ticketID)
 }
 
 func waitForInstrumentStatus(t *testing.T, client *http.Client, baseURL, instrumentID, wantStatus string) {
@@ -96,10 +126,7 @@ func TestInstrumentNotReadyIntegration(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
-	instID := importAsyncNoWait(t, client, srv.URL, map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": "sh510300", "provider_symbol": "sh510300",
-	})
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
 	plan := createPlanWithValuationDate(t, db, "2026-06-09")
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
 
@@ -166,10 +193,7 @@ func TestInstrumentRetryFetchIntegration(t *testing.T) {
 	client := srv.Client()
 
 	beforeCount := countTable(t, db, "instruments")
-	instID := importAsyncNoWait(t, client, srv.URL, map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": "sh510300", "provider_symbol": "sh510300",
-	})
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
 	waitForInstrumentStatus(t, client, srv.URL, instID, "fetch_failed")
 	if countTable(t, db, "instruments") != beforeCount+1 {
 		t.Fatalf("expected exactly one new instrument row after failed fetch")
@@ -252,14 +276,8 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
-	shID := importAsyncNoWait(t, client, srv.URL, map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund",
-		"code": "sh000510", "provider_symbol": "sh000510",
-	})
-	szID := importAsyncNoWait(t, client, srv.URL, map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_stock",
-		"code": "sz000510", "provider_symbol": "sz000510",
-	})
+	shID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "sh000510")
+	szID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_stock", "sz000510")
 	if shID == szID {
 		t.Fatal("sh000510 and sz000510 must be separate instrument records")
 	}
@@ -279,26 +297,15 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name    string
-		payload map[string]any
+		name                         string
+		market, instrumentType, code string
 	}{
-		{
-			name: "sh000510",
-			payload: map[string]any{
-				"market": "CN", "instrument_type": "cn_exchange_fund",
-				"code": "sh000510", "provider_symbol": "sh000510",
-			},
-		},
-		{
-			name: "sz000510",
-			payload: map[string]any{
-				"market": "CN", "instrument_type": "cn_exchange_stock",
-				"code": "sz000510", "provider_symbol": "sz000510",
-			},
-		},
+		{name: "sh000510", market: "CN", instrumentType: "cn_exchange_fund", code: "sh000510"},
+		{name: "sz000510", market: "CN", instrumentType: "cn_exchange_stock", code: "sz000510"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, _ := json.Marshal(tc.payload)
+			ticketID := resolveTicket(t, client, srv.URL, tc.market, tc.instrumentType, tc.code)
+			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
 			resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 			if err != nil {
 				t.Fatal(err)
@@ -308,5 +315,100 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 			}
 			assertErrorCode(t, readBody(t, resp), "instrument_already_exists")
 		})
+	}
+}
+
+func TestConcurrentImportAsyncIntegration(t *testing.T) {
+	provider := mockProviderServer(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	ticketID := resolveTicket(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	const workers = 20
+	results := make(chan int, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID})
+			resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
+			if err != nil {
+				results <- 0
+				return
+			}
+			results <- resp.StatusCode
+		}()
+	}
+	okCount := 0
+	rejectCount := 0
+	for i := 0; i < workers; i++ {
+		status := <-results
+		switch status {
+		case http.StatusOK:
+			okCount++
+		case http.StatusBadRequest:
+			rejectCount++
+		default:
+			t.Fatalf("unexpected status=%d", status)
+		}
+	}
+	if okCount != 1 {
+		t.Fatalf("okCount=%d want 1", okCount)
+	}
+	if rejectCount != workers-1 {
+		t.Fatalf("rejectCount=%d want %d", rejectCount, workers-1)
+	}
+	var instCount int
+	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM instruments WHERE code='sh510300'`).Scan(&instCount); err != nil {
+		t.Fatal(err)
+	}
+	if instCount != 1 {
+		t.Fatalf("instrument rows=%d want 1", instCount)
+	}
+}
+
+func TestConcurrentRetryFetchIntegration(t *testing.T) {
+	provider := mockRetryFetchProvider(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	waitForInstrumentStatus(t, client, srv.URL, instID, "fetch_failed")
+
+	const workers = 20
+	results := make(chan int, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/retry-fetch", "application/json", nil)
+			if err != nil {
+				results <- 0
+				return
+			}
+			results <- resp.StatusCode
+		}()
+	}
+	okCount := 0
+	inProgressCount := 0
+	for i := 0; i < workers; i++ {
+		status := <-results
+		switch status {
+		case http.StatusOK:
+			okCount++
+		case http.StatusBadRequest:
+			inProgressCount++
+		default:
+			t.Fatalf("unexpected status=%d", status)
+		}
+	}
+	if okCount != 1 {
+		t.Fatalf("okCount=%d want 1", okCount)
+	}
+	if inProgressCount != workers-1 {
+		t.Fatalf("inProgressCount=%d want %d", inProgressCount, workers-1)
 	}
 }
