@@ -105,12 +105,13 @@ def _candidate_from_cn(parsed: CNExchangeCode, name: str, kind: str) -> _Candida
 
 
 def _dedupe_candidates(items: list[_Candidate]) -> list[_Candidate]:
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     out: list[_Candidate] = []
     for item in items:
-        if item.provider_symbol in seen:
+        key = (item.provider_symbol, item.instrument_kind)
+        if key in seen:
             continue
-        seen.add(item.provider_symbol)
+        seen.add(key)
         out.append(item)
     return out
 
@@ -142,16 +143,17 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
     etf_map, lof_map, stock_map = _load_cn_spot_maps(deadline)
 
     if _has_exchange_prefix(code):
-        prefixed = parse_cn_etf_code(code)
-        if prefixed is None:
-            return []
-        name = etf_map.get(bare) or lof_map.get(bare)
-        if not name:
-            return []
-        kind = "lof" if bare in lof_map and bare not in etf_map else "etf"
-        if bare in etf_map and bare not in lof_map:
-            kind = "index_etf" if kind == "etf" else kind
-        return [_candidate_from_cn(prefixed, name, kind)]
+        out: list[_Candidate] = []
+        if bare in etf_map:
+            parsed_etf = parse_cn_etf_code(code)
+            if parsed_etf:
+                kind = "etf" if bare in lof_map else "index_etf"
+                out.append(_candidate_from_cn(parsed_etf, etf_map[bare], kind))
+        if bare in lof_map:
+            parsed_lof = parse_cn_lof_code(code, deadline=deadline)
+            if parsed_lof:
+                out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
+        return _dedupe_candidates(out)
 
     if bare in etf_map:
         parsed = parse_cn_etf_code(bare)
