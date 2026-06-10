@@ -158,6 +158,7 @@ func (s *InstrumentService) Import(ctx context.Context, req InstrumentImportRequ
 	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{
 		TicketID:   ticketID,
 		AssetClass: defaultImportAssetClass(req.InstrumentType),
+		Region:     defaultImportRegion(req.Market),
 	})
 	if err != nil {
 		return repository.InstrumentRecord{}, err
@@ -572,9 +573,9 @@ func CheckInstrumentReadOnlyFields(body []byte) error {
 	return checkInstrumentReadOnlyFields(body, nil)
 }
 
-// CheckInstrumentImportAsyncFields allows user-selected asset_class on import-async.
+// CheckInstrumentImportAsyncFields allows user-selected asset_class and region on import-async.
 func CheckInstrumentImportAsyncFields(body []byte) error {
-	return checkInstrumentReadOnlyFields(body, map[string]struct{}{"asset_class": {}})
+	return checkInstrumentReadOnlyFields(body, map[string]struct{}{"asset_class": {}, "region": {}})
 }
 
 func checkInstrumentReadOnlyFields(body []byte, allowed map[string]struct{}) error {

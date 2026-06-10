@@ -39,7 +39,7 @@ func TestInstrumentResolveAndImportAsync(t *testing.T) {
 	resolved := resolve["resolved"].(map[string]any)
 	ticketID := resolved["ticket_id"].(string)
 
-	importPayload, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity"})
+	importPayload, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity", "region": "domestic"})
 	resp, err = client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(importPayload))
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestInstrumentFetchWorkerActivates(t *testing.T) {
 		t.Fatal(err)
 	}
 	ticketID := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)["resolved"].(map[string]any)["ticket_id"].(string)
-	payload, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity"})
+	payload, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity", "region": "domestic"})
 	resp, err = client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)

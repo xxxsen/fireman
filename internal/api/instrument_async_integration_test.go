@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,10 +42,10 @@ func resolveTicket(t *testing.T, client *http.Client, baseURL string, market, in
 	return ticketID
 }
 
-func importAsyncNoWait(t *testing.T, client *http.Client, baseURL string, ticketID string) string {
+func importAsyncNoWait(t *testing.T, client *http.Client, baseURL, ticketID, region string) string {
 	t.Helper()
 	assetClass := "equity"
-	raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": assetClass})
+	raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": assetClass, "region": region})
 	resp, err := client.Post(baseURL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -56,10 +57,19 @@ func importAsyncNoWait(t *testing.T, client *http.Client, baseURL string, ticket
 	return env["data"].(map[string]any)["instrument_id"].(string)
 }
 
+func defaultImportRegionForMarket(market string) string {
+	switch strings.ToUpper(market) {
+	case "HK", "US":
+		return "foreign"
+	default:
+		return "domestic"
+	}
+}
+
 func resolveAndImportAsync(t *testing.T, client *http.Client, baseURL, market, instrumentType, code string) string {
 	t.Helper()
 	ticketID := resolveTicket(t, client, baseURL, market, instrumentType, code)
-	return importAsyncNoWait(t, client, baseURL, ticketID)
+	return importAsyncNoWait(t, client, baseURL, ticketID, defaultImportRegionForMarket(market))
 }
 
 func waitForInstrumentStatus(t *testing.T, client *http.Client, baseURL, instrumentID, wantStatus string) {
@@ -307,7 +317,7 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ticketID := resolveTicket(t, client, srv.URL, tc.market, tc.instrumentType, tc.code)
-			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity"})
+			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity", "region": "domestic"})
 			resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 			if err != nil {
 				t.Fatal(err)
@@ -333,7 +343,7 @@ func TestConcurrentImportAsyncIntegration(t *testing.T) {
 	results := make(chan int, workers)
 	for i := 0; i < workers; i++ {
 		go func() {
-			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity"})
+			raw, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity", "region": "domestic"})
 			resp, err := client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(raw))
 			if err != nil {
 				results <- 0

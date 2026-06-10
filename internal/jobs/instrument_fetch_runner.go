@@ -198,8 +198,10 @@ func toRepoAnnual(instrumentID string, rows []marketdata.AnnualReturnRow) []repo
 }
 
 func resolveFetchClassification(payload repository.InstrumentFetchPayload, data *marketdata.FetchData) (marketdata.Classification, error) {
-	if payload.UserAssetClass != "" {
-		return marketdata.UserClassification(payload.Market, payload.InstrumentType, payload.UserAssetClass, data.Currency)
+	if payload.UserAssetClass != "" && payload.UserRegion != "" {
+		return marketdata.UserClassification(
+			payload.Market, payload.InstrumentType, payload.UserAssetClass, payload.UserRegion, data.Currency,
+		)
 	}
 	return marketdata.ResolveClassification(payload.Market, payload.InstrumentType, data)
 }

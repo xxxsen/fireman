@@ -121,7 +121,11 @@ export function resolveImport(body: InstrumentImportRequest): Promise<ResolveRes
   return apiPost("/api/v1/instruments/resolve", body);
 }
 
-export function importAsync(body: { ticket_id: string; asset_class: string }): Promise<ImportAsyncResult> {
+export function importAsync(body: {
+  ticket_id: string;
+  asset_class: string;
+  region: string;
+}): Promise<ImportAsyncResult> {
   return apiPost("/api/v1/instruments/import-async", body);
 }
 

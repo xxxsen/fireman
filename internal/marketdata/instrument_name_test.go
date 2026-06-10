@@ -19,14 +19,17 @@ func TestPreferInstrumentName(t *testing.T) {
 }
 
 func TestUserClassification(t *testing.T) {
-	cls, err := UserClassification("CN", "cn_mutual_fund", "bond", "CNY")
+	cls, err := UserClassification("CN", "cn_mutual_fund", "bond", "foreign", "CNY")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cls.AssetClass != "bond" || cls.Region != "domestic" || cls.Currency != "CNY" {
+	if cls.AssetClass != "bond" || cls.Region != "foreign" || cls.Currency != "CNY" {
 		t.Fatalf("unexpected classification: %+v", cls)
 	}
 	if err := ValidateUserAssetClass("fx"); err == nil {
 		t.Fatal("expected fx to be rejected")
+	}
+	if err := ValidateUserRegion("invalid"); err == nil {
+		t.Fatal("expected invalid region to be rejected")
 	}
 }

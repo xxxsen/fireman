@@ -207,7 +207,12 @@ describe("ImportAssetPage", () => {
     expect(screen.getByText("测试LOF")).toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId("asset-class-select"), { target: { value: "equity" } });
+    fireEvent.change(screen.getByTestId("region-select"), { target: { value: "domestic" } });
     fireEvent.click(screen.getByTestId("confirm-import"));
-    expect(importAsyncMock).toHaveBeenCalledWith({ ticket_id: "tkt_lof", asset_class: "equity" });
+    expect(importAsyncMock).toHaveBeenCalledWith({
+      ticket_id: "tkt_lof",
+      asset_class: "equity",
+      region: "domestic",
+    });
   });
 });

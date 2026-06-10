@@ -16,6 +16,10 @@ var supportedAssetClasses = map[string]struct{}{
 	"equity": {}, "bond": {}, "cash": {},
 }
 
+var supportedRegions = map[string]struct{}{
+	"domestic": {}, "foreign": {},
+}
+
 // ValidateUserAssetClass reports whether the user-selected asset class is supported.
 func ValidateUserAssetClass(assetClass string) error {
 	if _, ok := supportedAssetClasses[assetClass]; !ok {
@@ -24,17 +28,30 @@ func ValidateUserAssetClass(assetClass string) error {
 	return nil
 }
 
-// UserClassification builds persisted classification from an explicit user asset class.
-func UserClassification(market, instrumentType, assetClass, currency string) (Classification, error) {
+// ValidateUserRegion reports whether the user-selected region is supported.
+func ValidateUserRegion(region string) error {
+	if _, ok := supportedRegions[region]; !ok {
+		return fmt.Errorf("instrument_metadata_conflict")
+	}
+	return nil
+}
+
+// UserClassification builds persisted classification from explicit user asset class and region.
+func UserClassification(market, instrumentType, assetClass, region, currency string) (Classification, error) {
 	if err := ValidateUserAssetClass(assetClass); err != nil {
+		return Classification{}, err
+	}
+	if err := ValidateUserRegion(region); err != nil {
 		return Classification{}, err
 	}
 	if currency == "" {
 		return Classification{}, fmt.Errorf("instrument_metadata_conflict")
 	}
+	_ = market
+	_ = instrumentType
 	return Classification{
 		AssetClass: assetClass,
-		Region:     defaultRegion(market, instrumentType),
+		Region:     region,
 		Currency:   currency,
 	}, nil
 }

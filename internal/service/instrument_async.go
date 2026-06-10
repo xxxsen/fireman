@@ -31,6 +31,7 @@ type InstrumentResolveRequest struct {
 type InstrumentImportAsyncRequest struct {
 	TicketID   string `json:"ticket_id"`
 	AssetClass string `json:"asset_class"`
+	Region     string `json:"region"`
 }
 
 // InstrumentImportAsyncResult is returned immediately after enqueue.
@@ -85,6 +86,20 @@ func validateUserAssetClass(assetClass string) error {
 		return newErr("invalid_request", "asset_class must be equity, bond, or cash", nil)
 	}
 	return nil
+}
+
+func validateUserRegion(region string) error {
+	if err := marketdata.ValidateUserRegion(region); err != nil {
+		return newErr("invalid_request", "region must be domestic or foreign", nil)
+	}
+	return nil
+}
+
+func defaultImportRegion(market string) string {
+	if strings.EqualFold(market, "HK") || strings.EqualFold(market, "US") {
+		return "foreign"
+	}
+	return "domestic"
 }
 
 func defaultImportAssetClass(instrumentType string) string {
@@ -200,10 +215,14 @@ func (s *InstrumentService) createResolutionTicket(ctx context.Context, market, 
 func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImportAsyncRequest) (InstrumentImportAsyncResult, error) {
 	req.TicketID = strings.TrimSpace(req.TicketID)
 	req.AssetClass = strings.TrimSpace(req.AssetClass)
+	req.Region = strings.TrimSpace(req.Region)
 	if req.TicketID == "" {
 		return InstrumentImportAsyncResult{}, newErr("invalid_request", "ticket_id is required", nil)
 	}
 	if err := validateUserAssetClass(req.AssetClass); err != nil {
+		return InstrumentImportAsyncResult{}, err
+	}
+	if err := validateUserRegion(req.Region); err != nil {
 		return InstrumentImportAsyncResult{}, err
 	}
 	if s.tickets == nil {
@@ -265,14 +284,10 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 			})
 		}
 		providerSymbol = ticket.ProviderSymbol
-		region := "domestic"
-		if strings.EqualFold(market, "HK") || strings.EqualFold(market, "US") {
-			region = "foreign"
-		}
 		inst = repository.InstrumentRecord{
 			ID: instID, Code: code, Name: ticket.Name,
 			Market: market, InstrumentType: instrumentType,
-			AssetClass: req.AssetClass, Region: region, Currency: defaultCurrency(market),
+			AssetClass: req.AssetClass, Region: req.Region, Currency: defaultCurrency(market),
 			Provider: "akshare", ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
 			ExpenseRatioStatus: "unavailable",
 			FeeTreatment:       marketdata.FeeTreatmentForType(instrumentType),
@@ -281,7 +296,7 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		payload = InstrumentFetchPayload{
 			InstrumentID: instID, Market: market, InstrumentType: instrumentType,
 			Code: code, ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
-			ResolvedName: ticket.Name, UserAssetClass: req.AssetClass,
+			ResolvedName: ticket.Name, UserAssetClass: req.AssetClass, UserRegion: req.Region,
 		}
 		payloadJSON, err = json.Marshal(payload)
 		if err != nil {
@@ -407,7 +422,7 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 	payload := InstrumentFetchPayload{
 		InstrumentID: inst.ID, Market: inst.Market, InstrumentType: inst.InstrumentType,
 		Code: inst.Code, ProviderSymbol: inst.ProviderSymbol, AdjustPolicy: inst.AdjustPolicy,
-		ResolvedName: inst.Name, UserAssetClass: inst.AssetClass,
+		ResolvedName: inst.Name, UserAssetClass: inst.AssetClass, UserRegion: inst.Region,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

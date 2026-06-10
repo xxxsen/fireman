@@ -11,7 +11,7 @@ import {
   type ResolveCandidate,
 } from "@/lib/api/instruments";
 import { ApiError } from "@/lib/api/client";
-import { assetClassLabel } from "@/lib/format";
+import { assetClassLabel, regionLabel } from "@/lib/format";
 
 const ASSET_CLASSES = [
   { value: "equity", label: "股票 / 权益" },
@@ -19,9 +19,10 @@ const ASSET_CLASSES = [
   { value: "cash", label: "现金 / 货币" },
 ] as const;
 
-function defaultAssetClassForType(instrumentType: string): string {
-  return instrumentType === "cn_mutual_fund" ? "" : "equity";
-}
+const REGIONS = [
+  { value: "domestic", label: "国内" },
+  { value: "foreign", label: "国外" },
+] as const;
 
 const MARKETS = [
   { value: "CN", label: "中国市场" },
@@ -75,11 +76,13 @@ export default function ImportAssetPage() {
   const [candidates, setCandidates] = useState<ResolveCandidate[]>([]);
   const [selected, setSelected] = useState<ResolveCandidate | null>(null);
   const [assetClass, setAssetClass] = useState("");
+  const [region, setRegion] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const beginConfirm = (candidate: ResolveCandidate) => {
     setSelected(candidate);
-    setAssetClass(defaultAssetClassForType(instrumentType));
+    setAssetClass("");
+    setRegion("");
     setStage("confirm");
   };
 
@@ -132,7 +135,15 @@ export default function ImportAssetPage() {
         setError("请选择资产类别");
         return;
       }
-      const result = await importAsync({ ticket_id: selected.ticket_id, asset_class: assetClass });
+      if (!region) {
+        setError("请选择投资地区");
+        return;
+      }
+      const result = await importAsync({
+        ticket_id: selected.ticket_id,
+        asset_class: assetClass,
+        region,
+      });
       router.push(`/assets/${result.instrument_id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "录入失败");
@@ -307,7 +318,30 @@ export default function ImportAssetPage() {
               {instrumentType === "cn_mutual_fund" && assetClass === "bond" && (
                 <span>（短债/纯债等场外公募基金通常归入债券）</span>
               )}
+              {instrumentType === "cn_mutual_fund" && assetClass === "equity" && (
+                <span>（标普500、纳指等联接基金若投资海外市场，地区请选「国外」）</span>
+              )}
             </p>
+          )}
+          <label className="block text-sm">
+            投资地区
+            <span className="ml-1 text-slate-500">（用于国内/国外权重配置，请手动确认）</span>
+            <select
+              className="mt-1 w-full rounded-md border px-3 py-2"
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              data-testid="region-select"
+            >
+              <option value="">请选择…</option>
+              {REGIONS.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {region && (
+            <p className="text-sm text-slate-600">已选择：{regionLabel(region)}</p>
           )}
           <p className="text-sm text-slate-600">
             确认后将创建占位记录并在后台抓取历史数据；详情页可查看进度。
@@ -316,7 +350,7 @@ export default function ImportAssetPage() {
             type="button"
             data-testid="confirm-import"
             className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-            disabled={loading || !assetClass}
+            disabled={loading || !assetClass || !region}
             onClick={() => void handleImport()}
           >
             {loading ? "提交中…" : "开始抓取"}
