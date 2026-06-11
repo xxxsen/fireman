@@ -121,7 +121,10 @@ export default function PathDetailPage() {
 
   return (
     <div className="space-y-4">
-      <Link href={`/plans/${planId}/analysis`} className="text-sm underline">
+      <Link
+        href={`/plans/${planId}/settings?section=simulation`}
+        className="text-sm underline"
+      >
         ← 返回分析中心
       </Link>
       <h1 className="text-xl font-semibold">路径 #{data.path_no}</h1>

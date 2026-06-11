@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { createPlanWizard } from "@/lib/api/plans";
@@ -32,9 +33,8 @@ import {
 } from "@/lib/wizard-allocation";
 import type { PlanParameters } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
-import { useJobStatus } from "@/hooks/useJobStatus";
 
-const STEPS = ["FIRE 基础信息", "目标配置", "选择标的", "检查并模拟"] as const;
+const STEPS = ["计划基础", "目标配置", "建立持仓", "确认组合"] as const;
 const DEFAULT_RUNS = 10000;
 
 function defaultParameters(
@@ -89,48 +89,12 @@ export default function NewPlanWizardPage() {
   const [scenarioId, setScenarioId] = useState("");
   const [regionTargets, setRegionTargets] = useState<WizardRegionTargets>(defaultWizardRegionTargets);
   const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
+  const [runSimulation, setRunSimulation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [holdingTab, setHoldingTab] = useState<string>("equity");
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
   const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: () => listInstruments() });
-
-  const [simFailed, setSimFailed] = useState(false);
-
-  const jobState = useJobStatus(jobId, {
-    onComplete: () => {
-      if (createdPlanId) router.push(`/plans/${createdPlanId}/dashboard`);
-    },
-    onFailed: (msg) => {
-      setJobId(null);
-      setSimFailed(true);
-      setError(msg);
-    },
-    onCanceled: () => {
-      setJobId(null);
-      setSimFailed(true);
-      setError("模拟已取消");
-    },
-  });
-
-  const retrySimMut = useMutation({
-    mutationFn: async () => {
-      if (!createdPlanId) {
-        throw new Error("计划尚未创建");
-      }
-      return createSimulation(createdPlanId, { runs: DEFAULT_RUNS });
-    },
-    onSuccess: (sim) => {
-      setSimFailed(false);
-      setJobId(sim.job_id);
-      setError(null);
-    },
-    onError: (e) => {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "重试失败");
-    },
-  });
 
   const finishMut = useMutation({
     mutationFn: async () => {
@@ -154,13 +118,22 @@ export default function NewPlanWizardPage() {
         region_targets: buildRegionTargetsPayload(regionTargets),
         apply_unallocated_to_cash: assetGap > 100,
       });
-      const sim = await createSimulation(plan.id, { runs: DEFAULT_RUNS });
-      return { plan, sim };
+      if (!runSimulation) return { plan, sim: null, simulationFailed: false };
+      try {
+        const sim = await createSimulation(plan.id, { runs: DEFAULT_RUNS });
+        return { plan, sim, simulationFailed: false };
+      } catch {
+        return { plan, sim: null, simulationFailed: true };
+      }
     },
-    onSuccess: ({ plan, sim }) => {
-      setCreatedPlanId(plan.id);
-      setJobId(sim.job_id);
+    onSuccess: ({ plan, sim, simulationFailed }) => {
       setError(null);
+      const suffix = sim
+        ? `?job_id=${encodeURIComponent(sim.job_id)}`
+        : simulationFailed
+          ? "?simulation_error=1"
+          : "";
+      router.push(`/plans/${plan.id}/overview${suffix}`);
     },
     onError: (e) => {
       if (e instanceof ApiError) {
@@ -296,6 +269,10 @@ export default function NewPlanWizardPage() {
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
+            <h2 className="flex items-center text-sm font-medium">
+              FIRE 模拟参数
+              <MetricHelp termKey="fire_params_for_simulation" />
+            </h2>
             <div className="grid gap-4 sm:grid-cols-3">
               <label className="text-sm">
                 当前年龄
@@ -533,7 +510,6 @@ export default function NewPlanWizardPage() {
               <li>组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}</li>
               <li>全组合目标权重：{portfolioReview?.passed ? "通过" : "未通过"}</li>
               <li>已选标的：{selectedInstruments.length} 个</li>
-              <li>预计模拟：{DEFAULT_RUNS.toLocaleString()} 次</li>
             </ul>
 
             {selectedScenario && (
@@ -633,29 +609,15 @@ export default function NewPlanWizardPage() {
             {assetGap < -100 && (
               <p className="text-sm text-red-600">持仓合计超过总资产，请返回上一步调整。</p>
             )}
-            {jobId && (
-              <p className="text-sm">
-                模拟进度：{jobState.job?.status} {Math.round(jobState.progress * 100)}%
-              </p>
-            )}
-            {simFailed && createdPlanId && (
-              <div className="mt-3 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
-                  disabled={retrySimMut.isPending || !!jobId}
-                  onClick={() => retrySimMut.mutate()}
-                >
-                  重新启动模拟
-                </button>
-                <Link
-                  href={`/plans/${createdPlanId}/dashboard`}
-                  className="rounded-md border px-4 py-2 text-sm"
-                >
-                  进入计划
-                </Link>
-              </div>
-            )}
+            <label className="mt-4 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={runSimulation}
+                onChange={(event) => setRunSimulation(event.target.checked)}
+              />
+              创建后运行 FIRE 模拟（{DEFAULT_RUNS.toLocaleString()} 次）
+              <MetricHelp termKey="fire_simulation_optional" />
+            </label>
             {error && <p className="text-sm text-red-600">{error}</p>}
           </>
         )}
@@ -671,7 +633,7 @@ export default function NewPlanWizardPage() {
         <button
           type="button"
           className="rounded-md border px-4 py-2 text-sm"
-          disabled={step === 0 || !!jobId}
+          disabled={step === 0}
           onClick={() => setStep((s) => s - 1)}
         >
           上一步
@@ -739,8 +701,6 @@ export default function NewPlanWizardPage() {
               selectedInstruments.length === 0 ||
               !scenarioId ||
               assetGap < -100 ||
-              !!jobId ||
-              !!createdPlanId ||
               finishMut.isPending
             }
             title={
@@ -750,7 +710,7 @@ export default function NewPlanWizardPage() {
             }
             onClick={() => finishMut.mutate()}
           >
-            创建并启动模拟
+            {runSimulation ? "创建并运行模拟" : "创建计划"}
           </button>
         )}
       </div>

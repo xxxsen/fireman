@@ -78,6 +78,18 @@ func TestPlansCRUDAndVersionConflict(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list status=%d", resp.StatusCode)
 	}
+	listEnv := decodeEnvelope(t, mustRead(t, resp))
+	listData := listEnv["data"].([]any)
+	if len(listData) != 1 {
+		t.Fatalf("list len=%d, want 1", len(listData))
+	}
+	listItem := listData[0].(map[string]any)
+	if _, ok := listItem["rebalance_actionable_count"]; !ok {
+		t.Fatalf("plan list missing rebalance_actionable_count: %+v", listItem)
+	}
+	if _, ok := listItem["holdings_gap_minor"]; !ok {
+		t.Fatalf("plan list missing holdings_gap_minor: %+v", listItem)
+	}
 
 	// Update allocation
 	allocBody, _ := json.Marshal(map[string]any{

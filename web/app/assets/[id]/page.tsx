@@ -413,7 +413,7 @@ export default function AssetDetailPage() {
               <ul className="mt-2 space-y-1 text-sm">
                 {referencingPlans.map((p) => (
                   <li key={p.plan_id}>
-                    <Link href={`/plans/${p.plan_id}/dashboard`} className="underline">
+                    <Link href={`/plans/${p.plan_id}/overview`} className="underline">
                       {p.plan_name}
                     </Link>
                     <span className="text-slate-500"> · 快照纳入 {p.snapshot_inclusion_date || "—"}</span>

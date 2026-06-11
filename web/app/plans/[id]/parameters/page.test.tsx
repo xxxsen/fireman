@@ -112,7 +112,7 @@ vi.mock("@/lib/api/allocation", () => ({
   updateAllocation: vi.fn(),
 }));
 
-import ParametersPage from "./page";
+import { ParametersContent as ParametersPage } from "./page";
 
 describe("ParametersPage strategy enums", () => {
   beforeEach(() => {

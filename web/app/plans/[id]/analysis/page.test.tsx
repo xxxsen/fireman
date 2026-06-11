@@ -109,7 +109,7 @@ vi.mock("@/components/charts/WealthPathChart", () => ({
   WealthPathChart: () => <div data-testid="wealth-chart" />,
 }));
 
-import AnalysisPage from "./page";
+import { AnalysisContent as AnalysisPage } from "./page";
 
 function renderAnalysis() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

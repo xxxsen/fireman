@@ -36,15 +36,6 @@ export function PlanSelector({ currentPlanId }: { currentPlanId: string }) {
         >
           新建计划
         </Link>
-        <Link
-          href={`/plans/${currentPlanId}/analysis`}
-          onClick={(e) => {
-            if (!confirmLeave()) e.preventDefault();
-          }}
-          className="text-sm font-medium text-slate-900 underline"
-        >
-          模拟分析中心 →
-        </Link>
       </div>
     </div>
   );

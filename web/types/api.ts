@@ -22,6 +22,8 @@ export interface Plan {
   config_hash: string;
   created_at: number;
   updated_at: number;
+  rebalance_actionable_count?: number;
+  holdings_gap_minor?: number;
 }
 
 export interface PlanParameters {
@@ -345,6 +347,11 @@ export interface DashboardView {
   rebalance_summary: RebalanceSummary;
   allocation_bars: {
     asset_class: string;
+    target_weight: number;
+    current_weight: number;
+  }[];
+  region_bars: {
+    region: string;
     target_weight: number;
     current_weight: number;
   }[];

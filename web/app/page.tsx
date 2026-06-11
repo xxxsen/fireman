@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { listPlans } from "@/lib/api/plans";
+import { formatMoney } from "@/lib/format";
 
 function formatPlanDate(ts: number): string {
   if (!ts) return "—";
@@ -51,7 +52,7 @@ export default function HomePage() {
           {plans.map((plan) => (
             <Link
               key={plan.id}
-              href={`/plans/${plan.id}/dashboard`}
+              href={`/plans/${plan.id}/overview`}
               className="group flex flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300 hover:shadow-md"
             >
               <h2 className="text-lg font-semibold text-slate-900 group-hover:text-slate-700">
@@ -66,6 +67,18 @@ export default function HomePage() {
                   <dt>基准货币</dt>
                   <dd className="text-slate-900">{plan.base_currency}</dd>
                 </div>
+                <div className="flex justify-between gap-2">
+                  <dt>需调仓</dt>
+                  <dd className="font-medium text-slate-900">
+                    {plan.rebalance_actionable_count ?? 0} 个标的
+                  </dd>
+                </div>
+                {!!plan.holdings_gap_minor && (
+                  <div className="flex justify-between gap-2 text-amber-700">
+                    <dt>未分配差额</dt>
+                    <dd>{formatMoney(plan.holdings_gap_minor, plan.base_currency)}</dd>
+                  </div>
+                )}
                 <div className="flex justify-between gap-2">
                   <dt>更新于</dt>
                   <dd className="text-slate-900">{formatPlanDate(plan.updated_at)}</dd>

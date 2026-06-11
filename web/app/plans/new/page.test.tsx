@@ -1,21 +1,17 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
 
+const routerPush = vi.fn();
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: routerPush }),
 }));
 
 const createPlanWizard = vi.fn();
 const createSimulation = vi.fn();
-
-let wizardJobCallbacks: {
-  onComplete?: () => void;
-  onFailed?: (message: string) => void;
-  onCanceled?: () => void;
-} = {};
 
 vi.mock("@/lib/api/plans", () => ({
   createPlanWizard: (...args: unknown[]) => createPlanWizard(...args),
@@ -27,16 +23,6 @@ vi.mock("@/lib/api/holdings", () => ({ updateHoldings: vi.fn() }));
 vi.mock("@/lib/api/simulations", () => ({
   createSimulation: (...args: unknown[]) => createSimulation(...args),
 }));
-vi.mock("@/hooks/useJobStatus", () => ({
-  useJobStatus: (jobId: string | null, options?: typeof wizardJobCallbacks) => {
-    wizardJobCallbacks = options ?? {};
-    if (!jobId) {
-      return { job: null, progress: 0, error: null };
-    }
-    return { job: { status: "running", progress_current: 10, progress_total: 100 }, progress: 0.1, error: null };
-  },
-}));
-
 const conservativeScenario = {
   id: "scn_conservative",
   name: "保守",
@@ -161,6 +147,7 @@ describe("NewPlanWizardPage", () => {
   beforeEach(() => {
     createPlanWizard.mockReset();
     createSimulation.mockReset();
+    routerPush.mockReset();
     createPlanWizard.mockResolvedValue({ id: "plan_new", config_version: 1 });
     createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
   });
@@ -226,43 +213,59 @@ describe("NewPlanWizardPage", () => {
     expect(await screen.findByText("¥1,000,000.00")).toBeInTheDocument();
   });
 
-  it("calls wizard once with region_targets on finish", async () => {
+  it("creates without simulation by default and navigates to overview", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByText(/10,000/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "创建并启动模拟" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建计划" }));
     await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
     const body = createPlanWizard.mock.calls[0]![0] as {
       region_targets: unknown[];
       apply_unallocated_to_cash: boolean;
     };
     expect(body.region_targets).toHaveLength(6);
-    expect(createSimulation).toHaveBeenCalledWith("plan_new", { runs: 10000 });
+    expect(createSimulation).not.toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith("/plans/plan_new/overview");
   });
 
-  it("retries simulation without recreating plan after first failure", async () => {
+  it("starts optional simulation and navigates with its job id", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByText(/10,000/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "创建并启动模拟" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /创建后运行 FIRE 模拟/,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "创建并运行模拟" }));
 
     await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(1));
+    expect(createSimulation).toHaveBeenCalledWith("plan_new", { runs: 10000 });
+    expect(routerPush).toHaveBeenCalledWith(
+      "/plans/plan_new/overview?job_id=job_1",
+    );
+  });
 
-    await act(async () => {
-      wizardJobCallbacks.onFailed?.("首次模拟失败");
-    });
+  it("still enters the created plan when optional simulation fails to start", async () => {
+    createSimulation.mockRejectedValueOnce(new Error("启动失败"));
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await screen.findByRole("button", { name: "创建计划" });
+    fireEvent.click(screen.getByRole("checkbox", { name: /创建后运行 FIRE 模拟/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并运行模拟" }));
 
-    expect(await screen.findByText("首次模拟失败")).toBeInTheDocument();
-    createSimulation.mockResolvedValue({ job_id: "job_retry", run_id: "run_retry", status: "queued" });
-    fireEvent.click(screen.getByRole("button", { name: "重新启动模拟" }));
-
-    await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(routerPush).toHaveBeenCalledWith(
+        "/plans/plan_new/overview?simulation_error=1",
+      ),
+    );
     expect(createPlanWizard).toHaveBeenCalledTimes(1);
-    expect(createSimulation).toHaveBeenLastCalledWith("plan_new", { runs: 10000 });
   });
 });

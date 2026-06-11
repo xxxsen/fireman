@@ -154,7 +154,21 @@ func (s Services) listPlans(c *gin.Context) {
 		FailErr(c, err)
 		return
 	}
-	OK(c, out)
+	type planListItem struct {
+		service.PlanDetail
+		RebalanceActionableCount int   `json:"rebalance_actionable_count"`
+		HoldingsGapMinor         int64 `json:"holdings_gap_minor"`
+	}
+	items := make([]planListItem, 0, len(out))
+	for _, plan := range out {
+		item := planListItem{PlanDetail: plan}
+		if summary, summaryErr := s.Dashboard.GetPlanSummary(c.Request.Context(), plan.ID); summaryErr == nil {
+			item.RebalanceActionableCount = summary.RebalanceActionableCount
+			item.HoldingsGapMinor = summary.HoldingsGapMinor
+		}
+		items = append(items, item)
+	}
+	OK(c, items)
 }
 
 func (s Services) getPlan(c *gin.Context) {

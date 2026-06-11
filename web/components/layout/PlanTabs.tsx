@@ -4,12 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
-  { segment: "dashboard", label: "仪表盘" },
-  { segment: "parameters", label: "参数配置" },
-  { segment: "scenarios", label: "场景配置" },
-  { segment: "instruments", label: "标的配置" },
-  { segment: "targets", label: "目标配置" },
-  { segment: "rebalance", label: "调仓检查" },
+  { segment: "overview", label: "组合总览" },
+  { segment: "rebalance", label: "调仓工作台" },
+  { segment: "holdings", label: "持仓管理" },
+  { segment: "settings", label: "计划设置" },
 ] as const;
 
 export function PlanTabs({
@@ -32,6 +30,7 @@ export function PlanTabs({
             <Link
               key={tab.segment}
               href={href}
+              aria-current={active ? "page" : undefined}
               onClick={(e) => {
                 if (onNavigate && !onNavigate(href)) {
                   e.preventDefault();

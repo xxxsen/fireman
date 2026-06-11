@@ -1,8 +1,8 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { usePlanEdit } from "../layout";
 import {
@@ -18,7 +18,7 @@ import { validatePercentSum } from "@/lib/percent";
 import type { AllocationScenario } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
 
-export default function ScenariosPage() {
+export function ScenariosContent() {
   const planId = useParams().id as string;
   const qc = useQueryClient();
   const { markDirty, markClean } = usePlanEdit();
@@ -301,7 +301,14 @@ export default function ScenariosPage() {
               </div>
             ))}
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" className="px-3 py-2 text-sm" onClick={() => setEditing(null)}>
+              <button
+                type="button"
+                className="px-3 py-2 text-sm"
+                onClick={() => {
+                  setEditing(null);
+                  markClean();
+                }}
+              >
                 取消
               </button>
               <button
@@ -317,4 +324,13 @@ export default function ScenariosPage() {
       )}
     </div>
   );
+}
+
+export default function ScenariosPage() {
+  const planId = useParams().id as string;
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(`/plans/${planId}/settings?section=scenarios`);
+  }, [planId, router]);
+  return <p className="text-slate-600">正在前往计划设置…</p>;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
@@ -33,7 +33,13 @@ function normalizeSeedInput(raw: string): string | null {
   return raw;
 }
 
-export default function ParametersPage() {
+export function ParametersContent({
+  showAllocation = true,
+  showStale = true,
+}: {
+  showAllocation?: boolean;
+  showStale?: boolean;
+}) {
   const planId = useParams().id as string;
   const { dirty, markDirty, markClean } = usePlanEdit();
   const qc = useQueryClient();
@@ -93,7 +99,7 @@ export default function ParametersPage() {
     mutationFn: async () => {
       if (!params || !planQ.data) throw new Error("未加载");
       let version = planQ.data.config_version;
-      if (allocationDirty) {
+      if (showAllocation && allocationDirty) {
         await updateAllocation(planId, {
           config_version: version,
           asset_class_targets: assetTargets,
@@ -146,7 +152,7 @@ export default function ParametersPage() {
 
   return (
     <div className="space-y-6 pb-20">
-      {stale && <StaleBanner />}
+      {showStale && stale && <StaleBanner />}
       <section className="rounded-lg border border-slate-200 p-4">
         <h2 className="text-lg font-medium">计划信息</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -259,7 +265,7 @@ export default function ParametersPage() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      {showAllocation && <section className="rounded-lg border border-slate-200 p-4">
         <h2 className="text-lg font-medium">资产配置</h2>
         <label className="mt-4 block text-sm">
           场景选择
@@ -331,7 +337,7 @@ export default function ParametersPage() {
             </div>
           ))}
         </div>
-      </section>
+      </section>}
 
       <section className="rounded-lg border border-slate-200 p-4">
         <h2 className="text-lg font-medium">提取与通胀</h2>
@@ -516,7 +522,7 @@ export default function ParametersPage() {
       </section>
 
       <SaveBar
-        dirty={dirty || allocationDirty}
+        dirty={dirty || (showAllocation && allocationDirty)}
         saving={saveMut.isPending}
         error={saveError}
         onSave={() => {
@@ -528,7 +534,10 @@ export default function ParametersPage() {
             setSaveError("存在未分配差额，请勾选「计入现金/其他」或补充持仓。");
             return;
           }
-          if (!acCheck.passed || regionChecks.some((c) => !c.passed)) {
+          if (
+            showAllocation &&
+            (!acCheck.passed || regionChecks.some((c) => !c.passed))
+          ) {
             setSaveError("资产配置权重未通过校验。");
             return;
           }
@@ -541,4 +550,13 @@ export default function ParametersPage() {
       />
     </div>
   );
+}
+
+export default function ParametersPage() {
+  const planId = useParams().id as string;
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(`/plans/${planId}/settings?section=fire-params`);
+  }, [planId, router]);
+  return <p className="text-slate-600">正在前往计划设置…</p>;
 }

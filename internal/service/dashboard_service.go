@@ -17,6 +17,19 @@ type DashboardAllocationBar struct {
 	CurrentWeight float64 `json:"current_weight"`
 }
 
+// DashboardRegionBar is one domestic/foreign allocation bar.
+type DashboardRegionBar struct {
+	Region        string  `json:"region"`
+	TargetWeight  float64 `json:"target_weight"`
+	CurrentWeight float64 `json:"current_weight"`
+}
+
+// PlanDashboardSummary is the lightweight plan-list summary.
+type PlanDashboardSummary struct {
+	RebalanceActionableCount int   `json:"rebalance_actionable_count"`
+	HoldingsGapMinor         int64 `json:"holdings_gap_minor"`
+}
+
 // DashboardDeviation is a top deviation holding line.
 type DashboardDeviation struct {
 	InstrumentName  string  `json:"instrument_name"`
@@ -37,6 +50,7 @@ type DashboardView struct {
 	HoldingsGapMinor int64                         `json:"holdings_gap_minor"`
 	RebalanceSummary domain.RebalanceSummary       `json:"rebalance_summary"`
 	AllocationBars   []DashboardAllocationBar      `json:"allocation_bars"`
+	RegionBars       []DashboardRegionBar          `json:"region_bars"`
 	TopDeviations    []DashboardDeviation          `json:"top_deviations"`
 	DataWarnings     []string                      `json:"data_warnings"`
 	LatestSimulation *SimulationRunView            `json:"latest_simulation,omitempty"`
@@ -142,6 +156,7 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 	}
 
 	bars := buildAllocationBars(targets)
+	regionBars := buildRegionBars(targets)
 	topDev := topDeviations(targets.Holdings, holds, 5)
 	warnings := collectDataWarnings(ctx, s.instRepo, holds)
 
@@ -163,11 +178,37 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 		HoldingsGapMinor: params.TotalAssetsMinor - holdingsSum,
 		RebalanceSummary: reb.Summary,
 		AllocationBars:   bars,
+		RegionBars:       regionBars,
 		TopDeviations:    topDev,
 		DataWarnings:     warnings,
 		LatestSimulation: latest,
 		StressTest:       s.stressSummary(ctx, planID),
 		SensitivityTest:  s.sensitivitySummary(ctx, planID),
+	}, nil
+}
+
+func (s *DashboardService) GetPlanSummary(ctx context.Context, planID string) (PlanDashboardSummary, error) {
+	params, err := s.params.Get(ctx, planID)
+	if err != nil {
+		return PlanDashboardSummary{}, err
+	}
+	holds, err := s.holdings.ListByPlan(ctx, planID)
+	if err != nil {
+		return PlanDashboardSummary{}, err
+	}
+	var holdingsSum int64
+	for _, holding := range holds {
+		if holding.Enabled {
+			holdingsSum += holding.CurrentAmountMinor
+		}
+	}
+	rebalance, err := s.rebalance.GetRebalance(ctx, planID, domain.RebalanceModeFull, 0)
+	if err != nil {
+		return PlanDashboardSummary{}, err
+	}
+	return PlanDashboardSummary{
+		RebalanceActionableCount: rebalance.Summary.ActionableCount,
+		HoldingsGapMinor:         params.TotalAssetsMinor - holdingsSum,
 	}, nil
 }
 
@@ -259,6 +300,33 @@ func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 	return out
 }
 
+func buildRegionBars(targets TargetView) []DashboardRegionBar {
+	type agg struct {
+		target, current float64
+	}
+	byRegion := map[string]*agg{}
+	for _, line := range targets.Holdings {
+		if !line.Enabled {
+			continue
+		}
+		a := byRegion[line.Region]
+		if a == nil {
+			a = &agg{}
+			byRegion[line.Region] = a
+		}
+		a.target += line.PortfolioTargetWeight
+		a.current += line.CurrentWeight
+	}
+	out := make([]DashboardRegionBar, 0, len(byRegion))
+	for region, a := range byRegion {
+		out = append(out, DashboardRegionBar{
+			Region: region, TargetWeight: a.target, CurrentWeight: a.current,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Region < out[j].Region })
+	return out
+}
+
 func topDeviations(lines []domain.HoldingTargetLine, holds []repository.PlanHolding, n int) []DashboardDeviation {
 	nameByHolding := map[string]repository.PlanHolding{}
 	for _, h := range holds {
@@ -273,7 +341,7 @@ func topDeviations(lines []domain.HoldingTargetLine, holds []repository.PlanHold
 		if !l.Enabled {
 			continue
 		}
-		rows = append(rows, row{line: l, abs: absFloat(l.DeviationWeight)})
+		rows = append(rows, row{line: l, abs: absFloat(float64(l.DeviationAmountMinor))})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].abs > rows[j].abs })
 	if len(rows) > n {

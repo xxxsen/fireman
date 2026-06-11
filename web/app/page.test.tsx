@@ -15,6 +15,8 @@ vi.mock("@tanstack/react-query", () => ({
         config_hash: "",
         created_at: 0,
         updated_at: 0,
+        rebalance_actionable_count: 2,
+        holdings_gap_minor: 500_000,
       },
     ],
     isLoading: false,
@@ -28,8 +30,10 @@ describe("HomePage", () => {
     expect(screen.getByRole("heading", { name: /我的 FIRE 计划/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /测试计划/ })).toHaveAttribute(
       "href",
-      "/plans/plan_1/dashboard",
+      "/plans/plan_1/overview",
     );
+    expect(screen.getByText("2 个标的")).toBeInTheDocument();
+    expect(screen.getByText("¥5,000.00")).toBeInTheDocument();
     expect(screen.getByText("查看详情 →")).toBeInTheDocument();
   });
 });

@@ -295,7 +295,7 @@ function AnalysisJobPanel({
   );
 }
 
-export default function AnalysisPage() {
+export function AnalysisContent() {
   const planId = useParams().id as string;
   const router = useRouter();
   const qc = useQueryClient();
@@ -446,8 +446,8 @@ export default function AnalysisPage() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">模拟分析中心</h1>
-        <Link href={`/plans/${planId}/dashboard`} className="text-sm underline">
-          返回仪表盘
+        <Link href={`/plans/${planId}/overview`} className="text-sm underline">
+          返回组合总览
         </Link>
       </div>
 
@@ -602,4 +602,13 @@ export default function AnalysisPage() {
       />
     </div>
   );
+}
+
+export default function AnalysisPage() {
+  const planId = useParams().id as string;
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(`/plans/${planId}/settings?section=simulation`);
+  }, [planId, router]);
+  return <p className="text-slate-600">正在前往计划设置…</p>;
 }
