@@ -202,12 +202,27 @@ export function ParametersContent({
       <section className="rounded-lg border border-slate-200 p-4">
         <h2 className="text-lg font-medium">资金与现金流</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <MoneyInput
-            label="总资产"
-            valueMinor={params.total_assets_minor}
-            currency={planQ.data?.base_currency}
-            onChange={(v) => update("total_assets_minor", v)}
-          />
+          <div>
+            <MoneyInput
+              label="计划基准规模"
+              valueMinor={params.total_assets_minor}
+              currency={planQ.data?.base_currency}
+              onChange={(v) => update("total_assets_minor", v)}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              <MetricHelp termKey="configured_total_assets" />
+            </p>
+            {holdingsSum > params.total_assets_minor + 100 && (
+              <p className="mt-1 text-xs text-amber-700">
+                低于当前持仓 {formatMoney(holdingsSum - params.total_assets_minor, planQ.data?.base_currency)}
+              </p>
+            )}
+            {params.total_assets_minor > holdingsSum + 100 && (
+              <p className="mt-1 text-xs text-amber-700">
+                高于当前持仓 {formatMoney(params.total_assets_minor - holdingsSum, planQ.data?.base_currency)}（规模缺口）
+              </p>
+            )}
+          </div>
           <MoneyInput
             label="当前年储蓄"
             valueMinor={params.annual_savings_minor}
@@ -232,8 +247,17 @@ export function ParametersContent({
         {Math.abs(gap) > 100 && (
           <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
             <p>
-              未分配差额 = {formatMoney(gap, planQ.data?.base_currency)}
-              <MetricHelp termKey="unallocated_gap" />
+              {gap > 0 ? (
+                <>
+                  规模缺口 {formatMoney(gap, planQ.data?.base_currency)}
+                  <MetricHelp termKey="unallocated_gap" />
+                </>
+              ) : (
+                <>
+                  规模超出 {formatMoney(Math.abs(gap), planQ.data?.base_currency)}
+                  <MetricHelp termKey="scale_gap_over" />
+                </>
+              )}
             </p>
             {gap > 0 ? (
               <label className="mt-2 flex items-center gap-2">
@@ -242,10 +266,10 @@ export function ParametersContent({
                   checked={gapAction === "cash"}
                   onChange={(e) => setGapAction(e.target.checked ? "cash" : "")}
                 />
-                计入现金/其他（保存前请补充持仓或调整总资产）
+                计入现金/其他（保存前请补充持仓或下调计划基准规模）
               </label>
             ) : (
-              <p className="mt-1 text-red-700">持仓金额超过总资产，无法保存。</p>
+              <p className="mt-1 text-red-700">持仓合计超过计划基准规模，无法保存。</p>
             )}
           </div>
         )}
@@ -527,11 +551,11 @@ export function ParametersContent({
         error={saveError}
         onSave={() => {
           if (gapBlocking) {
-            setSaveError("持仓金额超过总资产，请先调整标的当前金额或总资产。");
+            setSaveError("持仓合计超过计划基准规模，请先调整标的当前金额或计划基准规模。");
             return;
           }
           if (gapNeedsCash) {
-            setSaveError("存在未分配差额，请勾选「计入现金/其他」或补充持仓。");
+            setSaveError("存在规模缺口，请勾选「计入现金/其他」、补充持仓或下调计划基准规模。");
             return;
           }
           if (

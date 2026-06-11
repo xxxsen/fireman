@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { PercentInput } from "@/components/ui/PercentInput";
@@ -21,6 +21,9 @@ const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
 export function AllocationSettings() {
   const planId = useParams().id as string;
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = searchParams.get("return");
   const queryClient = useQueryClient();
   const { markDirty, markClean } = usePlanEdit();
   const [assetTargets, setAssetTargets] = useState<AssetClassTarget[]>([]);
@@ -94,6 +97,9 @@ export function AllocationSettings() {
       setSaveError(null);
       for (const key of ["plan", "parameters", "allocation", "targets", "dashboard"]) {
         void queryClient.invalidateQueries({ queryKey: [key, planId] });
+      }
+      if (returnTo === "asset-refresh") {
+        router.push(`/plans/${planId}/asset-refresh`);
       }
     },
     onError: (error) =>

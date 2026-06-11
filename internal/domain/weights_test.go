@@ -80,6 +80,36 @@ func TestValidateAllocationWeights(t *testing.T) {
 	}
 }
 
+func TestHoldingsTotalMinor(t *testing.T) {
+	holdings := []HoldingWeightInput{
+		{Enabled: true, CurrentAmountMinor: 100},
+		{Enabled: false, CurrentAmountMinor: 50},
+		{Enabled: true, CurrentAmountMinor: 200},
+	}
+	if got := HoldingsTotalMinor(holdings); got != 300 {
+		t.Fatalf("got %d want 300", got)
+	}
+}
+
+func TestStructuralCurrentWeight(t *testing.T) {
+	got := StructuralCurrentWeight(250, 1000)
+	if got != 0.25 {
+		t.Fatalf("got %v want 0.25", got)
+	}
+	if StructuralCurrentWeight(100, 0) != 0 {
+		t.Fatal("expected 0 when holdings total is 0")
+	}
+}
+
+func TestScaleGapMinor(t *testing.T) {
+	if got := ScaleGapMinor(500_000_00, 450_000_00); got != 50_000_00 {
+		t.Fatalf("got %d want %d", got, 50_000_00)
+	}
+	if got := ScaleGapMinor(400_000_00, 450_000_00); got != -50_000_00 {
+		t.Fatalf("got %d want %d", got, -50_000_00)
+	}
+}
+
 func TestValidateHoldingGroupWeights(t *testing.T) {
 	alloc := testAlloc()
 	holdings := []HoldingWeightInput{

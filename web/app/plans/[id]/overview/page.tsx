@@ -9,11 +9,13 @@ import { MetricHelp } from "@/components/ui/MetricHelp";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { getDashboard } from "@/lib/api/dashboard";
 import { formatMoney, formatPercent } from "@/lib/format";
+import { isSignificantScaleGap, SCALE_GAP_TOLERANCE_MINOR } from "@/lib/scale-gap";
 
 export default function OverviewPage() {
   const planId = useParams().id as string;
   const searchParams = useSearchParams();
   const pendingJobId = searchParams.get("job_id");
+  const assetRefreshed = searchParams.get("asset_refreshed") === "1";
   const simulationStartFailed = searchParams.get("simulation_error") === "1";
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["dashboard", planId],
@@ -36,6 +38,12 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
+      {assetRefreshed && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          账户资产已更新。
+        </div>
+      )}
+
       {!data.weight_checks.passed && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {failedChecks.map((check) => check.message).join("；")}
@@ -76,7 +84,10 @@ export default function OverviewPage() {
       <section className="rounded-lg bg-slate-100 px-5 py-4">
         <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <dt className="text-sm text-slate-500">总资产</dt>
+            <dt className="flex items-center text-sm text-slate-500">
+              计划基准规模
+              <MetricHelp termKey="configured_total_assets" />
+            </dt>
             <dd className="mt-1 text-lg font-semibold">
               {formatMoney(data.parameters.total_assets_minor, data.plan.base_currency)}
             </dd>
@@ -92,15 +103,32 @@ export default function OverviewPage() {
           </div>
           <div>
             <dt className="flex items-center text-sm text-slate-500">
-              未分配差额
-              <MetricHelp termKey="unallocated_gap" />
+              {data.holdings_gap_minor > SCALE_GAP_TOLERANCE_MINOR
+                ? "规模超出"
+                : data.holdings_gap_minor < -SCALE_GAP_TOLERANCE_MINOR
+                  ? "规模缺口"
+                  : "规模一致"}
+              <MetricHelp
+                termKey={
+                  data.holdings_gap_minor > SCALE_GAP_TOLERANCE_MINOR
+                    ? "scale_gap_over"
+                    : data.holdings_gap_minor < -SCALE_GAP_TOLERANCE_MINOR
+                      ? "unallocated_gap"
+                      : undefined
+                }
+              />
             </dt>
             <dd
               className={`mt-1 text-lg font-semibold ${
-                data.holdings_gap_minor !== 0 ? "text-amber-700" : ""
+                isSignificantScaleGap(data.holdings_gap_minor) ? "text-amber-700" : ""
               }`}
             >
-              {formatMoney(data.holdings_gap_minor, data.plan.base_currency)}
+              {!isSignificantScaleGap(data.holdings_gap_minor)
+                ? "—"
+                : formatMoney(
+                    Math.abs(data.holdings_gap_minor),
+                    data.plan.base_currency,
+                  )}
             </dd>
           </div>
           <div>
@@ -154,8 +182,8 @@ export default function OverviewPage() {
 
           <section className="rounded-lg border border-slate-200 p-4">
             <h2 className="flex items-center text-lg font-medium">
-              偏离最大
-              <MetricHelp termKey="deviation_amount" />
+              结构偏离最大
+              <MetricHelp termKey="structural_gap_row" />
             </h2>
             {data.top_deviations.length > 0 ? (
               <ul className="mt-3 divide-y divide-slate-100">
@@ -207,10 +235,20 @@ export default function OverviewPage() {
           查看调仓建议
         </Link>
         <Link
+          href={
+            isSignificantScaleGap(data.holdings_gap_minor)
+              ? `/plans/${planId}/asset-refresh?reason=scale`
+              : `/plans/${planId}/asset-refresh`
+          }
+          className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
+        >
+          更新账户资产
+        </Link>
+        <Link
           href={`/plans/${planId}/holdings`}
           className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
         >
-          更新持仓
+          持仓管理
         </Link>
         <button
           type="button"

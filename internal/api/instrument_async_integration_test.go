@@ -119,6 +119,7 @@ func assertWizardNotReady(t *testing.T, client *http.Client, baseURL, instrument
 		"selected_scenario_id":      "scn_builtin_near_fire",
 		"apply_unallocated_to_cash": true,
 		"parameters":                wizardParams(1_000_000_00),
+		"region_targets":            wizardRegionTargets(),
 		"holdings": []map[string]any{
 			{"instrument_id": instrumentID, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 1_000_000_00, "sort_order": 1},
 		},

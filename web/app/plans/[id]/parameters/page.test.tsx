@@ -71,6 +71,8 @@ vi.mock("@/lib/api/plans", () => ({
   updateParameters: (...args: unknown[]) => updateParameters(...args),
 }));
 
+const holdingsSumMinor = vi.hoisted(() => ({ value: 1_000_000_00 }));
+
 vi.mock("@/lib/api/holdings", () => ({
   getHoldings: () =>
     Promise.resolve({
@@ -83,7 +85,7 @@ vi.mock("@/lib/api/holdings", () => ({
           asset_class: "equity",
           region: "domestic",
           weight_within_group: 1,
-          current_amount_minor: 1_000_000_00,
+          current_amount_minor: holdingsSumMinor.value,
           simulation_snapshot_id: "snap_1",
           sort_order: 1,
         },
@@ -116,6 +118,7 @@ import { ParametersContent as ParametersPage } from "./page";
 
 describe("ParametersPage strategy enums", () => {
   beforeEach(() => {
+    holdingsSumMinor.value = 1_000_000_00;
     updateParameters.mockReset();
     updateParameters.mockResolvedValue({});
   });
@@ -141,6 +144,20 @@ describe("ParametersPage strategy enums", () => {
     };
     expect(req.parameters.withdrawal_type).toBe("fixed_portfolio");
     expect(req.parameters.inflation_mode).toBe("random_ar1");
+  });
+
+  it("shows scale gap wording when plan baseline exceeds holdings (§6.4)", async () => {
+    holdingsSumMinor.value = 400_000_00;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("资金与现金流");
+    expect(screen.getAllByText(/规模缺口/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/未分配差额/)).not.toBeInTheDocument();
   });
 
   it("sends max seed as string without precision loss", async () => {

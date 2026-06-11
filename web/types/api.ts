@@ -140,6 +140,12 @@ export interface HoldingTargetLine {
   current_weight: number;
   deviation_amount_minor: number;
   deviation_weight: number;
+  structural_current_weight: number;
+  structural_gap_weight: number;
+  structural_gap_amount_minor: number;
+  structural_target_amount_minor: number;
+  plan_gap_weight: number;
+  plan_gap_amount_minor: number;
   simulation_snapshot_id: string;
   sort_order: number;
 }
@@ -156,13 +162,20 @@ export interface TargetView {
 export interface RebalanceLine extends HoldingTargetLine {
   action: string;
   suggested_trade_minor: number;
+  plan_scale_action: string;
+  plan_scale_suggested_trade_minor: number;
 }
 
 export interface RebalanceSummary {
   total_assets_minor: number;
+  configured_total_minor: number;
+  holdings_total_minor: number;
+  scale_gap_minor: number;
   target_total_minor: number;
   current_total_minor: number;
   actionable_count: number;
+  structural_actionable_count: number;
+  plan_scale_actionable_count: number;
   estimated_trade_minor: number;
   estimated_cost_minor: number;
 }
@@ -172,6 +185,56 @@ export interface RebalanceResult {
   summary: RebalanceSummary;
   lines: RebalanceLine[];
   weight_checks: WeightValidationResult;
+}
+
+export interface RebalanceDraft {
+  id: string;
+  plan_id: string;
+  status: string;
+  config_version: number;
+  baseline_holdings_total_minor: number;
+  created_at: number;
+  updated_at: number;
+  committed_at?: number;
+  note?: string;
+}
+
+export interface RebalanceDraftLine {
+  id: string;
+  draft_id: string;
+  holding_id: string;
+  instrument_id: string;
+  instrument_code?: string;
+  instrument_name?: string;
+  baseline_current_minor: number;
+  planned_current_minor: number;
+  frozen_target_minor: number;
+  frozen_gap_minor: number;
+  frozen_gap_weight: number;
+  frozen_action: string;
+  frozen_suggested_trade_minor: number;
+  recommended_package_delta_minor: number;
+  last_saved_at?: number;
+}
+
+export interface RebalanceDraftEvent {
+  id: string;
+  draft_id: string;
+  seq: number;
+  event_type: string;
+  payload_json: string;
+  created_at: number;
+}
+
+export interface RebalanceDraftDetail {
+  draft: RebalanceDraft;
+  lines: RebalanceDraftLine[];
+  events: RebalanceDraftEvent[];
+  fund_pool: {
+    released_minor: number;
+    used_minor: number;
+    net_minor: number;
+  };
 }
 
 export interface Instrument {

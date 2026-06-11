@@ -79,3 +79,14 @@ export function createPortfolioSnapshot(
 ): Promise<unknown> {
   return apiPost(`/api/v1/plans/${planId}/portfolio-snapshots`, body);
 }
+
+/** Sync plan benchmark total_assets_minor to current holdings sum. */
+export function syncPlanTotalAssets(
+  planId: string,
+  body: {
+    config_version: number;
+    parameters: PlanParameters;
+  },
+): Promise<{ parameters: PlanParameters; cash_flows: PlanCashFlow[] }> {
+  return updateParameters(planId, body);
+}

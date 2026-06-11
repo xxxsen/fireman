@@ -168,7 +168,11 @@ func (s *SystemService) ExportRebalanceCSV(ctx context.Context, planID string) (
 	}
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"instrument_id", "action", "suggested_trade_minor", "deviation_weight", "portfolio_target_weight", "current_weight"})
+	_ = w.Write([]string{
+		"instrument_id", "structural_action", "structural_suggested_trade_minor",
+		"structural_gap_weight", "portfolio_target_weight", "structural_current_weight",
+		"plan_scale_action", "plan_scale_suggested_trade_minor",
+	})
 	for _, line := range reb.Lines {
 		if !line.Enabled {
 			continue
@@ -177,9 +181,11 @@ func (s *SystemService) ExportRebalanceCSV(ctx context.Context, planID string) (
 			line.InstrumentID,
 			line.Action,
 			fmt.Sprintf("%d", line.SuggestedTradeMinor),
-			fmt.Sprintf("%.6f", line.DeviationWeight),
+			fmt.Sprintf("%.6f", line.StructuralGapWeight),
 			fmt.Sprintf("%.6f", line.PortfolioTargetWeight),
-			fmt.Sprintf("%.6f", line.CurrentWeight),
+			fmt.Sprintf("%.6f", line.StructuralCurrentWeight),
+			line.PlanScaleAction,
+			fmt.Sprintf("%d", line.PlanScaleSuggestedTradeMinor),
 		})
 	}
 	w.Flush()

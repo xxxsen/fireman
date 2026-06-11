@@ -119,6 +119,13 @@ func TestComputeNewCashRebalance(t *testing.T) {
 	if buySum == 0 {
 		t.Fatal("expected some buy suggestions")
 	}
+	if res.Summary.StructuralActionableCount != 0 {
+		t.Fatalf("new_cash structural_actionable=%d want 0", res.Summary.StructuralActionableCount)
+	}
+	if res.Summary.PlanScaleActionableCount != res.Summary.ActionableCount {
+		t.Fatalf("plan_scale actionable mismatch: %d vs %d",
+			res.Summary.PlanScaleActionableCount, res.Summary.ActionableCount)
+	}
 }
 
 func abs64(v int64) int64 {
@@ -126,4 +133,188 @@ func abs64(v int64) int64 {
 		return -v
 	}
 	return v
+}
+
+func bondOnlyAlloc() AllocationWeights {
+	return AllocationWeights{
+		AssetClass: map[string]float64{
+			AssetClassEquity: 0,
+			AssetClassBond:   1,
+			AssetClassCash:   0,
+		},
+		Region: map[string]map[string]float64{
+			AssetClassBond: {RegionDomestic: 1, RegionForeign: 0},
+		},
+	}
+}
+
+func equityBondAlloc() AllocationWeights {
+	return AllocationWeights{
+		AssetClass: map[string]float64{
+			AssetClassEquity: 0.6,
+			AssetClassBond:   0.4,
+			AssetClassCash:   0,
+		},
+		Region: map[string]map[string]float64{
+			AssetClassEquity: {RegionDomestic: 1, RegionForeign: 0},
+			AssetClassBond:   {RegionDomestic: 1, RegionForeign: 0},
+		},
+	}
+}
+
+// A1: 450w plan, 500w proportional bond holding → structural hold, scale +50w.
+func TestComputeFullRebalance_A1_ScaleOverProportional(t *testing.T) {
+	alloc := bondOnlyAlloc()
+	holdings := []HoldingWeightInput{
+		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 500_000_00},
+	}
+	meta := []struct {
+		ID, InstrumentID, SimulationSnapshotID string
+		SortOrder                              int
+	}{{"h1", "ins1", "snap1", 1}}
+
+	res := ComputeFullRebalance(alloc, holdings, meta, 450_000_00, 0.03, 0)
+	if res.Summary.ScaleGapMinor != 50_000_00 {
+		t.Fatalf("scale_gap=%d want %d", res.Summary.ScaleGapMinor, 50_000_00)
+	}
+	if res.Summary.ActionableCount != 0 {
+		t.Fatalf("actionable=%d want 0", res.Summary.ActionableCount)
+	}
+	if len(res.Lines) != 1 || res.Lines[0].Action != RebalanceActionHold {
+		t.Fatalf("expected structural hold, got %+v", res.Lines)
+	}
+	if res.Lines[0].PlanScaleAction != RebalanceActionDecrease {
+		t.Fatalf("plan_scale_action=%q want decrease", res.Lines[0].PlanScaleAction)
+	}
+}
+
+// B1: 450w plan, 400w proportional bond holding → structural hold, scale -50w.
+func TestComputeFullRebalance_B1_ScaleUnderProportional(t *testing.T) {
+	alloc := bondOnlyAlloc()
+	holdings := []HoldingWeightInput{
+		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 400_000_00},
+	}
+	meta := []struct {
+		ID, InstrumentID, SimulationSnapshotID string
+		SortOrder                              int
+	}{{"h1", "ins1", "snap1", 1}}
+
+	res := ComputeFullRebalance(alloc, holdings, meta, 450_000_00, 0.03, 0)
+	if res.Summary.ScaleGapMinor != -50_000_00 {
+		t.Fatalf("scale_gap=%d want %d", res.Summary.ScaleGapMinor, -50_000_00)
+	}
+	if res.Summary.ActionableCount != 0 {
+		t.Fatalf("actionable=%d want 0", res.Summary.ActionableCount)
+	}
+	if len(res.Lines) != 1 || res.Lines[0].Action != RebalanceActionHold {
+		t.Fatalf("expected structural hold, got %+v", res.Lines)
+	}
+	if res.Lines[0].PlanScaleAction != RebalanceActionIncrease {
+		t.Fatalf("plan_scale_action=%q want increase", res.Lines[0].PlanScaleAction)
+	}
+}
+
+// A2: 450w 60/40, 500w holdings 70/30 → structural rotation, scale +50w.
+func TestComputeFullRebalance_A2_StructuralRotationScaleOver(t *testing.T) {
+	alloc := equityBondAlloc()
+	holdings := []HoldingWeightInput{
+		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 350_000_00},
+		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 150_000_00},
+	}
+	meta := []struct {
+		ID, InstrumentID, SimulationSnapshotID string
+		SortOrder                              int
+	}{
+		{"h1", "ins1", "snap1", 1},
+		{"h2", "ins2", "snap2", 2},
+	}
+
+	res := ComputeFullRebalance(alloc, holdings, meta, 450_000_00, 0.03, 0)
+	if res.Summary.ScaleGapMinor != 50_000_00 {
+		t.Fatalf("scale_gap=%d want %d", res.Summary.ScaleGapMinor, 50_000_00)
+	}
+	if res.Summary.ActionableCount != 2 {
+		t.Fatalf("actionable=%d want 2", res.Summary.ActionableCount)
+	}
+	actions := map[string]string{}
+	for _, line := range res.Lines {
+		actions[line.AssetClass] = line.Action
+	}
+	if actions[AssetClassEquity] != RebalanceActionDecrease {
+		t.Fatalf("equity action=%q want decrease", actions[AssetClassEquity])
+	}
+	if actions[AssetClassBond] != RebalanceActionIncrease {
+		t.Fatalf("bond action=%q want increase", actions[AssetClassBond])
+	}
+}
+
+// B2: 450w 60/40, 400w holdings 70/30 → structural rotation, scale -50w.
+func TestComputeFullRebalance_B2_StructuralRotationScaleUnder(t *testing.T) {
+	alloc := equityBondAlloc()
+	holdings := []HoldingWeightInput{
+		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 280_000_00},
+		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 120_000_00},
+	}
+	meta := []struct {
+		ID, InstrumentID, SimulationSnapshotID string
+		SortOrder                              int
+	}{
+		{"h1", "ins1", "snap1", 1},
+		{"h2", "ins2", "snap2", 2},
+	}
+
+	res := ComputeFullRebalance(alloc, holdings, meta, 450_000_00, 0.03, 0)
+	if res.Summary.ScaleGapMinor != -50_000_00 {
+		t.Fatalf("scale_gap=%d want %d", res.Summary.ScaleGapMinor, -50_000_00)
+	}
+	if res.Summary.ActionableCount != 2 {
+		t.Fatalf("actionable=%d want 2", res.Summary.ActionableCount)
+	}
+	actions := map[string]string{}
+	for _, line := range res.Lines {
+		actions[line.AssetClass] = line.Action
+	}
+	if actions[AssetClassEquity] != RebalanceActionDecrease {
+		t.Fatalf("equity action=%q want decrease", actions[AssetClassEquity])
+	}
+	if actions[AssetClassBond] != RebalanceActionIncrease {
+		t.Fatalf("bond action=%q want increase", actions[AssetClassBond])
+	}
+}
+
+// C1: 450w plan, 450w 60/40 holdings on target → structural hold, scale ~0.
+func TestComputeFullRebalance_C1_ScaleAligned(t *testing.T) {
+	alloc := equityBondAlloc()
+	holdings := []HoldingWeightInput{
+		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 270_000_00},
+		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 180_000_00},
+	}
+	meta := []struct {
+		ID, InstrumentID, SimulationSnapshotID string
+		SortOrder                              int
+	}{
+		{"h1", "ins1", "snap1", 1},
+		{"h2", "ins2", "snap2", 2},
+	}
+
+	res := ComputeFullRebalance(alloc, holdings, meta, 450_000_00, 0.03, 0)
+	if res.Summary.ScaleGapMinor != 0 {
+		t.Fatalf("scale_gap=%d want 0", res.Summary.ScaleGapMinor)
+	}
+	if res.Summary.ActionableCount != 0 {
+		t.Fatalf("actionable=%d want 0", res.Summary.ActionableCount)
+	}
+	for _, line := range res.Lines {
+		if line.Action != RebalanceActionHold {
+			t.Fatalf("expected hold for %s, got %q", line.HoldingID, line.Action)
+		}
+	}
 }

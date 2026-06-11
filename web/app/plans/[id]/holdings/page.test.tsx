@@ -67,23 +67,14 @@ vi.mock("@/lib/api/holdings", () => ({
   getTargets: () =>
     Promise.resolve({
       asset_class_targets: [{ asset_class: "equity", weight: 1 }],
-      holdings: [
-        {
-          holding_id: "holding_1",
-          enabled: true,
-          asset_class: "equity",
-          region: "domestic",
-          portfolio_target_weight: 1,
-          target_amount_minor: 100_000_00,
-        },
-      ],
+      holdings: [],
     }),
   updateHoldings: vi.fn(),
   syncHoldingSnapshot: vi.fn(),
 }));
 
 describe("HoldingsPage", () => {
-  it("groups holdings and shows target and gap amounts", async () => {
+  it("shows summary header without target/gap columns", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -93,10 +84,9 @@ describe("HoldingsPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("权益", { selector: "h2" })).toBeInTheDocument();
-    expect(screen.getByText("国内", { selector: "h3" })).toBeInTheDocument();
-    expect(screen.getByText("全组合目标 100%")).toBeInTheDocument();
-    expect(screen.getByText("¥100,000.00")).toBeInTheDocument();
-    expect(screen.getByText("¥20,000.00")).toBeInTheDocument();
+    expect(await screen.findByText("更新账户资产")).toBeInTheDocument();
+    expect(screen.getByText("查看调仓工作台 →")).toBeInTheDocument();
+    expect(screen.queryByText("结构还差")).not.toBeInTheDocument();
+    expect(screen.queryByText("目标金额")).not.toBeInTheDocument();
   });
 });

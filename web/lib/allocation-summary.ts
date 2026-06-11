@@ -22,7 +22,7 @@ export interface AllocationSummaryRow {
   gap_weight: number;
 }
 
-function aggregate(
+function aggregateStructural(
   key: string,
   level: AllocationSummaryRow["level"],
   assetClass: string,
@@ -30,9 +30,11 @@ function aggregate(
   lines: HoldingTargetLine[],
 ): AllocationSummaryRow {
   const targetWeight = lines.reduce((sum, line) => sum + line.portfolio_target_weight, 0);
-  const currentWeight = lines.reduce((sum, line) => sum + line.current_weight, 0);
-  const targetAmount = lines.reduce((sum, line) => sum + line.target_amount_minor, 0);
+  const currentWeight = lines.reduce((sum, line) => sum + line.structural_current_weight, 0);
+  const targetAmount = lines.reduce((sum, line) => sum + line.structural_target_amount_minor, 0);
   const currentAmount = lines.reduce((sum, line) => sum + line.current_amount_minor, 0);
+  const gapAmount = lines.reduce((sum, line) => sum + line.structural_gap_amount_minor, 0);
+  const gapWeight = lines.reduce((sum, line) => sum + line.structural_gap_weight, 0);
   return {
     key,
     level,
@@ -42,8 +44,8 @@ function aggregate(
     current_weight: currentWeight,
     target_amount_minor: targetAmount,
     current_amount_minor: currentAmount,
-    gap_amount_minor: targetAmount - currentAmount,
-    gap_weight: targetWeight - currentWeight,
+    gap_amount_minor: gapAmount,
+    gap_weight: gapWeight,
   };
 }
 
@@ -60,7 +62,7 @@ export function buildAllocationSummary(targets: TargetView): AllocationSummaryRo
 
   for (const assetClass of activeClasses) {
     const classLines = enabled.filter((line) => line.asset_class === assetClass);
-    const classRow = aggregate(
+    const classRow = aggregateStructural(
       assetClass,
       "asset_class",
       assetClass,
@@ -82,7 +84,7 @@ export function buildAllocationSummary(targets: TargetView): AllocationSummaryRo
       const regionLines = classLines.filter(
         (line) => line.region === regionTarget.region,
       );
-      const regionRow = aggregate(
+      const regionRow = aggregateStructural(
         `${assetClass}:${regionTarget.region}`,
         "region",
         assetClass,
@@ -128,6 +130,9 @@ export interface RebalanceWorkspaceRow {
   gap_weight: number;
   action?: string;
   suggested_trade_minor?: number;
+  plan_scale_action?: string;
+  plan_scale_suggested_trade_minor?: number;
+  plan_gap_amount_minor?: number;
 }
 
 function summaryToWorkspaceRow(row: AllocationSummaryRow): RebalanceWorkspaceRow {
@@ -161,13 +166,16 @@ function holdingToWorkspaceRow(line: RebalanceLine): RebalanceWorkspaceRow {
     instrument_code: line.instrument_code,
     holding_id: line.holding_id,
     target_weight: line.portfolio_target_weight,
-    current_weight: line.current_weight,
-    target_amount_minor: line.target_amount_minor,
+    current_weight: line.structural_current_weight,
+    target_amount_minor: line.structural_target_amount_minor,
     current_amount_minor: line.current_amount_minor,
-    gap_amount_minor: line.deviation_amount_minor,
-    gap_weight: line.deviation_weight,
+    gap_amount_minor: line.structural_gap_amount_minor,
+    gap_weight: line.structural_gap_weight,
     action: line.action,
     suggested_trade_minor: line.suggested_trade_minor,
+    plan_scale_action: line.plan_scale_action,
+    plan_scale_suggested_trade_minor: line.plan_scale_suggested_trade_minor,
+    plan_gap_amount_minor: line.plan_gap_amount_minor,
   };
 }
 

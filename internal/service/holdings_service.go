@@ -66,7 +66,34 @@ func (s *HoldingsService) GetHoldings(ctx context.Context, planID string) ([]rep
 	return s.holdings.ListByPlan(ctx, planID)
 }
 
+type preparedHoldingsUpdate struct {
+	built        []repository.PlanHolding
+	pendingSnaps []pendingHoldingSnap
+}
+
+type pendingHoldingSnap struct {
+	snap repository.SimulationSnapshot
+	skip bool
+}
+
 func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req HoldingsUpdateRequest) ([]repository.PlanHolding, error) {
+	prep, err := s.prepareHoldingsUpdate(ctx, planID, req)
+	if err != nil {
+		return nil, err
+	}
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		return s.applyHoldingsUpdateTx(ctx, tx, planID, req.ConfigVersion, prep)
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrVersionConflict) {
+			return nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+		}
+		return nil, err
+	}
+	return s.holdings.ListByPlan(ctx, planID)
+}
+
+func (s *HoldingsService) prepareHoldingsUpdate(ctx context.Context, planID string, req HoldingsUpdateRequest) (*preparedHoldingsUpdate, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
@@ -87,13 +114,8 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 		existingSnap[h.InstrumentID] = h.SimulationSnapshotID
 	}
 
-	type pendingSnap struct {
-		snap repository.SimulationSnapshot
-		skip bool
-	}
-	pendingSnaps := make([]pendingSnap, 0)
-
-	var built []repository.PlanHolding
+	pendingSnaps := make([]pendingHoldingSnap, 0)
+	built := make([]repository.PlanHolding, 0, len(req.Holdings))
 	for _, item := range req.Holdings {
 		if item.AssetClass != nil || item.Region != nil || item.SimulationSnapshotID != nil {
 			return nil, newErr("holding_fields_read_only", "asset_class, region and simulation_snapshot_id are read-only", nil)
@@ -119,7 +141,7 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 				return nil, MapSnapshotError(err)
 			}
 			snapID = snap.ID
-			pendingSnaps = append(pendingSnaps, pendingSnap{
+			pendingSnaps = append(pendingSnaps, pendingHoldingSnap{
 				snap: snap,
 				skip: snap.ID == repository.SystemCashSnapshotID,
 			})
@@ -151,27 +173,21 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string, req
 		}
 		return nil, newErr("plan_weights_invalid", msg, map[string]any{"checks": check.Checks})
 	}
+	return &preparedHoldingsUpdate{built: built, pendingSnaps: pendingSnaps}, nil
+}
 
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		for _, ps := range pendingSnaps {
-			if ps.skip {
-				continue
-			}
-			if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, ps.snap); err != nil {
-				return err
-			}
+func (s *HoldingsService) applyHoldingsUpdateTx(ctx context.Context, tx *sql.Tx, planID string, configVersion int, prep *preparedHoldingsUpdate) error {
+	for _, ps := range prep.pendingSnaps {
+		if ps.skip {
+			continue
 		}
-		if err := s.holdings.Replace(ctx, tx, planID, built); err != nil {
+		if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, ps.snap); err != nil {
 			return err
 		}
-		_, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion)
-		return err
-	})
-	if err != nil {
-		if errors.Is(err, repository.ErrVersionConflict) {
-			return nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
-		}
-		return nil, err
 	}
-	return s.holdings.ListByPlan(ctx, planID)
+	if err := s.holdings.Replace(ctx, tx, planID, prep.built); err != nil {
+		return err
+	}
+	_, err := s.plans.BumpVersionTx(ctx, tx, planID, configVersion)
+	return err
 }

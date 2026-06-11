@@ -175,7 +175,7 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 		Parameters:       params,
 		WeightChecks:     targets.WeightChecks,
 		HoldingsSumMinor: holdingsSum,
-		HoldingsGapMinor: params.TotalAssetsMinor - holdingsSum,
+		HoldingsGapMinor: holdingsSum - params.TotalAssetsMinor,
 		RebalanceSummary: reb.Summary,
 		AllocationBars:   bars,
 		RegionBars:       regionBars,
@@ -208,7 +208,7 @@ func (s *DashboardService) GetPlanSummary(ctx context.Context, planID string) (P
 	}
 	return PlanDashboardSummary{
 		RebalanceActionableCount: rebalance.Summary.ActionableCount,
-		HoldingsGapMinor:         params.TotalAssetsMinor - holdingsSum,
+		HoldingsGapMinor:         holdingsSum - params.TotalAssetsMinor,
 	}, nil
 }
 
@@ -288,7 +288,7 @@ func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 			byClass[line.AssetClass] = a
 		}
 		a.target += line.PortfolioTargetWeight
-		a.current += line.CurrentWeight
+		a.current += line.StructuralCurrentWeight
 	}
 	out := make([]DashboardAllocationBar, 0, len(byClass))
 	for ac, a := range byClass {
@@ -315,7 +315,7 @@ func buildRegionBars(targets TargetView) []DashboardRegionBar {
 			byRegion[line.Region] = a
 		}
 		a.target += line.PortfolioTargetWeight
-		a.current += line.CurrentWeight
+		a.current += line.StructuralCurrentWeight
 	}
 	out := make([]DashboardRegionBar, 0, len(byRegion))
 	for region, a := range byRegion {
@@ -341,7 +341,11 @@ func topDeviations(lines []domain.HoldingTargetLine, holds []repository.PlanHold
 		if !l.Enabled {
 			continue
 		}
-		rows = append(rows, row{line: l, abs: absFloat(float64(l.DeviationAmountMinor))})
+		absAmt := absFloat(float64(l.StructuralGapAmountMinor))
+		if absAmt <= 100 {
+			continue
+		}
+		rows = append(rows, row{line: l, abs: absAmt})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].abs > rows[j].abs })
 	if len(rows) > n {
@@ -353,10 +357,10 @@ func topDeviations(lines []domain.HoldingTargetLine, holds []repository.PlanHold
 		out[i] = DashboardDeviation{
 			InstrumentName:  meta.InstrumentName,
 			InstrumentCode:  meta.InstrumentCode,
-			DeviationWeight: r.line.DeviationWeight,
-			DeviationMinor:  r.line.DeviationAmountMinor,
+			DeviationWeight: r.line.StructuralGapWeight,
+			DeviationMinor:  r.line.StructuralGapAmountMinor,
 			PortfolioWeight: r.line.PortfolioTargetWeight,
-			CurrentWeight:   r.line.CurrentWeight,
+			CurrentWeight:   r.line.StructuralCurrentWeight,
 		}
 	}
 	return out

@@ -21,6 +21,8 @@ type Services struct {
 	Holdings         *service.HoldingsService
 	Targets          *service.TargetService
 	Rebalance        *service.RebalanceService
+	RebalanceDrafts  *service.RebalanceDraftService
+	AssetRefresh     *service.AssetRefreshService
 	Instruments      *service.InstrumentService
 	HoldingSnapshots *service.HoldingSnapshotService
 	Simulations      *service.SimulationService
@@ -55,6 +57,8 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	eventHub := jobs.NewEventHub()
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
+	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, instRepo, marketRepo)
+	rebalanceDraftSvc := service.NewRebalanceDraftService(db, plans, repository.NewRebalanceDraftRepo(db), holdings, holdingsSvc, rebalanceSvc)
 	simSvc := service.NewSimulationService(db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, hash)
 	stressSvc := service.NewStressService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	sensitivitySvc := service.NewSensitivityService(db, plans, jobRepo, analysisRepo, simSvc, hash)
@@ -67,9 +71,11 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	return Services{
 		Plans:            planSvc,
 		Allocation:       service.NewAllocationService(db, plans, alloc, scenario),
-		Holdings:         service.NewHoldingsService(db, plans, holdings, snapSvc, instRepo, marketRepo),
+		Holdings:         holdingsSvc,
 		Targets:          targetSvc,
 		Rebalance:        rebalanceSvc,
+		RebalanceDrafts:  rebalanceDraftSvc,
+		AssetRefresh:     service.NewAssetRefreshService(db, plans, params, holdingsSvc, repository.NewAssetRefreshEventRepo(db)),
 		Instruments:      service.NewInstrumentService(db, instRepo, marketRepo, annualRepo, jobRepo, repository.NewResolutionTicketRepo(db), provider),
 		HoldingSnapshots: service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
 		Simulations:      simSvc,
@@ -102,6 +108,7 @@ func (s Services) registerPlanRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans/:plan_id/portfolio-snapshots", s.createPortfolioSnapshot)
 	rg.POST("/plans/:plan_id/apply-scenario", s.applyScenario)
 	rg.GET("/plans/:plan_id/dashboard", s.getDashboard)
+	s.registerRebalanceDraftRoutes(rg)
 }
 
 func (s Services) getDashboard(c *gin.Context) {

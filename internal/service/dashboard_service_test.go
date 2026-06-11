@@ -11,15 +11,15 @@ func TestBuildRegionBars(t *testing.T) {
 		Holdings: []domain.HoldingTargetLine{
 			{
 				Enabled: true, Region: domain.RegionDomestic,
-				PortfolioTargetWeight: 0.35, CurrentWeight: 0.30,
+				PortfolioTargetWeight: 0.35, StructuralCurrentWeight: 0.30,
 			},
 			{
 				Enabled: true, Region: domain.RegionForeign,
-				PortfolioTargetWeight: 0.25, CurrentWeight: 0.40,
+				PortfolioTargetWeight: 0.25, StructuralCurrentWeight: 0.40,
 			},
 			{
 				Enabled: false, Region: domain.RegionDomestic,
-				PortfolioTargetWeight: 0.40, CurrentWeight: 0.30,
+				PortfolioTargetWeight: 0.40, StructuralCurrentWeight: 0.30,
 			},
 		},
 	}
@@ -40,11 +40,11 @@ func TestTopDeviationsSortsByAbsoluteAmount(t *testing.T) {
 	lines := []domain.HoldingTargetLine{
 		{
 			HoldingID: "large-percent", Enabled: true,
-			DeviationAmountMinor: 100, DeviationWeight: 0.20,
+			StructuralGapAmountMinor: 5_000, StructuralGapWeight: 0.20,
 		},
 		{
 			HoldingID: "large-amount", Enabled: true,
-			DeviationAmountMinor: -10_000, DeviationWeight: -0.01,
+			StructuralGapAmountMinor: -10_000, StructuralGapWeight: -0.01,
 		},
 	}
 
@@ -54,5 +54,35 @@ func TestTopDeviationsSortsByAbsoluteAmount(t *testing.T) {
 	}
 	if got[0].DeviationMinor != -10_000 {
 		t.Fatalf("first deviation = %d, want -10000", got[0].DeviationMinor)
+	}
+}
+
+func TestTopDeviationsExcludesNearZeroGap(t *testing.T) {
+	lines := []domain.HoldingTargetLine{
+		{HoldingID: "a", Enabled: true, StructuralGapAmountMinor: 0},
+		{HoldingID: "b", Enabled: true, StructuralGapAmountMinor: 50},
+		{HoldingID: "c", Enabled: true, StructuralGapAmountMinor: -100},
+		{HoldingID: "d", Enabled: true, StructuralGapAmountMinor: 101},
+	}
+
+	got := topDeviations(lines, nil, 5)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (only |gap| > 1元)", len(got))
+	}
+	if got[0].DeviationMinor != 101 {
+		t.Fatalf("deviation = %d, want 101", got[0].DeviationMinor)
+	}
+}
+
+func TestTopDeviationsB1AllStructuralHoldReturnsEmpty(t *testing.T) {
+	lines := []domain.HoldingTargetLine{
+		{HoldingID: "equity-a", Enabled: true, StructuralGapAmountMinor: 0, StructuralGapWeight: 0},
+		{HoldingID: "bond-b", Enabled: true, StructuralGapAmountMinor: 0, StructuralGapWeight: 0},
+		{HoldingID: "cash-c", Enabled: true, StructuralGapAmountMinor: 0, StructuralGapWeight: 0},
+	}
+
+	got := topDeviations(lines, nil, 5)
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0 for B1-style zero structural gap", len(got))
 	}
 }

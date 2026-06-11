@@ -89,12 +89,6 @@ export default function HoldingsPage() {
     }
     return map;
   }, [instruments.data]);
-  const targetByHolding = useMemo(() => {
-    const map = new Map(
-      (targets.data?.holdings ?? []).map((line) => [line.holding_id, line]),
-    );
-    return map;
-  }, [targets.data]);
   const classGroups = useMemo(() => {
     const byClass = new Map<string, Map<string, PlanHolding[]>>();
     for (const holding of displayRows) {
@@ -130,9 +124,6 @@ export default function HoldingsPage() {
 
   const renderHoldingRows = (groupRows: PlanHolding[]) =>
     groupRows.map((holding) => {
-      const target = targetByHolding.get(holding.id);
-      const targetAmount = target?.target_amount_minor ?? 0;
-      const gap = targetAmount - holding.current_amount_minor;
       const instrument = instrumentById.get(holding.instrument_id);
       return (
         <tr
@@ -182,14 +173,6 @@ export default function HoldingsPage() {
                 updateRow(holding.id, { current_amount_minor: value })
               }
             />
-          </td>
-          <td className="px-3 py-2 text-right">{formatMoney(targetAmount)}</td>
-          <td
-            className={`px-3 py-2 text-right font-medium ${
-              gap >= 0 ? "text-emerald-700" : "text-red-700"
-            }`}
-          >
-            {formatMoney(gap)}
           </td>
           <td className="px-3 py-2">
             <Link href={`/assets/${holding.instrument_id}`} className="block underline">
@@ -315,17 +298,31 @@ export default function HoldingsPage() {
             <MetricHelp termKey="current_amount_vs_target" />
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            当前金额应与券商账户一致；已启用持仓合计{" "}
-            {formatMoney(totalCurrent, plan.data?.base_currency)}
+            持仓合计 {formatMoney(totalCurrent, plan.data?.base_currency)}。
+            批量更新市值请走资产变更；结构调仓请查看调仓工作台。
           </p>
         </div>
-        <button
-          type="button"
-          className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white"
-          onClick={() => setDrawerOpen(true)}
-        >
-          添加标的
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href={`/plans/${planId}/asset-refresh`}
+            className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm text-white"
+          >
+            更新账户资产
+          </Link>
+          <Link
+            href={`/plans/${planId}/rebalance`}
+            className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
+          >
+            查看调仓工作台 →
+          </Link>
+          <button
+            type="button"
+            className="min-h-11 rounded-md border border-slate-300 px-4 text-sm"
+            onClick={() => setDrawerOpen(true)}
+          >
+            添加标的
+          </button>
+        </div>
       </div>
 
       {savedMessage && (
@@ -387,8 +384,6 @@ export default function HoldingsPage() {
                             <MetricHelp termKey="weight_within_group" />
                           </th>
                           <th className="px-3 py-2">当前金额</th>
-                          <th className="px-3 py-2 text-right">目标金额</th>
-                          <th className="px-3 py-2 text-right">还差</th>
                           <th className="px-3 py-2">操作</th>
                         </tr>
                       </thead>

@@ -22,20 +22,23 @@ export default function PlanSettingsPage() {
   const searchParams = useSearchParams();
   const { confirmLeave, markClean } = usePlanEdit();
   const requested = searchParams.get("section");
+  const returnTo = searchParams.get("return");
   const section: SectionKey = SECTIONS.some((item) => item.key === requested)
     ? (requested as SectionKey)
     : "scenarios";
 
   useEffect(() => {
     if (!requested || !SECTIONS.some((item) => item.key === requested)) {
-      router.replace(`/plans/${planId}/settings?section=scenarios`);
+      const returnQuery = returnTo ? `&return=${encodeURIComponent(returnTo)}` : "";
+      router.replace(`/plans/${planId}/settings?section=scenarios${returnQuery}`);
     }
-  }, [planId, requested, router]);
+  }, [planId, requested, returnTo, router]);
 
   const switchSection = (next: SectionKey) => {
     if (next === section || !confirmLeave()) return;
     markClean();
-    router.replace(`/plans/${planId}/settings?section=${next}`);
+    const returnQuery = returnTo ? `&return=${encodeURIComponent(returnTo)}` : "";
+    router.replace(`/plans/${planId}/settings?section=${next}${returnQuery}`);
   };
 
   return (
