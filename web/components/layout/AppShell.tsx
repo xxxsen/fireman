@@ -13,11 +13,11 @@ const NAV = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const inPlan = pathname.startsWith("/plans/") && !pathname.startsWith("/plans/new");
+  const inPlanModule = pathname === "/" || pathname.startsWith("/plans/");
 
   const isNavActive = (href: string) => {
     if (href === "/") {
-      return pathname === "/" || inPlan;
+      return inPlanModule;
     }
     return pathname.startsWith(href);
   };
