@@ -28,15 +28,15 @@ export function MoneyInput({
 
   return (
     <label className="block">
-      {label && <span className="mb-1 block text-sm text-slate-600">{label}</span>}
+      {label && <span className="mb-1 block text-sm text-ink-muted">{label}</span>}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-slate-500">{currency}</span>
+        <span className="text-sm text-ink-muted">{currency}</span>
         <input
           type="text"
           inputMode="decimal"
           disabled={disabled}
           data-testid="money-input"
-          className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          className="input-base font-mono-numeric"
           value={editing ? draft : formatMoneyInput(valueMinor)}
           onFocus={() => {
             setEditing(true);

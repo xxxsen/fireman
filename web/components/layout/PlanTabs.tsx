@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { cn } from "@/lib/cn";
 
 const TABS = [
   { segment: "overview", label: "组合总览" },
@@ -21,8 +22,8 @@ export function PlanTabs({
   const base = `/plans/${planId}`;
 
   return (
-    <div className="mb-6 overflow-x-auto border-b border-slate-200">
-      <nav className="flex gap-1" data-testid="plan-tabs">
+    <div className="mb-5 overflow-x-auto border-b border-line">
+      <nav className="flex gap-0.5" data-testid="plan-tabs" aria-label="计划导航">
         {TABS.map((tab) => {
           const href = `${base}/${tab.segment}`;
           const active = pathname === href || pathname.startsWith(`${href}/`);
@@ -36,11 +37,12 @@ export function PlanTabs({
                   e.preventDefault();
                 }
               }}
-              className={`whitespace-nowrap border-b-2 px-4 py-2 text-sm ${
+              className={cn(
+                "whitespace-nowrap border-b-2 px-4 py-2.5 text-sm transition-colors",
                 active
-                  ? "border-slate-900 font-medium text-slate-900"
-                  : "border-transparent text-slate-600 hover:text-slate-900"
-              }`}
+                  ? "border-brand font-medium text-brand-strong"
+                  : "border-transparent text-ink-muted hover:border-line hover:text-ink",
+              )}
             >
               {tab.label}
             </Link>

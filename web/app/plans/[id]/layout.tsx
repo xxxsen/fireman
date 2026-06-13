@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { useParams } from "next/navigation";
-import { PlanSelector } from "@/components/layout/PlanSelector";
+import { PlanContextBar } from "@/components/layout/PlanContextBar";
 import { PlanTabs } from "@/components/layout/PlanTabs";
 import { PlanEditContext } from "@/hooks/usePlanEdit";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
@@ -26,7 +26,7 @@ export default function PlanLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <PlanEditContext.Provider value={value}>
-      <PlanSelector currentPlanId={planId} />
+      <PlanContextBar currentPlanId={planId} />
       <PlanTabs
         planId={planId}
         onNavigate={() => confirmLeave()}
