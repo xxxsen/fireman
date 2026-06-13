@@ -15,7 +15,9 @@ type shutdownBlockingRunner struct {
 	block time.Duration
 }
 
-func (b shutdownBlockingRunner) RunSimulation(ctx context.Context, jobID, runID string, snap *simulation.InputSnapshot, cancelCheck func() bool, progress func(done, total int, phase string)) error {
+func (b shutdownBlockingRunner) RunSimulation(ctx context.Context, _, _ string, _ *simulation.InputSnapshot,
+	_ func() bool, _ func(done, total int, phase string),
+) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -48,7 +50,8 @@ func TestShutdownWaitsForWorkerBeforeDBClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := jobs.NewWorker(db, repo, repository.NewSimulationRepo(db), shutdownBlockingRunner{block: 35 * time.Second}, nil, nil, jobs.NewEventHub(), nil, nil)
+	w := jobs.NewWorker(db, repo, repository.NewSimulationRepo(db), shutdownBlockingRunner{block: 35 * time.Second}, nil,
+		nil, jobs.NewEventHub(), nil, nil)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	workerDone := make(chan struct{})
 	go func() {

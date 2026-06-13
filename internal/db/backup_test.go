@@ -25,7 +25,7 @@ func openTempMigratedDB(t *testing.T) (*sql.DB, string) {
 
 func TestValidateDatabaseFile(t *testing.T) {
 	db, path := openTempMigratedDB(t)
-	if err := ValidateDatabaseFile(path); err != nil {
+	if err := ValidateDatabaseFile(context.Background(), path); err != nil {
 		t.Fatalf("valid db: %v", err)
 	}
 	_ = db
@@ -34,7 +34,7 @@ func TestValidateDatabaseFile(t *testing.T) {
 	if err := os.WriteFile(badPath, []byte("not-sqlite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateDatabaseFile(badPath); err == nil {
+	if err := ValidateDatabaseFile(context.Background(), badPath); err == nil {
 		t.Fatal("expected invalid backup to fail validation")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -68,7 +69,10 @@ func (r *JobRepo) Create(ctx context.Context, tx *sql.Tx, job Job) error {
 		job.ID, planID, job.Type, job.Status, job.InputHash, job.PayloadJSON,
 		job.ProgressCurrent, job.ProgressTotal, job.Phase,
 		boolToInt(job.CancelRequested), job.RetryCount, job.CreatedAt)
-	return err
+	if err != nil {
+		return fmt.Errorf("insert job: %w", err)
+	}
+	return nil
 }
 
 func (r *JobRepo) GetByID(ctx context.Context, id string) (Job, error) {
@@ -84,7 +88,7 @@ func (r *JobRepo) ClaimNextQueued(ctx context.Context) (Job, error) {
 	now := time.Now().UnixMilli()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Job{}, err
+		return Job{}, fmt.Errorf("begin claim job tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -95,21 +99,21 @@ func (r *JobRepo) ClaimNextQueued(ctx context.Context) (Job, error) {
 		return Job{}, ErrJobNotFound
 	}
 	if err != nil {
-		return Job{}, err
+		return Job{}, fmt.Errorf("select queued job: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE jobs SET status=?, started_at=?, heartbeat_at=?, phase=?
 		WHERE id=? AND status=?`,
 		JobStatusRunning, now, now, "starting", id, JobStatusQueued)
 	if err != nil {
-		return Job{}, err
+		return Job{}, fmt.Errorf("mark job running: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return Job{}, ErrJobNotFound
 	}
 	if err := tx.Commit(); err != nil {
-		return Job{}, err
+		return Job{}, fmt.Errorf("commit claimed job: %w", err)
 	}
 	return r.GetByID(ctx, id)
 }
@@ -119,18 +123,21 @@ func (r *JobRepo) UpdateProgress(ctx context.Context, id string, current, total 
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE jobs SET progress_current=?, progress_total=?, phase=?, heartbeat_at=?
 		WHERE id=?`, current, total, phase, now, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("update job progress: %w", err)
+	}
+	return nil
 }
 
 func (r *JobRepo) Heartbeat(ctx context.Context, id string) error {
 	now := time.Now().UnixMilli()
 	_, err := r.db.ExecContext(ctx, `UPDATE jobs SET heartbeat_at=? WHERE id=?`, now, id)
-	return err
+	return wrapSQL("update job heartbeat", err)
 }
 
 func (r *JobRepo) RequestCancel(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1 WHERE id=?`, id)
-	return err
+	return wrapSQL("request job cancel", err)
 }
 
 // CancelQueued marks a queued job as canceled immediately.
@@ -148,7 +155,7 @@ func (r *JobRepo) CancelQueuedWithError(ctx context.Context, tx *sql.Tx, id, err
 		WHERE id=? AND status=?`,
 		JobStatusCanceled, now, errCode, errMsg, id, JobStatusQueued)
 	if err != nil {
-		return err
+		return wrapSQL("cancel queued job", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -163,7 +170,7 @@ func (r *JobRepo) IsCancelRequested(ctx context.Context, id string) (bool, error
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrJobNotFound
 	}
-	return v == 1, err
+	return v == 1, wrapSQL("query cancel_requested", err)
 }
 
 func (r *JobRepo) Finish(ctx context.Context, id, status, errCode, errMsg string) error {
@@ -176,7 +183,7 @@ func (r *JobRepo) FinishTx(ctx context.Context, tx *sql.Tx, id, status, errCode,
 	_, err := exec.ExecContext(ctx, `
 		UPDATE jobs SET status=?, finished_at=?, error_code=?, error_message=?, phase=''
 		WHERE id=?`, status, now, errCode, errMsg, id)
-	return err
+	return wrapSQL("finish job", err)
 }
 
 func (r *JobRepo) RequeueIfRunning(ctx context.Context, id string) (bool, error) {
@@ -185,7 +192,7 @@ func (r *JobRepo) RequeueIfRunning(ctx context.Context, id string) (bool, error)
 		WHERE id=? AND status=?`,
 		JobStatusQueued, id, JobStatusRunning)
 	if err != nil {
-		return false, err
+		return false, wrapSQL("requeue running job", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
@@ -197,7 +204,7 @@ func (r *JobRepo) RequeueStaleRunning(ctx context.Context, staleBefore int64, ma
 		WHERE status=? AND heartbeat_at IS NOT NULL AND heartbeat_at < ? AND retry_count < ?`,
 		JobStatusQueued, JobStatusRunning, staleBefore, maxRetries)
 	if err != nil {
-		return 0, err
+		return 0, wrapSQL("requeue stale running jobs", err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -213,19 +220,24 @@ func (r *JobRepo) FindIdempotency(ctx context.Context, planID, jobType, key stri
 		return Job{}, "", ErrJobNotFound
 	}
 	if err != nil {
-		return Job{}, "", err
+		return Job{}, "", wrapSQL("lookup idempotency key", err)
 	}
 	job, err := r.GetByID(ctx, jobID)
-	return job, inputHash, err
+	if err != nil {
+		return Job{}, "", wrapSQL("load idempotent job", err)
+	}
+	return job, inputHash, nil
 }
 
-func (r *JobRepo) SaveIdempotency(ctx context.Context, tx *sql.Tx, planID, jobType, key, jobID, inputHash string) error {
+func (r *JobRepo) SaveIdempotency(ctx context.Context, tx *sql.Tx, planID, jobType, key, jobID,
+	inputHash string,
+) error {
 	exec := r.exec(tx)
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO job_idempotency_keys (plan_id, job_type, idempotency_key, job_id, input_hash, created_at)
 		VALUES (?,?,?,?,?,?)`,
 		planID, jobType, key, jobID, inputHash, time.Now().UnixMilli())
-	return err
+	return wrapSQL("save idempotency key", err)
 }
 
 func (r *JobRepo) ListByPlanAndType(ctx context.Context, planID, jobType string, limit int) ([]Job, error) {
@@ -239,18 +251,21 @@ func (r *JobRepo) ListByPlanAndType(ctx context.Context, planID, jobType string,
 		FROM jobs WHERE plan_id=? AND type=? ORDER BY created_at DESC LIMIT ?`,
 		planID, jobType, limit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query jobs by plan: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Job
 	for rows.Next() {
 		j, err := scanJobRows(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan job row: %w", err)
 		}
 		out = append(out, j)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate jobs: %w", err)
+	}
+	return out, nil
 }
 
 func (r *JobRepo) FindInProgressByInputHash(ctx context.Context, jobType, inputHash string) (Job, error) {
@@ -292,7 +307,7 @@ func scanJob(row *sql.Row) (Job, error) {
 		return Job{}, ErrJobNotFound
 	}
 	if err != nil {
-		return Job{}, err
+		return Job{}, fmt.Errorf("scan job: %w", err)
 	}
 	if payload.Valid {
 		j.PayloadJSON = payload.String
@@ -328,7 +343,7 @@ func scanJobRows(rows *sql.Rows) (Job, error) {
 		&hb, &j.ErrorCode, &j.ErrorMessage, &j.CreatedAt, &started, &finished,
 	)
 	if err != nil {
-		return Job{}, err
+		return Job{}, fmt.Errorf("scan job row: %w", err)
 	}
 	if payload.Valid {
 		j.PayloadJSON = payload.String

@@ -131,7 +131,8 @@ type HoldingTargetLine struct {
 func ComputeHoldingTargets(alloc AllocationWeights, holdings []HoldingWeightInput, holdingMeta []struct {
 	ID, InstrumentID, SimulationSnapshotID string
 	SortOrder                              int
-}, totalAssetsMinor int64) []HoldingTargetLine {
+}, totalAssetsMinor int64,
+) []HoldingTargetLine {
 	holdingsTotal := HoldingsTotalMinor(holdings)
 	lines := make([]HoldingTargetLine, 0, len(holdings))
 	for i, h := range holdings {

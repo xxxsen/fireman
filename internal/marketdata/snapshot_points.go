@@ -63,7 +63,7 @@ func BuildSnapshotPointSet(points []DataPoint, years []SimulationYear, pointType
 }
 
 // WindowBoundsFromPoints returns inclusive window bounds from a point set.
-func WindowBoundsFromPoints(points []DataPoint) (start, end string) {
+func WindowBoundsFromPoints(points []DataPoint) (string, string) {
 	if len(points) == 0 {
 		return "", ""
 	}

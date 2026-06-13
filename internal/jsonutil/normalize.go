@@ -24,45 +24,21 @@ func normalize(v reflect.Value) {
 
 	switch v.Kind() {
 	case reflect.Ptr:
-		if v.IsNil() {
-			return
-		}
-		normalize(v.Elem())
+		normalizePtr(v)
 	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			f := v.Field(i)
-			if f.CanSet() {
-				if f.Kind() == reflect.Slice && f.IsNil() {
-					f.Set(reflect.MakeSlice(f.Type(), 0, 0))
-					continue
-				}
-				normalize(f)
-				continue
-			}
-			if f.CanAddr() {
-				normalize(f.Addr())
-			} else {
-				normalize(f)
-			}
-		}
+		normalizeStruct(v)
 	case reflect.Map:
-		if v.Type().Key().Kind() != reflect.String {
-			return
-		}
-		for _, key := range v.MapKeys() {
-			elem := v.MapIndex(key)
-			if next := normalizeMapValue(elem); next.IsValid() {
-				v.SetMapIndex(key, next)
-			}
-		}
+		normalizeMapValueField(v)
 	case reflect.Slice:
-		if v.CanSet() && v.IsNil() {
-			v.Set(reflect.MakeSlice(v.Type(), 0, 0))
-			return
-		}
-		for i := 0; i < v.Len(); i++ {
-			normalize(v.Index(i))
-		}
+		normalizeSliceField(v)
+	case reflect.Invalid, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.String, reflect.UnsafePointer:
+		return
 	}
 }
 

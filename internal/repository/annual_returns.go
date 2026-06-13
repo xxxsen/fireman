@@ -29,10 +29,13 @@ type AnnualReturnRecord struct {
 	InSimulation bool    `json:"in_simulation,omitempty"`
 }
 
-func (r *AnnualReturnsRepo) ReplaceAll(ctx context.Context, tx *sql.Tx, instrumentID string, rows []AnnualReturnRecord) error {
+func (r *AnnualReturnsRepo) ReplaceAll(ctx context.Context, tx *sql.Tx, instrumentID string,
+	rows []AnnualReturnRecord,
+) error {
 	exec := r.exec(tx)
-	if _, err := exec.ExecContext(ctx, `DELETE FROM instrument_annual_returns WHERE instrument_id=?`, instrumentID); err != nil {
-		return err
+	if _, err := exec.ExecContext(ctx, `DELETE FROM instrument_annual_returns WHERE instrument_id=?`,
+		instrumentID); err != nil {
+		return fmt.Errorf("delete annual returns: %w", err)
 	}
 	for _, row := range rows {
 		_, err := exec.ExecContext(ctx, `
@@ -57,9 +60,9 @@ func (r *AnnualReturnsRepo) ListByInstrument(ctx context.Context, instrumentID s
 		WHERE instrument_id=?
 		ORDER BY year`, instrumentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query annual returns: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []AnnualReturnRecord
 	for rows.Next() {
 		var rec AnnualReturnRecord
@@ -69,12 +72,15 @@ func (r *AnnualReturnsRepo) ListByInstrument(ctx context.Context, instrumentID s
 			&rec.StartDate, &rec.EndDate, &rec.StartValue, &rec.EndValue,
 			&rec.Observations, &partial,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan annual return: %w", err)
 		}
 		rec.IsPartial = partial == 1
 		out = append(out, rec)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate annual returns: %w", err)
+	}
+	return out, nil
 }
 
 func (r *AnnualReturnsRepo) exec(tx *sql.Tx) dbExec {

@@ -61,7 +61,8 @@ func TestStressShockOnlyInWindow(t *testing.T) {
 		t.Fatal("expected non-empty schedule")
 	}
 	if stressed.BaselineSuccessProbability != float64(baseline.SuccessCount)/20 {
-		t.Fatalf("baseline mismatch: stress=%f sim=%f", stressed.BaselineSuccessProbability, float64(baseline.SuccessCount)/20)
+		t.Fatalf("baseline mismatch: stress=%f sim=%f", stressed.BaselineSuccessProbability,
+			float64(baseline.SuccessCount)/20)
 	}
 	foundWorse := false
 	for _, sc := range stressed.Scenarios {

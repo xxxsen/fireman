@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useSyncExternalStore, useEffect, useMemo, useState } from "react";
 import { CurrentWeightCell, TargetWeightCell } from "@/components/plans/TargetWeightCell";
 import { InlineTooltip } from "@/components/ui/InlineTooltip";
 import { MetricHelp } from "@/components/ui/MetricHelp";
@@ -44,13 +44,18 @@ export default function RebalancePage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [actionFilter, setActionFilter] = useState("all");
-  const [scaleDismissed, setScaleDismissed] = useState(false);
+  const [scaleDismissOverride, setScaleDismissOverride] = useState<boolean | null>(null);
   const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setScaleDismissed(sessionStorage.getItem(`${SCALE_DISMISS_KEY}:${planId}`) === "1");
-  }, [planId]);
+  const scaleDismissKey = `${SCALE_DISMISS_KEY}:${planId}`;
+  const storedScaleDismissed = useSyncExternalStore(
+    () => () => {},
+    () =>
+      typeof window !== "undefined" &&
+      sessionStorage.getItem(scaleDismissKey) === "1",
+    () => false,
+  );
+  const scaleDismissed = scaleDismissOverride ?? storedScaleDismissed;
 
   useEffect(() => {
     if (!syncSuccessMsg) return;
@@ -182,8 +187,8 @@ export default function RebalancePage() {
   });
 
   const dismissScaleBar = () => {
-    sessionStorage.setItem(`${SCALE_DISMISS_KEY}:${planId}`, "1");
-    setScaleDismissed(true);
+    sessionStorage.setItem(scaleDismissKey, "1");
+    setScaleDismissOverride(true);
   };
 
   if (targets.isLoading || rebalance.isLoading || !targets.data || !rebalance.data) {

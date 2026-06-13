@@ -14,7 +14,12 @@ import (
 	"github.com/fireman/fireman/migrations"
 )
 
-func applyMigrationsThrough(t *testing.T, pool *sql.DB, dbPath string, maxVersion int) {
+func TestMain(m *testing.M) {
+	SetMigrations(migrations.FS)
+	os.Exit(m.Run())
+}
+
+func applyMigrationsThrough(t *testing.T, pool *sql.DB, _ string, maxVersion int) {
 	t.Helper()
 	SetMigrations(migrations.FS)
 	ctx := context.Background()
@@ -147,7 +152,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 	}
 
 	var fxCount int
-	if err := pool.QueryRowContext(ctx,
+	if err := pool.QueryRowContext(
+		ctx,
 		`SELECT COUNT(*) FROM instruments WHERE is_system=1 AND asset_class='fx' AND code IN ('USDCNY','HKDCNY')`,
 	).Scan(&fxCount); err != nil {
 		t.Fatalf("count system fx instruments: %v", err)

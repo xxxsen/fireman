@@ -77,15 +77,17 @@ func (r *SimulationRepo) CreatePending(ctx context.Context, tx *sql.Tx, run Simu
 		run.ID, run.JobID, run.PlanID, run.InputHash, run.InputSnapshotJSON, run.MarketSnapshotHash,
 		run.EngineVersion, run.Runs, run.Seed, run.HorizonMonths, run.SuccessCount, run.FailureCount,
 		string(run.SummaryJSON), run.CreatedAt)
-	return err
+	return wrapSQL("create pending simulation run", err)
 }
 
-func (r *SimulationRepo) Complete(ctx context.Context, tx *sql.Tx, runID string, success, failure int, summary json.RawMessage) error {
+func (r *SimulationRepo) Complete(ctx context.Context, tx *sql.Tx, runID string, success, failure int,
+	summary json.RawMessage,
+) error {
 	exec := r.exec(tx)
 	_, err := exec.ExecContext(ctx, `
 		UPDATE simulation_runs SET success_count=?, failure_count=?, summary_json=? WHERE id=?`,
 		success, failure, string(summary), runID)
-	return err
+	return wrapSQL("complete simulation run", err)
 }
 
 func (r *SimulationRepo) GetByJobID(ctx context.Context, jobID string) (SimulationRun, error) {
@@ -116,24 +118,24 @@ func (r *SimulationRepo) ListByPlan(ctx context.Context, planID string, limit in
 			summary_json, created_at
 		FROM simulation_runs WHERE plan_id=? ORDER BY created_at DESC LIMIT ?`, planID, limit)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list simulation runs by plan", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SimulationRun
 	for rows.Next() {
 		run, err := scanSimulationRunRows(rows)
 		if err != nil {
-			return nil, err
+			return nil, wrapSQL("scan simulation run", err)
 		}
 		out = append(out, run)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate simulation runs", rows.Err())
 }
 
 func (r *SimulationRepo) ReplacePathIndex(ctx context.Context, tx *sql.Tx, runID string, paths []PathIndexRow) error {
 	exec := r.exec(tx)
 	if _, err := exec.ExecContext(ctx, `DELETE FROM simulation_path_index WHERE run_id=?`, runID); err != nil {
-		return err
+		return wrapSQL("delete simulation path index", err)
 	}
 	for _, p := range paths {
 		var failMonth any
@@ -147,16 +149,18 @@ func (r *SimulationRepo) ReplacePathIndex(ctx context.Context, tx *sql.Tx, runID
 			) VALUES (?,?,?,?,?,?,?,?)`,
 			runID, p.PathNo, p.PathSeed, boolToInt(p.Succeeded), failMonth,
 			p.TerminalWealthMinor, p.MaxDrawdown, p.RepresentativePercentile); err != nil {
-			return err
+			return wrapSQL("insert simulation path index row", err)
 		}
 	}
 	return nil
 }
 
-func (r *SimulationRepo) ReplaceQuantileSeries(ctx context.Context, tx *sql.Tx, runID string, series []QuantileSeriesRow) error {
+func (r *SimulationRepo) ReplaceQuantileSeries(ctx context.Context, tx *sql.Tx, runID string,
+	series []QuantileSeriesRow,
+) error {
 	exec := r.exec(tx)
 	if _, err := exec.ExecContext(ctx, `DELETE FROM simulation_quantile_series WHERE run_id=?`, runID); err != nil {
-		return err
+		return wrapSQL("delete simulation quantile series", err)
 	}
 	for _, q := range series {
 		if _, err := exec.ExecContext(ctx, `
@@ -164,7 +168,7 @@ func (r *SimulationRepo) ReplaceQuantileSeries(ctx context.Context, tx *sql.Tx, 
 				run_id, month_offset, p00_minor, p05_minor, p25_minor, p50_minor, p75_minor, p95_minor
 			) VALUES (?,?,?,?,?,?,?,?)`,
 			runID, q.MonthOffset, q.P00Minor, q.P05Minor, q.P25Minor, q.P50Minor, q.P75Minor, q.P95Minor); err != nil {
-			return err
+			return wrapSQL("insert simulation quantile series row", err)
 		}
 	}
 	return nil
@@ -175,18 +179,19 @@ func (r *SimulationRepo) ListQuantileSeries(ctx context.Context, runID string) (
 		SELECT run_id, month_offset, p00_minor, p05_minor, p25_minor, p50_minor, p75_minor, p95_minor
 		FROM simulation_quantile_series WHERE run_id=? ORDER BY month_offset`, runID)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list quantile series", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []QuantileSeriesRow
 	for rows.Next() {
 		var q QuantileSeriesRow
-		if err := rows.Scan(&q.RunID, &q.MonthOffset, &q.P00Minor, &q.P05Minor, &q.P25Minor, &q.P50Minor, &q.P75Minor, &q.P95Minor); err != nil {
-			return nil, err
+		if err := rows.Scan(&q.RunID, &q.MonthOffset, &q.P00Minor, &q.P05Minor, &q.P25Minor, &q.P50Minor, &q.P75Minor,
+			&q.P95Minor); err != nil {
+			return nil, wrapSQL("scan quantile series row", err)
 		}
 		out = append(out, q)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate quantile series", rows.Err())
 }
 
 func (r *SimulationRepo) ListPathIndex(ctx context.Context, runID string) ([]PathIndexRow, error) {
@@ -195,9 +200,9 @@ func (r *SimulationRepo) ListPathIndex(ctx context.Context, runID string) ([]Pat
 			terminal_wealth_minor, max_drawdown, representative_percentile
 		FROM simulation_path_index WHERE run_id=? ORDER BY path_no`, runID)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list path index", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []PathIndexRow
 	for rows.Next() {
 		var p PathIndexRow
@@ -205,7 +210,7 @@ func (r *SimulationRepo) ListPathIndex(ctx context.Context, runID string) ([]Pat
 		var fail sql.NullInt64
 		if err := rows.Scan(&p.RunID, &p.PathNo, &p.PathSeed, &ok, &fail,
 			&p.TerminalWealthMinor, &p.MaxDrawdown, &p.RepresentativePercentile); err != nil {
-			return nil, err
+			return nil, wrapSQL("scan path index row", err)
 		}
 		p.Succeeded = ok == 1
 		if fail.Valid {
@@ -214,7 +219,7 @@ func (r *SimulationRepo) ListPathIndex(ctx context.Context, runID string) ([]Pat
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate path index", rows.Err())
 }
 
 func (r *SimulationRepo) GetPathIndex(ctx context.Context, runID string, pathNo int) (PathIndexRow, error) {
@@ -226,12 +231,13 @@ func (r *SimulationRepo) GetPathIndex(ctx context.Context, runID string, pathNo 
 			terminal_wealth_minor, max_drawdown, representative_percentile
 		FROM simulation_path_index WHERE run_id=? AND path_no=?`, runID, pathNo).Scan(
 		&p.RunID, &p.PathNo, &p.PathSeed, &ok, &fail,
-		&p.TerminalWealthMinor, &p.MaxDrawdown, &p.RepresentativePercentile)
+		&p.TerminalWealthMinor, &p.MaxDrawdown, &p.RepresentativePercentile,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PathIndexRow{}, ErrSimulationNotFound
 	}
 	if err != nil {
-		return PathIndexRow{}, err
+		return PathIndexRow{}, wrapSQL("scan path index", err)
 	}
 	p.Succeeded = ok == 1
 	if fail.Valid {
@@ -247,12 +253,13 @@ func scanSimulationRun(row *sql.Row) (SimulationRun, error) {
 	err := row.Scan(
 		&run.ID, &run.JobID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
 		&run.EngineVersion, &run.Runs, &run.Seed, &run.HorizonMonths, &run.SuccessCount, &run.FailureCount,
-		&summary, &run.CreatedAt)
+		&summary, &run.CreatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SimulationRun{}, ErrSimulationNotFound
 	}
 	if err != nil {
-		return SimulationRun{}, err
+		return SimulationRun{}, wrapSQL("scan simulation run", err)
 	}
 	run.SummaryJSON = json.RawMessage(summary)
 	return run, nil
@@ -264,9 +271,10 @@ func scanSimulationRunRows(rows *sql.Rows) (SimulationRun, error) {
 	err := rows.Scan(
 		&run.ID, &run.JobID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
 		&run.EngineVersion, &run.Runs, &run.Seed, &run.HorizonMonths, &run.SuccessCount, &run.FailureCount,
-		&summary, &run.CreatedAt)
+		&summary, &run.CreatedAt,
+	)
 	if err != nil {
-		return SimulationRun{}, err
+		return SimulationRun{}, wrapSQL("scan simulation run row", err)
 	}
 	run.SummaryJSON = json.RawMessage(summary)
 	return run, nil

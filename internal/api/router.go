@@ -27,7 +27,8 @@ type Deps struct {
 }
 
 // NewRouter builds the Gin engine and registers routes.
-func NewRouter(deps Deps) *gin.Engine {
+func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
+	_ = ctx
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
@@ -40,7 +41,7 @@ func NewRouter(deps Deps) *gin.Engine {
 	r.Use(requestIDMiddleware())
 	r.Use(requestLogger(deps.Logger))
 
-	r.GET("/healthz", healthz(deps))
+	r.GET("/healthz", healthz(ctx, deps))
 
 	v1 := r.Group("/api/v1")
 	v1.Use(maintenanceMiddleware(deps.Services.Maintenance))
@@ -75,11 +76,11 @@ func maintenanceMiddleware(gate *service.MaintenanceGate) gin.HandlerFunc {
 	}
 }
 
-func healthz(deps Deps) gin.HandlerFunc {
+func healthz(lifecycleCtx context.Context, deps Deps) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		probeCtx, cancel := context.WithTimeout(lifecycleCtx, 2*time.Second)
 		defer cancel()
-		if err := db.Ping(ctx, deps.DB); err != nil {
+		if err := db.Ping(probeCtx, deps.DB); err != nil {
 			deps.Logger.Error("healthz database probe failed", "error", err)
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "unhealthy",
@@ -95,7 +96,8 @@ func requestLogger(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
-		logger.Info("http_request",
+		logger.Info(
+			"http_request",
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
 			"status", c.Writer.Status(),

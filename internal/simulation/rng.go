@@ -4,7 +4,14 @@ import "math"
 
 // DerivePathSeed derives a deterministic non-negative 63-bit seed for one path.
 func DerivePathSeed(rootSeed int64, pathNo int) int64 {
-	return int64(SplitMix64(uint64(rootSeed)+uint64(pathNo)) & math.MaxInt64)
+	return int64(SplitMix64(seedAsUint64(rootSeed)+seedAsUint64(int64(pathNo))) & math.MaxInt64)
+}
+
+func seedAsUint64(v int64) uint64 {
+	if v < 0 {
+		return uint64(-v)
+	}
+	return uint64(v)
 }
 
 // SplitMix64 derives a deterministic non-negative 63-bit seed.
@@ -22,7 +29,7 @@ type RNG struct {
 
 // NewRNG creates a path-local RNG from a non-negative 63-bit seed.
 func NewRNG(seed int64) *RNG {
-	return &RNG{state: uint64(seed)}
+	return &RNG{state: seedAsUint64(seed)}
 }
 
 func (r *RNG) Uint64() uint64 {

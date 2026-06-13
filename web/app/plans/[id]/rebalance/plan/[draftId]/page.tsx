@@ -68,7 +68,7 @@ export default function RebalancePlanPage() {
     queryFn: () => getRebalanceDraft(planId, draftId),
   });
 
-  const lines = draft.data?.lines ?? [];
+  const lines = useMemo(() => draft.data?.lines ?? [], [draft.data?.lines]);
   const events = draft.data?.events ?? [];
   const fundPool = useMemo(
     () =>

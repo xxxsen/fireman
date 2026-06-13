@@ -34,7 +34,7 @@ export default function HoldingsPage() {
   const highlight = useSearchParams().get("highlight");
   const queryClient = useQueryClient();
   const { dirty, markDirty, markClean } = usePlanEdit();
-  const [rows, setRows] = useState<PlanHolding[]>([]);
+  const [editedRows, setEditedRows] = useState<PlanHolding[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -65,23 +65,23 @@ export default function HoldingsPage() {
     queryFn: () => getTargets(planId),
   });
 
-  useEffect(() => {
-    if (holdings.data && !dirty) {
-      setRows(holdings.data.holdings.map((holding) => ({ ...holding })));
-    }
-  }, [holdings.data, dirty]);
+  const serverRows = useMemo(
+    () => holdings.data?.holdings.map((holding) => ({ ...holding })) ?? [],
+    [holdings.data],
+  );
+  const rows = editedRows ?? serverRows;
+  const displayRows = useMemo(() => rows, [rows]);
 
   useEffect(() => {
-    if (!highlight || rows.length === 0) return;
+    if (!highlight || displayRows.length === 0) return;
     const element = rowRefs.current.get(highlight);
     if (!element) return;
     element.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightedId(highlight);
     const timer = window.setTimeout(() => setHighlightedId(null), 2000);
     return () => window.clearTimeout(timer);
-  }, [highlight, rows.length]);
+  }, [highlight, displayRows.length]);
 
-  const displayRows = rows.length ? rows : holdings.data?.holdings ?? [];
   const instrumentById = useMemo(() => {
     const map = new Map<string, Instrument>();
     for (const instrument of instruments.data?.instruments ?? []) {
@@ -195,7 +195,7 @@ export default function HoldingsPage() {
     });
 
   const updateRow = (holdingId: string, patch: Partial<PlanHolding>) => {
-    setRows(
+    setEditedRows(
       displayRows.map((holding) =>
         holding.id === holdingId ? { ...holding, ...patch } : holding,
       ),
@@ -206,7 +206,7 @@ export default function HoldingsPage() {
 
   const addInstrument = (instrument: Instrument) => {
     if (displayRows.some((holding) => holding.instrument_id === instrument.id)) return;
-    setRows([
+    setEditedRows([
       ...displayRows,
       {
         id: `draft_${instrument.id}`,
@@ -244,7 +244,7 @@ export default function HoldingsPage() {
     },
     onSuccess: () => {
       markClean();
-      setRows([]);
+      setEditedRows(null);
       setSaveError(null);
       setSavedMessage("持仓已更新，可返回调仓工作台查看建议。");
       for (const key of ["holdings", "targets", "rebalance", "dashboard", "plan"]) {

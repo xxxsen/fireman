@@ -1,6 +1,7 @@
 package marketdata
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -76,7 +77,7 @@ func sortStrings(ss []string) {
 func RefreshStartDate(lastDate string) (string, error) {
 	t, err := time.Parse("2006-01-02", lastDate)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse last trade date: %w", err)
 	}
 	return t.AddDate(0, 0, -10).Format("2006-01-02"), nil
 }
@@ -91,10 +92,10 @@ func DominantSourceName(points []DataPoint) string {
 		counts[p.SourceName]++
 	}
 	best := ""
-	max := 0
+	maxCount := 0
 	for name, n := range counts {
-		if n > max {
-			max = n
+		if n > maxCount {
+			maxCount = n
 			best = name
 		}
 	}

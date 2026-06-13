@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -148,7 +149,7 @@ func sprintf2(n int) string {
 func testRouterWithProvider(t *testing.T, providerURL string) *httptest.Server {
 	t.Helper()
 	db := testutil.OpenTestDB(t)
-	r := NewRouter(Deps{DB: db, Services: buildServices(db, providerURL)})
+	r := NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, providerURL)})
 	return httptest.NewServer(r)
 }
 
@@ -170,6 +171,7 @@ func TestInstrumentFieldsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -211,6 +213,7 @@ func TestInstrumentImportPreviewAndImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get status=%d", resp.StatusCode)
 	}

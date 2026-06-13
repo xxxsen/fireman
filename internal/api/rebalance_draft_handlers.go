@@ -1,10 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 )
 
@@ -32,6 +34,10 @@ func (s Services) createRebalanceDraft(c *gin.Context) {
 
 func (s Services) getActiveRebalanceDraft(c *gin.Context) {
 	out, err := s.RebalanceDrafts.GetActive(c.Request.Context(), c.Param("plan_id"))
+	if errors.Is(err, repository.ErrNoActiveRebalanceDraft) {
+		OK(c, nil)
+		return
+	}
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -90,7 +96,7 @@ func (s Services) cancelRebalanceDraft(c *gin.Context) {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"cancelled": true})
+	OK(c, gin.H{"canceled": true})
 }
 
 func (s Services) submitAssetRefresh(c *gin.Context) {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -72,16 +71,18 @@ func NewSimulationService(
 }
 
 // BuildInputSnapshot freezes the current plan configuration for analysis jobs.
-func (s *SimulationService) BuildInputSnapshot(ctx context.Context, planID string, runs *int, seed *string) (*simulation.InputSnapshot, string, error) {
+func (s *SimulationService) BuildInputSnapshot(ctx context.Context, planID string, runs *int,
+	seed *string,
+) (*simulation.InputSnapshot, string, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, "", newErr("plan_not_found", "plan not found", nil)
 		}
-		return nil, "", err
+		return nil, "", wrapRepo("get plan for snapshot", err)
 	}
 	parsed, err := ParseSeedString(seed)
-	if err != nil {
+	if err != nil && !errors.Is(err, errSeedNotProvided) {
 		return nil, "", newErr("parameters_invalid", err.Error(), nil)
 	}
 	return s.buildInputSnapshot(ctx, plan, CreateSimulationRequest{
@@ -95,12 +96,12 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return CreateSimulationResponse{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return CreateSimulationResponse{}, err
+		return CreateSimulationResponse{}, wrapRepo("get plan for simulation", err)
 	}
 
 	if req.Seed != nil {
 		parsed, err := ParseSeedString(req.Seed)
-		if err != nil {
+		if err != nil && !errors.Is(err, errSeedNotProvided) {
 			return CreateSimulationResponse{}, newErr("parameters_invalid", err.Error(), nil)
 		}
 		req.seedInt = parsed
@@ -112,16 +113,16 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 	}
 
 	if req.IdempotencyKey != "" {
-		existing, storedHash, err := s.jobs.FindIdempotency(ctx, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey)
-		if err == nil {
-			if storedHash != inputHash {
-				return CreateSimulationResponse{}, newErr("idempotency_conflict", "idempotency key reused with different input", nil)
-			}
+		existing, found, err := findExistingIdempotentJob(
+			ctx, s.jobs, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, inputHash,
+			"find simulation idempotency",
+		)
+		if err != nil {
+			return CreateSimulationResponse{}, err
+		}
+		if found {
 			run, _ := s.sims.GetByJobID(ctx, existing.ID)
 			return CreateSimulationResponse{JobID: existing.ID, RunID: run.ID, Status: existing.Status}, nil
-		}
-		if !errors.Is(err, repository.ErrJobNotFound) {
-			return CreateSimulationResponse{}, err
 		}
 	}
 
@@ -138,7 +139,7 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 			Status: repository.JobStatusQueued, InputHash: inputHash,
 			ProgressTotal: snap.Parameters.SimulationRuns,
 		}); err != nil {
-			return err
+			return wrapRepo("create simulation job", err)
 		}
 		if err := s.sims.CreatePending(ctx, tx, repository.SimulationRun{
 			ID: runID, JobID: jobID, PlanID: req.PlanID, InputHash: inputHash,
@@ -146,15 +147,16 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 			EngineVersion: simulation.EngineVersion, Runs: snap.Parameters.SimulationRuns,
 			Seed: snap.RootSeed(), HorizonMonths: snap.HorizonMonths(),
 		}); err != nil {
-			return err
+			return wrapRepo("create pending simulation run", err)
 		}
 		if req.IdempotencyKey != "" {
-			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, jobID, inputHash)
+			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, jobID,
+				inputHash)
 		}
 		return nil
 	})
 	if err != nil {
-		return CreateSimulationResponse{}, err
+		return CreateSimulationResponse{}, wrapRepo("create simulation tx", err)
 	}
 	return CreateSimulationResponse{JobID: jobID, RunID: runID, Status: repository.JobStatusQueued}, nil
 }
@@ -164,11 +166,11 @@ func (s *SimulationService) ListByPlan(ctx context.Context, planID string) ([]Si
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, newErr("plan_not_found", "plan not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get plan for simulation list", err)
 	}
 	runs, err := s.sims.ListByPlan(ctx, planID, 50)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("list simulation runs", err)
 	}
 	currentHash, _ := s.hash.Compute(ctx, planID)
 	out := make([]SimulationRunView, len(runs))
@@ -184,7 +186,7 @@ func (s *SimulationService) GetRun(ctx context.Context, runID string) (Simulatio
 		if errors.Is(err, repository.ErrSimulationNotFound) {
 			return SimulationRunView{}, newErr("simulation_not_found", "simulation not found", nil)
 		}
-		return SimulationRunView{}, err
+		return SimulationRunView{}, wrapRepo("get simulation run", err)
 	}
 	currentHash, _ := s.hash.Compute(ctx, run.PlanID)
 	return toRunView(run, currentHash), nil
@@ -195,11 +197,11 @@ func (s *SimulationService) ListPaths(ctx context.Context, runID string) ([]Path
 		if errors.Is(err, repository.ErrSimulationNotFound) {
 			return nil, newErr("simulation_not_found", "simulation not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get simulation run for paths", err)
 	}
 	rows, err := s.sims.ListPathIndex(ctx, runID)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("list simulation path index", err)
 	}
 	out := make([]PathIndexView, len(rows))
 	for i, r := range rows {
@@ -208,19 +210,21 @@ func (s *SimulationService) ListPaths(ctx context.Context, runID string) ([]Path
 	return out, nil
 }
 
-func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pathNo int) (*simulation.PathDetail, error) {
+func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pathNo int) (*simulation.PathDetail,
+	error,
+) {
 	run, err := s.sims.GetByID(ctx, runID)
 	if err != nil {
 		if errors.Is(err, repository.ErrSimulationNotFound) {
 			return nil, newErr("simulation_not_found", "simulation not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get simulation run for path detail", err)
 	}
 	if _, err := s.sims.GetPathIndex(ctx, runID, pathNo); err != nil {
 		if errors.Is(err, repository.ErrSimulationNotFound) {
 			return nil, newErr("path_not_found", "simulation path not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get simulation path index", err)
 	}
 	var snap simulation.InputSnapshot
 	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
@@ -282,22 +286,15 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 	}
 }
 
-func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan repository.Plan, req CreateSimulationRequest) (*simulation.InputSnapshot, string, error) {
+func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan repository.Plan,
+	req CreateSimulationRequest,
+) (*simulation.InputSnapshot, string, error) {
 	params, err := s.params.Get(ctx, plan.ID)
 	if err != nil {
+		return nil, "", wrapRepo("get plan parameters for snapshot", err)
+	}
+	if err := applyCreateSimOverrides(&params, req); err != nil {
 		return nil, "", err
-	}
-	if req.Runs != nil {
-		params.SimulationRuns = *req.Runs
-	}
-	if req.seedInt != nil {
-		params.Seed = req.seedInt
-	} else if req.Seed != nil {
-		parsed, err := ParseSeedString(req.Seed)
-		if err != nil {
-			return nil, "", newErr("parameters_invalid", err.Error(), nil)
-		}
-		params.Seed = parsed
 	}
 	if err := validateSimulationReady(params); err != nil {
 		return nil, "", newErr("simulation_input_invalid", err.Error(), nil)
@@ -305,108 +302,34 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 
 	alloc, err := s.alloc.Get(ctx, plan.ID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", wrapRepo("get plan allocation for snapshot", err)
 	}
 	holds, err := s.holdings.ListByPlan(ctx, plan.ID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", wrapRepo("list plan holdings for snapshot", err)
 	}
 	da := toDomainAllocation(alloc)
 	dh := holdingsToDomain(holds)
 	checks := domain.ValidateAllWeights(da, dh)
 	if !checks.Passed {
-		return nil, "", newErr("plan_weights_invalid", "plan weights are incomplete or invalid", map[string]any{"checks": checks.Checks})
+		return nil, "", newErr("plan_weights_invalid", "plan weights are incomplete or invalid",
+			map[string]any{"checks": checks.Checks})
 	}
-
-	enabledSum := int64(0)
-	enabledCount := 0
-	for _, h := range holds {
-		if h.Enabled {
-			enabledSum += h.CurrentAmountMinor
-			enabledCount++
-		}
-	}
-	if enabledCount == 0 {
-		return nil, "", newErr("simulation_input_invalid", "at least one enabled holding is required", nil)
-	}
-	if abs64(enabledSum-params.TotalAssetsMinor) > 100 {
-		return nil, "", newErr("simulation_input_invalid", "total assets must match enabled holdings within 1 CNY", map[string]any{
-			"total_assets_minor": params.TotalAssetsMinor, "holdings_sum_minor": enabledSum,
-		})
+	if err := validateSnapshotHoldings(holds, params.TotalAssetsMinor); err != nil {
+		return nil, "", err
 	}
 
 	flows, err := s.params.ListCashFlows(ctx, plan.ID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", wrapRepo("list plan holdings for snapshot", err)
 	}
 
 	lines := domain.ComputeHoldingTargets(da, dh, holdingMeta(holds), params.TotalAssetsMinor)
-	fxCache := make(map[string]marketdata.SnapshotMetrics)
-	assets := make([]simulation.SnapshotAsset, 0, len(lines))
-	for _, line := range lines {
-		if !line.Enabled {
-			continue
-		}
-		snap, err := s.snapRepo.GetByID(ctx, line.SimulationSnapshotID)
-		if err != nil {
-			return nil, "", newErr("snapshot_not_found", "simulation snapshot missing for holding", map[string]any{"holding_id": line.HoldingID})
-		}
-		if snap.SourceMode != "system_cash" && snap.CompleteYearCount < 2 {
-			return nil, "", newErr("instrument_insufficient_history", "holding snapshot needs at least 2 complete years", map[string]any{"holding_id": line.HoldingID})
-		}
-		years := make([]simulation.SnapshotYear, len(snap.Years))
-		for i, y := range snap.Years {
-			years[i] = simulation.SnapshotYear{
-				Year: y.Year, AnnualReturn: y.AnnualReturn, StartDate: y.StartDate,
-				EndDate: y.EndDate, Observations: y.Observations,
-			}
-		}
-		inst, err := s.holdings.GetInstrument(ctx, line.InstrumentID)
-		currency := plan.BaseCurrency
-		if err == nil {
-			currency = inst.Currency
-		}
-		isCash := snap.SourceMode == "system_cash" || line.AssetClass == domain.AssetClassCash
-		sa := simulation.SnapshotAsset{
-			HoldingID: line.HoldingID, InstrumentID: line.InstrumentID, SnapshotID: line.SimulationSnapshotID,
-			Currency: currency, AssetClass: line.AssetClass, IsCash: isCash,
-			InitialMinor: line.CurrentAmountMinor, TargetWeight: line.PortfolioTargetWeight,
-			ModeledAnnualReturn: snap.ModeledAnnualReturn, AnnualVolatility: snap.AnnualVolatility,
-			MaxDrawdown: snap.MaxDrawdown, FeeTreatment: snap.FeeTreatment, ExpenseRatio: snap.ExpenseRatio,
-			SourceHash: snap.SourceHash, Years: years,
-		}
-		if currency != plan.BaseCurrency {
-			fxMetrics, ok := fxCache[currency]
-			if !ok {
-				var err error
-				fxMetrics, err = s.fx.Metrics(ctx, currency, plan.BaseCurrency, plan.ValuationDate)
-				if err != nil {
-					return nil, "", newErr("fx_snapshot_missing", "FX data unavailable for foreign holding", map[string]any{
-						"holding_id": line.HoldingID, "currency": currency, "error": err.Error(),
-					})
-				}
-				if fxMetrics.CompleteYearCount < 2 || fxMetrics.QualityStatus != "available" {
-					return nil, "", newErr("fx_insufficient_history", "FX snapshot needs at least 2 complete years", map[string]any{
-						"holding_id": line.HoldingID, "currency": currency,
-					})
-				}
-				fxCache[currency] = fxMetrics
-			}
-			sa.FXSnapshotID = fxMetrics.SourceHash
-			sa.FXModeledReturn = fxMetrics.ModeledAnnualReturn
-			sa.FXAnnualVolatility = fxMetrics.AnnualVolatility
-		}
-		assets = append(assets, sa)
+	assets, err := s.buildSnapshotAssets(ctx, plan, lines)
+	if err != nil {
+		return nil, "", err
 	}
-
-	cfSnap := make([]simulation.SnapshotCashFlow, 0, len(flows))
-	for _, f := range flows {
-		cfSnap = append(cfSnap, simulation.SnapshotCashFlow{
-			ID: f.ID, Kind: f.Kind, AmountMinor: f.AmountMinor, StartMonthOffset: f.StartMonthOffset,
-			EndMonthOffset: f.EndMonthOffset, Recurrence: f.Recurrence, InflationLinked: f.InflationLinked,
-			AnnualGrowthRate: f.AnnualGrowthRate, Enabled: f.Enabled,
-		})
-	}
+	cfSnap := snapshotCashFlows(flows)
 
 	seed := params.Seed
 	if seed == nil {
@@ -422,34 +345,10 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", err
 	}
 
-	in := &simulation.InputSnapshot{
-		EngineVersion:     simulation.EngineVersion,
-		PlanID:            plan.ID,
-		BaseCurrency:      plan.BaseCurrency,
-		RandomFactorModel: "independent_student_t",
-		ConfigHash:        configHash,
-		Parameters: simulation.SnapshotParameters{
-			CurrentAge: params.CurrentAge, RetirementAge: params.RetirementAge, EndAge: params.EndAge,
-			TotalAssetsMinor: params.TotalAssetsMinor, AnnualSavingsMinor: params.AnnualSavingsMinor,
-			AnnualSavingsGrowthRate: params.AnnualSavingsGrowthRate, AnnualSpendingMinor: params.AnnualSpendingMinor,
-			TerminalWealthFloorMinor: params.TerminalWealthFloorMinor,
-			InflationMode:            params.InflationMode, FixedInflationRate: params.FixedInflationRate,
-			InflationMu: params.InflationMu, InflationPhi: params.InflationPhi, InflationSigma: params.InflationSigma,
-			WithdrawalType: params.WithdrawalType, WithdrawalRate: params.WithdrawalRate,
-			WithdrawalFloorRatio: params.WithdrawalFloorRatio, WithdrawalCeilingRatio: params.WithdrawalCeilingRatio,
-			WithdrawalTaxRate: params.WithdrawalTaxRate, TaxableWithdrawalRatio: params.TaxableWithdrawalRatio,
-			RebalanceFrequency: params.RebalanceFrequency, RebalanceThreshold: params.RebalanceThreshold,
-			TransactionCostRate: params.TransactionCostRate, SimulationRuns: params.SimulationRuns,
-			StudentTDf: params.StudentTDf, Seed: strconv.FormatInt(*seed, 10),
-		},
-		Assets:    assets,
-		CashFlows: cfSnap,
-	}
-	in.MarketSnapshotHash = simulation.MarketHashFromAssets(assets)
-
+	in := buildInputSnapshotStruct(plan, params, *seed, configHash, assets, cfSnap)
 	inputHash, err := simulation.HashInput(in)
 	if err != nil {
-		return nil, "", err
+		return nil, "", wrapRepo("hash simulation input", err)
 	}
 	return in, inputHash, nil
 }
@@ -460,7 +359,7 @@ func validateSimulationReady(p repository.PlanParameters) error {
 	}
 	denom := 1 - p.WithdrawalTaxRate*p.TaxableWithdrawalRatio
 	if denom <= 0 {
-		return fmt.Errorf("withdrawal tax parameters invalid: denominator must be > 0")
+		return errWithdrawalTaxInvalid
 	}
 	return nil
 }
@@ -468,7 +367,7 @@ func validateSimulationReady(p repository.PlanParameters) error {
 func randomSeed() (int64, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1<<62))
 	if err != nil {
-		return time.Now().UnixNano(), nil
+		return 0, fmt.Errorf("generate random seed: %w", err)
 	}
 	return n.Int64(), nil
 }

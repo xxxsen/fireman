@@ -1,17 +1,22 @@
-// Package db owns SQLite connection management, PRAGMA enforcement and
-// transaction helpers. Higher-level repositories live under internal/repository
-// and consume *sql.DB instances created here.
 package db
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // SQLite driver registered for sql.Open("sqlite", ...)
+)
+
+var (
+	errSelectOneUnexpected     = errors.New("db: select 1 returned unexpected value")
+	errEmptyDatabasePath       = errors.New("db: empty database path")
+	errMissingSchemaMigrations = errors.New("db: missing schema_migrations table")
+	errMigrationsNotRegistered = errors.New("db: migrations filesystem not registered")
 )
 
 // pragmaStatements lists the PRAGMA statements that MUST be applied to every
@@ -28,7 +33,7 @@ var pragmaStatements = []string{
 // are applied to every newly created connection via a connector hook.
 func Open(ctx context.Context, dbPath string) (*sql.DB, error) {
 	if strings.TrimSpace(dbPath) == "" {
-		return nil, fmt.Errorf("db: empty database path")
+		return nil, errEmptyDatabasePath
 	}
 	abs, err := filepath.Abs(dbPath)
 	if err != nil {
@@ -66,7 +71,7 @@ func Ping(ctx context.Context, pool *sql.DB) error {
 		return fmt.Errorf("db: select 1 failed: %w", err)
 	}
 	if one != 1 {
-		return fmt.Errorf("db: select 1 returned %d", one)
+		return fmt.Errorf("%w: %d", errSelectOneUnexpected, one)
 	}
 	return nil
 }
@@ -79,7 +84,7 @@ func applyPragmas(ctx context.Context, pool *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("db: acquire connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	for _, stmt := range pragmaStatements {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("db: apply %q: %w", stmt, err)

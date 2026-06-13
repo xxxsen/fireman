@@ -129,9 +129,10 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 			return nil, newErr("instrument_not_found", "instrument not found", nil)
 		}
 		if strings.Contains(msg, "instrument_type_mismatch") {
-			return nil, newErr("instrument_type_mismatch", "code belongs to a different instrument type; try cn_mutual_fund for off-exchange funds", map[string]any{
-				"suggested_instrument_type": "cn_mutual_fund",
-			})
+			return nil, newErr("instrument_type_mismatch",
+				"code belongs to a different instrument type; try cn_mutual_fund for off-exchange funds", map[string]any{
+					"suggested_instrument_type": "cn_mutual_fund",
+				})
 		}
 		if strings.Contains(msg, "invalid_request") {
 			return nil, newErr("invalid_request", msg, nil)
@@ -188,9 +189,11 @@ func (s *InstrumentService) buildResolveCandidate(
 	return out, nil
 }
 
-func (s *InstrumentService) createResolutionTicket(ctx context.Context, market, instrumentType string, c marketdata.ResolveCandidate) (string, error) {
+func (s *InstrumentService) createResolutionTicket(ctx context.Context, market, instrumentType string,
+	c marketdata.ResolveCandidate,
+) (string, error) {
 	if s.tickets == nil {
-		return "", errors.New("resolution ticket repo not configured")
+		return "", errResolutionTicketRepo
 	}
 	id := "tkt_" + uuid.New().String()
 	now := time.Now()
@@ -207,12 +210,14 @@ func (s *InstrumentService) createResolutionTicket(ctx context.Context, market, 
 		ExpiresAt:      now.Add(resolutionTicketTTL).UnixMilli(),
 	}
 	if err := s.tickets.Create(ctx, nil, ticket); err != nil {
-		return "", err
+		return "", wrapRepo("create resolution ticket", err)
 	}
 	return id, nil
 }
 
-func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImportAsyncRequest) (InstrumentImportAsyncResult, error) {
+func (s *InstrumentService) ImportAsync(ctx context.Context,
+	req InstrumentImportAsyncRequest,
+) (InstrumentImportAsyncResult, error) {
 	req.TicketID = strings.TrimSpace(req.TicketID)
 	req.AssetClass = strings.TrimSpace(req.AssetClass)
 	req.Region = strings.TrimSpace(req.Region)
@@ -220,13 +225,13 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 		return InstrumentImportAsyncResult{}, newErr("invalid_request", "ticket_id is required", nil)
 	}
 	if err := validateUserAssetClass(req.AssetClass); err != nil {
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, wrapRepo("load instrument", err)
 	}
 	if err := validateUserRegion(req.Region); err != nil {
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, wrapRepo("load instrument", err)
 	}
 	if s.tickets == nil {
-		return InstrumentImportAsyncResult{}, errors.New("resolution ticket repo not configured")
+		return InstrumentImportAsyncResult{}, errResolutionTicketRepo
 	}
 
 	ticketPreview, err := s.tickets.GetByID(ctx, req.TicketID)
@@ -239,97 +244,24 @@ func (s *InstrumentService) ImportAsync(ctx context.Context, req InstrumentImpor
 	adjust := marketdata.DefaultAdjustPolicy(instrumentType)
 	inputHash := instrumentFetchInputHash(market, instrumentType, code, adjust)
 
-	if existing, err := s.instRepo.FindByKey(ctx, market, instrumentType, code, adjust); err == nil {
-		if existing.Status == "active" || existing.Status == "fetch_failed" {
-			return InstrumentImportAsyncResult{}, newErr("instrument_already_exists", "instrument already imported", map[string]any{"instrument_id": existing.ID})
-		}
-		if existing.Status == "pending_fetch" {
-			if job, err := s.jobs.FindInProgressByInputHash(ctx, repository.JobTypeInstrumentFetch, inputHash); err == nil {
-				return InstrumentImportAsyncResult{}, newErr("instrument_fetch_in_progress", "instrument fetch already in progress", map[string]any{
-					"instrument_id": existing.ID, "job_id": job.ID,
-				})
-			}
-		}
-	} else if !errors.Is(err, repository.ErrInstrumentNotFound) {
+	if err := s.checkExistingInstrumentImport(ctx, market, instrumentType, code, adjust, inputHash); err != nil {
+		return InstrumentImportAsyncResult{}, err
+	}
+	if err := s.checkInProgressFetchJob(ctx, inputHash); err != nil {
 		return InstrumentImportAsyncResult{}, err
 	}
 
-	if job, err := s.jobs.FindInProgressByInputHash(ctx, repository.JobTypeInstrumentFetch, inputHash); err == nil {
-		var payload InstrumentFetchPayload
-		_ = json.Unmarshal([]byte(job.PayloadJSON), &payload)
-		details := map[string]any{"job_id": job.ID}
-		if payload.InstrumentID != "" {
-			details["instrument_id"] = payload.InstrumentID
-		}
-		return InstrumentImportAsyncResult{}, newErr("instrument_fetch_in_progress", "instrument fetch already in progress", details)
-	} else if !errors.Is(err, repository.ErrJobNotFound) {
-		return InstrumentImportAsyncResult{}, err
-	}
-
-	instID := "ins_" + uuid.New().String()
-	jobID := "job_" + uuid.New().String()
-	var ticket repository.ResolutionTicket
-	var providerSymbol string
-	inst := repository.InstrumentRecord{}
-	payload := InstrumentFetchPayload{}
-	payloadJSON := []byte{}
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		ticket, err = s.tickets.Consume(ctx, tx, req.TicketID)
-		if err != nil {
-			return mapTicketError(err)
-		}
-		if !IsImportableCandidate(ticket.InstrumentType, ticket.InstrumentKind) {
-			return newErr("invalid_request", "instrument kind is not compatible with instrument type", map[string]any{
-				"instrument_type": ticket.InstrumentType, "instrument_kind": ticket.InstrumentKind,
-			})
-		}
-		providerSymbol = ticket.ProviderSymbol
-		inst = repository.InstrumentRecord{
-			ID: instID, Code: code, Name: ticket.Name,
-			Market: market, InstrumentType: instrumentType,
-			AssetClass: req.AssetClass, Region: req.Region, Currency: defaultCurrency(market),
-			Provider: "akshare", ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
-			ExpenseRatioStatus: "unavailable",
-			FeeTreatment:       marketdata.FeeTreatmentForType(instrumentType),
-			Status:             "pending_fetch",
-		}
-		payload = InstrumentFetchPayload{
-			InstrumentID: instID, Market: market, InstrumentType: instrumentType,
-			Code: code, ProviderSymbol: providerSymbol, AdjustPolicy: adjust,
-			ResolvedName: ticket.Name, UserAssetClass: req.AssetClass, UserRegion: req.Region,
-		}
-		payloadJSON, err = json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		if _, findErr := s.instRepo.FindByKey(ctx, market, instrumentType, code, adjust); findErr == nil {
-			return newErr("instrument_already_exists", "instrument already imported", nil)
-		} else if !errors.Is(findErr, repository.ErrInstrumentNotFound) {
-			return findErr
-		}
-		if err := s.instRepo.Create(ctx, tx, inst); err != nil {
-			return err
-		}
-		if err := s.jobs.Create(ctx, tx, repository.Job{
-			ID: jobID, Type: repository.JobTypeInstrumentFetch, Status: repository.JobStatusQueued,
-			InputHash: inputHash, PayloadJSON: string(payloadJSON),
-			ProgressTotal: 1, Phase: "queued",
-		}); err != nil {
-			if repository.IsJobUniqueConstraint(err) {
-				return s.returnFetchInProgress(ctx, inputHash)
-			}
-			return err
-		}
-		return nil
-	})
+	pending, err := s.createPendingInstrumentImport(ctx, req, market, instrumentType, code, adjust, inputHash)
 	if err != nil {
 		var ae *AppError
 		if errors.As(err, &ae) {
 			return InstrumentImportAsyncResult{}, ae
 		}
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, wrapRepo("import instrument async", err)
 	}
-	return InstrumentImportAsyncResult{InstrumentID: instID, JobID: jobID, Status: "pending_fetch"}, nil
+	return InstrumentImportAsyncResult{
+		InstrumentID: pending.instID, JobID: pending.jobID, Status: "pending_fetch",
+	}, nil
 }
 
 func mapTicketError(err error) error {
@@ -348,7 +280,7 @@ func mapTicketError(err error) error {
 func (s *InstrumentService) returnFetchInProgress(ctx context.Context, inputHash string) error {
 	job, err := s.jobs.FindInProgressByInputHash(ctx, repository.JobTypeInstrumentFetch, inputHash)
 	if err != nil {
-		return err
+		return wrapRepo("find in-progress fetch job", err)
 	}
 	var payload InstrumentFetchPayload
 	_ = json.Unmarshal([]byte(job.PayloadJSON), &payload)
@@ -376,7 +308,7 @@ func (s *InstrumentService) GetFetchStatus(ctx context.Context, instrumentID str
 		if errors.Is(err, repository.ErrInstrumentNotFound) {
 			return InstrumentFetchStatus{}, newErr("instrument_not_found", "instrument not found", nil)
 		}
-		return InstrumentFetchStatus{}, err
+		return InstrumentFetchStatus{}, wrapRepo("load instrument", err)
 	}
 	out := InstrumentFetchStatus{
 		InstrumentID: instrumentID, InstrumentStatus: inst.Status,
@@ -386,7 +318,7 @@ func (s *InstrumentService) GetFetchStatus(ctx context.Context, instrumentID str
 		return out, nil
 	}
 	if err != nil {
-		return InstrumentFetchStatus{}, err
+		return InstrumentFetchStatus{}, wrapRepo("find latest fetch job", err)
 	}
 	out.JobID = job.ID
 	out.JobStatus = job.Status
@@ -404,18 +336,23 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 		if errors.Is(err, repository.ErrInstrumentNotFound) {
 			return InstrumentImportAsyncResult{}, newErr("instrument_not_found", "instrument not found", nil)
 		}
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, wrapRepo("load instrument", err)
 	}
 	if inst.Status != "fetch_failed" {
-		return InstrumentImportAsyncResult{}, newErr("invalid_request", "retry is only allowed for fetch_failed instruments", nil)
+		return InstrumentImportAsyncResult{}, newErr(
+			"invalid_request",
+			"retry is only allowed for fetch_failed instruments",
+			nil,
+		)
 	}
 	inputHash := instrumentFetchInputHash(inst.Market, inst.InstrumentType, inst.Code, inst.AdjustPolicy)
 	if job, err := s.jobs.FindInProgressByInputHash(ctx, repository.JobTypeInstrumentFetch, inputHash); err == nil {
-		return InstrumentImportAsyncResult{}, newErr("instrument_fetch_in_progress", "instrument fetch already in progress", map[string]any{
-			"instrument_id": instrumentID, "job_id": job.ID,
-		})
+		return InstrumentImportAsyncResult{}, newErr("instrument_fetch_in_progress", "instrument fetch already in progress",
+			map[string]any{
+				"instrument_id": instrumentID, "job_id": job.ID,
+			})
 	} else if !errors.Is(err, repository.ErrJobNotFound) {
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, wrapRepo("find in-progress fetch job", err)
 	}
 
 	jobID := "job_" + uuid.New().String()
@@ -426,12 +363,12 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, fmt.Errorf("marshal fetch payload: %w", err)
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		if err := s.instRepo.UpdateStatusTx(ctx, tx, instrumentID, "pending_fetch"); err != nil {
-			return err
+			return wrapRepo("update instrument status", err)
 		}
 		if err := s.jobs.Create(ctx, tx, repository.Job{
 			ID: jobID, Type: repository.JobTypeInstrumentFetch, Status: repository.JobStatusQueued,
@@ -441,7 +378,7 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 			if repository.IsJobUniqueConstraint(err) {
 				return s.returnFetchInProgress(ctx, inputHash)
 			}
-			return err
+			return wrapRepo("create retry fetch job", err)
 		}
 		return nil
 	})
@@ -450,14 +387,15 @@ func (s *InstrumentService) RetryFetch(ctx context.Context, instrumentID string)
 		if errors.As(err, &ae) {
 			return InstrumentImportAsyncResult{}, ae
 		}
-		return InstrumentImportAsyncResult{}, err
+		return InstrumentImportAsyncResult{}, wrapRepo("retry instrument fetch", err)
 	}
 	return InstrumentImportAsyncResult{InstrumentID: instrumentID, JobID: jobID, Status: "pending_fetch"}, nil
 }
 
 func (s *InstrumentService) ensureNoFetchInProgress(ctx context.Context, inst repository.InstrumentRecord) error {
 	if inst.Status == "pending_fetch" {
-		return newErr("instrument_fetch_in_progress", "instrument fetch in progress", map[string]any{"instrument_id": inst.ID})
+		return newErr("instrument_fetch_in_progress", "instrument fetch in progress",
+			map[string]any{"instrument_id": inst.ID})
 	}
 	inputHash := instrumentFetchInputHash(inst.Market, inst.InstrumentType, inst.Code, inst.AdjustPolicy)
 	if job, err := s.jobs.FindInProgressByInputHash(ctx, repository.JobTypeInstrumentFetch, inputHash); err == nil {
@@ -465,7 +403,7 @@ func (s *InstrumentService) ensureNoFetchInProgress(ctx context.Context, inst re
 			"instrument_id": inst.ID, "job_id": job.ID,
 		})
 	} else if !errors.Is(err, repository.ErrJobNotFound) {
-		return err
+		return wrapRepo("find in-progress fetch job", err)
 	}
 	return nil
 }
@@ -486,9 +424,10 @@ func EnsureInstrumentReadyForPlan(inst repository.Instrument, qualityStatus stri
 		})
 	}
 	if qualityStatus != "available" {
-		return newErr("instrument_insufficient_history", "instrument does not have enough complete years for simulation", map[string]any{
-			"instrument_id": inst.ID, "quality_status": qualityStatus,
-		})
+		return newErr("instrument_insufficient_history", "instrument does not have enough complete years for simulation",
+			map[string]any{
+				"instrument_id": inst.ID, "quality_status": qualityStatus,
+			})
 	}
 	return nil
 }

@@ -94,7 +94,7 @@ func getRebalanceSummary(t *testing.T, srv *httptest.Server, planID string) map[
 func TestRebalanceAPI_StructuralHoldWhenScaleOver(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedBondPlanWithHoldingAmount(t, db, 450_000_00, 500_000_00)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 
 	summary := getRebalanceSummary(t, srv, planID)
@@ -112,7 +112,7 @@ func TestRebalanceAPI_StructuralHoldWhenScaleOver(t *testing.T) {
 func TestRebalanceAPI_StructuralHoldWhenScaleUnder(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedBondPlanWithHoldingAmount(t, db, 450_000_00, 400_000_00)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 
 	summary := getRebalanceSummary(t, srv, planID)
@@ -127,7 +127,7 @@ func TestRebalanceAPI_StructuralHoldWhenScaleUnder(t *testing.T) {
 func TestRebalanceExportCSV_UsesStructuralColumns(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedBondPlanWithHoldingAmount(t, db, 450_000_00, 500_000_00)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/v1/plans/" + planID + "/export/rebalance.csv")

@@ -7,8 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	fdb "github.com/fireman/fireman/internal/db"
-	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/repository"
 )
 
@@ -35,20 +33,11 @@ type PlanWizardRequest struct {
 
 // CreateWizard creates a complete plan in a single transaction.
 func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (PlanDetail, error) {
-	if req.Name == "" || req.ValuationDate == "" {
-		return PlanDetail{}, newErr("validation_failed", "name and valuation_date are required", nil)
-	}
-	if req.SelectedScenarioID == "" {
-		return PlanDetail{}, newErr("validation_failed", "selected_scenario_id is required", nil)
+	if err := validateWizardRequest(req); err != nil {
+		return PlanDetail{}, err
 	}
 	if req.BaseCurrency == "" {
 		req.BaseCurrency = "CNY"
-	}
-	if len(req.Holdings) == 0 {
-		return PlanDetail{}, newErr("validation_failed", "at least one holding is required", nil)
-	}
-	if err := validateRegionTargets(req.RegionTargets); err != nil {
-		return PlanDetail{}, newErr("validation_failed", err.Error(), nil)
 	}
 
 	scenarioID := req.SelectedScenarioID
@@ -66,101 +55,31 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 		if errors.Is(err, repository.ErrScenarioNotFound) {
 			return PlanDetail{}, newErr("scenario_not_found", "scenario not found", nil)
 		}
+		return PlanDetail{}, wrapRepo("get scenario for wizard", err)
+	}
+
+	gap, err := wizardHoldingsGap(params, req)
+	if err != nil {
 		return PlanDetail{}, err
 	}
 
-	enabledSum := int64(0)
-	for _, h := range req.Holdings {
-		if h.Enabled {
-			enabledSum += h.CurrentAmountMinor
-		}
-	}
-	gap := params.TotalAssetsMinor - enabledSum
-	if gap < -100 {
-		return PlanDetail{}, newErr("holdings_exceed_total", "enabled holdings exceed total assets", map[string]any{
-			"total_assets_minor": params.TotalAssetsMinor, "holdings_sum_minor": enabledSum,
-		})
-	}
-	if gap > 100 && !req.ApplyUnallocatedToCash {
-		return PlanDetail{}, newErr("unallocated_gap_unresolved", "unallocated gap must be applied to cash or resolved via holdings", map[string]any{
-			"gap_minor": gap,
-		})
-	}
-
 	planID := "plan_" + uuid.New().String()
-
-	instruments := make(map[string]repository.Instrument, len(req.Holdings))
-	for _, item := range req.Holdings {
-		instRec, err := s.instRepo.GetByID(ctx, item.InstrumentID)
-		if err != nil {
-			if errors.Is(err, repository.ErrInstrumentNotFound) {
-				return PlanDetail{}, newErr("instrument_not_found", "instrument not found", map[string]any{"instrument_id": item.InstrumentID})
-			}
-			return PlanDetail{}, err
-		}
-		if _, err := EvaluateInstrumentForPlan(ctx, instRec, s.marketRepo, req.ValuationDate); err != nil {
-			return PlanDetail{}, err
-		}
-		inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
-		if err != nil {
-			return PlanDetail{}, err
-		}
-		instruments[item.InstrumentID] = inst
+	instruments, err := s.loadWizardInstruments(ctx, req.Holdings, req.ValuationDate)
+	if err != nil {
+		return PlanDetail{}, err
 	}
-
-	type pendingSnap struct {
-		snap repository.SimulationSnapshot
-		skip bool
-	}
-	pending := make([]pendingSnap, 0, len(req.Holdings))
-	for _, item := range req.Holdings {
-		snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, item.InstrumentID, req.ValuationDate)
-		if err != nil {
-			return PlanDetail{}, MapSnapshotError(err)
-		}
-		pending = append(pending, pendingSnap{snap: snap, skip: snap.ID == repository.SystemCashSnapshotID})
+	pending, err := s.buildWizardPendingSnaps(ctx, planID, req.ValuationDate, req.Holdings)
+	if err != nil {
+		return PlanDetail{}, err
 	}
 
 	alloc := repository.PlanAllocation{
 		AssetClassTargets: scn.Weights,
 		RegionTargets:     req.RegionTargets,
 	}
-
-	var built []repository.PlanHolding
-	for i, item := range req.Holdings {
-		inst := instruments[item.InstrumentID]
-		snap := pending[i].snap
-		built = append(built, repository.PlanHolding{
-			ID: "hold_" + uuid.New().String(), PlanID: planID,
-			InstrumentID: item.InstrumentID, Enabled: item.Enabled,
-			AssetClass: inst.AssetClass, Region: inst.Region,
-			WeightWithinGroup: item.WeightWithinGroup, CurrentAmountMinor: item.CurrentAmountMinor,
-			SimulationSnapshotID: snap.ID, SortOrder: item.SortOrder,
-		})
-	}
-
-	if req.ApplyUnallocatedToCash && gap > 100 {
-		built = append(built, repository.PlanHolding{
-			ID: "hold_" + uuid.New().String(), PlanID: planID,
-			InstrumentID: repository.SystemCashInstrumentID, Enabled: true,
-			AssetClass: domain.AssetClassCash, Region: domain.RegionDomestic,
-			WeightWithinGroup: 1.0, CurrentAmountMinor: gap,
-			SimulationSnapshotID: repository.SystemCashSnapshotID, SortOrder: 9999,
-		})
-	}
-
-	da := toDomainAllocation(alloc)
-	dh := holdingsToDomain(built)
-	check := domain.ValidateAllWeights(da, dh)
-	if !check.Passed {
-		msg := "holding weights invalid"
-		for _, c := range check.Checks {
-			if !c.Passed && c.Message != "" {
-				msg = c.Message
-				break
-			}
-		}
-		return PlanDetail{}, newErr("plan_weights_invalid", msg, map[string]any{"checks": check.Checks})
+	built := buildWizardHoldings(planID, req, instruments, pending, gap)
+	if err := validateWizardWeights(alloc, built); err != nil {
+		return PlanDetail{}, err
 	}
 
 	plan := repository.Plan{
@@ -169,28 +88,9 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 	}
 	params.PlanID = planID
 
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.plans.CreateTx(ctx, tx, plan); err != nil {
-			return err
-		}
-		for _, ps := range pending {
-			if ps.skip {
-				continue
-			}
-			if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, ps.snap); err != nil {
-				return err
-			}
-		}
-		if err := s.params.Upsert(ctx, tx, params); err != nil {
-			return err
-		}
-		if err := s.alloc.Replace(ctx, tx, planID, alloc); err != nil {
-			return err
-		}
-		return s.holdings.Replace(ctx, tx, planID, built)
-	})
+	err = s.saveWizardPlanTx(ctx, plan, params, alloc, pending, built)
 	if err != nil {
-		return PlanDetail{}, err
+		return PlanDetail{}, wrapRepo("create wizard tx", err)
 	}
 	return s.Get(ctx, planID)
 }
@@ -199,14 +99,15 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 func CountPlans(ctx context.Context, db *sql.DB) (int, error) {
 	var n int
 	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plans`).Scan(&n)
-	return n, err
+	return n, wrapRepo("count plans", err)
 }
 
 // CountSnapshots returns plan-specific simulation snapshots count.
 func CountSnapshots(ctx context.Context, db *sql.DB) (int, error) {
 	var n int
-	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM instrument_simulation_snapshots WHERE plan_id IS NOT NULL`).Scan(&n)
-	return n, err
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM instrument_simulation_snapshots WHERE plan_id IS NOT NULL`).Scan(&n)
+	return n, wrapRepo("count snapshots", err)
 }
 
 // WizardErrorCode extracts business error code for tests.

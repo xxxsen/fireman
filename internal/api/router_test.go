@@ -24,7 +24,7 @@ func mustDB(t *testing.T) *sql.DB {
 
 func TestHealthz_OK(t *testing.T) {
 	pool := mustDB(t)
-	r := NewRouter(Deps{DB: pool})
+	r := NewRouter(context.Background(), Deps{DB: pool})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestHealthz_OK(t *testing.T) {
 func TestHealthz_DBUnavailable(t *testing.T) {
 	pool := mustDB(t)
 	_ = pool.Close()
-	r := NewRouter(Deps{DB: pool})
+	r := NewRouter(context.Background(), Deps{DB: pool})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()

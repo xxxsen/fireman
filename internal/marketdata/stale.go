@@ -5,7 +5,7 @@ import "time"
 const staleWarningMessage = "数据可能过期"
 
 // DataStale reports whether market data is older than seven calendar days.
-func DataStale(lastTradeDate string, asOf time.Time) (stale bool, warning string) {
+func DataStale(lastTradeDate string, asOf time.Time) (bool, string) {
 	if lastTradeDate == "" {
 		return false, ""
 	}

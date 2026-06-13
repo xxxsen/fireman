@@ -29,7 +29,7 @@ type PerturbationPoint struct {
 
 // DefaultPerturbations returns the seven default parameter grids.
 func DefaultPerturbations() []PerturbationPoint {
-	var out []PerturbationPoint
+	out := make([]PerturbationPoint, 0, 35)
 	out = append(out, pctPoints(ParamInitialAssets, "初始总资产", []float64{-0.20, -0.10, 0, 0.10, 0.20})...)
 	out = append(out, pctPoints(ParamAnnualSpending, "退休后年支出", []float64{-0.20, -0.10, 0, 0.10, 0.20})...)
 	out = append(out, ppPoints(ParamFixedInflation, "固定通胀率", []float64{-0.02, -0.01, 0, 0.01, 0.02})...)
@@ -135,55 +135,21 @@ func itoa(v int) string {
 // ApplyPerturbation returns a copy of the input with one perturbation applied.
 func ApplyPerturbation(base *simulation.InputSnapshot, pt PerturbationPoint) (*simulation.InputSnapshot, error) {
 	cp := cloneSnapshot(base)
-	p := &cp.Parameters
 	switch pt.ParameterID {
 	case ParamInitialAssets:
-		scale := 1 + pt.Delta
-		p.TotalAssetsMinor = int64(math.Round(float64(p.TotalAssetsMinor) * scale))
-		for i := range cp.Assets {
-			cp.Assets[i].InitialMinor = int64(math.Round(float64(cp.Assets[i].InitialMinor) * scale))
-		}
+		applyInitialAssetsPerturbation(&cp, pt.Delta)
 	case ParamAnnualSpending:
-		scale := 1 + pt.Delta
-		p.AnnualSpendingMinor = int64(math.Round(float64(p.AnnualSpendingMinor) * scale))
+		applyAnnualSpendingPerturbation(&cp, pt.Delta)
 	case ParamFixedInflation:
-		p.FixedInflationRate += pt.Delta
-		if p.FixedInflationRate < -0.02 {
-			p.FixedInflationRate = -0.02
-		}
-		if p.FixedInflationRate > 0.20 {
-			p.FixedInflationRate = 0.20
-		}
+		applyFixedInflationPerturbation(&cp, pt.Delta)
 	case ParamNonCashReturn:
-		for i := range cp.Assets {
-			if cp.Assets[i].IsCash || cp.Assets[i].AssetClass == domain.AssetClassCash {
-				continue
-			}
-			cp.Assets[i].ModeledAnnualReturn += pt.Delta
-			if cp.Assets[i].ModeledAnnualReturn < simulation.ReturnFloor {
-				cp.Assets[i].ModeledAnnualReturn = simulation.ReturnFloor
-			}
-		}
+		applyNonCashReturnPerturbation(&cp, pt.Delta)
 	case ParamEquityWeight:
 		applyEquityWeightDelta(&cp, pt.Delta)
 	case ParamRetirementAge:
-		age := p.RetirementAge + int(pt.Delta)
-		if age < p.CurrentAge {
-			age = p.CurrentAge
-		}
-		if age >= p.EndAge {
-			age = p.EndAge - 1
-		}
-		p.RetirementAge = age
+		applyRetirementAgePerturbation(&cp, pt.Delta)
 	case ParamEndAge:
-		age := p.EndAge + int(pt.Delta)
-		if age <= p.RetirementAge {
-			age = p.RetirementAge + 1
-		}
-		if age > 120 {
-			age = 120
-		}
-		p.EndAge = age
+		applyEndAgePerturbation(&cp, pt.Delta)
 	}
 	return &cp, nil
 }

@@ -2,7 +2,7 @@
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { SaveBar } from "@/components/ui/SaveBar";
 import { usePlanEdit } from "@/hooks/usePlanEdit";
@@ -26,9 +26,9 @@ export function AllocationSettings() {
   const returnTo = searchParams.get("return");
   const queryClient = useQueryClient();
   const { markDirty, markClean } = usePlanEdit();
-  const [assetTargets, setAssetTargets] = useState<AssetClassTarget[]>([]);
-  const [regionTargets, setRegionTargets] = useState<RegionTarget[]>([]);
-  const [selectedScenarioId, setSelectedScenarioId] = useState("");
+  const [localAssetTargets, setLocalAssetTargets] = useState<AssetClassTarget[] | null>(null);
+  const [localRegionTargets, setLocalRegionTargets] = useState<RegionTarget[] | null>(null);
+  const [localScenarioId, setLocalScenarioId] = useState<string | null>(null);
   const [allocationDirty, setAllocationDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -49,12 +49,16 @@ export function AllocationSettings() {
     queryFn: listScenarios,
   });
 
-  useEffect(() => {
-    if (!allocation.data || !parameters.data || allocationDirty) return;
-    setAssetTargets(allocation.data.asset_class_targets);
-    setRegionTargets(allocation.data.region_targets);
-    setSelectedScenarioId(parameters.data.parameters.selected_scenario_id ?? "");
-  }, [allocation.data, parameters.data, allocationDirty]);
+  const assetTargets =
+    allocationDirty && localAssetTargets
+      ? localAssetTargets
+      : (allocation.data?.asset_class_targets ?? []);
+  const regionTargets =
+    allocationDirty && localRegionTargets
+      ? localRegionTargets
+      : (allocation.data?.region_targets ?? []);
+  const selectedScenarioId =
+    localScenarioId ?? parameters.data?.parameters.selected_scenario_id ?? "";
 
   const assetCheck = validatePercentSum(
     assetTargets.map((target) => ({
@@ -93,6 +97,9 @@ export function AllocationSettings() {
     },
     onSuccess: () => {
       markClean();
+      setLocalAssetTargets(null);
+      setLocalRegionTargets(null);
+      setLocalScenarioId(null);
       setAllocationDirty(false);
       setSaveError(null);
       for (const key of ["plan", "parameters", "allocation", "targets", "dashboard"]) {
@@ -120,7 +127,7 @@ export function AllocationSettings() {
             className="mt-1 w-full rounded-md border px-3 py-2"
             value={selectedScenarioId}
             onChange={(event) => {
-              setSelectedScenarioId(event.target.value);
+              setLocalScenarioId(event.target.value);
               setAllocationDirty(true);
               markDirty();
             }}
@@ -146,7 +153,7 @@ export function AllocationSettings() {
               onChange={(value) => {
                 const next = [...assetTargets];
                 next[index] = { ...target, weight: value };
-                setAssetTargets(next);
+                setLocalAssetTargets(next);
                 setAllocationDirty(true);
                 markDirty();
               }}
@@ -178,7 +185,7 @@ export function AllocationSettings() {
                       onChange={(value) => {
                         const next = [...regionTargets];
                         next[index] = { ...target, weight_within_class: value };
-                        setRegionTargets(next);
+                        setLocalRegionTargets(next);
                         setAllocationDirty(true);
                         markDirty();
                       }}

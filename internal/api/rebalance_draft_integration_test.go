@@ -15,17 +15,17 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-func seedThreeHoldingsRebalancePlan(t *testing.T, db *sql.DB) (planID string, instIDs []string) {
+func seedThreeHoldingsRebalancePlan(t *testing.T, db *sql.DB) (string, []string) {
 	t.Helper()
 	plan := createTestPlan(t, db)
-	planID = plan.ID
+	planID := plan.ID
 	now := time.Now().UnixMilli()
 	snapRepo := repository.NewSnapshotRepo(db)
 	holdRepo := repository.NewHoldingsRepo(db)
 
 	amounts := []int64{120_000_00, 90_000_00, 90_000_00}
 	weights := []float64{0.3334, 0.3333, 0.3333}
-	instIDs = []string{"ins_rbd_a", "ins_rbd_b", "ins_rbd_c"}
+	instIDs := []string{"ins_rbd_a", "ins_rbd_b", "ins_rbd_c"}
 
 	for i, instID := range instIDs {
 		if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
@@ -96,7 +96,7 @@ func seedInstrumentMarketData(t *testing.T, db *sql.DB, instID string) {
 func TestRebalanceDraftCRUDFlow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -130,7 +130,7 @@ func TestRebalanceDraftCRUDFlow(t *testing.T) {
 		"stage": true,
 		"lines": []map[string]any{{"line_id": lineID, "planned_current_minor": planned}},
 	})
-	resp, err = client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err = client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(patchBody)))
 	if err != nil {
@@ -184,7 +184,7 @@ func TestRebalanceDraftCRUDFlow(t *testing.T) {
 	}
 
 	// stage again and commit
-	resp, err = client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err = client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(patchBody)))
 	if err != nil {
@@ -251,20 +251,21 @@ func TestRebalanceDraftCRUDFlow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() { _ = resp2.Body.Close() }()
 		if resp2.StatusCode != http.StatusOK {
 			t.Fatalf("cancel status=%d", resp2.StatusCode)
 		}
 	}
 }
 
-func mustNewRequest(t *testing.T, method, url string, body *bytes.Reader) *http.Request {
+func mustPatchRequest(t *testing.T, url string, body *bytes.Reader) *http.Request {
 	t.Helper()
 	var req *http.Request
 	var err error
 	if body != nil {
-		req, err = http.NewRequest(method, url, body)
+		req, err = http.NewRequest(http.MethodPatch, url, body)
 	} else {
-		req, err = http.NewRequest(method, url, nil)
+		req, err = http.NewRequest(http.MethodPatch, url, nil)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -273,9 +274,10 @@ func mustNewRequest(t *testing.T, method, url string, body *bytes.Reader) *http.
 	return req
 }
 
-func createRebalanceDraft(t *testing.T, client *http.Client, baseURL, planID string) (draftID, lineID string, version int) {
+func createRebalanceDraft(t *testing.T, client *http.Client, baseURL, planID string) (string, string, int) {
 	t.Helper()
-	resp, err := client.Post(baseURL+"/api/v1/plans/"+planID+"/rebalance-drafts", "application/json", bytes.NewReader([]byte(`{}`)))
+	resp, err := client.Post(baseURL+"/api/v1/plans/"+planID+"/rebalance-drafts", "application/json",
+		bytes.NewReader([]byte(`{}`)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,23 +288,23 @@ func createRebalanceDraft(t *testing.T, client *http.Client, baseURL, planID str
 	env := decodeEnvelope(t, body)
 	data := env["data"].(map[string]any)
 	draft := data["draft"].(map[string]any)
-	draftID = draft["id"].(string)
+	draftID := draft["id"].(string)
 	lines := data["lines"].([]any)
-	lineID = lines[0].(map[string]any)["id"].(string)
+	lineID := lines[0].(map[string]any)["id"].(string)
 
 	planResp, err := client.Get(baseURL + "/api/v1/plans/" + planID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	planEnv := decodeEnvelope(t, mustRead(t, planResp))
-	version = int(planEnv["data"].(map[string]any)["config_version"].(float64))
+	version := int(planEnv["data"].(map[string]any)["config_version"].(float64))
 	return draftID, lineID, version
 }
 
 func TestAssetRefreshPOST(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -344,12 +346,12 @@ func TestAssetRefreshPOST(t *testing.T) {
 func TestRebalanceDraftCommitFundPoolImbalanced(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, version := createRebalanceDraft(t, client, srv.URL, planID)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -386,12 +388,12 @@ func TestRebalanceDraftCommitFundPoolImbalanced(t *testing.T) {
 func TestRebalanceDraftCommitVersionConflict(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, version := createRebalanceDraft(t, client, srv.URL, planID)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -432,7 +434,7 @@ func TestRebalanceDraftCommitVersionConflict(t *testing.T) {
 func TestRebalanceDraftCommitNegativeAmount(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -473,7 +475,7 @@ func mustJSONBytes(t *testing.T, v any) []byte {
 func TestRebalanceDraftPersistenceAfterGET(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -483,7 +485,7 @@ func TestRebalanceDraftPersistenceAfterGET(t *testing.T) {
 		"stage": true,
 		"lines": []map[string]any{{"line_id": lineID, "planned_current_minor": planned}},
 	})
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(patchBody)))
 	if err != nil {
@@ -516,14 +518,14 @@ func TestRebalanceDraftPersistenceAfterGET(t *testing.T) {
 func TestRebalanceDraftUndoRestoresStagedLineState(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, _ := createRebalanceDraft(t, client, srv.URL, planID)
 	stage := func(planned int64) {
 		t.Helper()
-		resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+		resp, err := client.Do(mustPatchRequest(t,
 			srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 			bytes.NewReader(mustJSONBytes(t, map[string]any{
 				"stage": true,
@@ -541,7 +543,8 @@ func TestRebalanceDraftUndoRestoresStagedLineState(t *testing.T) {
 
 	resp, err := client.Post(
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/undo",
-		"application/json", nil)
+		"application/json", nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +578,7 @@ func TestRebalanceDraftUndoRestoresStagedLineState(t *testing.T) {
 func TestAssetRefreshSyncScaleAndAuditEvent(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -642,7 +645,7 @@ func TestAssetRefreshSyncScaleAndAuditEvent(t *testing.T) {
 	}
 }
 
-func seedCashHolding(t *testing.T, db *sql.DB, planID string, amountMinor int64) string {
+func seedCashHolding(t *testing.T, db *sql.DB, planID string, amountMinor int64) {
 	t.Helper()
 	now := time.Now().UnixMilli()
 	holdID := "hold_system_cash"
@@ -655,13 +658,12 @@ func seedCashHolding(t *testing.T, db *sql.DB, planID string, amountMinor int64)
 		holdID, planID, repository.SystemCashInstrumentID, amountMinor, now, now); err != nil {
 		t.Fatal(err)
 	}
-	return holdID
 }
 
 func TestRebalanceDraftPackageDeltaFrozenOnPatch_PKG3(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -674,7 +676,7 @@ func TestRebalanceDraftPackageDeltaFrozenOnPatch_PKG3(t *testing.T) {
 	lines := env["data"].(map[string]any)["lines"].([]any)
 	beforeDelta := int64(lines[0].(map[string]any)["recommended_package_delta_minor"].(float64))
 
-	resp, err = client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err = client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -705,13 +707,13 @@ func TestRebalanceDraftCommitCashSweep_CS1(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
 	seedCashHolding(t, db, planID, 10_000_00)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, version := createRebalanceDraft(t, client, srv.URL, planID)
 	planned := int64(100_000_00)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -764,12 +766,12 @@ func TestRebalanceDraftCommitCashSweep_CS1(t *testing.T) {
 func TestRebalanceDraftCommitNoCashBlocked_CS2(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, version := createRebalanceDraft(t, client, srv.URL, planID)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -802,13 +804,13 @@ func TestRebalanceDraftCommitNoCashBlocked_CS2(t *testing.T) {
 func TestRebalanceDraftCommitScaleShrink_CS3(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, version := createRebalanceDraft(t, client, srv.URL, planID)
 	planned := int64(100_000_00)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -855,7 +857,7 @@ func TestRebalanceDraftCommitScaleShrink_CS3(t *testing.T) {
 func TestRebalanceDraftPatchSingleLineOthersUnchanged_APP1(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, _ := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -879,7 +881,7 @@ func TestRebalanceDraftPatchSingleLineOthersUnchanged_APP1(t *testing.T) {
 		}
 	}
 
-	resp, err = client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err = client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -921,7 +923,7 @@ func TestRebalanceDraftPatchSingleLineOthersUnchanged_APP1(t *testing.T) {
 func TestRebalanceDraftCommitCashSweepPostDraft_CS5(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -929,7 +931,7 @@ func TestRebalanceDraftCommitCashSweepPostDraft_CS5(t *testing.T) {
 	seedCashHolding(t, db, planID, 10_000_00)
 
 	planned := int64(100_000_00)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,
@@ -999,13 +1001,13 @@ func TestRebalanceDraftCommitCashSweepSnapshot_CS4(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
 	seedCashHolding(t, db, planID, 10_000_00)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
 	defer srv.Close()
 	client := srv.Client()
 
 	draftID, lineID, version := createRebalanceDraft(t, client, srv.URL, planID)
 	planned := int64(100_000_00)
-	resp, err := client.Do(mustNewRequest(t, http.MethodPatch,
+	resp, err := client.Do(mustPatchRequest(t,
 		srv.URL+"/api/v1/plans/"+planID+"/rebalance-drafts/"+draftID+"/lines",
 		bytes.NewReader(mustJSONBytes(t, map[string]any{
 			"stage": true,

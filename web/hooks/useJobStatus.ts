@@ -97,7 +97,7 @@ export function useJobStatus(jobId: string | null, options?: UseJobStatusOptions
           loading: false,
         }));
       },
-      onTerminal: (_ev) => {
+      onTerminal: () => {
         void getJob(jobId).then(applyJob).catch(startPolling);
       },
       onError: startPolling,

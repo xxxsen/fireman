@@ -14,7 +14,9 @@ type blockingRunner struct {
 	block time.Duration
 }
 
-func (b blockingRunner) RunSimulation(ctx context.Context, jobID, runID string, snap *simulation.InputSnapshot, cancelCheck func() bool, progress func(done, total int, phase string)) error {
+func (b blockingRunner) RunSimulation(ctx context.Context, _, _ string, _ *simulation.InputSnapshot,
+	_ func() bool, _ func(done, total int, phase string),
+) error {
 	select {
 	case <-ctx.Done():
 		return context.Canceled
@@ -47,7 +49,8 @@ func TestWorkerHeartbeatDuringLongTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 25 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 25 * time.Second}, nil, nil,
+		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go w.Start(runCtx, 1)

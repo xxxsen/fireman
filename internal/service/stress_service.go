@@ -69,15 +69,15 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 	}
 
 	if req.IdempotencyKey != "" {
-		existing, storedHash, err := s.jobs.FindIdempotency(ctx, req.PlanID, repository.JobTypeStress, req.IdempotencyKey)
-		if err == nil {
-			if storedHash != inputHash {
-				return CreateStressTestResponse{}, newErr("idempotency_conflict", "idempotency key reused with different input", nil)
-			}
-			return CreateStressTestResponse{JobID: existing.ID, Status: existing.Status}, nil
-		}
-		if !errors.Is(err, repository.ErrJobNotFound) {
+		existing, found, err := findExistingIdempotentJob(
+			ctx, s.jobs, req.PlanID, repository.JobTypeStress, req.IdempotencyKey, inputHash,
+			"find stress idempotency",
+		)
+		if err != nil {
 			return CreateStressTestResponse{}, err
+		}
+		if found {
+			return CreateStressTestResponse{JobID: existing.ID, Status: existing.Status}, nil
 		}
 	}
 
@@ -93,13 +93,13 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 			Status: repository.JobStatusQueued, InputHash: inputHash,
 			ProgressTotal: 8,
 		}); err != nil {
-			return err
+			return wrapRepo("create stress job", err)
 		}
 		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
 			JobID: jobID, PlanID: req.PlanID, Type: repository.AnalysisTypeStress,
 			InputHash: inputHash, ResultJSON: pending,
 		}); err != nil {
-			return err
+			return wrapRepo("create stress analysis pending", err)
 		}
 		if req.IdempotencyKey != "" {
 			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeStress, req.IdempotencyKey, jobID, inputHash)
@@ -107,7 +107,7 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 		return nil
 	})
 	if err != nil {
-		return CreateStressTestResponse{}, err
+		return CreateStressTestResponse{}, wrapRepo("create stress tx", err)
 	}
 	return CreateStressTestResponse{JobID: jobID, Status: repository.JobStatusQueued}, nil
 }
@@ -117,11 +117,11 @@ func (s *StressService) ListByPlan(ctx context.Context, planID string) ([]Stress
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, newErr("plan_not_found", "plan not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get plan for stress list", err)
 	}
 	recs, err := s.analysis.ListByPlan(ctx, planID, repository.AnalysisTypeStress, 20)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("list stress tests", err)
 	}
 	currentHash, _ := s.hash.Compute(ctx, planID)
 	out := make([]StressTestView, len(recs))
@@ -137,7 +137,7 @@ func (s *StressService) GetByJobID(ctx context.Context, jobID string) (StressTes
 		if errors.Is(err, repository.ErrAnalysisNotFound) {
 			return StressTestView{}, newErr("stress_test_not_found", "stress test not found", nil)
 		}
-		return StressTestView{}, err
+		return StressTestView{}, wrapRepo("get stress test", err)
 	}
 	if rec.Type != repository.AnalysisTypeStress {
 		return StressTestView{}, newErr("stress_test_not_found", "stress test not found", nil)

@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
 	"github.com/fireman/fireman/internal/repository"
 )
+
+var errSystemInstrumentHoldings = errors.New("system instrument cannot be added to plan holdings")
 
 // SnapshotService creates plan-specific simulation snapshots.
 type SnapshotService struct {
@@ -27,16 +30,19 @@ func NewSnapshotService(
 }
 
 // BuildSnapshotForHolding computes a plan-specific simulation snapshot without persisting.
-func (s *SnapshotService) BuildSnapshotForHolding(ctx context.Context, planID, instrumentID, valuationDate string) (repository.SimulationSnapshot, error) {
+func (s *SnapshotService) BuildSnapshotForHolding(
+	ctx context.Context,
+	planID, instrumentID, valuationDate string,
+) (repository.SimulationSnapshot, error) {
 	inst, err := s.instRepo.GetByID(ctx, instrumentID)
 	if err != nil {
-		return repository.SimulationSnapshot{}, err
+		return repository.SimulationSnapshot{}, fmt.Errorf("load instrument: %w", err)
 	}
 	if inst.ID == "system_cash_cny" {
 		return repository.SimulationSnapshot{ID: s.snapRepo.GetSystemCashSnapshotID()}, nil
 	}
 	if inst.IsSystem {
-		return repository.SimulationSnapshot{}, fmt.Errorf("system instrument cannot be added to plan holdings")
+		return repository.SimulationSnapshot{}, errSystemInstrumentHoldings
 	}
 
 	points, err := s.loadPoints(ctx, instrumentID)
@@ -46,7 +52,10 @@ func (s *SnapshotService) BuildSnapshotForHolding(ctx context.Context, planID, i
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, valuationDate, pointType, sourceName)
 	if metrics.QualityStatus != "available" {
-		return repository.SimulationSnapshot{}, &SnapshotError{Code: "instrument_insufficient_history", Message: "instrument does not have enough complete years for simulation"}
+		return repository.SimulationSnapshot{}, &SnapshotError{
+			Code:    "instrument_insufficient_history",
+			Message: "instrument does not have enough complete years for simulation",
+		}
 	}
 
 	snapID := "sim_snap_" + uuid.New().String()
@@ -69,12 +78,22 @@ func (s *SnapshotService) BuildSnapshotForHolding(ctx context.Context, planID, i
 }
 
 // CreatePlanSnapshotTx persists a snapshot within an existing transaction.
-func (s *SnapshotService) CreatePlanSnapshotTx(ctx context.Context, tx *sql.Tx, snap repository.SimulationSnapshot) error {
-	return s.snapRepo.CreatePlanSnapshot(ctx, tx, snap)
+func (s *SnapshotService) CreatePlanSnapshotTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	snap repository.SimulationSnapshot,
+) error {
+	if err := s.snapRepo.CreatePlanSnapshot(ctx, tx, snap); err != nil {
+		return fmt.Errorf("create plan snapshot: %w", err)
+	}
+	return nil
 }
 
 // CreateForHolding returns a simulation snapshot ID for a new plan holding.
-func (s *SnapshotService) CreateForHolding(ctx context.Context, planID, instrumentID, valuationDate string) (string, error) {
+func (s *SnapshotService) CreateForHolding(
+	ctx context.Context,
+	planID, instrumentID, valuationDate string,
+) (string, error) {
 	snap, err := s.BuildSnapshotForHolding(ctx, planID, instrumentID, valuationDate)
 	if err != nil {
 		return "", err
@@ -83,16 +102,19 @@ func (s *SnapshotService) CreateForHolding(ctx context.Context, planID, instrume
 		return snap.ID, nil
 	}
 	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {
-		return "", err
+		return "", fmt.Errorf("persist plan snapshot: %w", err)
 	}
 	return snap.ID, nil
 }
 
 // SyncForHolding rebuilds snapshot for an existing holding.
-func (s *SnapshotService) SyncForHolding(ctx context.Context, planID, instrumentID, holdingID, syncDate string) (repository.SimulationSnapshot, error) {
+func (s *SnapshotService) SyncForHolding(
+	ctx context.Context,
+	planID, instrumentID, holdingID, syncDate string,
+) (repository.SimulationSnapshot, error) {
 	inst, err := s.instRepo.GetByID(ctx, instrumentID)
 	if err != nil {
-		return repository.SimulationSnapshot{}, err
+		return repository.SimulationSnapshot{}, fmt.Errorf("load instrument: %w", err)
 	}
 	points, err := s.loadPoints(ctx, instrumentID)
 	if err != nil {
@@ -101,7 +123,10 @@ func (s *SnapshotService) SyncForHolding(ctx context.Context, planID, instrument
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, syncDate, pointType, sourceName)
 	if metrics.QualityStatus != "available" {
-		return repository.SimulationSnapshot{}, &SnapshotError{Code: "instrument_insufficient_history", Message: "instrument does not have enough complete years for simulation"}
+		return repository.SimulationSnapshot{}, &SnapshotError{
+			Code:    "instrument_insufficient_history",
+			Message: "instrument does not have enough complete years for simulation",
+		}
 	}
 
 	snapID := "sim_snap_" + uuid.New().String()
@@ -123,15 +148,19 @@ func (s *SnapshotService) SyncForHolding(ctx context.Context, planID, instrument
 	}
 	_ = holdingID
 	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {
-		return repository.SimulationSnapshot{}, err
+		return repository.SimulationSnapshot{}, fmt.Errorf("persist synced snapshot: %w", err)
 	}
-	return s.snapRepo.GetByID(ctx, snapID)
+	out, err := s.snapRepo.GetByID(ctx, snapID)
+	if err != nil {
+		return repository.SimulationSnapshot{}, fmt.Errorf("load synced snapshot: %w", err)
+	}
+	return out, nil
 }
 
 func (s *SnapshotService) loadPoints(ctx context.Context, instrumentID string) ([]DataPoint, error) {
 	rows, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list market data points: %w", err)
 	}
 	out := make([]DataPoint, len(rows))
 	for i, r := range rows {
@@ -143,7 +172,7 @@ func (s *SnapshotService) loadPoints(ctx context.Context, instrumentID string) (
 	return out, nil
 }
 
-func pointMeta(points []DataPoint) (pointType, sourceName string) {
+func pointMeta(points []DataPoint) (string, string) {
 	if len(points) == 0 {
 		return "adjusted_close", "akshare"
 	}

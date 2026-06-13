@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -30,13 +31,18 @@ func SetMigrations(f fs.FS) {
 // backupRetention is the number of timestamped backups to retain.
 const backupRetention = 5
 
+var (
+	errMigrationNameFormat       = errors.New("migration filename must start with NNNN_")
+	errDuplicateMigrationVersion = errors.New("duplicate migration version")
+)
+
 // Migrate applies all pending SQL migrations from the embedded FS to the
 // database. Before applying any migration it creates a timestamped backup of
 // the database file (when it exists and is non-empty) and prunes older
 // backups beyond the retention window.
 func Migrate(ctx context.Context, pool *sql.DB, dbPath string, logger *slog.Logger) error {
 	if migrationsFS == nil {
-		return fmt.Errorf("db: migrations filesystem not registered")
+		return errMigrationsNotRegistered
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -116,7 +122,7 @@ func listMigrationFiles() ([]migrationFile, error) {
 		}
 		idx := strings.IndexByte(name, '_')
 		if idx <= 0 {
-			return nil, fmt.Errorf("db: migration %q must start with NNNN_", name)
+			return nil, fmt.Errorf("db: migration %q: %w", name, errMigrationNameFormat)
 		}
 		v, err := strconv.Atoi(name[:idx])
 		if err != nil {
@@ -127,7 +133,7 @@ func listMigrationFiles() ([]migrationFile, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
 	for i := 1; i < len(out); i++ {
 		if out[i].version == out[i-1].version {
-			return nil, fmt.Errorf("db: duplicate migration version %d", out[i].version)
+			return nil, fmt.Errorf("db: duplicate migration version %d: %w", out[i].version, errDuplicateMigrationVersion)
 		}
 	}
 	return out, nil
@@ -135,7 +141,8 @@ func listMigrationFiles() ([]migrationFile, error) {
 
 func schemaMigrationsRowCount(ctx context.Context, pool *sql.DB) (int, error) {
 	var exists int
-	if err := pool.QueryRowContext(ctx,
+	if err := pool.QueryRowContext(
+		ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`,
 	).Scan(&exists); err != nil {
 		return 0, fmt.Errorf("db: probe schema_migrations: %w", err)
@@ -155,17 +162,17 @@ func pendingMigrations(ctx context.Context, pool *sql.DB, files []migrationFile)
 	if err != nil {
 		return nil, fmt.Errorf("db: read schema_migrations: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	applied := make(map[int]struct{})
 	for rows.Next() {
 		var v int
 		if err := rows.Scan(&v); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan schema migration version: %w", err)
 		}
 		applied[v] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterate schema migrations: %w", err)
 	}
 	var pending []migrationFile
 	for _, f := range files {
@@ -203,7 +210,7 @@ func backupDatabase(dbPath string, logger *slog.Logger) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("stat database file: %w", err)
 	}
 	if info.Size() == 0 {
 		return nil
@@ -225,24 +232,27 @@ func backupDatabase(dbPath string, logger *slog.Logger) error {
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("open source file: %w", err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("open destination file: %w", err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
-		return err
+		return fmt.Errorf("copy database file: %w", err)
 	}
-	return out.Sync()
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("sync database backup: %w", err)
+	}
+	return nil
 }
 
 func pruneBackups(dir, base string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("read backup directory: %w", err)
 	}
 	prefix := base + "."
 	suffix := ".bak"
@@ -263,7 +273,7 @@ func pruneBackups(dir, base string) error {
 	}
 	for _, name := range backups[:len(backups)-backupRetention] {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil {
-			return err
+			return fmt.Errorf("remove old backup: %w", err)
 		}
 	}
 	return nil

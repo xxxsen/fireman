@@ -8,8 +8,10 @@ import (
 	"time"
 )
 
-var ErrPlanNotFound = errors.New("plan not found")
-var ErrVersionConflict = errors.New("plan version conflict")
+var (
+	ErrPlanNotFound    = errors.New("plan not found")
+	ErrVersionConflict = errors.New("plan version conflict")
+)
 
 // PlanRepo provides plan CRUD.
 type PlanRepo struct {
@@ -74,19 +76,19 @@ func (r *PlanRepo) List(ctx context.Context) ([]Plan, error) {
 		SELECT id, name, base_currency, valuation_date, status, config_version, created_at, updated_at
 		FROM plans ORDER BY updated_at DESC`)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list plans", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Plan
 	for rows.Next() {
 		var p Plan
 		if err := rows.Scan(&p.ID, &p.Name, &p.BaseCurrency, &p.ValuationDate, &p.Status,
 			&p.ConfigVersion, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, err
+			return nil, wrapSQL("scan plan row", err)
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate plans", rows.Err())
 }
 
 func (r *PlanRepo) GetByID(ctx context.Context, id string) (Plan, error) {
@@ -95,12 +97,13 @@ func (r *PlanRepo) GetByID(ctx context.Context, id string) (Plan, error) {
 		SELECT id, name, base_currency, valuation_date, status, config_version, created_at, updated_at
 		FROM plans WHERE id = ?`, id).Scan(
 		&p.ID, &p.Name, &p.BaseCurrency, &p.ValuationDate, &p.Status,
-		&p.ConfigVersion, &p.CreatedAt, &p.UpdatedAt)
+		&p.ConfigVersion, &p.CreatedAt, &p.UpdatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Plan{}, ErrPlanNotFound
 	}
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, wrapSQL("scan plan", err)
 	}
 	return p, nil
 }
@@ -112,7 +115,7 @@ func (r *PlanRepo) Update(ctx context.Context, p Plan, expectedVersion int) erro
 		WHERE id=? AND config_version=?`,
 		p.Name, p.BaseCurrency, p.ValuationDate, p.Status, expectedVersion+1, now, p.ID, expectedVersion)
 	if err != nil {
-		return err
+		return wrapSQL("update plan", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -135,14 +138,15 @@ func (r *PlanRepo) BumpVersionTx(ctx context.Context, tx *sql.Tx, planID string,
 
 func (r *PlanRepo) bumpVersion(ctx context.Context, exec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, planID string, expectedVersion int) (int, error) {
+}, planID string, expectedVersion int,
+) (int, error) {
 	now := time.Now().UnixMilli()
 	newVersion := expectedVersion + 1
 	res, err := exec.ExecContext(ctx, `
 		UPDATE plans SET config_version=?, updated_at=? WHERE id=? AND config_version=?`,
 		newVersion, now, planID, expectedVersion)
 	if err != nil {
-		return 0, err
+		return 0, wrapSQL("bump plan version", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -157,7 +161,7 @@ func (r *PlanRepo) bumpVersion(ctx context.Context, exec interface {
 func (r *PlanRepo) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM plans WHERE id=?`, id)
 	if err != nil {
-		return err
+		return wrapSQL("update plan", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

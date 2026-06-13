@@ -37,7 +37,7 @@ func (s *JobService) Get(ctx context.Context, jobID string) (repository.Job, err
 		if errors.Is(err, repository.ErrJobNotFound) {
 			return repository.Job{}, newErr("job_not_found", "job not found", nil)
 		}
-		return repository.Job{}, err
+		return repository.Job{}, wrapRepo("load job", err)
 	}
 	return job, nil
 }
@@ -48,21 +48,25 @@ func (s *JobService) Cancel(ctx context.Context, jobID string) (repository.Job, 
 		if errors.Is(err, repository.ErrJobNotFound) {
 			return repository.Job{}, newErr("job_not_found", "job not found", nil)
 		}
-		return repository.Job{}, err
+		return repository.Job{}, wrapRepo("load job", err)
 	}
 	switch job.Status {
 	case repository.JobStatusSucceeded, repository.JobStatusFailed, repository.JobStatusCanceled:
-		return repository.Job{}, newErr("job_already_terminal", "job already finished", map[string]any{"status": job.Status})
+		return repository.Job{}, newErr(
+			"job_already_terminal",
+			"job already finished",
+			map[string]any{"status": job.Status},
+		)
 	case repository.JobStatusQueued:
 		if job.Type == repository.JobTypeInstrumentFetch {
 			if err := s.cancelQueuedInstrumentFetch(ctx, job); err != nil {
-				return repository.Job{}, err
+				return repository.Job{}, wrapRepo("cancel queued instrument fetch", err)
 			}
 		} else if err := s.jobs.CancelQueued(ctx, jobID); err != nil {
 			if errors.Is(err, repository.ErrJobNotFound) {
 				return repository.Job{}, newErr("job_not_found", "job not found", nil)
 			}
-			return repository.Job{}, err
+			return repository.Job{}, wrapRepo("cancel queued job", err)
 		}
 		job.Status = repository.JobStatusCanceled
 		job.CancelRequested = true
@@ -75,7 +79,7 @@ func (s *JobService) Cancel(ctx context.Context, jobID string) (repository.Job, 
 		return job, nil
 	}
 	if err := s.jobs.RequestCancel(ctx, jobID); err != nil {
-		return repository.Job{}, err
+		return repository.Job{}, wrapRepo("request job cancel", err)
 	}
 	job.CancelRequested = true
 	s.events.Publish(jobs.Event{
@@ -90,15 +94,17 @@ func (s *JobService) cancelQueuedInstrumentFetch(ctx context.Context, job reposi
 	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
 		return err
 	}
-	return fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.jobs.CancelQueuedWithError(ctx, tx, job.ID, "fetch_canceled", "instrument fetch canceled by user"); err != nil {
-			return err
+	return wrapRepo("cancel queued instrument fetch tx", fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.jobs.CancelQueuedWithError(ctx, tx, job.ID, "fetch_canceled",
+			"instrument fetch canceled by user"); err != nil {
+			return wrapRepo("cancel queued fetch job", err)
 		}
 		if payload.InstrumentID == "" {
 			return nil
 		}
-		return s.instRepo.UpdateStatusTx(ctx, tx, payload.InstrumentID, "fetch_failed")
-	})
+		return wrapRepo("mark instrument fetch failed", s.instRepo.UpdateStatusTx(ctx, tx, payload.InstrumentID,
+			"fetch_failed"))
+	}))
 }
 
 func (s *JobService) EventsHub() *jobs.EventHub {

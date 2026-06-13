@@ -83,8 +83,14 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 		"parameters":           wizardParams(total),
 		"region_targets":       wizardRegionTargets(),
 		"holdings": []map[string]any{
-			{"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 7_000_000_00, "sort_order": 1},
-			{"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00, "sort_order": 2},
+			{
+				"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 7_000_000_00,
+				"sort_order": 1,
+			},
+			{
+				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
+				"sort_order": 2,
+			},
 		},
 	}
 
@@ -193,9 +199,18 @@ func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 		"parameters":           wizardParams(total),
 		"region_targets":       customTargets,
 		"holdings": []map[string]any{
-			{"instrument_id": instEquityDomestic, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 4_900_000_00, "sort_order": 1},
-			{"instrument_id": instEquityForeign, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_100_000_00, "sort_order": 2},
-			{"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00, "sort_order": 3},
+			{
+				"instrument_id": instEquityDomestic, "enabled": true, "weight_within_group": 1.0,
+				"current_amount_minor": 4_900_000_00, "sort_order": 1,
+			},
+			{
+				"instrument_id": instEquityForeign, "enabled": true, "weight_within_group": 1.0,
+				"current_amount_minor": 2_100_000_00, "sort_order": 2,
+			},
+			{
+				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
+				"sort_order": 3,
+			},
 		},
 	}
 
@@ -245,8 +260,14 @@ func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 		"region_targets":            wizardRegionTargets(),
 		"apply_unallocated_to_cash": true,
 		"holdings": []map[string]any{
-			{"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": equityAmt, "sort_order": 1},
-			{"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": bondAmt, "sort_order": 2},
+			{
+				"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": equityAmt,
+				"sort_order": 1,
+			},
+			{
+				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": bondAmt,
+				"sort_order": 2,
+			},
 		},
 	}
 
@@ -305,7 +326,10 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"region_targets":            wizardRegionTargets(),
 				"apply_unallocated_to_cash": true,
 				"holdings": []map[string]any{
-					{"instrument_id": inst, "enabled": true, "weight_within_group": 0.4, "current_amount_minor": 700_000_00, "sort_order": 1},
+					{
+						"instrument_id": inst, "enabled": true, "weight_within_group": 0.4, "current_amount_minor": 700_000_00,
+						"sort_order": 1,
+					},
 				},
 			},
 		},
@@ -318,7 +342,10 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"parameters":           wizardParams(1_000_000_00),
 				"region_targets":       wizardRegionTargets(),
 				"holdings": []map[string]any{
-					{"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_000_000_00, "sort_order": 1},
+					{
+						"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_000_000_00,
+						"sort_order": 1,
+					},
 				},
 			},
 		},
@@ -332,7 +359,10 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"region_targets":            wizardRegionTargets(),
 				"apply_unallocated_to_cash": true,
 				"holdings": []map[string]any{
-					{"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 700_000_00, "sort_order": 1},
+					{
+						"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 700_000_00,
+						"sort_order": 1,
+					},
 				},
 			},
 		},
@@ -341,7 +371,8 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.code == "instrument_insufficient_history" {
-				if _, err := db.ExecContext(context.Background(), `DELETE FROM market_data_points WHERE instrument_id=?`, inst); err != nil {
+				if _, err := db.ExecContext(context.Background(), `DELETE FROM market_data_points WHERE instrument_id=?`,
+					inst); err != nil {
 					t.Fatal(err)
 				}
 			}

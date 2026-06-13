@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -27,7 +28,7 @@ func (s Services) registerJobRoutes(rg *gin.RouterGroup) {
 
 func (s Services) createSimulation(c *gin.Context) {
 	var req service.CreateSimulationRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}

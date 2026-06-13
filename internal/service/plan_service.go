@@ -110,7 +110,7 @@ func defaultParameters(planID string, scenarioID *string) repository.PlanParamet
 }
 
 func defaultRegionTargets() []repository.RegionTarget {
-	var out []repository.RegionTarget
+	out := make([]repository.RegionTarget, 0, len(domain.Regions)*len(domain.AssetClasses))
 	for _, ac := range domain.AssetClasses {
 		for _, region := range domain.Regions {
 			w := 0.0
@@ -144,37 +144,23 @@ func (s *PlanService) Create(ctx context.Context, req CreatePlanRequest) (PlanDe
 		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
 	}
 
-	var alloc repository.PlanAllocation
-	if req.SelectedScenarioID != nil {
-		scn, err := s.scenario.GetByID(ctx, *req.SelectedScenarioID)
-		if err != nil {
-			if errors.Is(err, repository.ErrScenarioNotFound) {
-				return PlanDetail{}, newErr("scenario_not_found", "scenario not found", nil)
-			}
-			return PlanDetail{}, err
-		}
-		alloc.AssetClassTargets = scn.Weights
-	} else {
-		for _, ac := range domain.AssetClasses {
-			alloc.AssetClassTargets = append(alloc.AssetClassTargets, repository.AssetClassTarget{
-				AssetClass: ac, Weight: 0,
-			})
-		}
-	}
-	alloc.RegionTargets = defaultRegionTargets()
-
-	if err := s.plans.Create(ctx, plan); err != nil {
-		return PlanDetail{}, err
-	}
-	params.PlanID = planID
-	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.params.Upsert(ctx, tx, params); err != nil {
-			return err
-		}
-		return s.alloc.Replace(ctx, tx, planID, alloc)
-	})
+	alloc, err := initialPlanAllocation(ctx, s, req.SelectedScenarioID)
 	if err != nil {
 		return PlanDetail{}, err
+	}
+
+	if err := s.plans.Create(ctx, plan); err != nil {
+		return PlanDetail{}, wrapRepo("create plan", err)
+	}
+	params.PlanID = planID
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.params.Upsert(ctx, tx, params); err != nil {
+			return wrapRepo("upsert plan parameters", err)
+		}
+		return wrapRepo("replace plan allocation", s.alloc.Replace(ctx, tx, planID, alloc))
+	})
+	if err != nil {
+		return PlanDetail{}, wrapRepo("initialize plan", err)
 	}
 	return s.Get(ctx, planID)
 }
@@ -182,7 +168,7 @@ func (s *PlanService) Create(ctx context.Context, req CreatePlanRequest) (PlanDe
 func (s *PlanService) List(ctx context.Context) ([]PlanDetail, error) {
 	plans, err := s.plans.List(ctx)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("list plans", err)
 	}
 	out := make([]PlanDetail, 0, len(plans))
 	for _, p := range plans {
@@ -198,11 +184,11 @@ func (s *PlanService) Get(ctx context.Context, planID string) (PlanDetail, error
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return PlanDetail{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return PlanDetail{}, err
+		return PlanDetail{}, wrapRepo("load plan", err)
 	}
 	hash, err := s.hash.Compute(ctx, planID)
 	if err != nil {
-		return PlanDetail{}, err
+		return PlanDetail{}, wrapRepo("compute config hash", err)
 	}
 	return PlanDetail{Plan: plan, ConfigHash: hash}, nil
 }
@@ -213,7 +199,7 @@ func (s *PlanService) Update(ctx context.Context, planID string, req UpdatePlanR
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return PlanDetail{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return PlanDetail{}, err
+		return PlanDetail{}, wrapRepo("load plan", err)
 	}
 	if req.ConfigVersion != plan.ConfigVersion {
 		return PlanDetail{}, newErr("plan_version_conflict", "plan configuration version mismatch", map[string]any{
@@ -236,7 +222,7 @@ func (s *PlanService) Update(ctx context.Context, planID string, req UpdatePlanR
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return PlanDetail{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 		}
-		return PlanDetail{}, err
+		return PlanDetail{}, wrapRepo("update plan", err)
 	}
 	return s.Get(ctx, planID)
 }
@@ -246,37 +232,41 @@ func (s *PlanService) Delete(ctx context.Context, planID string) error {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return newErr("plan_not_found", "plan not found", nil)
 		}
-		return err
+		return wrapRepo("delete plan", err)
 	}
 	return nil
 }
 
 // GetParameters returns parameters and cash flows.
-func (s *PlanService) GetParameters(ctx context.Context, planID string) (repository.PlanParameters, []repository.PlanCashFlow, error) {
+func (s *PlanService) GetParameters(ctx context.Context, planID string) (repository.PlanParameters,
+	[]repository.PlanCashFlow, error,
+) {
 	if _, err := s.plans.GetByID(ctx, planID); err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return repository.PlanParameters{}, nil, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PlanParameters{}, nil, err
+		return repository.PlanParameters{}, nil, wrapRepo("load plan", err)
 	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return repository.PlanParameters{}, nil, err
+		return repository.PlanParameters{}, nil, wrapRepo("load plan parameters", err)
 	}
 	flows, err := s.params.ListCashFlows(ctx, planID)
 	if err != nil {
-		return repository.PlanParameters{}, nil, err
+		return repository.PlanParameters{}, nil, wrapRepo("list plan cash flows", err)
 	}
 	return params, flows, nil
 }
 
-func (s *PlanService) UpdateParameters(ctx context.Context, planID string, req ParametersUpdateRequest) (repository.PlanParameters, []repository.PlanCashFlow, error) {
+func (s *PlanService) UpdateParameters(ctx context.Context, planID string,
+	req ParametersUpdateRequest,
+) (repository.PlanParameters, []repository.PlanCashFlow, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return repository.PlanParameters{}, nil, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PlanParameters{}, nil, err
+		return repository.PlanParameters{}, nil, wrapRepo("load plan", err)
 	}
 	if req.ConfigVersion != plan.ConfigVersion {
 		return repository.PlanParameters{}, nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
@@ -288,50 +278,23 @@ func (s *PlanService) UpdateParameters(ctx context.Context, planID string, req P
 
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
+		return repository.PlanParameters{}, nil, wrapRepo("list plan holdings", err)
+	}
+	if err := validateParametersAssetsGap(req.Parameters, holds, req.ApplyUnallocatedToCash); err != nil {
 		return repository.PlanParameters{}, nil, err
 	}
-	enabledSum := int64(0)
-	for _, h := range holds {
-		if h.Enabled {
-			enabledSum += h.CurrentAmountMinor
-		}
-	}
-	gap := req.Parameters.TotalAssetsMinor - enabledSum
-	if gap < -100 {
-		return repository.PlanParameters{}, nil, newErr("holdings_exceed_total", "enabled holdings exceed total assets", map[string]any{
-			"total_assets_minor": req.Parameters.TotalAssetsMinor, "holdings_sum_minor": enabledSum,
-		})
-	}
-	if gap > 100 && !req.ApplyUnallocatedToCash {
-		return repository.PlanParameters{}, nil, newErr("unallocated_gap_unresolved", "unallocated gap must be applied to cash or resolved via holdings", map[string]any{
-			"gap_minor": gap,
-		})
-	}
+	gap := req.Parameters.TotalAssetsMinor - enabledHoldingsSum(holds)
 
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if req.ApplyUnallocatedToCash && gap > 100 {
-			if err := applyUnallocatedGapToCashTx(ctx, tx, s.holdings, planID, holds, gap); err != nil {
-				return err
-			}
-		}
-		if err := s.params.Upsert(ctx, tx, req.Parameters); err != nil {
-			return err
-		}
-		if req.CashFlows != nil {
-			if err := s.params.ReplaceCashFlows(ctx, tx, planID, req.CashFlows); err != nil {
-				return err
-			}
-		}
-		if _, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion); err != nil {
-			return err
-		}
-		return nil
-	})
+	err = applyParametersUpdateInTx(ctx, s, planID, req, gap, holds)
 	if err != nil {
 		if errors.Is(err, repository.ErrVersionConflict) {
-			return repository.PlanParameters{}, nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+			return repository.PlanParameters{}, nil, newErr(
+				"plan_version_conflict",
+				"plan configuration version mismatch",
+				nil,
+			)
 		}
-		return repository.PlanParameters{}, nil, err
+		return repository.PlanParameters{}, nil, wrapRepo("update plan parameters", err)
 	}
 	return s.GetParameters(ctx, planID)
 }
@@ -344,13 +307,15 @@ type CreatePortfolioSnapshotRequest struct {
 	UpdateHoldings bool                               `json:"update_holdings"`
 }
 
-func (s *PlanService) CreatePortfolioSnapshot(ctx context.Context, planID string, req CreatePortfolioSnapshotRequest) (repository.PortfolioSnapshot, error) {
+func (s *PlanService) CreatePortfolioSnapshot(ctx context.Context, planID string,
+	req CreatePortfolioSnapshotRequest,
+) (repository.PortfolioSnapshot, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return repository.PortfolioSnapshot{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PortfolioSnapshot{}, err
+		return repository.PortfolioSnapshot{}, wrapRepo("load plan", err)
 	}
 	if req.SnapshotDate == "" {
 		return repository.PortfolioSnapshot{}, newErr("validation_failed", "snapshot_date is required", nil)
@@ -368,13 +333,13 @@ func (s *PlanService) CreatePortfolioSnapshot(ctx context.Context, planID string
 	if req.UpdateHoldings {
 		err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 			if err := snapRepo.CreateTx(ctx, tx, snap); err != nil {
-				return err
+				return wrapRepo("create portfolio snapshot", err)
 			}
 			if err := s.holdings.UpdateCurrentAmountsTx(ctx, tx, planID, req.Items); err != nil {
-				return err
+				return wrapRepo("update holding amounts", err)
 			}
 			_, err := s.plans.BumpVersionTx(ctx, tx, planID, plan.ConfigVersion)
-			return err
+			return wrapRepo("bump plan version", err)
 		})
 	} else if err = snapRepo.Create(ctx, snap); err != nil {
 		return repository.PortfolioSnapshot{}, fmt.Errorf("create snapshot: %w", err)

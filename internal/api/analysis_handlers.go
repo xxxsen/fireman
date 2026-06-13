@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -21,7 +22,7 @@ func (s Services) registerAnalysisRoutes(rg *gin.RouterGroup) {
 
 func (s Services) createStressTest(c *gin.Context) {
 	var req service.CreateStressTestRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
@@ -55,7 +56,7 @@ func (s Services) getStressTest(c *gin.Context) {
 
 func (s Services) createSensitivityTest(c *gin.Context) {
 	var req service.CreateSensitivityTestRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}

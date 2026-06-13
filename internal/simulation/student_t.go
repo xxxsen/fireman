@@ -25,7 +25,7 @@ func ParamsFromAnnual(modeledAnnualReturn, annualVolatility float64) AssetReturn
 }
 
 // SampleStudentT draws one monthly simple return from an independent Student-t factor.
-func SampleStudentT(rng *RNG, p AssetReturnParams, df int) (ret float64, truncated bool) {
+func SampleStudentT(rng *RNG, p AssetReturnParams, df int) (float64, bool) {
 	if p.MonthlySigma == 0 {
 		return math.Exp(p.MonthlyMu) - 1, false
 	}

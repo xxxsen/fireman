@@ -21,8 +21,8 @@ type WeightValidationResult struct {
 	Checks []WeightCheck `json:"checks"`
 }
 
-func nearEqual(a, b, tol float64) bool {
-	return math.Abs(a-b) <= tol
+func nearEqual(a float64) bool {
+	return math.Abs(a-1.0) <= WeightTolerance
 }
 
 // ValidateAllocationWeights checks asset class and region weight sums.
@@ -34,7 +34,7 @@ func ValidateAllocationWeights(alloc AllocationWeights) WeightValidationResult {
 	for _, ac := range AssetClasses {
 		acSum += alloc.AssetClass[ac]
 	}
-	passed := nearEqual(acSum, 1.0, WeightTolerance)
+	passed := nearEqual(acSum)
 	if !passed {
 		allPassed = false
 	}
@@ -43,7 +43,7 @@ func ValidateAllocationWeights(alloc AllocationWeights) WeightValidationResult {
 		Actual:  acSum,
 		Target:  1.0,
 		Passed:  passed,
-		Message: formatWeightGapMessage("大类目标权重", acSum, 1.0, passed),
+		Message: formatWeightGapMessage("大类目标权重", acSum, passed),
 	})
 
 	for _, ac := range AssetClasses {
@@ -57,7 +57,7 @@ func ValidateAllocationWeights(alloc AllocationWeights) WeightValidationResult {
 				regSum += m[r]
 			}
 		}
-		rp := nearEqual(regSum, 1.0, WeightTolerance)
+		rp := nearEqual(regSum)
 		if !rp {
 			allPassed = false
 		}
@@ -67,7 +67,7 @@ func ValidateAllocationWeights(alloc AllocationWeights) WeightValidationResult {
 			Actual:  regSum,
 			Target:  1.0,
 			Passed:  rp,
-			Message: formatWeightGapMessage(assetClassLabel(ac)+"地区权重", regSum, 1.0, rp),
+			Message: formatWeightGapMessage(assetClassLabel(ac)+"地区权重", regSum, rp),
 		})
 	}
 
@@ -94,7 +94,7 @@ func ValidateHoldingGroupWeights(alloc AllocationWeights, holdings []HoldingWeig
 		for _, m := range members {
 			sum += m.WeightWithinGroup
 		}
-		passed := nearEqual(sum, 1.0, WeightTolerance)
+		passed := nearEqual(sum)
 		if !passed {
 			allPassed = false
 		}
@@ -104,7 +104,7 @@ func ValidateHoldingGroupWeights(alloc AllocationWeights, holdings []HoldingWeig
 			Actual:  sum,
 			Target:  1.0,
 			Passed:  passed,
-			Message: formatWeightGapMessage(groupLabel(k.ac, k.region)+"组内占比", sum, 1.0, passed),
+			Message: formatWeightGapMessage(groupLabel(k.ac, k.region)+"组内占比", sum, passed),
 		})
 	}
 
@@ -118,14 +118,14 @@ func ValidateHoldingGroupWeights(alloc AllocationWeights, holdings []HoldingWeig
 		portfolioSum += PortfolioTargetWeight(alloc, h)
 	}
 	if enabledCount > 0 {
-		pp := nearEqual(portfolioSum, 1.0, WeightTolerance)
+		pp := nearEqual(portfolioSum)
 		if !pp {
 			allPassed = false
 		}
 		missing := PortfolioCoverageByClass(alloc, holdings)
 		msg := formatPortfolioWeightMessage(portfolioSum, 1.0, missing, holdings, alloc)
 		if pp {
-			msg = formatWeightGapMessage("已启用标的全组合目标权重", portfolioSum, 1.0, true)
+			msg = formatWeightGapMessage("已启用标的全组合目标权重", portfolioSum, true)
 		}
 		checks = append(checks, WeightCheck{
 			Scope:   "portfolio",
@@ -143,18 +143,20 @@ func ValidateHoldingGroupWeights(alloc AllocationWeights, holdings []HoldingWeig
 func ValidateAllWeights(alloc AllocationWeights, holdings []HoldingWeightInput) WeightValidationResult {
 	ac := ValidateAllocationWeights(alloc)
 	hg := ValidateHoldingGroupWeights(alloc, holdings)
-	checks := append(ac.Checks, hg.Checks...)
+	checks := make([]WeightCheck, 0, len(ac.Checks)+len(hg.Checks))
+	checks = append(checks, ac.Checks...)
+	checks = append(checks, hg.Checks...)
 	return WeightValidationResult{
 		Passed: ac.Passed && hg.Passed,
 		Checks: checks,
 	}
 }
 
-func formatWeightGapMessage(label string, actual, target float64, passed bool) string {
+func formatWeightGapMessage(label string, actual float64, passed bool) string {
 	if passed {
 		return label + "合计 " + formatPercent(actual) + "，通过"
 	}
-	gap := target - actual
+	gap := 1.0 - actual
 	return fmt.Sprintf("%s当前为 %s，还差 %s。请调整至 100%%。",
 		label, formatPercent(actual), formatPercent(gap))
 }

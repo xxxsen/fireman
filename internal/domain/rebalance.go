@@ -119,66 +119,8 @@ func ComputeNewCashRebalance(
 ) RebalanceResult {
 	targets := ComputeHoldingTargets(alloc, holdings, meta, totalAssetsMinor)
 	holdingsTotal := HoldingsTotalMinor(holdings)
-	lines := make([]RebalanceLine, 0, len(targets))
-
-	type gapEntry struct {
-		idx int
-		gap int64
-	}
-	var gaps []gapEntry
-	var gapSum int64
-	var targetTotal, currentTotal int64
-
-	for i, t := range targets {
-		// new_cash mode keeps plan-scale semantics rather than structural-gap semantics.
-		action := SuggestAction(t.Enabled, t.PlanGapWeight, t.PlanGapAmountMinor, threshold)
-		trade := int64(0)
-		if t.Enabled {
-			targetTotal += t.TargetAmountMinor
-			currentTotal += t.CurrentAmountMinor
-			if action == RebalanceActionIncrease {
-				gap := t.PlanGapAmountMinor
-				if gap > 0 {
-					gaps = append(gaps, gapEntry{idx: i, gap: gap})
-					gapSum += gap
-				}
-			}
-		}
-		lines = append(lines, RebalanceLine{
-			HoldingTargetLine:            t,
-			Action:                       action,
-			SuggestedTradeMinor:          trade,
-			PlanScaleAction:              action,
-			PlanScaleSuggestedTradeMinor: 0,
-		})
-	}
-
-	allocatable := newCashMinor
-	if gapSum > 0 && int64(allocatable) > gapSum {
-		allocatable = gapSum
-	}
-
-	if gapSum > 0 && allocatable > 0 {
-		remaining := allocatable
-		var maxGapIdx = -1
-		var maxGap int64
-		for _, g := range gaps {
-			buy := int64(math.Round(float64(allocatable) * float64(g.gap) / float64(gapSum)))
-			if buy > remaining {
-				buy = remaining
-			}
-			lines[g.idx].SuggestedTradeMinor = buy
-			remaining -= buy
-			if g.gap > maxGap {
-				maxGap = g.gap
-				maxGapIdx = g.idx
-			}
-		}
-		// Assign rounding remainder to largest gap.
-		if remaining > 0 && maxGapIdx >= 0 {
-			lines[maxGapIdx].SuggestedTradeMinor += remaining
-		}
-	}
+	lines, gaps, gapSum, targetTotal, currentTotal := buildNewCashRebalanceLines(targets, threshold)
+	distributeNewCashAllocations(lines, gaps, gapSum, newCashMinor)
 
 	var estimatedTrade int64
 	planScaleActionable := 0

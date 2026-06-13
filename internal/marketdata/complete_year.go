@@ -1,6 +1,7 @@
 package marketdata
 
 import (
+	"fmt"
 	"sort"
 	"time"
 )
@@ -41,7 +42,7 @@ func IsCompleteYear(points []DataPoint, year int, inclusionDate string) bool {
 func yearFromDate(date string) (int, error) {
 	t, err := time.Parse("2006-01-02", date)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("parse date year: %w", err)
 	}
 	return t.Year(), nil
 }
@@ -89,18 +90,19 @@ func SelectSimulationYears(points []DataPoint, annual []AnnualReturnRow, inclusi
 }
 
 // WindowBounds returns window_start and window_end for selected years.
-func WindowBounds(points []DataPoint, years []SimulationYear) (start, end string) {
+func WindowBounds(points []DataPoint, years []SimulationYear) (string, string) {
 	if len(years) == 0 {
 		return "", ""
 	}
 	first := years[0].Year
 	anchor, ok := anchorBefore(points, first)
+	var start string
 	if ok {
 		start = anchor.TradeDate
 	} else {
 		start = years[0].StartDate
 	}
-	end = years[len(years)-1].EndDate
+	end := years[len(years)-1].EndDate
 	return start, end
 }
 

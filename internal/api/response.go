@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -58,7 +59,7 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusConflict
 		case "simulation_not_found", "path_not_found", "job_not_found":
 			status = http.StatusNotFound
-		case "simulation_input_invalid", "plan_weights_invalid", "invalid_backup":
+		case "simulation_input_invalid", "plan_weights_invalid", "invalid_backup", "invalid_request":
 			status = http.StatusBadRequest
 		case "builtin_scenario_immutable", "scenario_in_use":
 			status = http.StatusBadRequest
@@ -77,7 +78,8 @@ func asAppError(err error, target **service.AppError) bool {
 	if err == nil {
 		return false
 	}
-	if ae, ok := err.(*service.AppError); ok {
+	ae := &service.AppError{}
+	if errors.As(err, &ae) {
 		*target = ae
 		return true
 	}

@@ -110,7 +110,7 @@ func (in *InputSnapshot) RetirementMonth() int {
 // RootSeed parses the root seed string.
 func (in *InputSnapshot) RootSeed() int64 {
 	var v int64
-	fmt.Sscan(in.Parameters.Seed, &v)
+	_, _ = fmt.Sscan(in.Parameters.Seed, &v)
 	if v < 0 {
 		return 0
 	}

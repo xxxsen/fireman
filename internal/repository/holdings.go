@@ -8,8 +8,10 @@ import (
 	"time"
 )
 
-var ErrHoldingNotFound = errors.New("holding not found")
-var ErrInstrumentNotFound = errors.New("instrument not found")
+var (
+	ErrHoldingNotFound    = errors.New("holding not found")
+	ErrInstrumentNotFound = errors.New("instrument not found")
+)
 
 // HoldingsRepo manages plan holdings.
 type HoldingsRepo struct {
@@ -30,14 +32,16 @@ func (r *HoldingsRepo) ListByPlan(ctx context.Context, planID string) ([]PlanHol
 		JOIN instruments i ON i.id = h.instrument_id
 		WHERE h.plan_id=? ORDER BY h.sort_order, h.created_at`, planID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query plan holdings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanHoldings(rows)
 }
 
 // UpdateCurrentAmountsTx sets current_amount_minor for holdings matched by instrument_id.
-func (r *HoldingsRepo) UpdateCurrentAmountsTx(ctx context.Context, tx *sql.Tx, planID string, items []PortfolioSnapshotItem) error {
+func (r *HoldingsRepo) UpdateCurrentAmountsTx(ctx context.Context, tx *sql.Tx, planID string,
+	items []PortfolioSnapshotItem,
+) error {
 	exec := r.exec(tx)
 	now := time.Now().UnixMilli()
 	for _, it := range items {
@@ -54,7 +58,7 @@ func (r *HoldingsRepo) UpdateCurrentAmountsTx(ctx context.Context, tx *sql.Tx, p
 func (r *HoldingsRepo) Replace(ctx context.Context, tx *sql.Tx, planID string, holdings []PlanHolding) error {
 	exec := r.exec(tx)
 	if _, err := exec.ExecContext(ctx, `DELETE FROM plan_holdings WHERE plan_id=?`, planID); err != nil {
-		return err
+		return fmt.Errorf("delete plan holdings: %w", err)
 	}
 	now := time.Now().UnixMilli()
 	for _, h := range holdings {
@@ -92,12 +96,13 @@ func (r *HoldingsRepo) GetByID(ctx context.Context, planID, holdingID string) (P
 		&h.ID, &h.PlanID, &h.InstrumentID, &enabled,
 		&h.AssetClass, &h.Region, &h.WeightWithinGroup, &h.CurrentAmountMinor,
 		&h.SimulationSnapshotID, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
-		&h.InstrumentCode, &h.InstrumentName)
+		&h.InstrumentCode, &h.InstrumentName,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PlanHolding{}, ErrHoldingNotFound
 	}
 	if err != nil {
-		return PlanHolding{}, err
+		return PlanHolding{}, fmt.Errorf("scan holding: %w", err)
 	}
 	h.Enabled = enabled == 1
 	return h, nil
@@ -108,7 +113,10 @@ func (r *HoldingsRepo) UpdateSnapshotID(ctx context.Context, tx *sql.Tx, holding
 	_, err := r.exec(tx).ExecContext(ctx, `
 		UPDATE plan_holdings SET simulation_snapshot_id=?, updated_at=? WHERE id=?`,
 		snapshotID, now, holdingID)
-	return err
+	if err != nil {
+		return fmt.Errorf("update holding snapshot id: %w", err)
+	}
+	return nil
 }
 
 func (r *HoldingsRepo) GetInstrument(ctx context.Context, instrumentID string) (Instrument, error) {
@@ -118,12 +126,13 @@ func (r *HoldingsRepo) GetInstrument(ctx context.Context, instrumentID string) (
 		SELECT id, code, name, market, asset_class, region, currency, status, is_system
 		FROM instruments WHERE id=?`, instrumentID).Scan(
 		&inst.ID, &inst.Code, &inst.Name, &inst.Market,
-		&inst.AssetClass, &inst.Region, &inst.Currency, &inst.Status, &isSystem)
+		&inst.AssetClass, &inst.Region, &inst.Currency, &inst.Status, &isSystem,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Instrument{}, ErrInstrumentNotFound
 	}
 	if err != nil {
-		return Instrument{}, err
+		return Instrument{}, fmt.Errorf("scan instrument: %w", err)
 	}
 	inst.IsSystem = isSystem == 1
 	return inst, nil
@@ -138,12 +147,15 @@ func scanHoldings(rows *sql.Rows) ([]PlanHolding, error) {
 			&h.AssetClass, &h.Region, &h.WeightWithinGroup, &h.CurrentAmountMinor,
 			&h.SimulationSnapshotID, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
 			&h.InstrumentCode, &h.InstrumentName); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan holding row: %w", err)
 		}
 		h.Enabled = enabled == 1
 		out = append(out, h)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate holdings: %w", err)
+	}
+	return out, nil
 }
 
 func (r *HoldingsRepo) exec(tx *sql.Tx) dbExec {
@@ -160,7 +172,9 @@ type PlanInstrumentReference struct {
 	SnapshotInclusionDate string `json:"snapshot_inclusion_date"`
 }
 
-func (r *HoldingsRepo) ListReferencingPlans(ctx context.Context, instrumentID string) ([]PlanInstrumentReference, error) {
+func (r *HoldingsRepo) ListReferencingPlans(ctx context.Context, instrumentID string) ([]PlanInstrumentReference,
+	error,
+) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT p.id, p.name, COALESCE(s.inclusion_date, '')
 		FROM plan_holdings h
@@ -169,16 +183,19 @@ func (r *HoldingsRepo) ListReferencingPlans(ctx context.Context, instrumentID st
 		WHERE h.instrument_id=?
 		ORDER BY p.name`, instrumentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query referencing plans: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []PlanInstrumentReference
 	for rows.Next() {
 		var ref PlanInstrumentReference
 		if err := rows.Scan(&ref.PlanID, &ref.PlanName, &ref.SnapshotInclusionDate); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan referencing plan: %w", err)
 		}
 		out = append(out, ref)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate referencing plans: %w", err)
+	}
+	return out, nil
 }

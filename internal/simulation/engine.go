@@ -69,13 +69,12 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 		if opt.CancelCheck != nil && opt.CancelCheck() {
 			break
 		}
-		pathNo := i
-		ps, _ := RunPath(in, pathNo, PathRunOpts{CollectMonthlyWealth: true})
+		ps, _ := RunPath(in, i, PathRunOpts{CollectMonthlyWealth: true})
 		paths[i] = ps
 		if ps.TruncationCount > 0 {
 			truncPaths++
 		}
-		if opt.Progress != nil && (i+1)%max(1, runs/100) == 0 {
+		if opt.Progress != nil && (i+1)%maxInt(1, runs/100) == 0 {
 			opt.Progress(i+1, runs, "simulating")
 		}
 	}
@@ -187,7 +186,7 @@ func Quantile(sorted []float64, p float64) float64 {
 }
 
 // WilsonInterval returns Wilson score interval for binomial proportion.
-func WilsonInterval(successes, n int, z float64) (low, high float64) {
+func WilsonInterval(successes, n int, z float64) (float64, float64) {
 	if n == 0 {
 		return 0, 0
 	}
@@ -196,8 +195,8 @@ func WilsonInterval(successes, n int, z float64) (low, high float64) {
 	denom := 1 + z2/float64(n)
 	center := (p + z2/(2*float64(n))) / denom
 	margin := z * math.Sqrt((p*(1-p)/float64(n))+z2/(4*float64(n)*float64(n))) / denom
-	low = center - margin
-	high = center + margin
+	low := center - margin
+	high := center + margin
 	if low < 0 {
 		low = 0
 	}
@@ -222,7 +221,8 @@ func failureReasonCounts(paths []PathSummary) map[string]int {
 	return out
 }
 
-func splitTerminals(paths []PathSummary) (success, failure []int64) {
+func splitTerminals(paths []PathSummary) ([]int64, []int64) {
+	var success, failure []int64
 	for _, p := range paths {
 		if p.Succeeded {
 			success = append(success, p.TerminalWealthMinor)
@@ -315,7 +315,7 @@ func abs64(v int64) int64 {
 	return v
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}

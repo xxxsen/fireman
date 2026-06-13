@@ -58,8 +58,12 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
 	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, instRepo, marketRepo)
-	rebalanceDraftSvc := service.NewRebalanceDraftService(db, plans, repository.NewRebalanceDraftRepo(db), holdings, holdingsSvc, rebalanceSvc)
-	simSvc := service.NewSimulationService(db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, hash)
+	rebalanceDraftSvc := service.NewRebalanceDraftService(
+		db, plans, repository.NewRebalanceDraftRepo(db), holdings, holdingsSvc, rebalanceSvc,
+	)
+	simSvc := service.NewSimulationService(
+		db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, hash,
+	)
 	stressSvc := service.NewStressService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	sensitivitySvc := service.NewSensitivityService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	dashboardSvc := service.NewDashboardService(
@@ -69,14 +73,19 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, instRepo, hash, snapSvc, marketRepo)
 	return Services{
-		Plans:            planSvc,
-		Allocation:       service.NewAllocationService(db, plans, alloc, scenario),
-		Holdings:         holdingsSvc,
-		Targets:          targetSvc,
-		Rebalance:        rebalanceSvc,
-		RebalanceDrafts:  rebalanceDraftSvc,
-		AssetRefresh:     service.NewAssetRefreshService(db, plans, params, holdingsSvc, repository.NewAssetRefreshEventRepo(db)),
-		Instruments:      service.NewInstrumentService(db, instRepo, marketRepo, annualRepo, jobRepo, repository.NewResolutionTicketRepo(db), provider),
+		Plans:           planSvc,
+		Allocation:      service.NewAllocationService(db, plans, alloc, scenario),
+		Holdings:        holdingsSvc,
+		Targets:         targetSvc,
+		Rebalance:       rebalanceSvc,
+		RebalanceDrafts: rebalanceDraftSvc,
+		AssetRefresh: service.NewAssetRefreshService(
+			db, plans, params, holdingsSvc, repository.NewAssetRefreshEventRepo(db),
+		),
+		Instruments: service.NewInstrumentService(
+			db, instRepo, marketRepo, annualRepo, jobRepo,
+			repository.NewResolutionTicketRepo(db), provider,
+		),
 		HoldingSnapshots: service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
 		Simulations:      simSvc,
 		Stress:           stressSvc,
@@ -229,10 +238,11 @@ func (s Services) updateParameters(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "parameters_invalid", err.Error(), nil)
 		return
 	}
-	updated, flows, err := s.Plans.UpdateParameters(c.Request.Context(), c.Param("plan_id"), service.ParametersUpdateRequest{
-		ConfigVersion: req.ConfigVersion, Parameters: params,
-		CashFlows: req.CashFlows, ApplyUnallocatedToCash: req.ApplyUnallocatedToCash,
-	})
+	updated, flows, err := s.Plans.UpdateParameters(c.Request.Context(), c.Param("plan_id"),
+		service.ParametersUpdateRequest{
+			ConfigVersion: req.ConfigVersion, Parameters: params,
+			CashFlows: req.CashFlows, ApplyUnallocatedToCash: req.ApplyUnallocatedToCash,
+		})
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -300,7 +310,7 @@ func checkHoldingReadOnlyFields(body []byte) error {
 		Holdings []map[string]json.RawMessage `json:"holdings"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil
+		return &service.AppError{Code: "invalid_request", Message: err.Error()}
 	}
 	readOnly := []string{
 		"name", "code", "instrument_name", "instrument_code",

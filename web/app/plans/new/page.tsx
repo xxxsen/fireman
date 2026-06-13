@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { MoneyInput } from "@/components/ui/MoneyInput";
@@ -214,12 +214,9 @@ export default function NewPlanWizardPage() {
     [activeScenarioClasses],
   );
 
-  useEffect(() => {
-    if (instrumentTabs.length === 0) return;
-    if (!instrumentTabs.some((t) => t.assetClass === holdingTab)) {
-      setHoldingTab(instrumentTabs[0]!.assetClass);
-    }
-  }, [instrumentTabs, holdingTab]);
+  const effectiveHoldingTab = instrumentTabs.some((t) => t.assetClass === holdingTab)
+    ? holdingTab
+    : (instrumentTabs[0]?.assetClass ?? holdingTab);
 
   const portfolioReview = useMemo(() => {
     if (!selectedScenario) return null;
@@ -394,9 +391,9 @@ export default function NewPlanWizardPage() {
                       key={assetClass}
                       type="button"
                       role="tab"
-                      aria-selected={holdingTab === assetClass}
+                      aria-selected={effectiveHoldingTab === assetClass}
                       className={`px-4 py-2 text-sm font-medium ${
-                        holdingTab === assetClass
+                        effectiveHoldingTab === assetClass
                           ? "border-b-2 border-slate-900 text-slate-900"
                           : "text-slate-500 hover:text-slate-700"
                       }`}
@@ -407,7 +404,7 @@ export default function NewPlanWizardPage() {
                   ))}
                 </div>
                 {instrumentTabs
-                  .filter((t) => t.assetClass === holdingTab)
+                  .filter((t) => t.assetClass === effectiveHoldingTab)
                   .map(({ assetClass, classWeight }) => {
                     const classSelected = selectedInstruments.filter(
                       (s) => s.inst.asset_class === assetClass,

@@ -7,9 +7,7 @@ import (
 // NormalizeHKCode normalizes HK exchange codes to zero-padded 5-digit symbols.
 func NormalizeHKCode(code string) string {
 	raw := strings.TrimSpace(strings.ToUpper(code))
-	if strings.HasPrefix(raw, "HK") {
-		raw = raw[2:]
-	}
+	raw = strings.TrimPrefix(raw, "HK")
 	var digits strings.Builder
 	for _, ch := range raw {
 		if ch >= '0' && ch <= '9' {

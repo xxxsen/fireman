@@ -28,10 +28,12 @@ type MarketDataPoint struct {
 
 func (r *MarketDataRepo) DeleteAllTx(ctx context.Context, tx *sql.Tx, instrumentID string) error {
 	_, err := r.exec(tx).ExecContext(ctx, `DELETE FROM market_data_points WHERE instrument_id=?`, instrumentID)
-	return err
+	return wrapSQL("delete market data points", err)
 }
 
-func (r *MarketDataRepo) UpsertBatch(ctx context.Context, tx *sql.Tx, instrumentID string, points []MarketDataPoint) error {
+func (r *MarketDataRepo) UpsertBatch(ctx context.Context, tx *sql.Tx, instrumentID string,
+	points []MarketDataPoint,
+) error {
 	exec := r.exec(tx)
 	for _, p := range points {
 		_, err := exec.ExecContext(ctx, `
@@ -51,24 +53,24 @@ func (r *MarketDataRepo) UpsertBatch(ctx context.Context, tx *sql.Tx, instrument
 }
 
 func (r *MarketDataRepo) ListByInstrument(ctx context.Context, instrumentID string) ([]MarketDataPoint, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return queryCollect(
+		ctx, r.db, `
 		SELECT instrument_id, trade_date, value, point_type, source_name, fetched_at
 		FROM market_data_points
 		WHERE instrument_id=?
-		ORDER BY trade_date`, instrumentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []MarketDataPoint
-	for rows.Next() {
-		var p MarketDataPoint
-		if err := rows.Scan(&p.InstrumentID, &p.TradeDate, &p.Value, &p.PointType, &p.SourceName, &p.FetchedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+		ORDER BY trade_date`, []any{instrumentID},
+		func(rows *sql.Rows) (MarketDataPoint, error) {
+			var p MarketDataPoint
+			if err := rows.Scan(
+				&p.InstrumentID, &p.TradeDate, &p.Value,
+				&p.PointType, &p.SourceName, &p.FetchedAt,
+			); err != nil {
+				return MarketDataPoint{}, wrapSQL("scan market data point", err)
+			}
+			return p, nil
+		},
+		"query market data points", "scan market data point", "iterate market data points",
+	)
 }
 
 func (r *MarketDataRepo) LastTradeDate(ctx context.Context, instrumentID string) (string, error) {
@@ -81,7 +83,7 @@ func (r *MarketDataRepo) LastTradeDate(ctx context.Context, instrumentID string)
 		return "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", wrapSQL("query last trade date", err)
 	}
 	if !d.Valid {
 		return "", nil
@@ -90,15 +92,16 @@ func (r *MarketDataRepo) LastTradeDate(ctx context.Context, instrumentID string)
 }
 
 // LatestPointMeta returns metadata from the most recent stored observation.
-func (r *MarketDataRepo) LatestPointMeta(ctx context.Context, instrumentID string) (sourceName, pointType string, err error) {
-	err = r.db.QueryRowContext(ctx, `
+func (r *MarketDataRepo) LatestPointMeta(ctx context.Context, instrumentID string) (string, string, error) {
+	var sourceName, pointType string
+	err := r.db.QueryRowContext(ctx, `
 		SELECT source_name, point_type FROM market_data_points
 		WHERE instrument_id=?
 		ORDER BY trade_date DESC LIMIT 1`, instrumentID).Scan(&sourceName, &pointType)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", nil
 	}
-	return sourceName, pointType, err
+	return sourceName, pointType, wrapSQL("scan latest point meta", err)
 }
 
 func (r *MarketDataRepo) LastFetchedAt(ctx context.Context, instrumentID string) (int64, error) {
@@ -106,7 +109,7 @@ func (r *MarketDataRepo) LastFetchedAt(ctx context.Context, instrumentID string)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT MAX(fetched_at) FROM market_data_points WHERE instrument_id=?`, instrumentID).Scan(&ts)
 	if err != nil {
-		return 0, err
+		return 0, wrapSQL("query last fetched at", err)
 	}
 	if !ts.Valid {
 		return 0, nil

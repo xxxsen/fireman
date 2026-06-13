@@ -24,7 +24,7 @@ func (e *AppError) Error() string {
 	if e.Message != "" {
 		return e.Message
 	}
-	return string(e.Code)
+	return e.Code
 }
 
 func (e *AppError) Unwrap() error { return e.Err }

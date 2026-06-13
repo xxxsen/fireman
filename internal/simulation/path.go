@@ -114,7 +114,8 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 	}
 
 	infl := NewInflationState(p.InflationMode, p.FixedInflationRate, p.InflationMu, p.InflationPhi, p.InflationSigma, rng)
-	withdraw := NewWithdrawalPlanner(p.WithdrawalType, p.AnnualSpendingMinor, p.WithdrawalRate, p.WithdrawalFloorRatio, p.WithdrawalCeilingRatio)
+	withdraw := NewWithdrawalPlanner(p.WithdrawalType, p.AnnualSpendingMinor, p.WithdrawalRate, p.WithdrawalFloorRatio,
+		p.WithdrawalCeilingRatio)
 
 	var detail *PathDetail
 	if opts.CollectDetail {
@@ -122,194 +123,11 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 	}
 
 	summary := PathSummary{PathNo: pathNo, PathSeed: pathSeed}
-	peak := int64(math.Round(total))
-	maxDD := 0.0
-	truncCount := 0
-	failed := false
-	var failMonth int
-	var failReason string
-	yearAcc := yearAccumulator{}
-
-	for month := 0; month < horizon; month++ {
-		if month == retire {
-			withdraw.InitAtRetirement(totalWealth(slots))
-		}
-
-		monthShock, hasShock := opts.Shocks[month]
-		if hasShock && monthShock.InflationAnnual != nil {
-			infl.SetOverrideAnnual(monthShock.InflationAnnual)
-		} else {
-			infl.ClearOverrideAnnual()
-		}
-
-		monthStart := totalWealth(slots)
-		if opts.CollectDetail && month%12 == 0 {
-			yearAcc.start = monthStart
-		}
-
-		// 2. savings and cash-flow income
-		income := int64(0)
-		if month < retire {
-			yearIdx := month / 12
-			saving := float64(p.AnnualSavingsMinor) * math.Pow(1+p.AnnualSavingsGrowthRate, float64(yearIdx)) / 12
-			income += int64(math.Round(saving))
-		}
-		income += cashFlowAmount(in.CashFlows, month, infl.Cumulative, "income")
-		if income > 0 {
-			addCash(slots, cashIdx, float64(income))
-		}
-
-		// 3-4. spending, tax, withdrawal
-		netSpend := int64(0)
-		tax := int64(0)
-		grossWithdrawal := int64(0)
-		if month >= retire {
-			isAnniv := month > retire && (month-retire)%12 == 0
-			net := withdraw.MonthlySpending(month, retire, monthStart, infl.Cumulative, isAnniv)
-			net += cashFlowAmount(in.CashFlows, month, infl.Cumulative, "expense")
-			if hasShock {
-				if monthShock.SpendingMultiplier > 0 && monthShock.SpendingMultiplier != 1 {
-					net = int64(math.Round(float64(net) * monthShock.SpendingMultiplier))
-				}
-				net += monthShock.ExtraSpendingMinor
-			}
-			gross, t := GrossWithdrawal(net, p.WithdrawalTaxRate, p.TaxableWithdrawalRatio)
-			netSpend = net
-			grossWithdrawal = gross
-			tax = t
-			summary.TotalSpendingMinor += net
-		} else {
-			netSpend = cashFlowAmount(in.CashFlows, month, infl.Cumulative, "expense")
-			if hasShock {
-				netSpend += monthShock.ExtraSpendingMinor
-			}
-			grossWithdrawal = netSpend
-		}
-
-		txCost := int64(0)
-		if grossWithdrawal > 0 {
-			ok, cost := withdrawAmount(slots, cashIdx, float64(grossWithdrawal), p.TransactionCostRate)
-			txCost = cost
-			summary.TransactionCostMinor += cost
-			if !ok {
-				failed = true
-				failMonth = month
-				failReason = classifyFailure(month, retire, horizon, infl.Cumulative)
-				break
-			}
-		}
-
-		// 6. rebalance
-		rebalanced := false
-		if month > 0 && shouldRebalance(month, p.RebalanceFrequency) {
-			if needsRebalance(slots, p.RebalanceThreshold) {
-				cost := rebalanceToTarget(slots, p.TransactionCostRate)
-				txCost += cost
-				summary.TransactionCostMinor += cost
-				rebalanced = true
-			}
-		}
-
-		// 7. returns
-		for i := range slots {
-			if slots[i].isCash {
-				continue
-			}
-			params := slots[i].returnParams
-			var assetShock AssetShock
-			if hasShock {
-				assetShock = monthShock.Assets[i]
-				if assetShock.DriftDelta != 0 {
-					annual := in.Assets[i].ModeledAnnualReturn + assetShock.DriftDelta
-					if annual < ReturnFloor {
-						annual = ReturnFloor
-					}
-					params = ParamsFromAnnual(annual, in.Assets[i].AnnualVolatility)
-				}
-			}
-			local, tr := SampleStudentT(rng, params, p.StudentTDf)
-			if tr {
-				truncCount++
-			}
-			if assetShock.ReturnMul != 0 {
-				local = (1+local)*(1+assetShock.ReturnMul) - 1
-			}
-			ret := local
-			if slots[i].useFX {
-				fx, tr2 := SampleStudentT(rng, slots[i].fxParams, p.StudentTDf)
-				if tr2 {
-					truncCount++
-				}
-				if assetShock.FXReturnMul != 0 {
-					fx = (1+fx)*(1+assetShock.FXReturnMul) - 1
-				}
-				ret = CompositeBaseReturn(local, fx)
-			}
-			slots[i].balance *= (1 + ret)
-			if slots[i].balance < 0 {
-				slots[i].balance = 0
-			}
-		}
-
-		infl.Advance(month)
-		endWealth := totalWealth(slots)
-		if endWealth > peak {
-			peak = endWealth
-		}
-		if peak > 0 {
-			dd := 1 - float64(endWealth)/float64(peak)
-			if dd > maxDD {
-				maxDD = dd
-			}
-		}
-
-		if opts.CollectMonthlyWealth {
-			summary.MonthlyWealthMinor = append(summary.MonthlyWealthMinor, endWealth)
-		}
-
-		if opts.CollectDetail {
-			mr := MonthRecord{
-				MonthOffset: month, TotalWealthMinor: endWealth, SpendingMinor: netSpend,
-				IncomeMinor: income, TaxMinor: tax, TransactionCost: txCost,
-				Rebalanced: rebalanced,
-			}
-			if peak > 0 {
-				mr.Drawdown = 1 - float64(endWealth)/float64(peak)
-			}
-			detail.Monthly = append(detail.Monthly, mr)
-			yearAcc.accum(netSpend, income, tax, txCost, endWealth, mr.Drawdown, rebalanced)
-			if month%12 == 11 || month == horizon-1 {
-				detail.Yearly = append(detail.Yearly, yearAcc.finish(month/12, p.CurrentAge, slotWeights(slots)))
-				yearAcc = yearAccumulator{start: endWealth}
-			}
-		}
-
-		if endWealth <= 0 {
-			failed = true
-			failMonth = month
-			failReason = classifyFailure(month, retire, horizon, infl.Cumulative)
-			break
-		}
-	}
-
-	summary.TerminalWealthMinor = totalWealth(slots)
-	summary.MaxDrawdown = maxDD
-	summary.TruncationCount = truncCount
-
-	if failed {
-		summary.Succeeded = false
-		summary.FailureMonth = &failMonth
-		summary.FailureReason = failReason
-	} else {
-		summary.Succeeded = summary.TerminalWealthMinor > 0 &&
-			summary.TerminalWealthMinor >= p.TerminalWealthFloorMinor
-		if !summary.Succeeded {
-			failReason = FailureLongevity
-			if summary.TerminalWealthMinor <= 0 {
-				failReason = FailureOther
-			}
-		}
-	}
+	state := pathSimState{summary: summary, detail: detail, peak: int64(math.Round(total))}
+	state = runPathMonths(in, slots, cashIdx, horizon, retire, &infl, &withdraw, rng, opts, state)
+	finalizePathSummary(&state.summary, slots, state, p.TerminalWealthFloorMinor)
+	summary = state.summary
+	detail = state.detail
 
 	if opts.CollectMonthlyWealth {
 		summary.MonthlyWealthMinor = padMonthlyWealth(summary.MonthlyWealthMinor, horizon)
@@ -317,7 +135,7 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 
 	if opts.CollectDetail {
 		detail.Succeeded = summary.Succeeded
-		detail.FailureReason = failReason
+		detail.FailureReason = summary.FailureReason
 		if summary.FailureMonth != nil {
 			detail.FailureMonth = summary.FailureMonth
 		}
@@ -420,22 +238,6 @@ func withdrawAmount(slots []assetSlot, cashIdx int, amount float64, txRate float
 	}
 	cost := int64(math.Round(grossNeeded * txRate))
 	return true, cost
-}
-
-func deductProRata(slots []assetSlot, amount float64) {
-	total := 0.0
-	for _, s := range slots {
-		total += s.balance
-	}
-	if total <= amount {
-		for i := range slots {
-			slots[i].balance = 0
-		}
-		return
-	}
-	for i := range slots {
-		slots[i].balance -= amount * (slots[i].balance / total)
-	}
 }
 
 func shouldRebalance(month int, freq string) bool {

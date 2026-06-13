@@ -141,7 +141,8 @@ func TestInvalidSeedRejectedIntegration(t *testing.T) {
 				"config_version": plan.ConfigVersion,
 				"parameters":     params,
 			})
-			upReq, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/plans/"+planID+"/parameters", bytes.NewReader(updateBody))
+			upReq, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/plans/"+planID+"/parameters",
+				bytes.NewReader(updateBody))
 			upReq.Header.Set("Content-Type", "application/json")
 			upResp, err := client.Do(upReq)
 			if err != nil {

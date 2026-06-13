@@ -3,9 +3,15 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+)
+
+var (
+	errIntegrityCheckFailed = errors.New("integrity check failed")
+	errBackupEmpty          = errors.New("db: backup file is empty")
 )
 
 // CheckpointWAL forces a WAL checkpoint so backup files are consistent.
@@ -14,7 +20,7 @@ func CheckpointWAL(ctx context.Context, pool *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("db: checkpoint conn: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if _, err := conn.ExecContext(ctx, "PRAGMA wal_checkpoint(FULL)"); err != nil {
 		return fmt.Errorf("db: wal_checkpoint: %w", err)
 	}
@@ -22,7 +28,7 @@ func CheckpointWAL(ctx context.Context, pool *sql.DB) error {
 }
 
 // ValidateDatabaseFile checks integrity and migration schema on a SQLite file.
-func ValidateDatabaseFile(path string) error {
+func ValidateDatabaseFile(ctx context.Context, path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("db: resolve path: %w", err)
@@ -31,22 +37,25 @@ func ValidateDatabaseFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("db: open validate: %w", err)
 	}
-	defer pool.Close()
+	defer func() { _ = pool.Close() }()
 
 	var integrity string
-	if err := pool.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+	if err := pool.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil {
 		return fmt.Errorf("db: integrity_check: %w", err)
 	}
 	if integrity != "ok" {
-		return fmt.Errorf("db: integrity_check failed: %s", integrity)
+		return fmt.Errorf("db: integrity_check failed: %s: %w", integrity, errIntegrityCheckFailed)
 	}
 
 	var count int
-	if err := pool.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&count); err != nil {
+	if err := pool.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`,
+	).Scan(&count); err != nil {
 		return fmt.Errorf("db: schema table: %w", err)
 	}
 	if count == 0 {
-		return fmt.Errorf("db: missing schema_migrations table")
+		return errMissingSchemaMigrations
 	}
 	return nil
 }
@@ -61,7 +70,7 @@ func ReadDatabaseFile(ctx context.Context, pool *sql.DB, dbPath string) ([]byte,
 		return nil, fmt.Errorf("db: read backup file: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, fmt.Errorf("db: backup file is empty")
+		return nil, errBackupEmpty
 	}
 	return data, nil
 }

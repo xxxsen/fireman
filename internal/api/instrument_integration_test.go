@@ -64,7 +64,7 @@ func setupInstrumentIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client()
 }
@@ -150,7 +150,9 @@ func setEquityOnlyAllocation(t *testing.T, client *http.Client, baseURL, planID 
 	return version + 1
 }
 
-func addEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, instrumentID string, version int) (holdingID string, newVersion int) {
+func addEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, instrumentID string,
+	version int,
+) (holdingID string, newVersion int) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{
 		"config_version": version,
@@ -306,7 +308,7 @@ func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {
 
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -319,7 +321,8 @@ func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {
 
 	var oldValue float64
 	if err := db.QueryRowContext(context.Background(), `
-		SELECT value FROM market_data_points WHERE instrument_id=? AND trade_date='2017-12-31'`, instID).Scan(&oldValue); err != nil {
+		SELECT value FROM market_data_points WHERE instrument_id=? AND trade_date='2017-12-31'`,
+		instID).Scan(&oldValue); err != nil {
 		t.Fatal(err)
 	}
 	if oldValue != 0.5 {
@@ -526,7 +529,8 @@ func TestInstrumentDataStaleWarningIntegration(t *testing.T) {
 	instID := importFixtureInstrument(t, client, srv.URL)
 	staleDate := time.Now().AddDate(0, 0, -10).Format("2006-01-02")
 	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(context.Background(), `DELETE FROM market_data_points WHERE instrument_id=?`, instID); err != nil {
+	if _, err := db.ExecContext(context.Background(), `DELETE FROM market_data_points WHERE instrument_id=?`,
+		instID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(context.Background(), `

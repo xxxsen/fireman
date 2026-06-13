@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 func TestSystemBackupDownload(t *testing.T) {
 	db, dbPath := testutil.OpenTestDBPath(t)
 	services := NewServices(db, dbPath, "", nil)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, DBPath: dbPath, Services: services}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, DBPath: dbPath, Services: services}))
 	defer srv.Close()
 
 	planBody := []byte(`{"name":"backup-test","valuation_date":"2024-01-01"}`)
@@ -21,6 +22,7 @@ func TestSystemBackupDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create plan status=%d", resp.StatusCode)
 	}
@@ -46,6 +48,7 @@ func TestSystemBackupDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = badResp.Body.Close() }()
 	if badResp.StatusCode == http.StatusOK {
 		t.Fatal("expected invalid backup to fail")
 	}
@@ -54,7 +57,7 @@ func TestSystemBackupDownload(t *testing.T) {
 func TestPlanExportEndpoints(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, "")}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
 	defer srv.Close()
 
 	for _, path := range []string{

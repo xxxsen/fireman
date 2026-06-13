@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +18,7 @@ import (
 func testRouter(t *testing.T) *httptest.Server {
 	t.Helper()
 	db := testutil.OpenTestDB(t)
-	r := NewRouter(Deps{DB: db})
+	r := NewRouter(context.Background(), Deps{DB: db})
 	return httptest.NewServer(r)
 }
 
@@ -117,7 +118,6 @@ func TestPlansCRUDAndVersionConflict(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("allocation status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
 	}
-	version++
 
 	// Stale version -> 409
 	staleBody, _ := json.Marshal(map[string]any{
@@ -145,9 +145,11 @@ func TestPlansCRUDAndVersionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("targets status=%d", resp.StatusCode)
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	// Delete
 	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/plans/"+planID, nil)
@@ -155,6 +157,7 @@ func TestPlansCRUDAndVersionConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("delete status=%d", resp.StatusCode)
 	}
@@ -165,7 +168,7 @@ func TestHoldingsReadOnlyFields(t *testing.T) {
 	plan := createTestPlan(t, db)
 	seedEquityInstrument(t, db, "ins_test_equity")
 
-	r := NewRouter(Deps{DB: db})
+	r := NewRouter(context.Background(), Deps{DB: db})
 	body, _ := json.Marshal(map[string]any{
 		"config_version": plan.ConfigVersion,
 		"holdings": []map[string]any{
@@ -190,7 +193,7 @@ func TestPlanVersionConflictOnStalePUT(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	plan := createTestPlan(t, db)
 	seedEquityInstrument(t, db, "ins_vc_equity")
-	r := NewRouter(Deps{DB: db})
+	r := NewRouter(context.Background(), Deps{DB: db})
 
 	// Bump config_version from 1 to 2 via a successful allocation update.
 	allocBody, _ := json.Marshal(map[string]any{
@@ -260,6 +263,7 @@ func TestBuiltinScenarioCannotDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
@@ -268,7 +272,7 @@ func TestBuiltinScenarioCannotDelete(t *testing.T) {
 func TestApplyScenarioDryRun(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	plan := createTestPlan(t, db)
-	r := NewRouter(Deps{DB: db})
+	r := NewRouter(context.Background(), Deps{DB: db})
 
 	body, _ := json.Marshal(map[string]any{
 		"scenario_id": "scn_builtin_post_fire", "config_version": plan.ConfigVersion, "dry_run": true,
@@ -293,7 +297,7 @@ func TestApplyScenarioDryRun(t *testing.T) {
 func TestRebalanceModes(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	plan := createTestPlan(t, db)
-	r := NewRouter(Deps{DB: db})
+	r := NewRouter(context.Background(), Deps{DB: db})
 
 	for _, path := range []string{
 		"/api/v1/plans/" + plan.ID + "/rebalance",

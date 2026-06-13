@@ -8,9 +8,11 @@ import (
 	"time"
 )
 
-var ErrScenarioNotFound = errors.New("scenario not found")
-var ErrBuiltinScenario = errors.New("builtin scenario cannot be deleted")
-var ErrScenarioInUse = errors.New("scenario is referenced by plans")
+var (
+	ErrScenarioNotFound = errors.New("scenario not found")
+	ErrBuiltinScenario  = errors.New("builtin scenario cannot be deleted")
+	ErrScenarioInUse    = errors.New("scenario is referenced by plans")
+)
 
 // ScenarioRepo manages allocation scenarios.
 type ScenarioRepo struct {
@@ -27,15 +29,18 @@ func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
 			(SELECT COUNT(*) FROM plan_parameters p WHERE p.selected_scenario_id = s.id) AS plan_count
 		FROM allocation_scenarios s ORDER BY s.is_builtin DESC, s.name`)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list allocation scenarios", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []AllocationScenario
 	for rows.Next() {
 		var s AllocationScenario
 		var builtin int
-		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &builtin, &s.CreatedAt, &s.UpdatedAt, &s.PlanCount); err != nil {
-			return nil, err
+		if err := rows.Scan(
+			&s.ID, &s.Name, &s.Description, &builtin,
+			&s.CreatedAt, &s.UpdatedAt, &s.PlanCount,
+		); err != nil {
+			return nil, wrapSQL("scan allocation scenario", err)
 		}
 		s.IsBuiltin = builtin == 1
 		weights, err := r.getWeights(ctx, s.ID)
@@ -45,7 +50,7 @@ func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
 		s.Weights = weights
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate allocation scenarios", rows.Err())
 }
 
 func (r *ScenarioRepo) GetByID(ctx context.Context, id string) (AllocationScenario, error) {
@@ -54,12 +59,13 @@ func (r *ScenarioRepo) GetByID(ctx context.Context, id string) (AllocationScenar
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, name, description, is_builtin, created_at, updated_at
 		FROM allocation_scenarios WHERE id=?`, id).Scan(
-		&s.ID, &s.Name, &s.Description, &builtin, &s.CreatedAt, &s.UpdatedAt)
+		&s.ID, &s.Name, &s.Description, &builtin, &s.CreatedAt, &s.UpdatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AllocationScenario{}, ErrScenarioNotFound
 	}
 	if err != nil {
-		return AllocationScenario{}, err
+		return AllocationScenario{}, wrapSQL("scan allocation scenario", err)
 	}
 	s.IsBuiltin = builtin == 1
 	s.Weights, err = r.getWeights(ctx, id)
@@ -78,18 +84,18 @@ func (r *ScenarioRepo) getWeights(ctx context.Context, scenarioID string) ([]Ass
 		SELECT asset_class, weight FROM allocation_scenario_weights
 		WHERE scenario_id=? ORDER BY asset_class`, scenarioID)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list scenario weights", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []AssetClassTarget
 	for rows.Next() {
 		var t AssetClassTarget
 		if err := rows.Scan(&t.AssetClass, &t.Weight); err != nil {
-			return nil, err
+			return nil, wrapSQL("scan scenario weight", err)
 		}
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate scenario weights", rows.Err())
 }
 
 func (r *ScenarioRepo) Create(ctx context.Context, s AllocationScenario) error {
@@ -100,7 +106,7 @@ func (r *ScenarioRepo) Create(ctx context.Context, s AllocationScenario) error {
 	s.UpdatedAt = now
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return wrapSQL("begin create scenario tx", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
@@ -113,40 +119,40 @@ func (r *ScenarioRepo) Create(ctx context.Context, s AllocationScenario) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO allocation_scenario_weights (scenario_id, asset_class, weight) VALUES (?,?,?)`,
 			s.ID, w.AssetClass, w.Weight); err != nil {
-			return err
+			return wrapSQL("insert scenario weight", err)
 		}
 	}
-	return tx.Commit()
+	return wrapSQL("commit create scenario tx", tx.Commit())
 }
 
 func (r *ScenarioRepo) Update(ctx context.Context, s AllocationScenario) error {
 	now := time.Now().UnixMilli()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return wrapSQL("begin update scenario tx", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `
 		UPDATE allocation_scenarios SET name=?, description=?, updated_at=? WHERE id=?`,
 		s.Name, s.Description, now, s.ID)
 	if err != nil {
-		return err
+		return wrapSQL("update scenario", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return ErrScenarioNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM allocation_scenario_weights WHERE scenario_id=?`, s.ID); err != nil {
-		return err
+		return wrapSQL("delete scenario weights", err)
 	}
 	for _, w := range s.Weights {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO allocation_scenario_weights (scenario_id, asset_class, weight) VALUES (?,?,?)`,
 			s.ID, w.AssetClass, w.Weight); err != nil {
-			return err
+			return wrapSQL("insert scenario weight", err)
 		}
 	}
-	return tx.Commit()
+	return wrapSQL("commit update scenario tx", tx.Commit())
 }
 
 func (r *ScenarioRepo) Delete(ctx context.Context, id string) error {
@@ -162,7 +168,7 @@ func (r *ScenarioRepo) Delete(ctx context.Context, id string) error {
 	}
 	res, err := r.db.ExecContext(ctx, `DELETE FROM allocation_scenarios WHERE id=?`, id)
 	if err != nil {
-		return err
+		return wrapSQL("delete scenario", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

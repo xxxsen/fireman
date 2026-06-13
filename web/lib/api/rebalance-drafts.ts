@@ -69,6 +69,6 @@ export function commitRebalanceDraft(
 export function cancelRebalanceDraft(
   planId: string,
   draftId: string,
-): Promise<{ cancelled: boolean }> {
+): Promise<{ canceled: boolean }> {
   return apiDelete(`/api/v1/plans/${planId}/rebalance-drafts/${draftId}`);
 }

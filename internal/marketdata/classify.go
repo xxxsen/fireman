@@ -1,7 +1,7 @@
 package marketdata
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 )
 
@@ -20,10 +20,15 @@ var supportedRegions = map[string]struct{}{
 	"domestic": {}, "foreign": {},
 }
 
+var (
+	errClassificationUnsupported = errors.New("instrument_classification_unsupported")
+	errMetadataConflict          = errors.New("instrument_metadata_conflict")
+)
+
 // ValidateUserAssetClass reports whether the user-selected asset class is supported.
 func ValidateUserAssetClass(assetClass string) error {
 	if _, ok := supportedAssetClasses[assetClass]; !ok {
-		return fmt.Errorf("instrument_classification_unsupported")
+		return errClassificationUnsupported
 	}
 	return nil
 }
@@ -31,7 +36,7 @@ func ValidateUserAssetClass(assetClass string) error {
 // ValidateUserRegion reports whether the user-selected region is supported.
 func ValidateUserRegion(region string) error {
 	if _, ok := supportedRegions[region]; !ok {
-		return fmt.Errorf("instrument_metadata_conflict")
+		return errMetadataConflict
 	}
 	return nil
 }
@@ -45,7 +50,7 @@ func UserClassification(market, instrumentType, assetClass, region, currency str
 		return Classification{}, err
 	}
 	if currency == "" {
-		return Classification{}, fmt.Errorf("instrument_metadata_conflict")
+		return Classification{}, errMetadataConflict
 	}
 	_ = market
 	_ = instrumentType
@@ -59,10 +64,10 @@ func UserClassification(market, instrumentType, assetClass, region, currency str
 // ResolveClassification maps provider metadata to persisted classification fields.
 func ResolveClassification(market, instrumentType string, data *FetchData) (Classification, error) {
 	if data.AssetClass == "fx" {
-		return Classification{}, fmt.Errorf("instrument_classification_unsupported")
+		return Classification{}, errClassificationUnsupported
 	}
 	if _, ok := supportedAssetClasses[data.AssetClass]; !ok {
-		return Classification{}, fmt.Errorf("instrument_classification_unsupported")
+		return Classification{}, errClassificationUnsupported
 	}
 
 	region := regionFromComponents(data.ExpenseRatioComponents)
@@ -70,10 +75,10 @@ func ResolveClassification(market, instrumentType string, data *FetchData) (Clas
 		region = defaultRegion(market, instrumentType)
 	}
 	if region != "domestic" && region != "foreign" {
-		return Classification{}, fmt.Errorf("instrument_metadata_conflict")
+		return Classification{}, errMetadataConflict
 	}
 	if data.Currency == "" {
-		return Classification{}, fmt.Errorf("instrument_metadata_conflict")
+		return Classification{}, errMetadataConflict
 	}
 	return Classification{
 		AssetClass: data.AssetClass,
@@ -94,7 +99,7 @@ func regionFromComponents(components map[string]any) string {
 	return ""
 }
 
-func defaultRegion(market, instrumentType string) string {
+func defaultRegion(market, _ string) string {
 	switch strings.ToUpper(market) {
 	case "US":
 		return "foreign"

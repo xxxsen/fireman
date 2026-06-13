@@ -1,7 +1,6 @@
 package simulation
 
 import (
-	"math"
 	"testing"
 )
 
@@ -19,7 +18,7 @@ func TestDerivePathSeedRangeAcrossPaths(t *testing.T) {
 	seen := make(map[int64]struct{}, 10000)
 	for pathNo := 0; pathNo < 10000; pathNo++ {
 		seed := DerivePathSeed(1, pathNo)
-		if seed < 0 || seed > math.MaxInt64 {
+		if seed < 0 {
 			t.Fatalf("path %d seed out of range: %d", pathNo, seed)
 		}
 		if seed == 0 {

@@ -43,13 +43,13 @@ export function ParametersContent({
   const planId = useParams().id as string;
   const { dirty, markDirty, markClean } = usePlanEdit();
   const qc = useQueryClient();
-  const [params, setParams] = useState<PlanParameters | null>(null);
-  const [cashFlows, setCashFlows] = useState<PlanCashFlow[]>([]);
+  const [localParams, setLocalParams] = useState<PlanParameters | null>(null);
+  const [localCashFlows, setLocalCashFlows] = useState<PlanCashFlow[] | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [gapAction, setGapAction] = useState<"cash" | "">("");
   const [highInflationConfirmed, setHighInflationConfirmed] = useState(false);
-  const [assetTargets, setAssetTargets] = useState<AssetClassTarget[]>([]);
-  const [regionTargets, setRegionTargets] = useState<RegionTarget[]>([]);
+  const [localAssetTargets, setLocalAssetTargets] = useState<AssetClassTarget[] | null>(null);
+  const [localRegionTargets, setLocalRegionTargets] = useState<RegionTarget[] | null>(null);
   const [allocationDirty, setAllocationDirty] = useState(false);
 
   const { stale } = usePlanResultStale(planId);
@@ -72,21 +72,16 @@ export function ParametersContent({
     queryFn: listScenarios,
   });
 
-  useEffect(() => {
-    if (paramsQ.data) {
-      setParams(paramsQ.data.parameters);
-      setCashFlows(paramsQ.data.cash_flows ?? []);
-      markClean();
-      setAllocationDirty(false);
-    }
-  }, [paramsQ.data, markClean]);
-
-  useEffect(() => {
-    if (allocationQ.data) {
-      setAssetTargets(allocationQ.data.asset_class_targets);
-      setRegionTargets(allocationQ.data.region_targets);
-    }
-  }, [allocationQ.data]);
+  const params = localParams ?? paramsQ.data?.parameters ?? null;
+  const cashFlows = localCashFlows ?? paramsQ.data?.cash_flows ?? [];
+  const assetTargets =
+    allocationDirty && localAssetTargets
+      ? localAssetTargets
+      : (allocationQ.data?.asset_class_targets ?? []);
+  const regionTargets =
+    allocationDirty && localRegionTargets
+      ? localRegionTargets
+      : (allocationQ.data?.region_targets ?? []);
 
   const holdingsSum =
     holdingsQ.data?.holdings
@@ -116,6 +111,10 @@ export function ParametersContent({
     },
     onSuccess: () => {
       markClean();
+      setLocalParams(null);
+      setLocalCashFlows(null);
+      setLocalAssetTargets(null);
+      setLocalRegionTargets(null);
       setAllocationDirty(false);
       setGapAction("");
       setSaveError(null);
@@ -132,7 +131,7 @@ export function ParametersContent({
 
   const update = <K extends keyof PlanParameters>(key: K, value: PlanParameters[K]) => {
     if (!params) return;
-    setParams({ ...params, [key]: value });
+    setLocalParams({ ...params, [key]: value });
     markDirty();
   };
 
@@ -282,7 +281,7 @@ export function ParametersContent({
             planId={planId}
             flows={cashFlows}
             onChange={(next) => {
-              setCashFlows(next);
+              setLocalCashFlows(next);
               markDirty();
             }}
           />
@@ -318,7 +317,7 @@ export function ParametersContent({
                   onChange={(v) => {
                     const next = [...assetTargets];
                     next[i] = { ...t, weight: v };
-                    setAssetTargets(next);
+                    setLocalAssetTargets(next);
                     setAllocationDirty(true);
                     markDirty();
                   }}
@@ -345,7 +344,7 @@ export function ParametersContent({
                         onChange={(v) => {
                           const next = [...regionTargets];
                           next[idx] = { ...r, weight_within_class: v };
-                          setRegionTargets(next);
+                          setLocalRegionTargets(next);
                           setAllocationDirty(true);
                           markDirty();
                         }}

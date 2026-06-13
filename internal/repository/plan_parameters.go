@@ -37,12 +37,13 @@ func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters
 		&p.WithdrawalType, &p.WithdrawalRate, &p.WithdrawalFloorRatio, &p.WithdrawalCeilingRatio,
 		&p.WithdrawalTaxRate, &p.TaxableWithdrawalRatio,
 		&p.RebalanceFrequency, &p.RebalanceThreshold, &p.TransactionCostRate,
-		&p.SimulationRuns, &p.StudentTDf, &seed, &p.UpdatedAt)
+		&p.SimulationRuns, &p.StudentTDf, &seed, &p.UpdatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PlanParameters{}, ErrPlanNotFound
 	}
 	if err != nil {
-		return PlanParameters{}, err
+		return PlanParameters{}, wrapSQL("scan plan parameters", err)
 	}
 	if scenario.Valid {
 		s := scenario.String
@@ -105,7 +106,7 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 		p.WithdrawalTaxRate, p.TaxableWithdrawalRatio,
 		p.RebalanceFrequency, p.RebalanceThreshold, p.TransactionCostRate,
 		p.SimulationRuns, p.StudentTDf, seed, p.UpdatedAt)
-	return err
+	return wrapSQL("upsert plan parameters", err)
 }
 
 func (r *ParametersRepo) ListCashFlows(ctx context.Context, planID string) ([]PlanCashFlow, error) {
@@ -114,16 +115,16 @@ func (r *ParametersRepo) ListCashFlows(ctx context.Context, planID string) ([]Pl
 			recurrence, inflation_linked, annual_growth_rate, enabled, note, created_at, updated_at
 		FROM plan_cash_flows WHERE plan_id=? ORDER BY start_month_offset`, planID)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("query plan cash flows", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanCashFlows(rows)
 }
 
 func (r *ParametersRepo) ReplaceCashFlows(ctx context.Context, tx *sql.Tx, planID string, flows []PlanCashFlow) error {
 	exec := r.exec(tx)
 	if _, err := exec.ExecContext(ctx, `DELETE FROM plan_cash_flows WHERE plan_id=?`, planID); err != nil {
-		return err
+		return wrapSQL("delete plan cash flows", err)
 	}
 	now := time.Now().UnixMilli()
 	for _, f := range flows {
@@ -140,7 +141,7 @@ func (r *ParametersRepo) ReplaceCashFlows(ctx context.Context, tx *sql.Tx, planI
 			f.Recurrence, boolToInt(f.InflationLinked), f.AnnualGrowthRate, boolToInt(f.Enabled),
 			f.Note, f.CreatedAt, f.UpdatedAt)
 		if err != nil {
-			return err
+			return wrapSQL("insert plan cash flow", err)
 		}
 	}
 	return nil
@@ -154,13 +155,13 @@ func scanCashFlows(rows *sql.Rows) ([]PlanCashFlow, error) {
 		if err := rows.Scan(&f.ID, &f.PlanID, &f.Name, &f.Kind, &f.AmountMinor,
 			&f.StartMonthOffset, &f.EndMonthOffset, &f.Recurrence, &inflLinked,
 			&f.AnnualGrowthRate, &enabled, &f.Note, &f.CreatedAt, &f.UpdatedAt); err != nil {
-			return nil, err
+			return nil, wrapSQL("scan cash flow row", err)
 		}
 		f.InflationLinked = inflLinked == 1
 		f.Enabled = enabled == 1
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate cash flow rows", rows.Err())
 }
 
 func (r *ParametersRepo) exec(tx *sql.Tx) dbExec {

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { getHoldings, getTargets } from "@/lib/api/holdings";
@@ -23,6 +23,12 @@ import { ApiError } from "@/lib/api/client";
 
 const STEPS = ["说明", "配置确认", "录入当前资产", "确认提交"] as const;
 
+type AssetRefreshRow = {
+  instrument_id: string;
+  label: string;
+  current_amount_minor: number;
+};
+
 export default function AssetRefreshPage() {
   const planId = useParams().id as string;
   const router = useRouter();
@@ -30,10 +36,8 @@ export default function AssetRefreshPage() {
   const reason = searchParams.get("reason");
   const queryClient = useQueryClient();
   const [step, setStep] = useState(reason === "scale" ? 2 : 0);
-  const [rows, setRows] = useState<
-    { instrument_id: string; label: string; current_amount_minor: number }[]
-  >([]);
-  const [totalAssets, setTotalAssets] = useState(0);
+  const [rowsOverride, setRowsOverride] = useState<AssetRefreshRow[] | null>(null);
+  const [totalOverride, setTotalOverride] = useState<number | null>(null);
   const [syncScale, setSyncScale] = useState(reason === "scale");
   const [configChanged, setConfigChanged] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,19 +52,25 @@ export default function AssetRefreshPage() {
     queryFn: () => getTargets(planId),
   });
 
-  useEffect(() => {
-    if (!holdings.data) return;
-    const enabled = holdings.data.holdings.filter((h) => h.enabled);
-    setRows(
-      enabled.map((h) => ({
+  const enabledHoldings = useMemo(
+    () => holdings.data?.holdings.filter((h) => h.enabled) ?? [],
+    [holdings.data],
+  );
+  const defaultRows = useMemo(
+    () =>
+      enabledHoldings.map((h) => ({
         instrument_id: h.instrument_id,
         label: h.instrument_name ?? h.instrument_code ?? h.instrument_id,
         current_amount_minor: h.current_amount_minor,
       })),
-    );
-    const sum = enabled.reduce((s, h) => s + h.current_amount_minor, 0);
-    setTotalAssets(sum);
-  }, [holdings.data]);
+    [enabledHoldings],
+  );
+  const defaultTotal = useMemo(
+    () => enabledHoldings.reduce((s, h) => s + h.current_amount_minor, 0),
+    [enabledHoldings],
+  );
+  const rows = rowsOverride ?? defaultRows;
+  const totalAssets = totalOverride ?? defaultTotal;
 
   const sumMinor = useMemo(() => sumHoldingsMinor(rows), [rows]);
   const validation = useMemo(
@@ -198,7 +208,7 @@ export default function AssetRefreshPage() {
                       <MoneyInput
                         valueMinor={row.current_amount_minor}
                         onChange={(value) =>
-                          setRows(
+                          setRowsOverride(
                             rows.map((r) =>
                               r.instrument_id === row.instrument_id
                                 ? { ...r, current_amount_minor: value }
@@ -217,13 +227,13 @@ export default function AssetRefreshPage() {
             <label className="text-sm">
               资产总值
               <div className="mt-1">
-                <MoneyInput valueMinor={totalAssets} onChange={setTotalAssets} />
+                <MoneyInput valueMinor={totalAssets} onChange={setTotalOverride} />
               </div>
             </label>
             <button
               type="button"
               className="text-sm underline"
-              onClick={() => setTotalAssets(sumMinor)}
+              onClick={() => setTotalOverride(sumMinor)}
             >
               使用分项合计 {formatMoney(sumMinor, plan.data.base_currency)}
             </button>

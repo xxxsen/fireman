@@ -61,22 +61,24 @@ func NewSensitivityService(
 	}
 }
 
-func (s *SensitivityService) Create(ctx context.Context, req CreateSensitivityTestRequest) (CreateSensitivityTestResponse, error) {
+func (s *SensitivityService) Create(ctx context.Context,
+	req CreateSensitivityTestRequest,
+) (CreateSensitivityTestResponse, error) {
 	snap, inputHash, err := s.sims.BuildInputSnapshot(ctx, req.PlanID, req.Runs, req.Seed)
 	if err != nil {
 		return CreateSensitivityTestResponse{}, err
 	}
 
 	if req.IdempotencyKey != "" {
-		existing, storedHash, err := s.jobs.FindIdempotency(ctx, req.PlanID, repository.JobTypeSensitivity, req.IdempotencyKey)
-		if err == nil {
-			if storedHash != inputHash {
-				return CreateSensitivityTestResponse{}, newErr("idempotency_conflict", "idempotency key reused with different input", nil)
-			}
-			return CreateSensitivityTestResponse{JobID: existing.ID, Status: existing.Status}, nil
-		}
-		if !errors.Is(err, repository.ErrJobNotFound) {
+		existing, found, err := findExistingIdempotentJob(
+			ctx, s.jobs, req.PlanID, repository.JobTypeSensitivity, req.IdempotencyKey, inputHash,
+			"find sensitivity idempotency",
+		)
+		if err != nil {
 			return CreateSensitivityTestResponse{}, err
+		}
+		if found {
+			return CreateSensitivityTestResponse{JobID: existing.ID, Status: existing.Status}, nil
 		}
 	}
 
@@ -92,21 +94,22 @@ func (s *SensitivityService) Create(ctx context.Context, req CreateSensitivityTe
 			Status: repository.JobStatusQueued, InputHash: inputHash,
 			ProgressTotal: 50,
 		}); err != nil {
-			return err
+			return wrapRepo("create sensitivity job", err)
 		}
 		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
 			JobID: jobID, PlanID: req.PlanID, Type: repository.AnalysisTypeSensitivity,
 			InputHash: inputHash, ResultJSON: pending,
 		}); err != nil {
-			return err
+			return wrapRepo("create sensitivity analysis pending", err)
 		}
 		if req.IdempotencyKey != "" {
-			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSensitivity, req.IdempotencyKey, jobID, inputHash)
+			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSensitivity, req.IdempotencyKey, jobID,
+				inputHash)
 		}
 		return nil
 	})
 	if err != nil {
-		return CreateSensitivityTestResponse{}, err
+		return CreateSensitivityTestResponse{}, wrapRepo("create sensitivity tx", err)
 	}
 	return CreateSensitivityTestResponse{JobID: jobID, Status: repository.JobStatusQueued}, nil
 }
@@ -116,11 +119,11 @@ func (s *SensitivityService) ListByPlan(ctx context.Context, planID string) ([]S
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, newErr("plan_not_found", "plan not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get plan for sensitivity list", err)
 	}
 	recs, err := s.analysis.ListByPlan(ctx, planID, repository.AnalysisTypeSensitivity, 20)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("list sensitivity tests", err)
 	}
 	currentHash, _ := s.hash.Compute(ctx, planID)
 	out := make([]SensitivityTestView, len(recs))
@@ -136,7 +139,7 @@ func (s *SensitivityService) GetByJobID(ctx context.Context, jobID string) (Sens
 		if errors.Is(err, repository.ErrAnalysisNotFound) {
 			return SensitivityTestView{}, newErr("sensitivity_test_not_found", "sensitivity test not found", nil)
 		}
-		return SensitivityTestView{}, err
+		return SensitivityTestView{}, wrapRepo("get sensitivity test", err)
 	}
 	if rec.Type != repository.AnalysisTypeSensitivity {
 		return SensitivityTestView{}, newErr("sensitivity_test_not_found", "sensitivity test not found", nil)
@@ -145,7 +148,9 @@ func (s *SensitivityService) GetByJobID(ctx context.Context, jobID string) (Sens
 	return s.toView(ctx, rec, currentHash), nil
 }
 
-func (s *SensitivityService) toView(ctx context.Context, rec repository.AnalysisResult, currentHash string) SensitivityTestView {
+func (s *SensitivityService) toView(ctx context.Context, rec repository.AnalysisResult,
+	currentHash string,
+) SensitivityTestView {
 	job, _ := s.jobs.GetByID(ctx, rec.JobID)
 	stale := currentHash != "" && rec.InputHash != currentHash
 	view := SensitivityTestView{

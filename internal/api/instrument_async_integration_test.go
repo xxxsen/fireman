@@ -89,7 +89,9 @@ func waitForInstrumentStatus(t *testing.T, client *http.Client, baseURL, instrum
 	t.Fatalf("instrument %s did not reach status %s", instrumentID, wantStatus)
 }
 
-func assertHoldingsNotReady(t *testing.T, client *http.Client, baseURL, planID string, version int, instrumentID string) {
+func assertHoldingsNotReady(t *testing.T, client *http.Client, baseURL, planID string, version int,
+	instrumentID string,
+) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{
 		"config_version": version,
@@ -121,7 +123,10 @@ func assertWizardNotReady(t *testing.T, client *http.Client, baseURL, instrument
 		"parameters":                wizardParams(1_000_000_00),
 		"region_targets":            wizardRegionTargets(),
 		"holdings": []map[string]any{
-			{"instrument_id": instrumentID, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 1_000_000_00, "sort_order": 1},
+			{
+				"instrument_id": instrumentID, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 1_000_000_00,
+				"sort_order": 1,
+			},
 		},
 	}
 	resp, raw := postWizard(t, client, baseURL, body)
@@ -135,7 +140,7 @@ func TestInstrumentNotReadyIntegration(t *testing.T) {
 	provider := mockProviderServer(t)
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -146,7 +151,8 @@ func TestInstrumentNotReadyIntegration(t *testing.T) {
 	assertHoldingsNotReady(t, client, srv.URL, plan.ID, version, instID)
 	assertWizardNotReady(t, client, srv.URL, instID)
 
-	if _, err := db.ExecContext(context.Background(), `UPDATE instruments SET status='fetch_failed' WHERE id=?`, instID); err != nil {
+	if _, err := db.ExecContext(context.Background(), `UPDATE instruments SET status='fetch_failed' WHERE id=?`,
+		instID); err != nil {
 		t.Fatal(err)
 	}
 	assertHoldingsNotReady(t, client, srv.URL, plan.ID, version, instID)
@@ -201,7 +207,7 @@ func TestInstrumentRetryFetchIntegration(t *testing.T) {
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -225,7 +231,8 @@ func TestInstrumentRetryFetchIntegration(t *testing.T) {
 	}
 
 	var status string
-	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&status); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`,
+		instID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "active" {
@@ -285,7 +292,7 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -299,10 +306,12 @@ func TestInstrument510DualImportIntegration(t *testing.T) {
 	waitForInstrumentActive(t, client, srv.URL, szID)
 
 	var shCode, szCode string
-	if err := db.QueryRowContext(context.Background(), `SELECT code FROM instruments WHERE id=?`, shID).Scan(&shCode); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT code FROM instruments WHERE id=?`,
+		shID).Scan(&shCode); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRowContext(context.Background(), `SELECT code FROM instruments WHERE id=?`, szID).Scan(&szCode); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT code FROM instruments WHERE id=?`,
+		szID).Scan(&szCode); err != nil {
 		t.Fatal(err)
 	}
 	if shCode != "sh000510" || szCode != "sz000510" {
@@ -335,7 +344,7 @@ func TestConcurrentImportAsyncIntegration(t *testing.T) {
 	provider := mockProviderServer(t)
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -373,7 +382,8 @@ func TestConcurrentImportAsyncIntegration(t *testing.T) {
 		t.Fatalf("rejectCount=%d want %d", rejectCount, workers-1)
 	}
 	var instCount int
-	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM instruments WHERE code='sh510300'`).Scan(&instCount); err != nil {
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM instruments WHERE code='sh510300'`).Scan(&instCount); err != nil {
 		t.Fatal(err)
 	}
 	if instCount != 1 {
@@ -386,7 +396,7 @@ func TestConcurrentRetryFetchIntegration(t *testing.T) {
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -488,7 +498,8 @@ func waitForJobStatus(t *testing.T, db *sql.DB, jobID, wantStatus string) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var status string
-		if err := db.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id=?`, jobID).Scan(&status); err != nil {
+		if err := db.QueryRowContext(context.Background(), `SELECT status FROM jobs WHERE id=?`,
+			jobID).Scan(&status); err != nil {
 			t.Fatal(err)
 		}
 		if status == wantStatus {
@@ -499,7 +510,9 @@ func waitForJobStatus(t *testing.T, db *sql.DB, jobID, wantStatus string) {
 	t.Fatalf("job %s did not reach status %s", jobID, wantStatus)
 }
 
-func waitForFetchStatus(t *testing.T, client *http.Client, baseURL, instrumentID string, check func(map[string]any) bool) {
+func waitForFetchStatus(t *testing.T, client *http.Client, baseURL, instrumentID string,
+	check func(map[string]any) bool,
+) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -532,7 +545,7 @@ func TestInstrumentFetchRunningCancelIntegration(t *testing.T) {
 	closeProvider(t, provider)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -555,7 +568,8 @@ func TestInstrumentFetchRunningCancelIntegration(t *testing.T) {
 
 	waitForJobStatus(t, db, jobID, "canceled")
 	var jobStatus, errorCode string
-	if err := db.QueryRowContext(context.Background(), `SELECT status, COALESCE(error_code, '') FROM jobs WHERE id=?`, jobID).Scan(&jobStatus, &errorCode); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT status, COALESCE(error_code, '') FROM jobs WHERE id=?`,
+		jobID).Scan(&jobStatus, &errorCode); err != nil {
 		t.Fatal(err)
 	}
 	if jobStatus != "canceled" {
@@ -566,7 +580,8 @@ func TestInstrumentFetchRunningCancelIntegration(t *testing.T) {
 	}
 
 	var instStatus string
-	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&instStatus); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`,
+		instID).Scan(&instStatus); err != nil {
 		t.Fatal(err)
 	}
 	if instStatus != "fetch_failed" {
@@ -592,7 +607,7 @@ func TestInstrumentFetchShutdownRequeueIntegration(t *testing.T) {
 	closeProvider(t, provider)
 	db := testutil.OpenTestDB(t)
 	stopWorker := startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -609,7 +624,8 @@ func TestInstrumentFetchShutdownRequeueIntegration(t *testing.T) {
 	waitForJobStatus(t, db, jobID, "queued")
 
 	var instStatus string
-	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&instStatus); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`,
+		instID).Scan(&instStatus); err != nil {
 		t.Fatal(err)
 	}
 	if instStatus != "pending_fetch" {
@@ -621,7 +637,7 @@ func TestInstrumentFetchQueuedCancelIntegration(t *testing.T) {
 	provider := mockProviderServer(t)
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -642,7 +658,8 @@ func TestInstrumentFetchQueuedCancelIntegration(t *testing.T) {
 	}
 
 	var status string
-	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`, instID).Scan(&status); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT status FROM instruments WHERE id=?`,
+		instID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "fetch_failed" {
@@ -663,7 +680,7 @@ func TestHoldingsWithSystemCashIntegration(t *testing.T) {
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -686,7 +703,8 @@ func TestHoldingsWithSystemCashIntegration(t *testing.T) {
 			{"asset_class": "cash", "region": "foreign", "weight_within_class": 0.0},
 		},
 	})
-	allocReq, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/plans/"+plan.ID+"/allocation", bytes.NewReader(allocBody))
+	allocReq, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/plans/"+plan.ID+"/allocation",
+		bytes.NewReader(allocBody))
 	allocReq.Header.Set("Content-Type", "application/json")
 	allocResp, err := client.Do(allocReq)
 	if err != nil {
@@ -746,7 +764,7 @@ func TestResolveStockCandidateNoTicketForFundTypeIntegration(t *testing.T) {
 	provider := mockAmbiguousFundProviderServer(t)
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 

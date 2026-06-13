@@ -21,16 +21,18 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	services := buildServices(db, "")
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, nil, services.EventHub, nil, nil)
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, nil,
+		services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
 
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 
 	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "7"})
-	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests", bytes.NewReader(stressBody))
+	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests",
+		bytes.NewReader(stressBody))
 	stressReq.Header.Set("Content-Type", "application/json")
 	stressResp, err := http.DefaultClient.Do(stressReq)
 	if err != nil {
@@ -54,7 +56,8 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	}
 
 	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "8"})
-	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests", bytes.NewReader(sensBody))
+	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests",
+		bytes.NewReader(sensBody))
 	sensReq.Header.Set("Content-Type", "application/json")
 	sensResp, err := http.DefaultClient.Do(sensReq)
 	if err != nil {
@@ -71,6 +74,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = listResp.Body.Close() }()
 	if listResp.StatusCode != http.StatusOK {
 		t.Fatalf("list stress status=%d", listResp.StatusCode)
 	}

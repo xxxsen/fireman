@@ -2,9 +2,15 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fireman/fireman/internal/repository"
+)
+
+var (
+	errUnsupportedBaseCurrency    = errors.New("unsupported base currency for FX conversion")
+	errUnsupportedForeignCurrency = errors.New("unsupported foreign currency")
 )
 
 // FXPairCode returns the system FX instrument code for converting assetCurrency into baseCurrency.
@@ -13,7 +19,7 @@ func FXPairCode(assetCurrency, baseCurrency string) (string, error) {
 		return "", nil
 	}
 	if baseCurrency != "CNY" {
-		return "", fmt.Errorf("unsupported base currency %q for FX conversion", baseCurrency)
+		return "", fmt.Errorf("%w: %q", errUnsupportedBaseCurrency, baseCurrency)
 	}
 	switch assetCurrency {
 	case "USD":
@@ -21,7 +27,7 @@ func FXPairCode(assetCurrency, baseCurrency string) (string, error) {
 	case "HKD":
 		return "HKDCNY", nil
 	default:
-		return "", fmt.Errorf("unsupported foreign currency %q", assetCurrency)
+		return "", fmt.Errorf("%w: %q", errUnsupportedForeignCurrency, assetCurrency)
 	}
 }
 
@@ -36,7 +42,9 @@ func NewFXResolver(inst *repository.InstrumentRepo, market *repository.MarketDat
 }
 
 // Metrics returns FX snapshot metrics for a foreign-currency asset.
-func (r *FXResolver) Metrics(ctx context.Context, assetCurrency, baseCurrency, asOfDate string) (SnapshotMetrics, error) {
+func (r *FXResolver) Metrics(
+	ctx context.Context, assetCurrency, baseCurrency, asOfDate string,
+) (SnapshotMetrics, error) {
 	code, err := FXPairCode(assetCurrency, baseCurrency)
 	if err != nil {
 		return SnapshotMetrics{}, err
@@ -51,7 +59,7 @@ func (r *FXResolver) Metrics(ctx context.Context, assetCurrency, baseCurrency, a
 	}
 	rows, err := r.market.ListByInstrument(ctx, inst.ID)
 	if err != nil {
-		return SnapshotMetrics{}, err
+		return SnapshotMetrics{}, fmt.Errorf("list fx market data: %w", err)
 	}
 	points := make([]DataPoint, len(rows))
 	for i, row := range rows {

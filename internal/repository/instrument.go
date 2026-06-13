@@ -55,9 +55,9 @@ func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 		WHERE provider='akshare' OR is_system=1
 		ORDER BY is_system DESC, name`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query instruments: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanInstrumentRecords(rows)
 }
 
@@ -71,7 +71,9 @@ func (r *InstrumentRepo) GetByID(ctx context.Context, id string) (InstrumentReco
 	return scanInstrumentRecord(row)
 }
 
-func (r *InstrumentRepo) FindByKey(ctx context.Context, market, instrumentType, code, adjustPolicy string) (InstrumentRecord, error) {
+func (r *InstrumentRepo) FindByKey(ctx context.Context, market, instrumentType, code,
+	adjustPolicy string,
+) (InstrumentRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
 			provider, provider_symbol, adjust_policy, is_system,
@@ -110,7 +112,10 @@ func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst Instrument
 func (r *InstrumentRepo) UpdateStatusTx(ctx context.Context, tx *sql.Tx, id, status string) error {
 	now := time.Now().UnixMilli()
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET status=?, updated_at=? WHERE id=?`, status, now, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("update instrument status: %w", err)
+	}
+	return nil
 }
 
 func (r *InstrumentRepo) UpdateAfterFetchTx(ctx context.Context, tx *sql.Tx, inst InstrumentRecord) error {
@@ -124,24 +129,33 @@ func (r *InstrumentRepo) UpdateAfterFetchTx(ctx context.Context, tx *sql.Tx, ins
 		inst.Name, inst.AssetClass, inst.Region, inst.Currency,
 		inst.ProviderSymbol, inst.ExpenseRatio, inst.ExpenseRatioStatus,
 		inst.FeeTreatment, inst.Status, now, inst.ID)
-	return err
+	if err != nil {
+		return fmt.Errorf("update instrument after fetch: %w", err)
+	}
+	return nil
 }
 
 func (r *InstrumentRepo) TouchUpdated(ctx context.Context, tx *sql.Tx, id string) error {
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
-	return err
+	if err != nil {
+		return fmt.Errorf("touch instrument updated_at: %w", err)
+	}
+	return nil
 }
 
 func (r *InstrumentRepo) UpdateNameTx(ctx context.Context, tx *sql.Tx, id, name string) error {
 	now := time.Now().UnixMilli()
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET name=?, updated_at=? WHERE id=?`, name, now, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("update instrument name: %w", err)
+	}
+	return nil
 }
 
 func (r *InstrumentRepo) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM instruments WHERE id=?`, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("delete instrument: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
@@ -153,7 +167,10 @@ func (r *InstrumentRepo) Delete(ctx context.Context, id string) error {
 func (r *InstrumentRepo) IsReferencedByPlan(ctx context.Context, instrumentID string) (bool, error) {
 	var n int
 	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plan_holdings WHERE instrument_id=?`, instrumentID).Scan(&n)
-	return n > 0, err
+	if err != nil {
+		return false, fmt.Errorf("count plan references: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (r *InstrumentRepo) exec(tx *sql.Tx) dbExec {
@@ -178,7 +195,7 @@ func scanInstrumentRecord(row *sql.Row) (InstrumentRecord, error) {
 		return InstrumentRecord{}, ErrInstrumentNotFound
 	}
 	if err != nil {
-		return InstrumentRecord{}, err
+		return InstrumentRecord{}, fmt.Errorf("scan instrument: %w", err)
 	}
 	inst.IsSystem = isSystem == 1
 	if expenseRatio.Valid {
@@ -201,7 +218,7 @@ func scanInstrumentRecords(rows *sql.Rows) ([]InstrumentRecord, error) {
 			&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
 			&inst.CreatedAt, &inst.UpdatedAt,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan instrument row: %w", err)
 		}
 		inst.IsSystem = isSystem == 1
 		if expenseRatio.Valid {
@@ -210,5 +227,8 @@ func scanInstrumentRecords(rows *sql.Rows) ([]InstrumentRecord, error) {
 		}
 		out = append(out, inst)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate instruments: %w", err)
+	}
+	return out, nil
 }

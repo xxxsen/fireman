@@ -6,12 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/domain"
@@ -21,7 +17,7 @@ import (
 const (
 	RebalanceDraftStatusDraft     = "draft"
 	RebalanceDraftStatusCommitted = "committed"
-	RebalanceDraftStatusCancelled = "cancelled"
+	RebalanceDraftStatusCancelled = "canceled"
 
 	DraftEventStage  = "stage"
 	DraftEventUndo   = "undo"
@@ -99,18 +95,18 @@ func (s *RebalanceDraftService) GetActive(ctx context.Context, planID string) (*
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, newErr("plan_not_found", "plan not found", nil)
 		}
-		return nil, err
+		return nil, wrapRepo("get plan", err)
 	}
 	draft, err := s.drafts.GetActiveByPlan(ctx, planID)
-	if err != nil {
-		return nil, err
+	if errors.Is(err, repository.ErrNoActiveRebalanceDraft) {
+		return nil, repository.ErrNoActiveRebalanceDraft
 	}
-	if draft == nil {
-		return nil, nil
+	if err != nil {
+		return nil, wrapRepo("get active draft", err)
 	}
 	detail, err := s.buildDetail(ctx, *draft)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("build rebalance draft detail", err)
 	}
 	return &detail, nil
 }
@@ -121,88 +117,40 @@ func (s *RebalanceDraftService) Get(ctx context.Context, planID, draftID string)
 		if errors.Is(err, repository.ErrRebalanceDraftNotFound) {
 			return RebalanceDraftDetail{}, newErr("rebalance_draft_not_found", "rebalance draft not found", nil)
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("get rebalance draft", err)
 	}
 	return s.buildDetail(ctx, draft)
 }
 
-func (s *RebalanceDraftService) Create(ctx context.Context, planID string, req CreateRebalanceDraftRequest) (RebalanceDraftDetail, error) {
+func (s *RebalanceDraftService) Create(ctx context.Context, planID string,
+	req CreateRebalanceDraftRequest,
+) (RebalanceDraftDetail, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return RebalanceDraftDetail{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("get plan for draft create", err)
 	}
 
-	active, err := s.drafts.GetActiveByPlan(ctx, planID)
+	active, result, err := validateRebalanceDraftCreate(ctx, s, planID, req)
 	if err != nil {
 		return RebalanceDraftDetail{}, err
 	}
-	if active != nil && !req.ForceNew {
-		return RebalanceDraftDetail{}, newErr("active_draft_exists", "an active rebalance draft already exists", map[string]any{
-			"draft_id": active.ID, "created_at": active.CreatedAt,
-		})
-	}
 
-	result, err := s.rebalance.GetRebalance(ctx, planID, domain.RebalanceModeFull, 0)
-	if err != nil {
-		return RebalanceDraftDetail{}, err
-	}
-	if result.Summary.HoldingsTotalMinor <= 0 {
-		return RebalanceDraftDetail{}, newErr("validation_failed", "no enabled holdings", nil)
-	}
-	if result.Summary.StructuralActionableCount <= 0 {
-		return RebalanceDraftDetail{}, newErr("validation_failed", "no structural rebalance actions", nil)
-	}
-	maxGap := maxStructuralGapWeight(result.Lines)
-	params, err := repository.NewParametersRepo(s.sql).Get(ctx, planID)
-	if err != nil {
-		return RebalanceDraftDetail{}, err
-	}
-	if math.Abs(maxGap) <= params.RebalanceThreshold {
-		return RebalanceDraftDetail{}, newErr("validation_failed", "structural gap below rebalance threshold", nil)
-	}
-
-	frozen := domain.BuildFrozenDraftLines(result)
-	now := time.Now().UnixMilli()
-	draft := repository.RebalanceDraft{
-		ID: "rbd_" + uuid.New().String(), PlanID: planID,
-		Status: RebalanceDraftStatusDraft, ConfigVersion: plan.ConfigVersion,
-		BaselineHoldingsTotalMinor: result.Summary.HoldingsTotalMinor,
-		CreatedAt:                  now, UpdatedAt: now,
-	}
-	lines := make([]repository.RebalanceDraftLine, 0, len(frozen))
-	for _, f := range frozen {
-		lines = append(lines, repository.RebalanceDraftLine{
-			ID: "rbdl_" + uuid.New().String(), DraftID: draft.ID,
-			HoldingID: f.HoldingID, InstrumentID: f.InstrumentID,
-			BaselineCurrentMinor: f.BaselineCurrentMinor, PlannedCurrentMinor: f.PlannedCurrentMinor,
-			FrozenTargetMinor: f.FrozenTargetMinor, FrozenGapMinor: f.FrozenGapMinor,
-			FrozenGapWeight: f.FrozenGapWeight, FrozenAction: f.FrozenAction,
-			FrozenSuggestedTradeMinor:    f.FrozenSuggestedTradeMinor,
-			RecommendedPackageDeltaMinor: f.RecommendedPackageDeltaMinor,
-		})
-	}
-
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if active != nil && req.ForceNew {
-			if err := s.drafts.SetStatusTx(ctx, tx, active.ID, RebalanceDraftStatusCancelled, nil); err != nil {
-				return err
-			}
-		}
-		return s.drafts.CreateTx(ctx, tx, draft, lines)
-	})
+	draft, lines := buildRebalanceDraftRecords(planID, plan, result)
+	err = persistDraftCreate(ctx, s, active, req, draft, lines)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			existing, getErr := s.drafts.GetActiveByPlan(ctx, planID)
 			if getErr == nil && existing != nil {
-				return RebalanceDraftDetail{}, newErr("active_draft_exists", "an active rebalance draft already exists", map[string]any{
-					"draft_id": existing.ID, "created_at": existing.CreatedAt,
-				})
+				return RebalanceDraftDetail{}, newErr("active_draft_exists", "an active rebalance draft already exists",
+					map[string]any{
+						"draft_id": existing.ID, "created_at": existing.CreatedAt,
+					})
 			}
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("create rebalance draft tx", err)
 	}
 	return s.Get(ctx, planID, draft.ID)
 }
@@ -214,13 +162,15 @@ func isUniqueConstraintErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "unique constraint failed")
 }
 
-func (s *RebalanceDraftService) PatchLines(ctx context.Context, planID, draftID string, req PatchRebalanceDraftLinesRequest) (RebalanceDraftDetail, error) {
+func (s *RebalanceDraftService) PatchLines(ctx context.Context, planID, draftID string,
+	req PatchRebalanceDraftLinesRequest,
+) (RebalanceDraftDetail, error) {
 	draft, err := s.drafts.GetByID(ctx, planID, draftID)
 	if err != nil {
 		if errors.Is(err, repository.ErrRebalanceDraftNotFound) {
 			return RebalanceDraftDetail{}, newErr("rebalance_draft_not_found", "rebalance draft not found", nil)
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("get draft for patch", err)
 	}
 	if draft.Status != RebalanceDraftStatusDraft {
 		return RebalanceDraftDetail{}, newErr("validation_failed", "draft is not editable", nil)
@@ -231,56 +181,18 @@ func (s *RebalanceDraftService) PatchLines(ctx context.Context, planID, draftID 
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		for _, item := range req.Lines {
-			if item.LineID == "" {
-				return newErr("validation_failed", "line_id required", nil)
-			}
-			if item.PlannedCurrentMinor < 0 {
-				return newErr("validation_failed", "planned amount cannot be negative", nil)
-			}
-			line, err := s.drafts.GetLineByID(ctx, draftID, item.LineID)
-			if err != nil {
+			if err := s.patchDraftLineItem(ctx, tx, draftID, item, req.Stage); err != nil {
 				return err
-			}
-			before := line.PlannedCurrentMinor
-			after := item.PlannedCurrentMinor
-			var lastSaved *int64
-			if req.Stage {
-				now := time.Now().UnixMilli()
-				lastSaved = &now
-			}
-			if err := s.drafts.UpdateLinePlannedTx(ctx, tx, item.LineID, after, lastSaved); err != nil {
-				return err
-			}
-			if req.Stage && before != after {
-				seq, err := s.drafts.NextEventSeq(ctx, tx, draftID)
-				if err != nil {
-					return err
-				}
-				label := line.InstrumentName
-				if label == "" {
-					label = line.InstrumentCode
-				}
-				payload := StageEventPayload{
-					LineID: item.LineID, HoldingLabel: label,
-					BeforeMinor: before, AfterMinor: after,
-					Summary: formatStageSummary(label, before, after),
-				}
-				payloadJSON, _ := json.Marshal(payload)
-				if err := s.drafts.InsertEventTx(ctx, tx, repository.RebalanceDraftEvent{
-					ID: "rbde_" + uuid.New().String(), DraftID: draftID,
-					Seq: seq, EventType: DraftEventStage, PayloadJSON: string(payloadJSON),
-				}); err != nil {
-					return err
-				}
 			}
 		}
 		return s.drafts.TouchDraftTx(ctx, tx, draftID)
 	})
 	if err != nil {
-		if appErr, ok := err.(*AppError); ok {
+		appErr := &AppError{}
+		if errors.As(err, &appErr) {
 			return RebalanceDraftDetail{}, appErr
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("patch draft lines tx", err)
 	}
 	return s.Get(ctx, planID, draftID)
 }
@@ -291,203 +203,67 @@ func (s *RebalanceDraftService) Undo(ctx context.Context, planID, draftID string
 		if errors.Is(err, repository.ErrRebalanceDraftNotFound) {
 			return RebalanceDraftDetail{}, newErr("rebalance_draft_not_found", "rebalance draft not found", nil)
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("get draft for undo", err)
 	}
 	if draft.Status != RebalanceDraftStatusDraft {
 		return RebalanceDraftDetail{}, newErr("validation_failed", "draft is not editable", nil)
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		event, err := s.drafts.DeleteLastStageEventTx(ctx, tx, draftID)
-		if err != nil {
-			if errors.Is(err, repository.ErrRebalanceDraftNotFound) {
-				return newErr("validation_failed", "no staged change to undo", nil)
-			}
-			return err
-		}
-		var payload StageEventPayload
-		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
-			return err
-		}
-		line, err := s.drafts.GetLineByID(ctx, draftID, payload.LineID)
-		if err != nil {
-			return err
-		}
-		var lastSaved *int64
-		if payload.BeforeMinor != line.BaselineCurrentMinor {
-			remaining, err := s.drafts.ListStageEventsTx(ctx, tx, draftID)
-			if err != nil {
-				return err
-			}
-			lastSaved = findLastSavedFromStageEvents(remaining, payload.LineID, payload.BeforeMinor)
-		}
-		if err := s.drafts.UpdateLinePlannedTx(ctx, tx, payload.LineID, payload.BeforeMinor, lastSaved); err != nil {
-			return err
-		}
-		seq, err := s.drafts.NextEventSeq(ctx, tx, draftID)
-		if err != nil {
-			return err
-		}
-		undoPayload, _ := json.Marshal(map[string]any{
-			"undid_event_id": event.ID, "line_id": payload.LineID,
-			"reverted_to_minor": payload.BeforeMinor,
-			"summary":           formatUndoSummary(payload),
-		})
-		if err := s.drafts.InsertEventTx(ctx, tx, repository.RebalanceDraftEvent{
-			ID: "rbde_" + uuid.New().String(), DraftID: draftID,
-			Seq: seq, EventType: DraftEventUndo, PayloadJSON: string(undoPayload),
-		}); err != nil {
+		if err := s.undoDraftStageTx(ctx, tx, draftID); err != nil {
 			return err
 		}
 		return s.drafts.TouchDraftTx(ctx, tx, draftID)
 	})
 	if err != nil {
-		if appErr, ok := err.(*AppError); ok {
+		appErr := &AppError{}
+		if errors.As(err, &appErr) {
 			return RebalanceDraftDetail{}, appErr
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("undo draft tx", err)
 	}
 	return s.Get(ctx, planID, draftID)
 }
 
-func (s *RebalanceDraftService) Commit(ctx context.Context, planID, draftID string, req CommitRebalanceDraftRequest) (RebalanceDraftDetail, error) {
+func (s *RebalanceDraftService) Commit(ctx context.Context, planID, draftID string,
+	req CommitRebalanceDraftRequest,
+) (RebalanceDraftDetail, error) {
 	draft, err := s.drafts.GetByID(ctx, planID, draftID)
 	if err != nil {
 		if errors.Is(err, repository.ErrRebalanceDraftNotFound) {
 			return RebalanceDraftDetail{}, newErr("rebalance_draft_not_found", "rebalance draft not found", nil)
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("get draft for commit", err)
 	}
 	if draft.Status != RebalanceDraftStatusDraft {
 		return RebalanceDraftDetail{}, newErr("validation_failed", "draft is not editable", nil)
 	}
-	plan, err := s.plans.GetByID(ctx, planID)
+	state, err := s.loadCommitDraftState(ctx, planID, draftID, req, draft)
 	if err != nil {
 		return RebalanceDraftDetail{}, err
 	}
-	if req.ConfigVersion != plan.ConfigVersion {
-		return RebalanceDraftDetail{}, newErr("plan_version_conflict", "plan configuration changed since draft creation; abandon and recreate", nil)
-	}
-	if draft.ConfigVersion != plan.ConfigVersion {
-		return RebalanceDraftDetail{}, newErr("plan_version_conflict", "plan configuration changed since draft creation; abandon and recreate", nil)
-	}
-
-	detail, err := s.buildDetail(ctx, draft)
-	if err != nil {
-		return RebalanceDraftDetail{}, err
-	}
-	for _, line := range detail.Lines {
-		if line.PlannedCurrentMinor < 0 {
-			return RebalanceDraftDetail{}, newErr("validation_failed", "planned amount cannot be negative", nil)
-		}
-	}
-	net := detail.FundPool.NetMinor
-	existing, err := s.holdings.ListByPlan(ctx, planID)
-	if err != nil {
-		return RebalanceDraftDetail{}, err
-	}
-	plannedByHolding := make(map[string]int64, len(detail.Lines))
-	for _, line := range detail.Lines {
-		plannedByHolding[line.HoldingID] = line.PlannedCurrentMinor
-	}
-
-	if net > amountToleranceMinor {
-		cashHolding := findCashSweepHolding(existing)
-		if req.SweepUnallocatedToCash && cashHolding != nil {
-			base := cashHolding.CurrentAmountMinor
-			if planned, ok := plannedByHolding[cashHolding.ID]; ok {
-				base = planned
-			}
-			plannedByHolding[cashHolding.ID] = base + net
-			net = 0
-		} else if !req.AcceptScaleShrink {
-			code := "unallocated_to_cash_required"
-			msg := "unallocated funds must be swept to cash or accept scale shrink"
-			if cashHolding == nil {
-				msg = "no enabled cash holding for unallocated sweep"
-			}
-			return RebalanceDraftDetail{}, newErr(code, msg, map[string]any{
-				"net_minor": net, "has_cash_holding": cashHolding != nil,
-			})
-		}
-	}
-	if math.Abs(float64(net)) > amountToleranceMinor && !req.ConfirmImbalanced && !req.AcceptScaleShrink {
+	if math.Abs(float64(state.net)) > amountToleranceMinor && !req.ConfirmImbalanced && !req.AcceptScaleShrink {
 		return RebalanceDraftDetail{}, newErr("fund_pool_imbalanced", "rebalance fund pool is not balanced", map[string]any{
-			"net_minor": net,
+			"net_minor": state.net,
 		})
 	}
-	holdingsReq := HoldingsUpdateRequest{
-		ConfigVersion: req.ConfigVersion,
-		Holdings:      make([]HoldingWriteItem, 0, len(existing)),
-	}
-	for _, h := range existing {
-		amount := h.CurrentAmountMinor
-		if planned, ok := plannedByHolding[h.ID]; ok {
-			amount = planned
-		}
-		holdingsReq.Holdings = append(holdingsReq.Holdings, HoldingWriteItem{
-			InstrumentID: h.InstrumentID, Enabled: h.Enabled,
-			WeightWithinGroup: h.WeightWithinGroup, CurrentAmountMinor: amount,
-			SortOrder: h.SortOrder,
-		})
-	}
+	holdingsReq := buildCommitHoldingsRequest(req, state.existing, state.plannedByHolding)
 
 	prep, err := s.holdingsSvc.prepareHoldingsUpdate(ctx, planID, holdingsReq)
 	if err != nil {
 		return RebalanceDraftDetail{}, err
 	}
 
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.holdingsSvc.applyHoldingsUpdateTx(ctx, tx, planID, req.ConfigVersion, prep); err != nil {
-			return err
-		}
-		now := time.Now().UnixMilli()
-		if err := s.drafts.SetStatusTx(ctx, tx, draftID, RebalanceDraftStatusCommitted, &now); err != nil {
-			return err
-		}
-		seq, err := s.drafts.NextEventSeq(ctx, tx, draftID)
-		if err != nil {
-			return err
-		}
-		commitPayload, _ := json.Marshal(map[string]any{"committed_at": now})
-		return s.drafts.InsertEventTx(ctx, tx, repository.RebalanceDraftEvent{
-			ID: "rbde_" + uuid.New().String(), DraftID: draftID,
-			Seq: seq, EventType: DraftEventCommit, PayloadJSON: string(commitPayload),
-		})
-	})
+	err = commitDraftHoldingsTx(ctx, s, planID, draftID, req, prep)
 	if err != nil {
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return RebalanceDraftDetail{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 		}
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("commit draft tx", err)
 	}
 
 	if req.RecordSnapshot {
-		// Use commit-final plannedByHolding (includes cash sweep), not draft lines alone.
-		items := make([]repository.PortfolioSnapshotItem, 0, len(existing))
-		var total int64
-		for _, h := range existing {
-			amount := h.CurrentAmountMinor
-			if planned, ok := plannedByHolding[h.ID]; ok {
-				amount = planned
-			}
-			items = append(items, repository.PortfolioSnapshotItem{
-				InstrumentID: h.InstrumentID, AmountMinor: amount,
-			})
-			total += amount
-		}
-		note := req.SnapshotNote
-		if note == "" {
-			note = "调仓计划提交后记录"
-		}
-		snap := repository.PortfolioSnapshot{
-			ID: "psnap_" + uuid.New().String(), PlanID: planID,
-			SnapshotDate: plan.ValuationDate, TotalAmountMinor: total, Note: note, Items: items,
-		}
-		if err := s.snapRepo.Create(ctx, snap); err != nil {
-			slog.WarnContext(ctx, "rebalance draft commit snapshot failed",
-				"plan_id", planID, "draft_id", draftID, "error", err)
-		}
+		s.recordCommitSnapshot(ctx, planID, draftID, state.plan, req, state.existing, state.plannedByHolding)
 	}
 
 	return s.Get(ctx, planID, draftID)
@@ -499,22 +275,24 @@ func (s *RebalanceDraftService) Cancel(ctx context.Context, planID, draftID stri
 		if errors.Is(err, repository.ErrRebalanceDraftNotFound) {
 			return newErr("rebalance_draft_not_found", "rebalance draft not found", nil)
 		}
-		return err
+		return wrapRepo("get draft for cancel", err)
 	}
 	if draft.Status != RebalanceDraftStatusDraft {
 		return newErr("validation_failed", "draft is not cancellable", nil)
 	}
-	return s.drafts.SetStatusTx(ctx, nil, draftID, RebalanceDraftStatusCancelled, nil)
+	return wrapRepo("cancel rebalance draft", s.drafts.SetStatusTx(ctx, nil, draftID, RebalanceDraftStatusCancelled, nil))
 }
 
-func (s *RebalanceDraftService) buildDetail(ctx context.Context, draft repository.RebalanceDraft) (RebalanceDraftDetail, error) {
+func (s *RebalanceDraftService) buildDetail(ctx context.Context, draft repository.RebalanceDraft) (RebalanceDraftDetail,
+	error,
+) {
 	lines, err := s.drafts.ListLines(ctx, draft.ID)
 	if err != nil {
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("list draft lines", err)
 	}
 	events, err := s.drafts.ListEvents(ctx, draft.ID)
 	if err != nil {
-		return RebalanceDraftDetail{}, err
+		return RebalanceDraftDetail{}, wrapRepo("list draft events", err)
 	}
 	frozen := make([]domain.FrozenDraftLine, 0, len(lines))
 	for _, line := range lines {
@@ -534,16 +312,16 @@ func (s *RebalanceDraftService) buildDetail(ctx context.Context, draft repositor
 }
 
 func maxStructuralGapWeight(lines []domain.RebalanceLine) float64 {
-	var max float64
+	var maxGap float64
 	for _, line := range lines {
 		if !line.Enabled {
 			continue
 		}
-		if w := math.Abs(line.StructuralGapWeight); w > max {
-			max = w
+		if w := math.Abs(line.StructuralGapWeight); w > maxGap {
+			maxGap = w
 		}
 	}
-	return max
+	return maxGap
 }
 
 func formatUndoSummary(payload StageEventPayload) string {

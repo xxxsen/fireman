@@ -36,7 +36,8 @@ func TestCommonRandomNumbersBaselinePoint(t *testing.T) {
 
 func TestEquityWeightPerturbationPreservesCash(t *testing.T) {
 	in := testSensitivityInput()
-	in.Assets = append(in.Assets,
+	in.Assets = append(
+		in.Assets,
 		simulation.SnapshotAsset{
 			HoldingID: "bond", AssetClass: domain.AssetClassBond,
 			InitialMinor: 300_000_00, TargetWeight: 0.3,

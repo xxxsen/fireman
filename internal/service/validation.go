@@ -1,68 +1,113 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/repository"
 )
 
+var (
+	errRegionTargetMissingClass     = errors.New("region_targets missing asset_class")
+	errRegionTargetsSum             = errors.New("region targets must sum to 100%")
+	errResolutionTicketRepo         = errors.New("resolution ticket repo not configured")
+	errAgesMustBePositive           = errors.New("ages must be positive")
+	errAgeOrderingInvalid           = errors.New("must satisfy 0 < current_age <= retirement_age < end_age <= 120")
+	errAssetsSpendingPositive       = errors.New("total_assets and annual_spending must be > 0")
+	errAmountsNonNegative           = errors.New("amounts must be non-negative")
+	errSimulationRunsRange          = errors.New("simulation_runs must be in [1000, 100000]")
+	errStudentTDfRange              = errors.New("student_t_df must be in [5, 30]")
+	errRebalanceThresholdRange      = errors.New("rebalance_threshold must be in [0, 0.5]")
+	errAnnualSavingsGrowthRateRange = errors.New("annual_savings_growth_rate must be in [-0.5, 0.5]")
+	errWithdrawalTypeInvalid        = errors.New("withdrawal_type must be fixed_real, fixed_portfolio, or guardrail")
+	errInflationModeInvalid         = errors.New("inflation_mode must be fixed_real or random_ar1")
+	errRegionTargetsRequired        = errors.New("region_targets is required")
+	errRegionWeightRange            = errors.New("region weight must be in [0, 1]")
+	errScenarioWeightsSum           = errors.New("scenario weights must sum to 100%")
+)
+
 func validateParameters(p repository.PlanParameters) error {
+	if err := validateParameterAges(p); err != nil {
+		return err
+	}
+	if err := validateParameterAmounts(p); err != nil {
+		return err
+	}
+	if err := validateParameterRanges(p); err != nil {
+		return err
+	}
+	return validateParameterModes(p)
+}
+
+func validateParameterAges(p repository.PlanParameters) error {
 	if p.CurrentAge <= 0 || p.RetirementAge <= 0 || p.EndAge <= 0 {
-		return fmt.Errorf("ages must be positive")
+		return errAgesMustBePositive
 	}
 	if p.CurrentAge > p.RetirementAge || p.RetirementAge >= p.EndAge || p.EndAge > 120 {
-		return fmt.Errorf("must satisfy 0 < current_age <= retirement_age < end_age <= 120")
+		return errAgeOrderingInvalid
 	}
+	return nil
+}
+
+func validateParameterAmounts(p repository.PlanParameters) error {
 	if p.TotalAssetsMinor <= 0 || p.AnnualSpendingMinor <= 0 {
-		return fmt.Errorf("total_assets and annual_spending must be > 0")
+		return errAssetsSpendingPositive
 	}
 	if p.AnnualSavingsMinor < 0 || p.TerminalWealthFloorMinor < 0 {
-		return fmt.Errorf("amounts must be non-negative")
+		return errAmountsNonNegative
 	}
+	return nil
+}
+
+func validateParameterRanges(p repository.PlanParameters) error {
 	if p.SimulationRuns < 1000 || p.SimulationRuns > 100000 {
-		return fmt.Errorf("simulation_runs must be in [1000, 100000]")
+		return errSimulationRunsRange
 	}
 	if p.StudentTDf < 5 || p.StudentTDf > 30 {
-		return fmt.Errorf("student_t_df must be in [5, 30]")
+		return errStudentTDfRange
 	}
 	if p.RebalanceThreshold < 0 || p.RebalanceThreshold > 0.5 {
-		return fmt.Errorf("rebalance_threshold must be in [0, 0.5]")
+		return errRebalanceThresholdRange
 	}
 	if p.AnnualSavingsGrowthRate < -0.5 || p.AnnualSavingsGrowthRate > 0.5 {
-		return fmt.Errorf("annual_savings_growth_rate must be in [-0.5, 0.5]")
+		return errAnnualSavingsGrowthRateRange
 	}
+	return nil
+}
+
+func validateParameterModes(p repository.PlanParameters) error {
 	switch p.WithdrawalType {
 	case "fixed_real", "fixed_portfolio", "guardrail":
 	default:
-		return fmt.Errorf("withdrawal_type must be fixed_real, fixed_portfolio, or guardrail")
+		return errWithdrawalTypeInvalid
 	}
 	switch p.InflationMode {
 	case "fixed_real", "random_ar1":
 	default:
-		return fmt.Errorf("inflation_mode must be fixed_real or random_ar1")
+		return errInflationModeInvalid
 	}
 	return nil
 }
 
 func validateRegionTargets(targets []repository.RegionTarget) error {
 	if len(targets) == 0 {
-		return fmt.Errorf("region_targets is required")
+		return errRegionTargetsRequired
 	}
 	byClass := make(map[string]float64)
 	for _, t := range targets {
 		if t.WeightWithinClass < 0 || t.WeightWithinClass > 1 {
-			return fmt.Errorf("region weight must be in [0, 1]")
+			return errRegionWeightRange
 		}
 		byClass[t.AssetClass] += t.WeightWithinClass
 	}
 	for _, ac := range domain.AssetClasses {
 		sum, ok := byClass[ac]
 		if !ok {
-			return fmt.Errorf("region_targets missing asset_class %s", ac)
+			return fmt.Errorf("%w %s", errRegionTargetMissingClass, ac)
 		}
 		if sum < 1.0-domain.WeightTolerance || sum > 1.0+domain.WeightTolerance {
-			return fmt.Errorf("region targets for %s must sum to 100%%", ac)
+			return fmt.Errorf("%w for %s", errRegionTargetsSum, ac)
 		}
 	}
 	return nil
@@ -74,7 +119,7 @@ func validateScenarioWeights(weights []repository.AssetClassTarget) error {
 		sum += w.Weight
 	}
 	if sum < 1.0-domain.WeightTolerance || sum > 1.0+domain.WeightTolerance {
-		return fmt.Errorf("scenario weights must sum to 100%%")
+		return errScenarioWeightsSum
 	}
 	return nil
 }

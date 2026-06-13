@@ -42,19 +42,19 @@ func (s *TargetService) GetTargets(ctx context.Context, planID string) (TargetVi
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return TargetView{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return TargetView{}, err
+		return TargetView{}, wrapRepo("get plan", err)
 	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return TargetView{}, err
+		return TargetView{}, wrapRepo("get plan parameters", err)
 	}
 	alloc, err := s.alloc.Get(ctx, planID)
 	if err != nil {
-		return TargetView{}, err
+		return TargetView{}, wrapRepo("get plan allocation", err)
 	}
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
-		return TargetView{}, err
+		return TargetView{}, wrapRepo("list plan holdings", err)
 	}
 	da := toDomainAllocation(alloc)
 	dh := holdingsToDomain(holds)

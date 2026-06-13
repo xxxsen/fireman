@@ -119,23 +119,18 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return DashboardView{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return DashboardView{}, err
+		return DashboardView{}, wrapRepo("load plan", err)
 	}
 	configHash, err := s.hash.Compute(ctx, planID)
 	if err != nil {
-		return DashboardView{}, err
+		return DashboardView{}, wrapRepo("compute config hash", err)
 	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return DashboardView{}, err
+		return DashboardView{}, wrapRepo("load plan parameters", err)
 	}
 
-	var scenarioName string
-	if params.SelectedScenarioID != nil && *params.SelectedScenarioID != "" {
-		if scn, err := s.scenario.GetByID(ctx, *params.SelectedScenarioID); err == nil {
-			scenarioName = scn.Name
-		}
-	}
+	scenarioName := s.loadScenarioName(ctx, params.SelectedScenarioID)
 
 	targets, err := s.targets.GetTargets(ctx, planID)
 	if err != nil {
@@ -160,14 +155,7 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 	topDev := topDeviations(targets.Holdings, holds, 5)
 	warnings := collectDataWarnings(ctx, s.instRepo, holds)
 
-	var latest *SimulationRunView
-	runs, err := s.sims.ListByPlan(ctx, planID, 1)
-	if err == nil && len(runs) > 0 && runs[0].SuccessCount+runs[0].FailureCount > 0 {
-		view, err := s.simulations.GetRun(ctx, runs[0].ID)
-		if err == nil {
-			latest = &view
-		}
-	}
+	latest := s.loadLatestSimulationRun(ctx, planID)
 
 	return DashboardView{
 		Plan:             PlanDetail{Plan: plan, ConfigHash: configHash},
@@ -190,11 +178,11 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 func (s *DashboardService) GetPlanSummary(ctx context.Context, planID string) (PlanDashboardSummary, error) {
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return PlanDashboardSummary{}, err
+		return PlanDashboardSummary{}, wrapRepo("load plan parameters", err)
 	}
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
-		return PlanDashboardSummary{}, err
+		return PlanDashboardSummary{}, wrapRepo("list plan holdings", err)
 	}
 	var holdingsSum int64
 	for _, holding := range holds {
@@ -273,23 +261,30 @@ func (s *DashboardService) sensitivitySummary(ctx context.Context, planID string
 	return sum
 }
 
-func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
-	type agg struct {
-		target, current float64
-	}
-	byClass := map[string]*agg{}
+type weightAgg struct {
+	target, current float64
+}
+
+func aggregateWeights(targets TargetView, keyFn func(domain.HoldingTargetLine) string) map[string]*weightAgg {
+	byKey := map[string]*weightAgg{}
 	for _, line := range targets.Holdings {
 		if !line.Enabled {
 			continue
 		}
-		a := byClass[line.AssetClass]
+		key := keyFn(line)
+		a := byKey[key]
 		if a == nil {
-			a = &agg{}
-			byClass[line.AssetClass] = a
+			a = &weightAgg{}
+			byKey[key] = a
 		}
 		a.target += line.PortfolioTargetWeight
 		a.current += line.StructuralCurrentWeight
 	}
+	return byKey
+}
+
+func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
+	byClass := aggregateWeights(targets, func(line domain.HoldingTargetLine) string { return line.AssetClass })
 	out := make([]DashboardAllocationBar, 0, len(byClass))
 	for ac, a := range byClass {
 		out = append(out, DashboardAllocationBar{
@@ -301,22 +296,7 @@ func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 }
 
 func buildRegionBars(targets TargetView) []DashboardRegionBar {
-	type agg struct {
-		target, current float64
-	}
-	byRegion := map[string]*agg{}
-	for _, line := range targets.Holdings {
-		if !line.Enabled {
-			continue
-		}
-		a := byRegion[line.Region]
-		if a == nil {
-			a = &agg{}
-			byRegion[line.Region] = a
-		}
-		a.target += line.PortfolioTargetWeight
-		a.current += line.StructuralCurrentWeight
-	}
+	byRegion := aggregateWeights(targets, func(line domain.HoldingTargetLine) string { return line.Region })
 	out := make([]DashboardRegionBar, 0, len(byRegion))
 	for region, a := range byRegion {
 		out = append(out, DashboardRegionBar{
@@ -366,7 +346,9 @@ func topDeviations(lines []domain.HoldingTargetLine, holds []repository.PlanHold
 	return out
 }
 
-func collectDataWarnings(ctx context.Context, instRepo *repository.InstrumentRepo, holds []repository.PlanHolding) []string {
+func collectDataWarnings(ctx context.Context, instRepo *repository.InstrumentRepo,
+	holds []repository.PlanHolding,
+) []string {
 	var warnings []string
 	seen := map[string]bool{}
 	for _, h := range holds {

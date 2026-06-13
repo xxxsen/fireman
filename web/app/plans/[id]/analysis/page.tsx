@@ -303,7 +303,7 @@ export function AnalysisContent() {
   const [activeJobKind, setActiveJobKind] = useState<"sim" | "stress" | "sensitivity" | null>(
     null,
   );
-  const [runs, setRuns] = useState(10000);
+  const [runsOverride, setRunsOverride] = useState<number | null>(null);
   const [jobErrors, setJobErrors] = useState<Partial<Record<JobKind, string>>>({});
 
   const paramsQ = useQuery({
@@ -311,10 +311,8 @@ export function AnalysisContent() {
     queryFn: () => getParameters(planId),
   });
 
-  useEffect(() => {
-    const sr = paramsQ.data?.parameters.simulation_runs;
-    if (sr && sr >= 1000) setRuns(sr);
-  }, [paramsQ.data?.parameters.simulation_runs]);
+  const serverRuns = paramsQ.data?.parameters.simulation_runs;
+  const runs = runsOverride ?? (serverRuns && serverRuns >= 1000 ? serverRuns : 10000);
 
   const simsQ = useQuery({
     queryKey: ["simulations", planId],
@@ -462,7 +460,7 @@ export function AnalysisContent() {
               max={100000}
               className="ml-2 rounded border px-2 py-1"
               value={runs}
-              onChange={(e) => setRuns(Number(e.target.value))}
+              onChange={(e) => setRunsOverride(Number(e.target.value))}
             />
           </label>
           <button

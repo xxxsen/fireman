@@ -48,5 +48,5 @@ func applyUnallocatedGapToCashTx(
 			UpdatedAt:            now,
 		})
 	}
-	return holdings.Replace(ctx, tx, planID, updated)
+	return wrapRepo("replace holdings with cash gap", holdings.Replace(ctx, tx, planID, updated))
 }

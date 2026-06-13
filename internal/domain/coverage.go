@@ -43,7 +43,9 @@ func PortfolioCoverageByClass(alloc AllocationWeights, holdings []HoldingWeightI
 	return out
 }
 
-func formatPortfolioWeightMessage(actual, target float64, missing []AssetClassCoverage, holdings []HoldingWeightInput, alloc AllocationWeights) string {
+func formatPortfolioWeightMessage(actual, target float64, missing []AssetClassCoverage, holdings []HoldingWeightInput,
+	alloc AllocationWeights,
+) string {
 	gap := target - actual
 	msg := fmt.Sprintf("%s当前为 %s，还差 %s。",
 		"已启用标的全组合目标权重", formatPercent(actual), formatPercent(gap))

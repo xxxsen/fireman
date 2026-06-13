@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+
 	"github.com/google/uuid"
 
 	fdb "github.com/fireman/fireman/internal/db"
@@ -50,7 +52,12 @@ type AllocationService struct {
 	scenario *repository.ScenarioRepo
 }
 
-func NewAllocationService(sqlDB *sql.DB, plans *repository.PlanRepo, alloc *repository.AllocationRepo, scenario *repository.ScenarioRepo) *AllocationService {
+func NewAllocationService(
+	sqlDB *sql.DB,
+	plans *repository.PlanRepo,
+	alloc *repository.AllocationRepo,
+	scenario *repository.ScenarioRepo,
+) *AllocationService {
 	return &AllocationService{sql: sqlDB, plans: plans, alloc: alloc, scenario: scenario}
 }
 
@@ -59,18 +66,26 @@ func (s *AllocationService) GetAllocation(ctx context.Context, planID string) (r
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return repository.PlanAllocation{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PlanAllocation{}, err
+		return repository.PlanAllocation{}, fmt.Errorf("load plan: %w", err)
 	}
-	return s.alloc.Get(ctx, planID)
+	out, err := s.alloc.Get(ctx, planID)
+	if err != nil {
+		return repository.PlanAllocation{}, fmt.Errorf("load allocation: %w", err)
+	}
+	return out, nil
 }
 
-func (s *AllocationService) UpdateAllocation(ctx context.Context, planID string, req AllocationUpdateRequest) (repository.PlanAllocation, error) {
+func (s *AllocationService) UpdateAllocation(
+	ctx context.Context,
+	planID string,
+	req AllocationUpdateRequest,
+) (repository.PlanAllocation, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return repository.PlanAllocation{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PlanAllocation{}, err
+		return repository.PlanAllocation{}, fmt.Errorf("load plan: %w", err)
 	}
 	if req.ConfigVersion != plan.ConfigVersion {
 		return repository.PlanAllocation{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
@@ -92,59 +107,73 @@ func (s *AllocationService) UpdateAllocation(ctx context.Context, planID string,
 	}
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		if err := s.alloc.Replace(ctx, tx, planID, alloc); err != nil {
-			return err
+			return fmt.Errorf("replace allocation: %w", err)
 		}
-		_, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion)
-		return err
+		if _, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion); err != nil {
+			return fmt.Errorf("bump plan version: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return repository.PlanAllocation{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 		}
-		return repository.PlanAllocation{}, err
+		return repository.PlanAllocation{}, fmt.Errorf("update allocation tx: %w", err)
 	}
-	return s.alloc.Get(ctx, planID)
+	out, err := s.alloc.Get(ctx, planID)
+	if err != nil {
+		return repository.PlanAllocation{}, fmt.Errorf("reload allocation: %w", err)
+	}
+	return out, nil
 }
 
 func (s *AllocationService) ListScenarios(ctx context.Context) ([]repository.AllocationScenario, error) {
-	return s.scenario.List(ctx)
+	out, err := s.scenario.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list scenarios: %w", err)
+	}
+	return out, nil
 }
 
-func (s *AllocationService) CreateScenario(ctx context.Context, req ScenarioCreateRequest) (repository.AllocationScenario, error) {
-	weights := req.Weights
+func (s *AllocationService) CreateScenario(
+	ctx context.Context,
+	req ScenarioCreateRequest,
+) (repository.AllocationScenario, error) {
 	if req.CopyFromID != nil {
 		src, err := s.scenario.GetByID(ctx, *req.CopyFromID)
 		if err != nil {
 			if errors.Is(err, repository.ErrScenarioNotFound) {
 				return repository.AllocationScenario{}, newErr("scenario_not_found", "scenario not found", nil)
 			}
-			return repository.AllocationScenario{}, err
+			return repository.AllocationScenario{}, fmt.Errorf("load source scenario: %w", err)
 		}
-		weights = src.Weights
-		if req.Name == "" {
-			req.Name = src.Name + " (副本)"
-		}
-		if req.Description == "" {
-			req.Description = src.Description
-		}
+		applyScenarioCopyDefaults(&req, src)
 	}
 	if req.Name == "" {
 		return repository.AllocationScenario{}, newErr("validation_failed", "name is required", nil)
 	}
-	if err := validateScenarioWeights(weights); err != nil {
+	if err := validateScenarioWeights(req.Weights); err != nil {
 		return repository.AllocationScenario{}, newErr("scenario_weights_invalid", err.Error(), nil)
 	}
 	scn := repository.AllocationScenario{
 		ID: "scn_" + uuid.New().String(), Name: req.Name,
-		Description: req.Description, Weights: weights,
+		Description: req.Description, Weights: req.Weights,
 	}
 	if err := s.scenario.Create(ctx, scn); err != nil {
-		return repository.AllocationScenario{}, err
+		return repository.AllocationScenario{}, fmt.Errorf("create scenario: %w", err)
 	}
-	return s.scenario.GetByID(ctx, scn.ID)
+	out, err := s.scenario.GetByID(ctx, scn.ID)
+	if err != nil {
+		return repository.AllocationScenario{}, fmt.Errorf("load created scenario: %w", err)
+	}
+	return out, nil
 }
 
-func (s *AllocationService) UpdateScenario(ctx context.Context, scenarioID string, req ScenarioCreateRequest) (repository.AllocationScenario, error) {
+func (s *AllocationService) UpdateScenario(
+	ctx context.Context,
+	scenarioID string,
+	req ScenarioCreateRequest,
+) (repository.AllocationScenario, error) {
 	if err := validateScenarioWeights(req.Weights); err != nil {
 		return repository.AllocationScenario{}, newErr("scenario_weights_invalid", err.Error(), nil)
 	}
@@ -155,9 +184,13 @@ func (s *AllocationService) UpdateScenario(ctx context.Context, scenarioID strin
 		if errors.Is(err, repository.ErrScenarioNotFound) {
 			return repository.AllocationScenario{}, newErr("scenario_not_found", "scenario not found", nil)
 		}
-		return repository.AllocationScenario{}, err
+		return repository.AllocationScenario{}, fmt.Errorf("update scenario: %w", err)
 	}
-	return s.scenario.GetByID(ctx, scenarioID)
+	out, err := s.scenario.GetByID(ctx, scenarioID)
+	if err != nil {
+		return repository.AllocationScenario{}, fmt.Errorf("load updated scenario: %w", err)
+	}
+	return out, nil
 }
 
 func (s *AllocationService) DeleteScenario(ctx context.Context, scenarioID string) error {
@@ -170,19 +203,23 @@ func (s *AllocationService) DeleteScenario(ctx context.Context, scenarioID strin
 		case errors.Is(err, repository.ErrScenarioInUse):
 			return newErr("scenario_in_use", "scenario is referenced by plans", nil)
 		default:
-			return err
+			return fmt.Errorf("delete scenario: %w", err)
 		}
 	}
 	return nil
 }
 
-func (s *AllocationService) ApplyScenario(ctx context.Context, planID string, req ApplyScenarioRequest) (ApplyScenarioResult, error) {
+func (s *AllocationService) ApplyScenario(
+	ctx context.Context,
+	planID string,
+	req ApplyScenarioRequest,
+) (ApplyScenarioResult, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return ApplyScenarioResult{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return ApplyScenarioResult{}, err
+		return ApplyScenarioResult{}, fmt.Errorf("load plan: %w", err)
 	}
 	if !req.DryRun && req.ConfigVersion != plan.ConfigVersion {
 		return ApplyScenarioResult{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
@@ -192,11 +229,11 @@ func (s *AllocationService) ApplyScenario(ctx context.Context, planID string, re
 		if errors.Is(err, repository.ErrScenarioNotFound) {
 			return ApplyScenarioResult{}, newErr("scenario_not_found", "scenario not found", nil)
 		}
-		return ApplyScenarioResult{}, err
+		return ApplyScenarioResult{}, fmt.Errorf("load scenario: %w", err)
 	}
 	current, err := s.alloc.Get(ctx, planID)
 	if err != nil {
-		return ApplyScenarioResult{}, err
+		return ApplyScenarioResult{}, fmt.Errorf("load current allocation: %w", err)
 	}
 	result := ApplyScenarioResult{
 		ScenarioID: req.ScenarioID,
@@ -213,11 +250,11 @@ func (s *AllocationService) ApplyScenario(ctx context.Context, planID string, re
 			RegionTargets:     current.RegionTargets,
 		}
 		if err := s.alloc.Replace(ctx, tx, planID, newAlloc); err != nil {
-			return err
+			return fmt.Errorf("replace allocation: %w", err)
 		}
 		newVer, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion)
 		if err != nil {
-			return err
+			return fmt.Errorf("bump plan version: %w", err)
 		}
 		result.ConfigVersion = newVer
 		return nil
@@ -226,7 +263,7 @@ func (s *AllocationService) ApplyScenario(ctx context.Context, planID string, re
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return ApplyScenarioResult{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 		}
-		return ApplyScenarioResult{}, err
+		return ApplyScenarioResult{}, fmt.Errorf("apply scenario tx: %w", err)
 	}
 	result.Applied = true
 	return result, nil

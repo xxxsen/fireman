@@ -46,7 +46,7 @@ func (r *ResolutionTicketRepo) Create(ctx context.Context, tx *sql.Tx, ticket Re
 		ticket.ID, ticket.Market, ticket.InstrumentType, ticket.Code,
 		ticket.ProviderSymbol, ticket.Name, ticket.Exchange, ticket.InstrumentKind,
 		ticket.CreatedAt, ticket.ExpiresAt)
-	return err
+	return wrapSQL("insert resolution ticket", err)
 }
 
 func (r *ResolutionTicketRepo) GetByID(ctx context.Context, id string) (ResolutionTicket, error) {
@@ -65,24 +65,11 @@ func (r *ResolutionTicketRepo) Consume(ctx context.Context, tx *sql.Tx, id strin
 		WHERE id=? AND consumed_at IS NULL AND expires_at > ?`,
 		now, id, now)
 	if err != nil {
-		return ResolutionTicket{}, err
+		return ResolutionTicket{}, wrapSQL("consume resolution ticket", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		ticket, getErr := r.GetByID(ctx, id)
-		if getErr != nil {
-			if errors.Is(getErr, ErrResolutionTicketNotFound) {
-				return ResolutionTicket{}, ErrResolutionTicketNotFound
-			}
-			return ResolutionTicket{}, getErr
-		}
-		if ticket.ConsumedAt != nil {
-			return ResolutionTicket{}, ErrResolutionTicketConsumed
-		}
-		if ticket.ExpiresAt <= now {
-			return ResolutionTicket{}, ErrResolutionTicketExpired
-		}
-		return ResolutionTicket{}, ErrResolutionTicketNotFound
+		return consumeTicketNotUpdated(ctx, r, id, now)
 	}
 	return r.GetByID(ctx, id)
 }
@@ -98,7 +85,7 @@ func scanResolutionTicket(row *sql.Row) (ResolutionTicket, error) {
 		return ResolutionTicket{}, ErrResolutionTicketNotFound
 	}
 	if err != nil {
-		return ResolutionTicket{}, err
+		return ResolutionTicket{}, wrapSQL("scan resolution ticket", err)
 	}
 	if consumed.Valid {
 		v := consumed.Int64
@@ -114,7 +101,7 @@ func (r *ResolutionTicketRepo) CleanupExpired(ctx context.Context, beforeMillis 
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return 0, wrapSQL("begin resolution ticket cleanup tx", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -127,11 +114,11 @@ func (r *ResolutionTicketRepo) CleanupExpired(ctx context.Context, beforeMillis 
 			LIMIT ?
 		)`, beforeMillis, beforeMillis, batchSize)
 	if err != nil {
-		return 0, err
+		return 0, wrapSQL("delete expired resolution tickets", err)
 	}
 	n, _ := res.RowsAffected()
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, wrapSQL("commit resolution ticket cleanup", err)
 	}
 	return int(n), nil
 }

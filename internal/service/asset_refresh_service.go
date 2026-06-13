@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,33 +48,18 @@ func NewAssetRefreshService(
 	}
 }
 
-func (s *AssetRefreshService) Submit(ctx context.Context, planID string, req AssetRefreshRequest) (map[string]any, error) {
+func (s *AssetRefreshService) Submit(ctx context.Context, planID string, req AssetRefreshRequest) (map[string]any,
+	error,
+) {
 	if _, err := s.plans.GetByID(ctx, planID); err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, newErr("plan_not_found", "plan not found", nil)
 		}
+		return nil, wrapRepo("load plan", err)
+	}
+	amountByInstrument, err := validateAssetRefreshRequest(req)
+	if err != nil {
 		return nil, err
-	}
-	if len(req.Holdings) == 0 {
-		return nil, newErr("validation_failed", "holdings required", nil)
-	}
-
-	var sum int64
-	amountByInstrument := make(map[string]int64, len(req.Holdings))
-	for _, item := range req.Holdings {
-		if item.InstrumentID == "" {
-			return nil, newErr("validation_failed", "instrument_id required", nil)
-		}
-		if item.CurrentAmountMinor < 0 {
-			return nil, newErr("validation_failed", "current amount cannot be negative", nil)
-		}
-		sum += item.CurrentAmountMinor
-		amountByInstrument[item.InstrumentID] = item.CurrentAmountMinor
-	}
-	if math.Abs(float64(sum-req.TotalAssetsMinor)) > amountToleranceMinor {
-		return nil, newErr("validation_failed", "holdings sum does not match total assets", map[string]any{
-			"holdings_sum_minor": sum, "total_assets_minor": req.TotalAssetsMinor,
-		})
 	}
 
 	existing, err := s.holdings.GetHoldings(ctx, planID)
@@ -83,22 +67,7 @@ func (s *AssetRefreshService) Submit(ctx context.Context, planID string, req Ass
 		return nil, err
 	}
 	beforeTotal := sumEnabledMinorFromHoldings(existing)
-
-	updateReq := HoldingsUpdateRequest{
-		ConfigVersion: req.ConfigVersion,
-		Holdings:      make([]HoldingWriteItem, 0, len(existing)),
-	}
-	for _, h := range existing {
-		amount := h.CurrentAmountMinor
-		if v, ok := amountByInstrument[h.InstrumentID]; ok {
-			amount = v
-		}
-		updateReq.Holdings = append(updateReq.Holdings, HoldingWriteItem{
-			InstrumentID: h.InstrumentID, Enabled: h.Enabled,
-			WeightWithinGroup: h.WeightWithinGroup, CurrentAmountMinor: amount,
-			SortOrder: h.SortOrder,
-		})
-	}
+	updateReq := buildAssetRefreshUpdateReq(req, existing, amountByInstrument)
 
 	prep, err := s.holdings.prepareHoldingsUpdate(ctx, planID, updateReq)
 	if err != nil {
@@ -113,7 +82,8 @@ func (s *AssetRefreshService) Submit(ctx context.Context, planID string, req Ass
 		}
 		versionAfterHoldings := req.ConfigVersion + 1
 		if req.SyncTotalAssetsMinor {
-			if err := applyTotalAssetsSyncTx(ctx, tx, s.plans, s.params, planID, versionAfterHoldings, req.TotalAssetsMinor, enabledAfter); err != nil {
+			if err := applyTotalAssetsSyncTx(ctx, tx, s.plans, s.params, planID, versionAfterHoldings, req.TotalAssetsMinor,
+				enabledAfter); err != nil {
 				return err
 			}
 			syncedScale = true
@@ -129,15 +99,16 @@ func (s *AssetRefreshService) Submit(ctx context.Context, planID string, req Ass
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 		}
-		if appErr, ok := err.(*AppError); ok {
+		appErr := &AppError{}
+		if errors.As(err, &appErr) {
 			return nil, appErr
 		}
-		return nil, err
+		return nil, wrapRepo("submit asset refresh", err)
 	}
 
 	updated, err := s.holdings.GetHoldings(ctx, planID)
 	if err != nil {
-		return nil, err
+		return nil, wrapRepo("load updated holdings", err)
 	}
 	return map[string]any{
 		"holdings":           updated,
@@ -190,12 +161,12 @@ func applyTotalAssetsSyncTx(
 	}
 	p, err := params.Get(ctx, planID)
 	if err != nil {
-		return err
+		return wrapRepo("load plan parameters", err)
 	}
 	p.TotalAssetsMinor = totalMinor
 	if err := params.Upsert(ctx, tx, p); err != nil {
-		return err
+		return wrapRepo("upsert plan parameters", err)
 	}
 	_, err = plans.BumpVersionTx(ctx, tx, planID, configVersion)
-	return err
+	return wrapRepo("bump plan version", err)
 }

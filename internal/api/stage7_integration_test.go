@@ -34,7 +34,7 @@ func setupFullStackIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.C
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go worker.Start(ctx, 1)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, DBPath: dbPath, Services: services}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, DBPath: dbPath, Services: services}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client(), dbPath
 }
@@ -179,7 +179,7 @@ func TestBackupDownloadAndValidateIntegration(t *testing.T) {
 	if err := os.WriteFile(backupPath, backupData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := fdb.ValidateDatabaseFile(backupPath); err != nil {
+	if err := fdb.ValidateDatabaseFile(context.Background(), backupPath); err != nil {
 		t.Fatalf("validate backup: %v", err)
 	}
 
@@ -217,7 +217,8 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	planID := seedSimulationReadyPlan(t, db)
 
 	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "11"})
-	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests", bytes.NewReader(stressBody))
+	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests",
+		bytes.NewReader(stressBody))
 	stressReq.Header.Set("Content-Type", "application/json")
 	stressResp, err := client.Do(stressReq)
 	if err != nil {
@@ -231,7 +232,8 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	waitJobSucceeded(t, srv, stressJobID)
 
 	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "12"})
-	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests", bytes.NewReader(sensBody))
+	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests",
+		bytes.NewReader(sensBody))
 	sensReq.Header.Set("Content-Type", "application/json")
 	sensResp, err := client.Do(sensReq)
 	if err != nil {

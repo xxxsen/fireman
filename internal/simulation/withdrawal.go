@@ -28,7 +28,9 @@ func (w *WithdrawalPlanner) InitAtRetirement(wealth int64) {
 	}
 }
 
-func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthStartWealth int64, inflCumulative float64, isRetirementAnniversary bool) int64 {
+func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthStartWealth int64, inflCumulative float64,
+	isRetirementAnniversary bool,
+) int64 {
 	if month < retirementMonth {
 		return 0
 	}
@@ -67,14 +69,14 @@ func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthSta
 }
 
 // GrossWithdrawal applies the effective withdrawal-tax approximation.
-func GrossWithdrawal(netSpending int64, taxRate, taxableRatio float64) (gross int64, tax int64) {
+func GrossWithdrawal(netSpending int64, taxRate, taxableRatio float64) (int64, int64) {
 	denom := 1 - taxRate*taxableRatio
 	if denom <= 0 {
 		return netSpending, 0
 	}
 	g := float64(netSpending) / denom
-	gross = int64(math.Ceil(g))
-	tax = gross - netSpending
+	gross := int64(math.Ceil(g))
+	tax := gross - netSpending
 	if tax < 0 {
 		tax = 0
 	}

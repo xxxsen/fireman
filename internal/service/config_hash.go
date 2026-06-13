@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/repository"
@@ -27,23 +28,23 @@ func NewConfigHashService(
 func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load plan: %w", err)
 	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load parameters: %w", err)
 	}
 	flows, err := s.params.ListCashFlows(ctx, planID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("list cash flows: %w", err)
 	}
 	alloc, err := s.alloc.Get(ctx, planID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load allocation: %w", err)
 	}
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("list holdings: %w", err)
 	}
 
 	in := domain.ConfigHashInput{
@@ -57,7 +58,11 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 		RegionTargets: regionToMaps(alloc.RegionTargets),
 		Holdings:      holdingsToMaps(holds),
 	}
-	return domain.ComputeConfigHash(in)
+	hash, err := domain.ComputeConfigHash(in)
+	if err != nil {
+		return "", fmt.Errorf("compute config hash: %w", err)
+	}
+	return hash, nil
 }
 
 func parametersToMap(p repository.PlanParameters) map[string]any {

@@ -5,7 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,10 +18,10 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-func seedSimulationReadyPlan(t *testing.T, db *sql.DB) (planID string) {
+func seedSimulationReadyPlan(t *testing.T, db *sql.DB) string {
 	t.Helper()
 	plan := createTestPlan(t, db)
-	planID = plan.ID
+	planID := plan.ID
 
 	snapRepo := repository.NewSnapshotRepo(db)
 	instID := "ins_sim_equity"
@@ -71,7 +71,8 @@ func seedSimulationReadyPlan(t *testing.T, db *sql.DB) (planID string) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(context.Background(), `
-		UPDATE plan_asset_class_targets SET weight=0 WHERE plan_id=? AND asset_class IN ('bond','cash')`, planID); err != nil {
+		UPDATE plan_asset_class_targets SET weight=0 WHERE plan_id=? AND asset_class IN ('bond','cash')`,
+		planID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(context.Background(), `
@@ -93,12 +94,13 @@ func TestSimulationJobFlow(t *testing.T) {
 
 	services := buildServices(db, "")
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
 
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 
 	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "99"})
@@ -156,6 +158,7 @@ func TestSimulationJobFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("paths status=%d", resp.StatusCode)
 	}
@@ -176,13 +179,14 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	jobsRepo := repository.NewJobRepo(db)
 	simsRepo := repository.NewSimulationRepo(db)
 	runner := persistFailingRunner{db: db, sims: simsRepo}
-	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, jobs.NewEventHub(), nil, nil)
+	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil,
+		jobs.NewEventHub(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
 
 	services := buildServices(db, "")
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 
 	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "42"})
@@ -248,7 +252,9 @@ type persistFailingRunner struct {
 	sims *repository.SimulationRepo
 }
 
-func (r persistFailingRunner) RunSimulation(ctx context.Context, jobID, runID string, snap *simulation.InputSnapshot, cancelCheck func() bool, progress func(done, total int, phase string)) error {
+func (r persistFailingRunner) RunSimulation(ctx context.Context, _, runID string, snap *simulation.InputSnapshot,
+	cancelCheck func() bool, progress func(done, total int, phase string),
+) error {
 	result := simulation.Run(snap, simulation.RunOptions{
 		Runs: snap.Parameters.SimulationRuns, Progress: progress, CancelCheck: cancelCheck,
 	})
@@ -260,7 +266,7 @@ func (r persistFailingRunner) RunSimulation(ctx context.Context, jobID, runID st
 		if err := r.sims.Complete(ctx, tx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
 			return err
 		}
-		return fmt.Errorf("injected persist failure")
+		return errors.New("injected persist failure")
 	})
 }
 

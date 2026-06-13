@@ -102,7 +102,7 @@ func TestInstrumentFetchWorkerActivates(t *testing.T) {
 	defer cancel()
 	go worker.Start(ctx, 1)
 
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: services}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 	client := srv.Client()
 
@@ -113,7 +113,8 @@ func TestInstrumentFetchWorkerActivates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ticketID := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)["resolved"].(map[string]any)["ticket_id"].(string)
+	ticketID := decodeEnvelope(t, readBody(t,
+		resp))["data"].(map[string]any)["resolved"].(map[string]any)["ticket_id"].(string)
 	payload, _ := json.Marshal(map[string]any{"ticket_id": ticketID, "asset_class": "equity", "region": "domestic"})
 	resp, err = client.Post(srv.URL+"/api/v1/instruments/import-async", "application/json", bytes.NewReader(payload))
 	if err != nil {

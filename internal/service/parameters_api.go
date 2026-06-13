@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/fireman/fireman/internal/repository"
 )
@@ -65,7 +66,7 @@ func ParametersToAPI(p repository.PlanParameters) PlanParametersAPI {
 
 func ParametersFromAPI(p PlanParametersAPI) (repository.PlanParameters, error) {
 	seed, err := ParseSeedString(p.Seed)
-	if err != nil {
+	if err != nil && !errors.Is(err, errSeedNotProvided) {
 		return repository.PlanParameters{}, err
 	}
 	return repository.PlanParameters{

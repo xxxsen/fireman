@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	fdb "github.com/fireman/fireman/internal/db"
 )
+
+var errInvalidCopyDestination = errors.New("invalid copy destination")
 
 // SystemService handles database backup, restore, and plan exports.
 type SystemService struct {
@@ -41,10 +44,11 @@ func NewSystemService(
 func (s *SystemService) DownloadBackup(ctx context.Context) ([]byte, string, error) {
 	data, err := fdb.ReadDatabaseFile(ctx, s.sql, s.dbPath)
 	if err != nil {
-		return nil, "", err
+		return nil, "", wrapRepo("read database backup", err)
 	}
 	base := filepath.Base(s.dbPath)
-	name := fmt.Sprintf("%s.%s.bak", strings.TrimSuffix(base, filepath.Ext(base)), time.Now().UTC().Format("20060102T150405Z"))
+	name := fmt.Sprintf("%s.%s.bak", strings.TrimSuffix(base, filepath.Ext(base)),
+		time.Now().UTC().Format("20060102T150405Z"))
 	return data, name, nil
 }
 
@@ -64,47 +68,51 @@ func (s *SystemService) RestoreBackup(ctx context.Context, data []byte) error {
 
 	dir := filepath.Dir(s.dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return wrapRepo("mkdir for restore", err)
 	}
 	tempPath := filepath.Join(dir, ".restore-"+fmt.Sprintf("%d", time.Now().UnixNano())+".db")
 	if err := os.WriteFile(tempPath, data, 0o600); err != nil {
-		return err
+		return wrapRepo("write temp restore file", err)
 	}
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 
-	if err := fdb.ValidateDatabaseFile(tempPath); err != nil {
-		return newErr("invalid_backup", "backup failed integrity or schema validation", map[string]any{"reason": err.Error()})
+	if err := fdb.ValidateDatabaseFile(ctx, tempPath); err != nil {
+		return newErr(
+			"invalid_backup",
+			"backup failed integrity or schema validation",
+			map[string]any{"reason": err.Error()},
+		)
 	}
 
 	if err := fdb.CheckpointWAL(ctx, s.sql); err != nil {
-		return err
+		return wrapRepo("checkpoint wal before restore", err)
 	}
 	if info, err := os.Stat(s.dbPath); err == nil && info.Size() > 0 {
 		ts := time.Now().UTC().Format("20060102T150405Z")
-		preRestore := filepath.Join(dir, filepath.Base(s.dbPath)+"."+ts+".pre-restore.bak")
-		if err := copyFile(s.dbPath, preRestore); err != nil {
+		if err := writePreRestoreBackup(s.dbPath, ts); err != nil {
 			return err
 		}
 	}
 
 	newPath := s.dbPath + ".new"
 	if err := os.WriteFile(newPath, data, 0o600); err != nil {
-		return err
+		return wrapRepo("write restored database", err)
 	}
 	if err := os.Rename(newPath, s.dbPath); err != nil {
-		return err
+		return wrapRepo("rename restored database", err)
 	}
 	_ = os.Remove(s.dbPath + "-wal")
 	_ = os.Remove(s.dbPath + "-shm")
 	return nil
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.ReadFile(src)
+func writePreRestoreBackup(dbPath, timestamp string) error {
+	in, err := os.ReadFile(dbPath)
 	if err != nil {
-		return err
+		return wrapRepo("read database for pre-restore backup", err)
 	}
-	return os.WriteFile(dst, in, 0o600)
+	name := filepath.Base(dbPath) + "." + timestamp + ".pre-restore.bak"
+	return wrapRepo("write pre-restore backup", writeFileInDir(filepath.Dir(dbPath), name, in, 0o600))
 }
 
 // ExportPlanJSON returns a portable plan snapshot.
@@ -142,7 +150,10 @@ func (s *SystemService) ExportTargetsCSV(ctx context.Context, planID string) ([]
 	}
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"instrument_id", "asset_class", "region", "weight_within_group", "portfolio_target_weight", "target_amount_minor", "current_amount_minor"})
+	_ = w.Write([]string{
+		"instrument_id", "asset_class", "region", "weight_within_group", "portfolio_target_weight",
+		"target_amount_minor", "current_amount_minor",
+	})
 	for _, h := range targets.Holdings {
 		if !h.Enabled {
 			continue

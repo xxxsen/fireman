@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -37,19 +38,31 @@ func (s Services) listInstruments(c *gin.Context) {
 	OK(c, gin.H{"instruments": out})
 }
 
-func (s Services) previewInstrumentImport(c *gin.Context) {
+func decodeInstrumentImportBody[T any](
+	c *gin.Context,
+	checkReadOnly func([]byte) error,
+) (T, bool) {
+	var zero T
 	body, err := c.GetRawData()
 	if err != nil {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
+		return zero, false
 	}
-	if roErr := service.CheckInstrumentReadOnlyFields(body); roErr != nil {
+	if roErr := checkReadOnly(body); roErr != nil {
 		FailErr(c, roErr)
-		return
+		return zero, false
 	}
-	var req service.InstrumentImportRequest
+	var req T
 	if err := json.Unmarshal(body, &req); err != nil {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return zero, false
+	}
+	return req, true
+}
+
+func (s Services) previewInstrumentImport(c *gin.Context) {
+	req, ok := decodeInstrumentImportBody[service.InstrumentImportRequest](c, service.CheckInstrumentReadOnlyFields)
+	if !ok {
 		return
 	}
 	out, err := s.Instruments.Preview(c.Request.Context(), req)
@@ -61,18 +74,8 @@ func (s Services) previewInstrumentImport(c *gin.Context) {
 }
 
 func (s Services) importInstrument(c *gin.Context) {
-	body, err := c.GetRawData()
-	if err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	if roErr := service.CheckInstrumentReadOnlyFields(body); roErr != nil {
-		FailErr(c, roErr)
-		return
-	}
-	var req service.InstrumentImportRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+	req, ok := decodeInstrumentImportBody[service.InstrumentImportRequest](c, service.CheckInstrumentReadOnlyFields)
+	if !ok {
 		return
 	}
 	out, err := s.Instruments.Import(c.Request.Context(), req)
@@ -98,18 +101,9 @@ func (s Services) resolveInstrument(c *gin.Context) {
 }
 
 func (s Services) importInstrumentAsync(c *gin.Context) {
-	body, err := c.GetRawData()
-	if err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	if roErr := service.CheckInstrumentImportAsyncFields(body); roErr != nil {
-		FailErr(c, roErr)
-		return
-	}
-	var req service.InstrumentImportAsyncRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+	req, ok := decodeInstrumentImportBody[service.InstrumentImportAsyncRequest](c,
+		service.CheckInstrumentImportAsyncFields)
+	if !ok {
 		return
 	}
 	out, err := s.Instruments.ImportAsync(c.Request.Context(), req)
@@ -158,7 +152,7 @@ func (s Services) getInstrumentDetail(c *gin.Context) {
 
 func (s Services) refreshInstrument(c *gin.Context) {
 	var req service.InstrumentRefreshOptions
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}

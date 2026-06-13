@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,14 @@ import (
 )
 
 const defaultTimeout = 30 * time.Second
+
+var (
+	errProviderResolveHTTP = errors.New("market provider resolve http error")
+	errProviderResolve     = errors.New("market provider resolve rejected")
+	errProviderHTTP        = errors.New("market provider http error")
+	errProviderTimeout     = errors.New("market provider timeout")
+	errProviderRejected    = errors.New("market provider rejected")
+)
 
 func resolveTimeout() time.Duration {
 	return envDuration("MARKET_PROVIDER_RESOLVE_TIMEOUT", 20*time.Second)
@@ -71,11 +80,13 @@ func (c *ProviderClient) FetchClient() *ProviderClient {
 func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*ResolveData, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal resolve request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/instruments/resolve", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, c.baseURL+"/v1/instruments/resolve", bytes.NewReader(body),
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build resolve request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -83,41 +94,41 @@ func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*Reso
 	if err != nil {
 		return nil, fmt.Errorf("market provider resolve request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read resolve response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("market provider resolve http %d: %s", resp.StatusCode, string(raw))
+		return nil, fmt.Errorf(
+			"market provider resolve http %d: %s: %w", resp.StatusCode, string(raw), errProviderResolveHTTP,
+		)
 	}
 
 	var envelope ResolveResponse
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode resolve response: %w", err)
 	}
 	if envelope.Code != 0 {
-		return nil, fmt.Errorf("market provider resolve error: %s", envelope.Message)
+		return nil, fmt.Errorf("market provider resolve error: %s: %w", envelope.Message, errProviderResolve)
 	}
 	return &envelope.Data, nil
 }
 
-func (c *ProviderClient) Fetch(ctx context.Context, req FetchRequest) (*FetchData, error) {
+func (c *ProviderClient) fetchHTTPRaw(
+	ctx context.Context,
+	req FetchRequest,
+) ([]byte, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal fetch request: %w", err)
 	}
-	slog.InfoContext(ctx, "market provider fetch start",
-		"market", req.Market,
-		"instrument_type", req.InstrumentType,
-		"source_code", req.SourceCode,
-		"start_date", req.StartDate,
-		"end_date", req.EndDate,
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, c.baseURL+"/v1/instruments/fetch", bytes.NewReader(body),
 	)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/instruments/fetch", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build fetch request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -127,49 +138,72 @@ func (c *ProviderClient) Fetch(ctx context.Context, req FetchRequest) (*FetchDat
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		slog.ErrorContext(ctx, "market provider fetch request failed",
+		slog.ErrorContext(
+			ctx, "market provider fetch request failed",
 			"source_code", req.SourceCode,
 			"instrument_type", req.InstrumentType,
 			"error", err,
 		)
 		return nil, fmt.Errorf("market provider request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 100<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read fetch response: %w", err)
 	}
 	if resp.StatusCode == http.StatusGatewayTimeout {
-		slog.ErrorContext(ctx, "market provider fetch timeout",
+		slog.ErrorContext(
+			ctx, "market provider fetch timeout",
 			"source_code", req.SourceCode,
 			"instrument_type", req.InstrumentType,
 		)
-		return nil, fmt.Errorf("market provider timeout")
+		return nil, fmt.Errorf("market provider timeout: %w", errProviderTimeout)
 	}
 	if resp.StatusCode >= 400 {
-		slog.ErrorContext(ctx, "market provider fetch http error",
+		slog.ErrorContext(
+			ctx, "market provider fetch http error",
 			"source_code", req.SourceCode,
 			"instrument_type", req.InstrumentType,
 			"status", resp.StatusCode,
 			"body", string(raw),
 		)
-		return nil, fmt.Errorf("market provider http %d: %s", resp.StatusCode, string(raw))
+		return nil, fmt.Errorf(
+			"market provider http %d: %s: %w", resp.StatusCode, string(raw), errProviderHTTP,
+		)
+	}
+	return raw, nil
+}
+
+func (c *ProviderClient) Fetch(ctx context.Context, req FetchRequest) (*FetchData, error) {
+	slog.InfoContext(
+		ctx, "market provider fetch start",
+		"market", req.Market,
+		"instrument_type", req.InstrumentType,
+		"source_code", req.SourceCode,
+		"start_date", req.StartDate,
+		"end_date", req.EndDate,
+	)
+	raw, err := c.fetchHTTPRaw(ctx, req)
+	if err != nil {
+		return nil, err
 	}
 
 	var envelope FetchResponse
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode fetch response: %w", err)
 	}
 	if envelope.Code != 0 {
-		slog.ErrorContext(ctx, "market provider fetch rejected",
+		slog.ErrorContext(
+			ctx, "market provider fetch rejected",
 			"source_code", req.SourceCode,
 			"instrument_type", req.InstrumentType,
 			"message", envelope.Message,
 		)
-		return nil, fmt.Errorf("market provider error: %s", envelope.Message)
+		return nil, fmt.Errorf("market provider error: %s: %w", envelope.Message, errProviderRejected)
 	}
-	slog.InfoContext(ctx, "market provider fetch ok",
+	slog.InfoContext(
+		ctx, "market provider fetch ok",
 		"source_code", req.SourceCode,
 		"instrument_type", req.InstrumentType,
 		"points", len(envelope.Data.Points),

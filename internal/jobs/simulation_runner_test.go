@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"testing"
 
 	fdb "github.com/fireman/fireman/internal/db"
@@ -38,13 +38,13 @@ func TestSimulationCompleteRollsBackOnQuantileSeriesFailure(t *testing.T) {
 		if err := repo.ReplaceQuantileSeries(ctx, tx, runID, qRows); err != nil {
 			return err
 		}
-		return fmt.Errorf("injected failure after quantile series write")
+		return errors.New("injected failure after quantile series write")
 	})
 	if err == nil {
 		t.Fatal("expected transaction failure")
 	}
 
-	assertSimulationRunRolledBack(t, ctx, repo, runID)
+	assertSimulationRunRolledBack(ctx, t, repo, runID)
 }
 
 func TestSimulationCompleteRollsBackOnPathIndexFailure(t *testing.T) {
@@ -68,13 +68,13 @@ func TestSimulationCompleteRollsBackOnPathIndexFailure(t *testing.T) {
 		if err := repo.ReplacePathIndex(ctx, tx, runID, rows); err != nil {
 			return err
 		}
-		return fmt.Errorf("injected failure after path index write")
+		return errors.New("injected failure after path index write")
 	})
 	if err == nil {
 		t.Fatal("expected transaction failure")
 	}
 
-	assertSimulationRunRolledBack(t, ctx, repo, runID)
+	assertSimulationRunRolledBack(ctx, t, repo, runID)
 }
 
 func TestSimulationCompleteCommitsSummaryPathIndexAndQuantileSeries(t *testing.T) {
@@ -161,7 +161,7 @@ func seedPendingSimulationRun(t *testing.T, db *sql.DB, runID, jobID, planID str
 	return runID
 }
 
-func assertSimulationRunRolledBack(t *testing.T, ctx context.Context, repo *repository.SimulationRepo, runID string) {
+func assertSimulationRunRolledBack(ctx context.Context, t *testing.T, repo *repository.SimulationRepo, runID string) {
 	t.Helper()
 	run, err := repo.GetByID(ctx, runID)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -23,13 +24,29 @@ const (
 
 // Runner executes simulation jobs using the frozen input snapshot.
 type Runner interface {
-	RunSimulation(ctx context.Context, jobID, runID string, snapshot *simulation.InputSnapshot, cancelCheck func() bool, progress func(done, total int, phase string)) error
+	RunSimulation(
+		ctx context.Context,
+		jobID, runID string,
+		snapshot *simulation.InputSnapshot,
+		cancelCheck func() bool,
+		progress func(done, total int, phase string),
+	) error
 }
 
 // AnalysisRunnerIface executes stress and sensitivity jobs.
 type AnalysisRunnerIface interface {
-	RunStress(ctx context.Context, jobID string, cancelCheck func() bool, progress func(done, total int, phase string)) error
-	RunSensitivity(ctx context.Context, jobID string, cancelCheck func() bool, progress func(done, total int, phase string)) error
+	RunStress(
+		ctx context.Context,
+		jobID string,
+		cancelCheck func() bool,
+		progress func(done, total int, phase string),
+	) error
+	RunSensitivity(
+		ctx context.Context,
+		jobID string,
+		cancelCheck func() bool,
+		progress func(done, total int, phase string),
+	) error
 }
 
 // Worker polls and executes queued jobs.
@@ -47,7 +64,17 @@ type Worker struct {
 	maintenance       func() bool
 }
 
-func NewWorker(db *sql.DB, jobs *repository.JobRepo, sims *repository.SimulationRepo, runner Runner, analysis AnalysisRunnerIface, instrumentFetch *InstrumentFetchRunner, events *EventHub, logger *slog.Logger, maintenance func() bool) *Worker {
+func NewWorker(
+	db *sql.DB,
+	jobs *repository.JobRepo,
+	sims *repository.SimulationRepo,
+	runner Runner,
+	analysis AnalysisRunnerIface,
+	instrumentFetch *InstrumentFetchRunner,
+	events *EventHub,
+	logger *slog.Logger,
+	maintenance func() bool,
+) *Worker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -64,12 +91,10 @@ func (w *Worker) Start(ctx context.Context, concurrency int) {
 	}
 	w.reconcileStale(ctx)
 	var wg sync.WaitGroup
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range concurrency {
+		wg.Go(func() {
 			w.loop(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -90,29 +115,14 @@ func (w *Worker) loop(ctx context.Context) {
 
 	for {
 		if activeJob != "" && jobDone != nil {
-			if hb == nil {
-				every := w.heartbeatInterval
-				if every <= 0 {
-					every = heartbeatEvery
-				}
-				hb = time.NewTicker(every)
-			}
-			select {
-			case <-ctx.Done():
-				if jobCancel != nil {
-					jobCancel()
-				}
-				<-jobDone
-				w.requeueInterrupted(activeJob)
+			completed, shutdown := w.waitActiveJob(ctx, activeJob, jobDone, jobCancel, &hb)
+			if shutdown {
 				return
-			case <-jobDone:
-				hb.Stop()
-				hb = nil
+			}
+			if completed {
 				activeJob = ""
 				jobDone = nil
 				jobCancel = nil
-			case <-hb.C:
-				_ = w.jobs.Heartbeat(ctx, activeJob)
 			}
 			continue
 		}
@@ -143,12 +153,59 @@ func (w *Worker) loop(ctx context.Context) {
 	}
 }
 
-func (w *Worker) requeueInterrupted(jobID string) {
+func (w *Worker) waitActiveJob(
+	ctx context.Context,
+	activeJob string,
+	jobDone chan struct{},
+	jobCancel context.CancelFunc,
+	hbOut **time.Ticker,
+) (bool, bool) {
+	if *hbOut == nil {
+		every := w.heartbeatInterval
+		if every <= 0 {
+			every = heartbeatEvery
+		}
+		*hbOut = time.NewTicker(every)
+	}
+	select {
+	case <-ctx.Done():
+		if jobCancel != nil {
+			jobCancel()
+		}
+		<-jobDone
+		w.requeueInterrupted(ctx, activeJob)
+		return false, true
+	case <-jobDone:
+		if *hbOut != nil {
+			(*hbOut).Stop()
+			*hbOut = nil
+		}
+		return true, false
+	case <-(*hbOut).C:
+		_ = w.jobs.Heartbeat(ctx, activeJob)
+		return false, false
+	}
+}
+
+func jobWriteCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), shutdownCleanupWait)
+}
+
+func (w *Worker) requeueInterrupted(ctx context.Context, jobID string) {
 	if jobID == "" {
 		return
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), shutdownCleanupWait)
+	cleanupCtx, cancel := jobWriteCtx(ctx)
 	defer cancel()
+	cancelRequested, err := w.jobs.IsCancelRequested(cleanupCtx, jobID)
+	if err != nil {
+		w.logger.Error("check cancel_requested before requeue failed", "job_id", jobID, "error", err)
+		return
+	}
+	if cancelRequested {
+		w.logger.Info("skip requeue for user-canceled job", "job_id", jobID)
+		return
+	}
 	requeued, err := w.jobs.RequeueIfRunning(cleanupCtx, jobID)
 	if err != nil {
 		w.logger.Error("requeue interrupted job failed", "job_id", jobID, "error", err)
@@ -194,93 +251,64 @@ func (w *Worker) execute(ctx context.Context, job repository.Job) {
 		return
 	}
 
-	cancelCheck := func() bool {
-		ok, _ := w.jobs.IsCancelRequested(context.Background(), job.ID)
-		return ok
-	}
-	progress := func(done, total int, phase string) {
-		_ = w.jobs.UpdateProgress(ctx, job.ID, done, total, phase)
-		w.events.Publish(Event{
-			JobID: job.ID, Status: repository.JobStatusRunning,
-			Phase: phase, ProgressCurrent: done, ProgressTotal: total,
-		})
-	}
+	cancelCheck := w.cancelCheck(ctx, job.ID)
+	progress := w.jobProgress(ctx, job.ID)
 
 	progress(0, snap.Parameters.SimulationRuns, "simulating")
 	if err := w.runner.RunSimulation(ctx, job.ID, run.ID, &snap, cancelCheck, progress); err != nil {
-		if ctx.Err() != nil && !cancelCheck() {
-			return
-		}
-		if cancelCheck() {
-			w.finish(ctx, job.ID, repository.JobStatusCanceled, "", "canceled by user", run.ID)
+		if w.handleRunError(ctx, job.ID, run.ID, cancelCheck, err) {
 			return
 		}
 		w.fail(ctx, job.ID, "simulation_failed", err.Error())
 		return
 	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "", run.ID)
+	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", run.ID)
+}
+
+type analysisRunFunc func(
+	ctx context.Context,
+	jobID string,
+	cancelCheck func() bool,
+	progress func(done, total int, phase string),
+) error
+
+func (w *Worker) executeAnalysisJob(
+	ctx context.Context,
+	job repository.Job,
+	runnerMissingMsg string,
+	phase string,
+	total int,
+	failCode string,
+	run analysisRunFunc,
+) {
+	if w.analysis == nil {
+		w.fail(ctx, job.ID, "runner_missing", runnerMissingMsg)
+		return
+	}
+	cancelCheck := w.cancelCheck(ctx, job.ID)
+	progress := w.jobProgress(ctx, job.ID)
+	progress(0, total, phase)
+	if err := run(ctx, job.ID, cancelCheck, progress); err != nil {
+		if w.handleRunError(ctx, job.ID, "", cancelCheck, err) {
+			return
+		}
+		w.fail(ctx, job.ID, failCode, err.Error())
+		return
+	}
+	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
 }
 
 func (w *Worker) executeStress(ctx context.Context, job repository.Job) {
-	if w.analysis == nil {
-		w.fail(ctx, job.ID, "runner_missing", "stress runner not configured")
-		return
-	}
-	cancelCheck := func() bool {
-		ok, _ := w.jobs.IsCancelRequested(context.Background(), job.ID)
-		return ok
-	}
-	progress := func(done, total int, phase string) {
-		_ = w.jobs.UpdateProgress(ctx, job.ID, done, total, phase)
-		w.events.Publish(Event{
-			JobID: job.ID, Status: repository.JobStatusRunning,
-			Phase: phase, ProgressCurrent: done, ProgressTotal: total,
-		})
-	}
-	progress(0, 8, "stress")
-	if err := w.analysis.RunStress(ctx, job.ID, cancelCheck, progress); err != nil {
-		if ctx.Err() != nil && !cancelCheck() {
-			return
-		}
-		if cancelCheck() {
-			w.finish(ctx, job.ID, repository.JobStatusCanceled, "", "canceled by user", "")
-			return
-		}
-		w.fail(ctx, job.ID, "stress_failed", err.Error())
-		return
-	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "", "")
+	w.executeAnalysisJob(
+		ctx, job, "stress runner not configured", "stress", 8, "stress_failed", w.analysis.RunStress,
+	)
 }
 
 func (w *Worker) executeSensitivity(ctx context.Context, job repository.Job) {
-	if w.analysis == nil {
-		w.fail(ctx, job.ID, "runner_missing", "sensitivity runner not configured")
-		return
-	}
-	cancelCheck := func() bool {
-		ok, _ := w.jobs.IsCancelRequested(context.Background(), job.ID)
-		return ok
-	}
-	progress := func(done, total int, phase string) {
-		_ = w.jobs.UpdateProgress(ctx, job.ID, done, total, phase)
-		w.events.Publish(Event{
-			JobID: job.ID, Status: repository.JobStatusRunning,
-			Phase: phase, ProgressCurrent: done, ProgressTotal: total,
-		})
-	}
-	progress(0, 50, "sensitivity")
-	if err := w.analysis.RunSensitivity(ctx, job.ID, cancelCheck, progress); err != nil {
-		if ctx.Err() != nil && !cancelCheck() {
-			return
-		}
-		if cancelCheck() {
-			w.finish(ctx, job.ID, repository.JobStatusCanceled, "", "canceled by user", "")
-			return
-		}
-		w.fail(ctx, job.ID, "sensitivity_failed", err.Error())
-		return
-	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "", "")
+	w.executeAnalysisJob(
+		ctx, job, "sensitivity runner not configured", "sensitivity", 50, "sensitivity_failed",
+		w.analysis.RunSensitivity,
+	)
 }
 
 func (w *Worker) executeInstrumentFetch(ctx context.Context, job repository.Job) {
@@ -288,33 +316,10 @@ func (w *Worker) executeInstrumentFetch(ctx context.Context, job repository.Job)
 		w.fail(ctx, job.ID, "runner_missing", "instrument fetch runner not configured")
 		return
 	}
-	cancelCheck := func() bool {
-		ok, _ := w.jobs.IsCancelRequested(context.Background(), job.ID)
-		return ok
-	}
-	progress := func(done, total int, phase string) {
-		_ = w.jobs.UpdateProgress(ctx, job.ID, done, total, phase)
-		w.events.Publish(Event{
-			JobID: job.ID, Status: repository.JobStatusRunning,
-			Phase: phase, ProgressCurrent: done, ProgressTotal: total,
-		})
-	}
+	cancelCheck := w.cancelCheck(ctx, job.ID)
+	progress := w.jobProgress(ctx, job.ID)
 	if err := w.instrumentFetch.Run(ctx, job, cancelCheck, progress); err != nil {
-		if errors.Is(err, ErrFetchCanceled) {
-			w.events.Publish(Event{
-				JobID: job.ID, Status: repository.JobStatusCanceled,
-				ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
-			})
-			return
-		}
-		if ctx.Err() != nil && !cancelCheck() {
-			return
-		}
-		if cancelCheck() {
-			w.events.Publish(Event{
-				JobID: job.ID, Status: repository.JobStatusCanceled,
-				ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
-			})
+		if w.handleInstrumentFetchError(ctx, job.ID, cancelCheck, err) {
 			return
 		}
 		code, msg := "fetch_failed", err.Error()
@@ -325,17 +330,91 @@ func (w *Worker) executeInstrumentFetch(ctx context.Context, job repository.Job)
 		w.fail(ctx, job.ID, code, msg)
 		return
 	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "", "")
+	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
+}
+
+func (w *Worker) cancelCheck(ctx context.Context, jobID string) func() bool {
+	return func() bool {
+		checkCtx := ctx
+		if ctx.Err() != nil {
+			var cancel context.CancelFunc
+			checkCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), shutdownCleanupWait)
+			defer cancel()
+		}
+		ok, _ := w.jobs.IsCancelRequested(checkCtx, jobID)
+		return ok
+	}
+}
+
+func (w *Worker) jobProgress(ctx context.Context, jobID string) func(done, total int, phase string) {
+	return func(done, total int, phase string) {
+		_ = w.jobs.UpdateProgress(ctx, jobID, done, total, phase)
+		w.events.Publish(Event{
+			JobID: jobID, Status: repository.JobStatusRunning,
+			Phase: phase, ProgressCurrent: done, ProgressTotal: total,
+		})
+	}
+}
+
+func (w *Worker) handleRunError(
+	ctx context.Context,
+	jobID, runID string,
+	cancelCheck func() bool,
+	_ error,
+) bool {
+	if ctx.Err() != nil && !cancelCheck() {
+		return true
+	}
+	if cancelCheck() {
+		w.finish(ctx, jobID, repository.JobStatusCanceled, "canceled by user", runID)
+		return true
+	}
+	return false
+}
+
+func (w *Worker) handleInstrumentFetchError(
+	ctx context.Context,
+	jobID string,
+	cancelCheck func() bool,
+	err error,
+) bool {
+	if errors.Is(err, ErrFetchCanceled) {
+		w.events.Publish(Event{
+			JobID: jobID, Status: repository.JobStatusCanceled,
+			ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
+		})
+		return true
+	}
+	if ctx.Err() != nil && !cancelCheck() {
+		return true
+	}
+	if cancelCheck() {
+		w.finish(ctx, jobID, repository.JobStatusCanceled, "instrument fetch canceled by user", "")
+		w.events.Publish(Event{
+			JobID: jobID, Status: repository.JobStatusCanceled,
+			ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
+		})
+		return true
+	}
+	return false
 }
 
 func (w *Worker) fail(ctx context.Context, jobID, code, msg string) {
-	_ = w.jobs.Finish(ctx, jobID, repository.JobStatusFailed, code, msg)
+	writeCtx, cancel := jobWriteCtx(ctx)
+	defer cancel()
+	if err := w.jobs.Finish(writeCtx, jobID, repository.JobStatusFailed, code, msg); err != nil {
+		w.logger.Error("finish failed job failed", "job_id", jobID, "error", err)
+	}
 	w.events.Publish(Event{JobID: jobID, Status: repository.JobStatusFailed, ErrorCode: code, ErrorMessage: msg})
 }
 
-func (w *Worker) finish(ctx context.Context, jobID, status, code, msg, runID string) {
-	_ = w.jobs.Finish(ctx, jobID, status, code, msg)
-	w.events.Publish(Event{JobID: jobID, Status: status, ErrorCode: code, ErrorMessage: msg, RunID: runID})
+func (w *Worker) finish(ctx context.Context, jobID, status, msg, runID string) {
+	writeCtx, cancel := jobWriteCtx(ctx)
+	defer cancel()
+	if err := w.jobs.Finish(writeCtx, jobID, status, "", msg); err != nil {
+		w.logger.Error("finish job failed", "job_id", jobID, "status", status, "error", err)
+	}
+	w.events.Publish(Event{JobID: jobID, Status: status, ErrorMessage: msg, RunID: runID})
 }
 
 // SimulationRunner persists Monte Carlo output.
@@ -348,7 +427,13 @@ func NewSimulationRunner(db *sql.DB, sims *repository.SimulationRepo) *Simulatio
 	return &SimulationRunner{db: db, sims: sims}
 }
 
-func (r *SimulationRunner) RunSimulation(ctx context.Context, jobID, runID string, snap *simulation.InputSnapshot, cancelCheck func() bool, progress func(done, total int, phase string)) error {
+func (r *SimulationRunner) RunSimulation(
+	ctx context.Context,
+	_, runID string,
+	snap *simulation.InputSnapshot,
+	cancelCheck func() bool,
+	progress func(done, total int, phase string),
+) error {
 	result := simulation.Run(snap, simulation.RunOptions{
 		Runs:        snap.Parameters.SimulationRuns,
 		Progress:    progress,
@@ -360,7 +445,7 @@ func (r *SimulationRunner) RunSimulation(ctx context.Context, jobID, runID strin
 
 	summaryJSON, err := json.Marshal(result.Summary)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal simulation summary: %w", err)
 	}
 
 	repPath := make(map[int]string)
@@ -386,13 +471,19 @@ func (r *SimulationRunner) RunSimulation(ctx context.Context, jobID, runID strin
 		}
 	}
 
-	return fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
+	if err := fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
 		if err := r.sims.Complete(ctx, tx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
-			return err
+			return fmt.Errorf("complete simulation run: %w", err)
 		}
 		if err := r.sims.ReplacePathIndex(ctx, tx, runID, rows); err != nil {
-			return err
+			return fmt.Errorf("replace path index: %w", err)
 		}
-		return r.sims.ReplaceQuantileSeries(ctx, tx, runID, qRows)
-	})
+		if err := r.sims.ReplaceQuantileSeries(ctx, tx, runID, qRows); err != nil {
+			return fmt.Errorf("replace quantile series: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("persist simulation run: %w", err)
+	}
+	return nil
 }

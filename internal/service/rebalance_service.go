@@ -25,24 +25,26 @@ func NewRebalanceService(
 	return &RebalanceService{plans: plans, params: params, alloc: alloc, holdings: holdings}
 }
 
-func (s *RebalanceService) GetRebalance(ctx context.Context, planID, mode string, newCashMinor int64) (domain.RebalanceResult, error) {
+func (s *RebalanceService) GetRebalance(ctx context.Context, planID, mode string,
+	newCashMinor int64,
+) (domain.RebalanceResult, error) {
 	if _, err := s.plans.GetByID(ctx, planID); err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return domain.RebalanceResult{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return domain.RebalanceResult{}, err
+		return domain.RebalanceResult{}, wrapRepo("get plan", err)
 	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return domain.RebalanceResult{}, err
+		return domain.RebalanceResult{}, wrapRepo("get plan parameters", err)
 	}
 	alloc, err := s.alloc.Get(ctx, planID)
 	if err != nil {
-		return domain.RebalanceResult{}, err
+		return domain.RebalanceResult{}, wrapRepo("get plan allocation", err)
 	}
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
-		return domain.RebalanceResult{}, err
+		return domain.RebalanceResult{}, wrapRepo("list plan holdings", err)
 	}
 	da := toDomainAllocation(alloc)
 	dh := holdingsToDomain(holds)

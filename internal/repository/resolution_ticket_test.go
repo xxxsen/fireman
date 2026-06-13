@@ -28,7 +28,8 @@ func TestResolutionTicketCleanupExpired(t *testing.T) {
 		if row.consumed == "?" {
 			consumed = old
 		}
-		if _, err := db.ExecContext(ctx, `
+		if _, err := db.ExecContext(
+			ctx, `
 			INSERT INTO resolution_tickets (
 				id, market, instrument_type, code, provider_symbol, name,
 				exchange, instrument_kind, created_at, expires_at, consumed_at

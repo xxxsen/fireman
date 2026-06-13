@@ -24,12 +24,12 @@ import (
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
+	"github.com/fireman/fireman/migrations"
 )
 
 // Run boots the backend and blocks until the process receives SIGINT/SIGTERM
 // or the HTTP server fails. It is the single entry point used by main.
 func Run(ctx context.Context, cfg config.Config) error {
-
 	logger := buildLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
@@ -39,11 +39,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	pool, err := fdb.Open(ctx, cfg.DBPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open database: %w", err)
 	}
 
+	fdb.SetMigrations(migrations.FS)
+
 	if err := fdb.Migrate(ctx, pool, cfg.DBPath, logger); err != nil {
-		pool.Close()
+		if closeErr := pool.Close(); closeErr != nil {
+			logger.Error("db close after migrate failure", "error", closeErr)
+		}
 		return fmt.Errorf("migrate: %w", err)
 	}
 
@@ -58,7 +62,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	instrumentFetchRunner := jobs.NewInstrumentFetchRunner(pool, jobRepo, instRepo, marketRepo, annualRepo, fetchProvider)
 	runner := jobs.NewSimulationRunner(pool, simRepo)
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(pool))
-	worker := jobs.NewWorker(pool, jobRepo, simRepo, runner, analysisRunner, instrumentFetchRunner, services.EventHub, logger, maintenance.Active)
+	worker := jobs.NewWorker(
+		pool, jobRepo, simRepo, runner, analysisRunner, instrumentFetchRunner,
+		services.EventHub, logger, maintenance.Active,
+	)
 
 	ticketRepo := repository.NewResolutionTicketRepo(pool)
 	runTicketCleanup(ctx, ticketRepo, logger)
@@ -70,7 +77,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 		close(workerDone)
 	}()
 
-	router := api.NewRouter(api.Deps{DB: pool, DBPath: cfg.DBPath, Logger: logger, MarketProviderURL: cfg.MarketProviderURL, Services: services})
+	router := api.NewRouter(ctx, api.Deps{
+		DB: pool, DBPath: cfg.DBPath, Logger: logger,
+		MarketProviderURL: cfg.MarketProviderURL, Services: services,
+	})
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -81,7 +91,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 	return runServer(ctx, server, pool, logger, workerCancel, workerDone)
 }
 
-func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *slog.Logger, workerCancel context.CancelFunc, workerDone <-chan struct{}) error {
+func runServer(
+	ctx context.Context,
+	server *http.Server,
+	pool *sql.DB,
+	logger *slog.Logger,
+	workerCancel context.CancelFunc,
+	workerDone <-chan struct{},
+) error {
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -102,21 +119,29 @@ func runServer(ctx context.Context, server *http.Server, pool *sql.DB, logger *s
 		shutdownHTTP = true
 	case err := <-serverErr:
 		if err != nil {
-			shutdownApp(logger, server, pool, workerCancel, workerDone, false)
+			shutdownApp(ctx, logger, server, pool, workerCancel, workerDone, false)
 			return fmt.Errorf("http server: %w", err)
 		}
-		shutdownApp(logger, server, pool, workerCancel, workerDone, false)
+		shutdownApp(ctx, logger, server, pool, workerCancel, workerDone, false)
 		return nil
 	}
 
-	shutdownApp(logger, server, pool, workerCancel, workerDone, shutdownHTTP)
+	shutdownApp(ctx, logger, server, pool, workerCancel, workerDone, shutdownHTTP)
 	return nil
 }
 
 // shutdownApp stops HTTP (when still serving), waits for worker exit, then closes the database.
-func shutdownApp(logger *slog.Logger, server *http.Server, pool *sql.DB, workerCancel context.CancelFunc, workerDone <-chan struct{}, shutdownHTTP bool) {
+func shutdownApp(
+	ctx context.Context,
+	logger *slog.Logger,
+	server *http.Server,
+	pool *sql.DB,
+	workerCancel context.CancelFunc,
+	workerDone <-chan struct{},
+	shutdownHTTP bool,
+) {
 	if shutdownHTTP {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Error("http server shutdown error", "error", err)
@@ -154,5 +179,5 @@ func ensureDataDir(dbPath string) error {
 	if dir == "" || dir == "." {
 		return nil
 	}
-	return os.MkdirAll(dir, 0o755)
+	return fmt.Errorf("ensure data dir: %w", os.MkdirAll(dir, 0o755))
 }

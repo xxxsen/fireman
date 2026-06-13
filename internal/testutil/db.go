@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	fdb "github.com/fireman/fireman/internal/db"
+	"github.com/fireman/fireman/migrations"
 )
 
 // OpenTestDBPath creates a migrated temporary SQLite database and returns its path.
@@ -18,6 +19,7 @@ func OpenTestDBPath(t *testing.T) (*sql.DB, string) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	fdb.SetMigrations(migrations.FS)
 	if err := fdb.Migrate(context.Background(), pool, path, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

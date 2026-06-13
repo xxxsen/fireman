@@ -114,8 +114,12 @@ export function findCashSweepHolding(
     }
   }
   if (!fallback) return null;
-  const { sort_order: _sort, ...candidate } = fallback;
-  return candidate;
+  return {
+    holding_id: fallback.holding_id,
+    instrument_id: fallback.instrument_id,
+    instrument_name: fallback.instrument_name,
+    current_amount_minor: fallback.current_amount_minor,
+  };
 }
 
 export function applyRecommendedOneLine(

@@ -34,7 +34,8 @@ func TestWorkerRequeuesRunningJobOnShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil,
+		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
@@ -95,7 +96,8 @@ func TestWorkerStartBlocksUntilActiveJobExits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil,
+		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	started := make(chan struct{})
@@ -161,7 +163,8 @@ func TestWorkerLoopExitsOnContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil,
+		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
@@ -281,7 +284,8 @@ func TestWorkerSingleHeartbeatTickerDuringLongTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil,
+		NewEventHub(), nil, nil)
 	w.heartbeatInterval = 50 * time.Millisecond
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

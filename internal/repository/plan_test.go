@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/fireman/fireman/internal/testutil"
@@ -26,7 +27,7 @@ func TestPlanRepo_VersionConflict(t *testing.T) {
 	if got.ConfigVersion != 2 {
 		t.Fatalf("version=%d", got.ConfigVersion)
 	}
-	if err := repo.Update(ctx, p, 1); err != ErrVersionConflict {
+	if err := repo.Update(ctx, p, 1); !errors.Is(err, ErrVersionConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
 }
@@ -38,7 +39,10 @@ func TestPlanDelete_Cascade(t *testing.T) {
 	ctx := context.Background()
 
 	planID := "plan_cascade"
-	if err := plans.Create(ctx, Plan{ID: planID, Name: "c", BaseCurrency: "CNY", ValuationDate: "2026-01-01"}); err != nil {
+	if err := plans.Create(ctx, Plan{
+		ID: planID, Name: "c", BaseCurrency: "CNY",
+		ValuationDate: "2026-01-01",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	p := defaultTestParams(planID)
@@ -49,7 +53,8 @@ func TestPlanDelete_Cascade(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plan_parameters WHERE plan_id=?`, planID).Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plan_parameters WHERE plan_id=?`,
+		planID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {

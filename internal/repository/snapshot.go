@@ -26,12 +26,13 @@ func NewSnapshotRepo(db *sql.DB) *SnapshotRepo {
 // CreatePlanSnapshot inserts a plan-specific simulation snapshot.
 func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap SimulationSnapshot) error {
 	run := func(q string, args ...any) error {
+		var e error
 		if tx != nil {
-			_, e := tx.ExecContext(ctx, q, args...)
-			return e
+			_, e = tx.ExecContext(ctx, q, args...)
+		} else {
+			_, e = r.db.ExecContext(ctx, q, args...)
 		}
-		_, e := r.db.ExecContext(ctx, q, args...)
-		return e
+		return wrapSQL("exec snapshot sql", e)
 	}
 	now := time.Now().UnixMilli()
 	if snap.CreatedAt == 0 {
@@ -52,22 +53,25 @@ func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap 
 		snap.HistoricalCAGR, snap.ModeledAnnualReturn, snap.AnnualVolatility, snap.MaxDrawdown,
 		snap.ExpenseRatio, snap.ExpenseRatioStatus, snap.FeeTreatment,
 		snap.SourceMode, snap.QualityStatus, snap.WarningsJSON, snap.SourceHash, snap.CreatedAt); err != nil {
-		return err
+		return wrapSQL("insert simulation snapshot", err)
 	}
 	return r.replaceSnapshotYears(ctx, tx, snap.ID, snap.Years)
 }
 
-func (r *SnapshotRepo) replaceSnapshotYears(ctx context.Context, tx *sql.Tx, snapshotID string, years []SnapshotYear) error {
+func (r *SnapshotRepo) replaceSnapshotYears(ctx context.Context, tx *sql.Tx, snapshotID string,
+	years []SnapshotYear,
+) error {
 	run := func(q string, args ...any) error {
+		var e error
 		if tx != nil {
-			_, e := tx.ExecContext(ctx, q, args...)
-			return e
+			_, e = tx.ExecContext(ctx, q, args...)
+		} else {
+			_, e = r.db.ExecContext(ctx, q, args...)
 		}
-		_, e := r.db.ExecContext(ctx, q, args...)
-		return e
+		return wrapSQL("exec snapshot sql", e)
 	}
 	if err := run(`DELETE FROM instrument_simulation_snapshot_years WHERE snapshot_id=?`, snapshotID); err != nil {
-		return err
+		return wrapSQL("delete snapshot years", err)
 	}
 	for _, y := range years {
 		if err := run(`
@@ -145,18 +149,18 @@ func (r *SnapshotRepo) listYears(ctx context.Context, snapshotID string) ([]Snap
 		FROM instrument_simulation_snapshot_years
 		WHERE snapshot_id=? ORDER BY year`, snapshotID)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list snapshot years", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SnapshotYear
 	for rows.Next() {
 		var y SnapshotYear
 		if err := rows.Scan(&y.Year, &y.AnnualReturn, &y.StartDate, &y.EndDate, &y.Observations); err != nil {
-			return nil, err
+			return nil, wrapSQL("scan snapshot year", err)
 		}
 		out = append(out, y)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate snapshot years", rows.Err())
 }
 
 func scanSnapshot(row *sql.Row) (SimulationSnapshot, error) {
@@ -177,7 +181,7 @@ func scanSnapshot(row *sql.Row) (SimulationSnapshot, error) {
 		return SimulationSnapshot{}, ErrSnapshotNotFound
 	}
 	if err != nil {
-		return SimulationSnapshot{}, err
+		return SimulationSnapshot{}, wrapSQL("scan snapshot", err)
 	}
 	if planID.Valid {
 		v := planID.String
@@ -225,9 +229,9 @@ func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string
 		WHERE instrument_id=? AND plan_id IS NOT NULL
 		ORDER BY created_at DESC LIMIT 50`, instrumentID)
 	if err != nil {
-		return nil, err
+		return nil, wrapSQL("list snapshots by instrument", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SimulationSnapshot
 	for rows.Next() {
 		var snap SimulationSnapshot
@@ -243,7 +247,7 @@ func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string
 			&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
 			&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,
 		); err != nil {
-			return nil, err
+			return nil, wrapSQL("scan snapshot list row", err)
 		}
 		if planID.Valid {
 			v := planID.String
@@ -271,7 +275,7 @@ func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string
 		}
 		out = append(out, snap)
 	}
-	return out, rows.Err()
+	return out, wrapSQL("iterate snapshots by instrument", rows.Err())
 }
 
 // WarningsToJSON serializes warning strings.

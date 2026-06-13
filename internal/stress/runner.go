@@ -108,11 +108,9 @@ func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSche
 	}
 	shockEnd := ShockEndMonth(sched)
 	shockStart := shockStartMonth(in)
-	if sched != nil {
-		for m := range sched {
-			if shockStart < 0 || m < shockStart {
-				shockStart = m
-			}
+	for m := range sched {
+		if shockStart < 0 || m < shockStart {
+			shockStart = m
 		}
 	}
 
@@ -132,20 +130,32 @@ func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSche
 		if !ps.Succeeded && ps.FailureMonth != nil {
 			batch.failureYears = append(batch.failureYears, float64(in.Parameters.CurrentAge+*ps.FailureMonth/12))
 		}
-		if sched != nil && len(ps.MonthlyWealthMinor) > shockEnd {
-			var recoveryTarget int64
-			if shockStart > 0 {
-				recoveryTarget = wealthAt(ps.MonthlyWealthMinor, shockStart-1)
-			} else {
-				recoveryTarget = in.Parameters.TotalAssetsMinor
-			}
-			rec := recoveryMonth(ps.MonthlyWealthMinor, shockEnd+1, recoveryTarget)
-			if rec >= 0 {
-				batch.recoveryMonths[i] = float64(rec)
-			}
-		}
+		recordPathRecovery(&batch, i, in, ps, sched, shockStart, shockEnd)
 	}
 	return batch
+}
+
+func recordPathRecovery(
+	batch *pathBatch,
+	i int,
+	in *simulation.InputSnapshot,
+	ps simulation.PathSummary,
+	sched simulation.ShockSchedule,
+	shockStart, shockEnd int,
+) {
+	if sched == nil || len(ps.MonthlyWealthMinor) <= shockEnd {
+		return
+	}
+	var recoveryTarget int64
+	if shockStart > 0 {
+		recoveryTarget = wealthAt(ps.MonthlyWealthMinor, shockStart-1)
+	} else {
+		recoveryTarget = in.Parameters.TotalAssetsMinor
+	}
+	rec := recoveryMonth(ps.MonthlyWealthMinor, shockEnd+1, recoveryTarget)
+	if rec >= 0 {
+		batch.recoveryMonths[i] = float64(rec)
+	}
 }
 
 func wealthAt(series []int64, month int) int64 {
@@ -167,7 +177,7 @@ func recoveryMonth(series []int64, after int, target int64) int {
 	return -1
 }
 
-func aggregateScenario(sc Scenario, batch pathBatch, baselineSuccess float64, startAge int) ScenarioResult {
+func aggregateScenario(sc Scenario, batch pathBatch, baselineSuccess float64, _ int) ScenarioResult {
 	runs := len(batch.terminals)
 	if runs == 0 {
 		return ScenarioResult{ScenarioID: sc.ID, ScenarioName: sc.Name, Description: sc.Description, RiskHint: sc.RiskHint}

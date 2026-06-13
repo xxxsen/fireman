@@ -5,12 +5,12 @@ import (
 )
 
 func TestSeedStringRoundTrip(t *testing.T) {
-	max := "9223372036854775807"
-	v, err := ValidateSeedInput(max)
+	maxSeed := "9223372036854775807"
+	v, err := ValidateSeedInput(maxSeed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if FormatSeedInt64(v) != max {
+	if FormatSeedInt64(v) != maxSeed {
 		t.Fatalf("round trip failed: %s", FormatSeedInt64(v))
 	}
 }

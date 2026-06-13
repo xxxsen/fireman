@@ -57,9 +57,10 @@ func EvaluateInstrumentForPlan(
 		}, nil
 	}
 	if inst.IsSystem {
-		return PlanInstrumentEval{}, newErr("instrument_not_ready", "system instrument cannot be used as a plan holding", map[string]any{
-			"instrument_id": inst.ID,
-		})
+		return PlanInstrumentEval{}, newErr("instrument_not_ready", "system instrument cannot be used as a plan holding",
+			map[string]any{
+				"instrument_id": inst.ID,
+			})
 	}
 	if inst.Status != "active" {
 		return PlanInstrumentEval{
@@ -72,15 +73,21 @@ func EvaluateInstrumentForPlan(
 	available := quality == "available"
 	eval := PlanInstrumentEval{Status: inst.Status, QualityStatus: quality, Available: available}
 	if !available {
-		return eval, newErr("instrument_insufficient_history", "instrument does not have enough complete years for simulation", map[string]any{
-			"instrument_id": inst.ID, "quality_status": quality, "valuation_date": valuationDate,
-		})
+		return eval, newErr(
+			"instrument_insufficient_history",
+			"instrument does not have enough complete years for simulation",
+			map[string]any{
+				"instrument_id": inst.ID, "quality_status": quality, "valuation_date": valuationDate,
+			},
+		)
 	}
 	return eval, nil
 }
 
 // LibraryQualityAtDate computes library quality truncated to valuationDate.
-func LibraryQualityAtDate(ctx context.Context, marketRepo *repository.MarketDataRepo, instrumentID, valuationDate string) string {
+func LibraryQualityAtDate(ctx context.Context, marketRepo *repository.MarketDataRepo, instrumentID,
+	valuationDate string,
+) string {
 	points, err := marketRepo.ListByInstrument(ctx, instrumentID)
 	if err != nil || len(points) == 0 {
 		return "insufficient_history"

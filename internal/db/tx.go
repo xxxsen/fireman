@@ -20,7 +20,7 @@ func WithTx(ctx context.Context, pool *sql.DB, fn func(tx *sql.Tx) error) error 
 	}()
 	if err := fn(tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("db: rollback after %v: %w", err, rbErr)
+			return fmt.Errorf("db: rollback after %w: %w", err, rbErr)
 		}
 		return err
 	}

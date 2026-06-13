@@ -23,7 +23,7 @@ func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) 
 	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
 	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client()
 }
@@ -116,7 +116,8 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 
 	services := buildServices(db, "")
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -214,7 +215,9 @@ func setForeignEquityAllocation(t *testing.T, client *http.Client, baseURL, plan
 	return version + 1
 }
 
-func addForeignEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, instrumentID string, version int) (holdingID string, newVersion int) {
+func addForeignEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, instrumentID string,
+	version int,
+) (holdingID string, newVersion int) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{
 		"config_version": version,

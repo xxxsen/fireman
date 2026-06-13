@@ -5,16 +5,25 @@ import "testing"
 func testHoldings() ([]HoldingWeightInput, []struct {
 	ID, InstrumentID, SimulationSnapshotID string
 	SortOrder                              int
-}) {
+},
+) {
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1.0, CurrentAmountMinor: 300_000_00},
-		{AssetClass: AssetClassEquity, Region: RegionForeign, Enabled: true,
-			WeightWithinGroup: 1.0, CurrentAmountMinor: 200_000_00},
-		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 0.5, CurrentAmountMinor: 150_000_00},
-		{AssetClass: AssetClassBond, Region: RegionForeign, Enabled: true,
-			WeightWithinGroup: 0.5, CurrentAmountMinor: 150_000_00},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1.0, CurrentAmountMinor: 300_000_00,
+		},
+		{
+			AssetClass: AssetClassEquity, Region: RegionForeign, Enabled: true,
+			WeightWithinGroup: 1.0, CurrentAmountMinor: 200_000_00,
+		},
+		{
+			AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 0.5, CurrentAmountMinor: 150_000_00,
+		},
+		{
+			AssetClass: AssetClassBond, Region: RegionForeign, Enabled: true,
+			WeightWithinGroup: 0.5, CurrentAmountMinor: 150_000_00,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string
@@ -62,12 +71,18 @@ func TestComputeNewCashRebalanceRoundingRemainderToLargestGap(t *testing.T) {
 		},
 	}
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1.0 / 3, CurrentAmountMinor: 123},
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1.0 / 3, CurrentAmountMinor: 123},
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1.0 / 3, CurrentAmountMinor: 123},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1.0 / 3, CurrentAmountMinor: 123,
+		},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1.0 / 3, CurrentAmountMinor: 123,
+		},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1.0 / 3, CurrentAmountMinor: 123,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string
@@ -166,8 +181,10 @@ func equityBondAlloc() AllocationWeights {
 func TestComputeFullRebalance_A1_ScaleOverProportional(t *testing.T) {
 	alloc := bondOnlyAlloc()
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 500_000_00},
+		{
+			AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 500_000_00,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string
@@ -193,8 +210,10 @@ func TestComputeFullRebalance_A1_ScaleOverProportional(t *testing.T) {
 func TestComputeFullRebalance_B1_ScaleUnderProportional(t *testing.T) {
 	alloc := bondOnlyAlloc()
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 400_000_00},
+		{
+			AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 400_000_00,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string
@@ -220,10 +239,14 @@ func TestComputeFullRebalance_B1_ScaleUnderProportional(t *testing.T) {
 func TestComputeFullRebalance_A2_StructuralRotationScaleOver(t *testing.T) {
 	alloc := equityBondAlloc()
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 350_000_00},
-		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 150_000_00},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 350_000_00,
+		},
+		{
+			AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 150_000_00,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string
@@ -256,10 +279,14 @@ func TestComputeFullRebalance_A2_StructuralRotationScaleOver(t *testing.T) {
 func TestComputeFullRebalance_B2_StructuralRotationScaleUnder(t *testing.T) {
 	alloc := equityBondAlloc()
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 280_000_00},
-		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 120_000_00},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 280_000_00,
+		},
+		{
+			AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 120_000_00,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string
@@ -292,10 +319,14 @@ func TestComputeFullRebalance_B2_StructuralRotationScaleUnder(t *testing.T) {
 func TestComputeFullRebalance_C1_ScaleAligned(t *testing.T) {
 	alloc := equityBondAlloc()
 	holdings := []HoldingWeightInput{
-		{AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 270_000_00},
-		{AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
-			WeightWithinGroup: 1, CurrentAmountMinor: 180_000_00},
+		{
+			AssetClass: AssetClassEquity, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 270_000_00,
+		},
+		{
+			AssetClass: AssetClassBond, Region: RegionDomestic, Enabled: true,
+			WeightWithinGroup: 1, CurrentAmountMinor: 180_000_00,
+		},
 	}
 	meta := []struct {
 		ID, InstrumentID, SimulationSnapshotID string

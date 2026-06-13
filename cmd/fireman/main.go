@@ -6,7 +6,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -15,6 +17,8 @@ import (
 	"github.com/fireman/fireman/internal/config"
 	"github.com/spf13/cobra"
 )
+
+var errHealthcheckStatus = errors.New("healthcheck returned non-200 status")
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -38,10 +42,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			if err := app.Run(context.Background(), cfg); err != nil {
-				return err
-			}
-			return nil
+			return app.Run(context.Background(), cfg)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "path to JSON config file (required)")
@@ -55,10 +56,7 @@ func newHealthcheckCmd() *cobra.Command {
 		Use:   "healthcheck",
 		Short: "Probe local /healthz and exit 0 on success",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := probeHealth(healthURL); err != nil {
-				return err
-			}
-			return nil
+			return probeHealth(healthURL)
 		},
 	}
 	cmd.Flags().StringVar(&healthURL, "url", "http://127.0.0.1:8080/healthz", "URL probed by healthcheck")
@@ -67,13 +65,18 @@ func newHealthcheckCmd() *cobra.Command {
 
 func probeHealth(url string) error {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("healthcheck request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("healthcheck: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("healthcheck: status=%d", resp.StatusCode)
+		return fmt.Errorf("healthcheck: status=%d: %w", resp.StatusCode, errHealthcheckStatus)
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
