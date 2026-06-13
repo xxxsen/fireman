@@ -33,14 +33,15 @@
 | 持仓快照 | 创建快照时可回写 `current_amount_minor`（td/003 返工） |
 | 只读字段校验 | 持仓/标的 metadata 客户端不可写（`holding_fields_read_only` 等） |
 
-### 2.1 新建计划向导（td/003 P0-1；td/013 选标改造）
+### 2.1 新建计划向导（td/003 P0-1；td/013、td/015 选标与地区配比改造）
 
 - 原子接口 `POST /api/v1/plans/wizard`：一次提交 FIRE 参数、场景、持仓、未分配现金处理
 - 前端四步向导：前三步本地草稿，最后一步单次提交；模拟默认关闭，可选后台运行 10000 次
 - 失败时不残留半成品计划或快照
 - **step 2 按大类分组**（td/013）：权益/债券/现金容器、大类内搜索、预期资金公式、大类组内权重 100%、场景切换 prune
+- **step 1/2 支持地区目标**（td/015）：权益/债券国内外配比、按 `region` 分区选标、`region_targets` 写入计划
 
-详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md)。
+详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md) 与 [006-wizard-region-domestic-foreign-allocation.md](./006-wizard-region-domestic-foreign-allocation.md)。
 
 ---
 
@@ -170,6 +171,7 @@
 | td/010 | 显式前缀 LOF | P1 已关 |
 | td/011 | candidate_id 唯一标识 | **全部关闭** |
 | td/013 | 公募缓存 TTL、删除刷新、向导大类选标 | **全部关闭**（见本地 `td/014` 复审） |
+| td/015 | 向导国内/国外配比与分区选标 | **已实施** |
 | td/016 | 组合优先 UI、调仓主路径、模拟次级 | **已实施** |
 
 ---
