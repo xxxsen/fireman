@@ -41,12 +41,18 @@ def default_region(market: str, instrument_type: str) -> str:
 
 
 def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str) -> FundMeta:
-    name = symbol
+    from .names import lookup_cn_mutual_fund_name, name_from_dataframe
+
+    name = name_from_dataframe(df, symbol) or symbol
     fund_type = ""
-    if "基金简称" in df.columns and not df["基金简称"].empty:
-        name = str(df["基金简称"].iloc[0])
     if "基金类型" in df.columns and not df["基金类型"].empty:
         fund_type = str(df["基金类型"].iloc[0])
+
+    # akshare NAV history frames omit name/type metadata; resolve from name cache.
+    if name == symbol or not name.strip():
+        cached = lookup_cn_mutual_fund_name(symbol)
+        if cached:
+            name = cached
 
     if "每万份收益" in df.columns and "累计净值" not in df.columns:
         return FundMeta(

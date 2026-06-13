@@ -4,7 +4,8 @@ services:
     user: root
     volumes:
       - fireman-data:/data
-    entrypoint: ["sh", "-c", "mkdir -p /data && chown 65532:65532 /data"]
+      - fireman-provider-cache:/cache
+    entrypoint: ["sh", "-c", "mkdir -p /data /cache && chown 65532:65532 /data && chown 1001:1001 /cache"]
     restart: "no"
 
   backend:
@@ -70,6 +71,9 @@ services:
       - fireman-provider-cache:/cache
     ports:
       - "18081:18081"
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - "CMD-SHELL"

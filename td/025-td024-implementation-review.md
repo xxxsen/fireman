@@ -1,7 +1,7 @@
 # Fireman `td/024` 实施复审报告
 
 - 复审日期：2026-06-13
-- 复审对象：当前工作区对 `td/024-plan-settings-rebalance-preview-refine.md` 的实施结果
+- 复审对象：当前工作区对原 `td/024` 临时方案（现已归档至 `docs/008`）的实施结果
 - 复审范围：场景配置独立化、计划设置只读模板、持仓预览收拢、资产变更流程、真实 dirty 检测
 - 约束：本次只 review，不修改业务代码
 
@@ -110,8 +110,8 @@
 
 定位：
 
-- `td/024-plan-settings-rebalance-preview-refine.md:302-307`
-- `td/024-plan-settings-rebalance-preview-refine.md:383-386`
+- 原 `td/024` 方案中关于“资产变更承担更新标的、配比等功能”的条目（现已归档至 `docs/008`）
+- 原 `td/024` 方案中关于“资产变更承担原持仓管理职责收拢”的条目（现已归档至 `docs/008`）
 - `web/app/plans/[id]/asset-refresh/page.tsx:425-468`
 - `web/lib/asset-refresh.ts:54-75`
 - `web/lib/asset-refresh.ts:77-84`

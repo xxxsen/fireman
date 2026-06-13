@@ -120,17 +120,18 @@
 | --- | --- |
 | `/plans/new` | 四步计划向导；模拟可选且不阻塞进入计划 |
 | `/plans/{id}/overview` | 组合总览、大类/地区配置、偏离摘要、折叠式可选模拟 |
-| `/plans/{id}/rebalance` | 大类/地区缺口汇总、建议筛选、CSV、调仓后快照 |
-| `/plans/{id}/holdings` | 按大类/地区分组维护真实持仓、目标金额和缺口 |
-| `/plans/{id}/settings` | 场景与权重、FIRE 参数、模拟分析三段设置 |
+| `/plans/{id}/rebalance` | 持仓预览；查看当前持仓、目标结构、结构偏差，并进入资产变更或调仓计划 |
+| `/plans/{id}/settings` | 切换当前计划使用的 FIRE 方案、编辑计划参数、运行模拟 |
 | `/assets` | 全局资产资料库 |
 | `/assets/import` | AKShare 解析 → 选类 → 异步抓取 |
 | `/assets/{id}` | 详情、年度收益、抓取进度 |
+| `/scenarios` | 全局 FIRE 方案 / 场景模板管理 |
 | `/settings` | 备份与恢复 |
 
 策略枚举前后端一致；分析页按任务类型分别重试。
 旧计划内页面 URL 保留兼容重定向。详见
-[004-portfolio-first-ui.md](./004-portfolio-first-ui.md)。
+[004-portfolio-first-ui.md](./004-portfolio-first-ui.md) 与
+[008-plan-settings-holdings-preview.md](./008-plan-settings-holdings-preview.md)。
 
 ---
 
@@ -165,6 +166,7 @@
 - 中国场内代码规范化、LOF 解析与硬超时
 - 公募基金名称缓存与资料库删除刷新
 - 组合优先 UI、结构偏差与规模偏差分拆
+- 持仓预览 / 资产变更 / 全局场景配置收拢
 
 ---
 

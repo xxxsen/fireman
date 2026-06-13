@@ -173,7 +173,16 @@ def _write_mutual_fund_cache_to_disk(names: dict[str, str]) -> None:
     global _MUTUAL_FUND_REFRESHED_AT
     _MUTUAL_FUND_REFRESHED_AT = refreshed_at
     payload = {"version": 1, "refreshed_at": refreshed_at, "names": names}
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        from ..logutil import get_logger
+
+        get_logger(__name__).warning(
+            "mutual fund name cache disk write failed path=%s: %s",
+            path,
+            exc,
+        )
 
 
 def _fetch_mutual_fund_name_map_from_upstream() -> dict[str, str]:

@@ -1,5 +1,7 @@
 """Tests for cn_mutual_fund classification helpers."""
 
+from unittest.mock import patch
+
 import pandas as pd
 
 from fireman_market_provider.adapters.classification import classify_cn_mutual_fund
@@ -15,6 +17,25 @@ def test_classify_hybrid_open_fund_as_equity() -> None:
         }
     )
     meta = classify_cn_mutual_fund(df, "000001")
+    assert meta.asset_class == "equity"
+    assert meta.region == "domestic"
+
+
+def test_classify_open_fund_from_nav_history_and_name_cache() -> None:
+    """akshare NAV frames omit 基金简称; classification must use name cache."""
+    df = pd.DataFrame(
+        {
+            "净值日期": ["2024-01-02"],
+            "单位净值": [1.0],
+            "日增长率": [0.0],
+        }
+    )
+    with patch(
+        "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name",
+        return_value="华夏成长混合",
+    ):
+        meta = classify_cn_mutual_fund(df, "000001")
+    assert meta.name == "华夏成长混合"
     assert meta.asset_class == "equity"
     assert meta.region == "domestic"
 

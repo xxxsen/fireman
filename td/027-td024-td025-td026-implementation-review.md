@@ -1,7 +1,7 @@
 # Fireman `td/024` / `td/025` / `td/026` 实施复审报告
 
 - 复审日期：2026-06-14
-- 复审对象：当前工作区对 `td/024-plan-settings-rebalance-preview-refine.md`、`td/025-td024-implementation-review.md`、`td/026-asset-000001-cagr-review.md` 的实施结果
+- 复审对象：当前工作区对原 `td/024` 临时方案（现已归档至 `docs/008`）、`td/025-td024-implementation-review.md`、`td/026-asset-000001-cagr-review.md` 的实施结果
 - 复审范围：场景模板完整化、持仓预览与资产变更收拢、`cn_mutual_fund` 数据源兼容修复
 - 约束：本次只 review，不修改业务代码
 
