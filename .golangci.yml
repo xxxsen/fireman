@@ -1,0 +1,263 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.25"
+
+linters:
+  default: none
+
+  enable:
+    # correctness / bug finding
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - err113
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - nilerr
+    - nilnil
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unparam
+    - unused
+
+    # maintainability / readability
+    - dogsled
+    - dupl
+    - exhaustive
+    - funlen
+    - gocognit
+    - gocyclo
+    - interfacebloat
+    - lll
+    - makezero
+    - misspell
+    - nakedret
+    - nestif
+    - nolintlint
+    - nonamedreturns
+    - prealloc
+    - revive
+    - unconvert
+    - whitespace
+
+    # engineering discipline
+    - forbidigo
+    - wrapcheck
+
+    # architecture / safety
+    - asasalint
+    - canonicalheader
+    - depguard
+    - fatcontext
+    - gochecknoinits
+    - predeclared
+
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    paths:
+      - web/node_modules
+
+    rules:
+      - path: '(.+)_test\.go'
+        linters:
+          - dupl
+          - err113
+          - errcheck
+          - funlen
+          - gochecknoinits
+          - gocognit
+          - gocyclo
+          - lll
+          - nestif
+          - noctx
+          - wrapcheck
+
+      - path: '(^|/)cmd/.+/main\.go'
+        linters:
+          - forbidigo
+          - wrapcheck
+
+      # Reproducible simulation paths intentionally use math/rand.
+      - path: '(internal/simulation/|internal/jobs/analysis_runner\.go|internal/service/simulation_service\.go)'
+        linters:
+          - gosec
+        text: "G404"
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.Copy
+        - io.CopyBuffer
+        - io.CopyN
+
+    copyloopvar:
+      check-alias: true
+
+    dupl:
+      threshold: 120
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    gocognit:
+      min-complexity: 25
+
+    gocyclo:
+      min-complexity: 15
+
+    interfacebloat:
+      max: 5
+
+    lll:
+      line-length: 120
+      tab-width: 2
+
+    misspell:
+      locale: US
+
+    nestif:
+      min-complexity: 4
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    nonamedreturns:
+      report-error-in-defer: true
+
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+
+    makezero:
+      always: false
+
+    errorlint:
+      errorf: true
+      errorf-multi: true
+      asserts: true
+      comparison: true
+
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+      ignore-package-globs:
+        - encoding/*
+        - github.com/pkg/errors
+
+    forbidigo:
+      forbid:
+        - pattern: '^fmt\.Print.*$'
+          msg: "不要提交调试输出，改用结构化日志"
+        - pattern: '^print(ln)?$'
+          msg: "不要使用内建 print/println"
+
+    depguard:
+      rules:
+        domain-is-leaf:
+          files:
+            - "**/internal/domain/**"
+          allow:
+            - $gostd
+
+        repository-no-upper-layers:
+          files:
+            - "**/internal/repository/**"
+          deny:
+            - pkg: github.com/fireman/fireman/internal/api
+              desc: "repository 不得依赖 API 表示层"
+            - pkg: github.com/fireman/fireman/internal/app
+              desc: "repository 不得依赖应用装配层"
+            - pkg: github.com/fireman/fireman/internal/jobs
+              desc: "repository 不得依赖任务执行层"
+            - pkg: github.com/fireman/fireman/internal/service
+              desc: "repository 不得依赖业务服务层"
+
+        simulation-no-service-or-store:
+          files:
+            - "**/internal/simulation/**"
+          deny:
+            - pkg: github.com/fireman/fireman/internal/api
+              desc: "simulation 不得依赖 API 表示层"
+            - pkg: github.com/fireman/fireman/internal/app
+              desc: "simulation 不得依赖应用装配层"
+            - pkg: github.com/fireman/fireman/internal/jobs
+              desc: "simulation 不得依赖任务执行层"
+            - pkg: github.com/fireman/fireman/internal/repository
+              desc: "simulation 不得依赖存储层"
+            - pkg: github.com/fireman/fireman/internal/service
+              desc: "simulation 不得依赖业务服务层"
+
+        no-import-cmd:
+          files:
+            - "**/internal/**"
+          deny:
+            - pkg: github.com/fireman/fireman/cmd
+              desc: "不得从 internal 反向依赖 cmd/ 入口"
+
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+        - name: empty-block
+        - name: empty-lines
+        - name: error-naming
+        - name: error-return
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: modifies-parameter
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: redundant-import-alias
+        - name: string-of-int
+        - name: superfluous-else
+        - name: time-equal
+        - name: time-naming
+        - name: unnecessary-if
+        - name: unnecessary-stmt
+        - name: unreachable-code
+        - name: unused-parameter
+          arguments:
+            - allow-regex: "^_"
+        - name: use-any
+        - name: use-errors-new
+        - name: use-waitgroup-go
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports

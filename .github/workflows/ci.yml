@@ -36,6 +36,9 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Install golangci-lint
+        run: make install-golangci-lint
+
       - name: Verify CI runs without browsers
         shell: bash
         run: |
