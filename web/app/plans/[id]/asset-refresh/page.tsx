@@ -7,11 +7,11 @@ import { useMemo, useState } from "react";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { Dialog } from "@/components/ui/Dialog";
-import { getHoldings, getTargets, updateHoldings } from "@/lib/api/holdings";
+import { getHoldings, getTargets } from "@/lib/api/holdings";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
 import { listInstruments } from "@/lib/api/instruments";
 import { getPlan, getParameters } from "@/lib/api/plans";
-import { applyScenario, listScenarios } from "@/lib/api/allocation";
+import { listScenarios } from "@/lib/api/allocation";
 import {
   assetClassLabel,
   formatMoney,
@@ -21,7 +21,6 @@ import {
 import { assetClassSortIndex, regionSortIndex } from "@/lib/asset-class-order";
 import {
   buildAssetRefreshBody,
-  buildHoldingsUpdateItems,
   countAssetRefreshChanges,
   defaultWeightWithinGroup,
   hasAssetRefreshDraftChanges,
@@ -33,7 +32,7 @@ import {
   type AssetRefreshHolding,
 } from "@/lib/asset-refresh";
 import { ApiError } from "@/lib/api/client";
-import type { Instrument, PlanHolding } from "@/types/api";
+import type { Instrument } from "@/types/api";
 
 const STEPS = ["说明", "配置确认", "录入当前资产", "确认提交"] as const;
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
@@ -103,38 +102,34 @@ export default function AssetRefreshPage() {
   );
 
   const draftHoldings = holdingsDraft ?? defaultHoldings;
-  const enabledRows = useMemo(
-    () => draftHoldings.filter((holding) => holding.enabled),
-    [draftHoldings],
-  );
   const defaultTotal = useMemo(
-    () => enabledRows.reduce((sum, holding) => sum + holding.current_amount_minor, 0),
-    [enabledRows],
+    () => draftHoldings.reduce((sum, holding) => sum + holding.current_amount_minor, 0),
+    [draftHoldings],
   );
   const totalAssets = totalOverride ?? defaultTotal;
   const sumMinor = useMemo(
-    () => sumHoldingsMinor(enabledRows.map((row) => ({
+    () => sumHoldingsMinor(draftHoldings.map((row) => ({
       instrument_id: row.instrument_id,
       current_amount_minor: row.current_amount_minor,
     }))),
-    [enabledRows],
+    [draftHoldings],
   );
   const validation = useMemo(
     () => validateAssetRefreshTotal(
-      enabledRows.map((row) => ({
+      draftHoldings.map((row) => ({
         instrument_id: row.instrument_id,
         current_amount_minor: row.current_amount_minor,
       })),
       totalAssets,
     ),
-    [enabledRows, totalAssets],
+    [draftHoldings, totalAssets],
   );
   const groupWeightValidation = useMemo(
     () => validateAssetRefreshGroupWeights(draftHoldings),
     [draftHoldings],
   );
   const canProceedFromEntry =
-    validation.ok && groupWeightValidation.ok && enabledRows.length > 0;
+    validation.ok && groupWeightValidation.ok && draftHoldings.length > 0;
   const structureChanged = useMemo(
     () =>
       holdings.data
@@ -236,10 +231,6 @@ export default function AssetRefreshPage() {
     );
   };
 
-  const toggleEnabled = (holding: AssetRefreshHolding, enabled: boolean) => {
-    updateDraft(updateDraftHoldings(draftHoldings, holding.instrument_id, { enabled }));
-  };
-
   const removeHolding = (holding: AssetRefreshHolding) => {
     if (holding.is_system) return;
     updateDraft(draftHoldings.filter((item) => item.instrument_id !== holding.instrument_id));
@@ -261,7 +252,6 @@ export default function AssetRefreshPage() {
         code: instrument.code,
         asset_class: instrument.asset_class,
         region: instrument.region,
-        enabled: true,
         current_amount_minor: 0,
         weight_within_group: defaultWeight,
         sort_order: draftHoldings.length * 10,
@@ -280,38 +270,19 @@ export default function AssetRefreshPage() {
         throw new Error(groupWeightValidation.message ?? "组内配比校验失败");
       }
 
-      let configVersion = plan.data.config_version;
-
-      if (currentScenarioId && currentScenarioId !== initialScenarioId) {
-        await applyScenario(planId, {
-          scenario_id: currentScenarioId,
-          config_version: configVersion,
-          dry_run: false,
-        });
-        const updatedPlan = await getPlan(planId);
-        configVersion = updatedPlan.config_version;
-      }
-
-      if (structureChanged) {
-        await updateHoldings(planId, {
-          config_version: configVersion,
-          holdings: buildHoldingsUpdateItems(draftHoldings),
-        });
-        const updatedPlan = await getPlan(planId);
-        configVersion = updatedPlan.config_version;
-      }
+      const scenarioChanged =
+        !!currentScenarioId && currentScenarioId !== initialScenarioId;
+      const configChanged = structureChanged || scenarioChanged;
 
       return submitAssetRefresh(
         planId,
         buildAssetRefreshBody(
-          configVersion,
-          enabledRows.map((row) => ({
-            instrument_id: row.instrument_id,
-            current_amount_minor: row.current_amount_minor,
-          })),
+          plan.data.config_version,
+          draftHoldings,
           totalAssets,
           true,
-          structureChanged,
+          configChanged,
+          scenarioChanged ? currentScenarioId : null,
         ),
       );
     },
@@ -330,12 +301,10 @@ export default function AssetRefreshPage() {
   }
 
   const beforeTotal = sumHoldingsMinor(
-    holdings.data.holdings
-      .filter((holding: PlanHolding) => holding.enabled)
-      .map((holding) => ({
-        instrument_id: holding.instrument_id,
-        current_amount_minor: holding.current_amount_minor,
-      })),
+    holdings.data.holdings.map((holding) => ({
+      instrument_id: holding.instrument_id,
+      current_amount_minor: holding.current_amount_minor,
+    })),
   );
   const structureOnly = hasChanges && beforeTotal === totalAssets && changeCount > 0;
   const scenarioName = previewScenario?.name ?? selectedScenario?.name ?? "—";
@@ -373,7 +342,7 @@ export default function AssetRefreshPage() {
           <div className="space-y-2 text-sm text-slate-700">
             <p>此流程用于维护当前计划下的真实持仓结构，包括：</p>
             <ul className="list-disc space-y-1 pl-5">
-              <li>新增、移除或启停资产标的</li>
+              <li>新增或移除资产标的</li>
               <li>修改各资产当前金额与组内配置</li>
               <li>提交后覆盖当前计划内的持仓事实</li>
               <li>提交后计划总资产将同步为最新持仓合计</li>
@@ -460,7 +429,7 @@ export default function AssetRefreshPage() {
             );
           })}
           <p className="text-sm text-slate-600">
-            已启用标的 {enabledRows.length} 个
+            当前标的 {draftHoldings.length} 个
           </p>
           <div className="flex flex-wrap gap-3">
             <button
@@ -508,7 +477,6 @@ export default function AssetRefreshPage() {
                     <table className="min-w-full text-sm">
                       <thead>
                         <tr className="text-left text-slate-500">
-                          <th className="px-3 py-2">启用</th>
                           <th className="px-3 py-2">标的</th>
                           <th className="px-3 py-2">分类</th>
                           <th className="px-3 py-2">国别</th>
@@ -519,18 +487,7 @@ export default function AssetRefreshPage() {
                       </thead>
                       <tbody>
                         {regionRows.map((row) => (
-                          <tr
-                            key={row.instrument_id}
-                            className={`border-t ${row.enabled ? "" : "bg-slate-50/60 text-slate-500"}`}
-                          >
-                            <td className="px-3 py-2">
-                              <input
-                                type="checkbox"
-                                checked={row.enabled}
-                                aria-label={`${row.label} 启用`}
-                                onChange={(event) => toggleEnabled(row, event.target.checked)}
-                              />
-                            </td>
+                          <tr key={row.instrument_id} className="border-t">
                             <td className="px-3 py-2">
                               <span className="font-medium">{row.label}</span>
                               <span className="block text-xs text-slate-500">{row.code}</span>
@@ -539,7 +496,6 @@ export default function AssetRefreshPage() {
                             <td className="px-3 py-2">{regionLabel(row.region)}</td>
                             <td className="px-3 py-2">
                               <PercentInput
-                                disabled={!row.enabled}
                                 value={row.weight_within_group}
                                 onChange={(value) =>
                                   updateHolding(row.instrument_id, { weight_within_group: value })
@@ -549,7 +505,6 @@ export default function AssetRefreshPage() {
                             <td className="px-3 py-2">
                               <MoneyInput
                                 plain
-                                disabled={!row.enabled}
                                 valueMinor={row.current_amount_minor}
                                 onChange={(value) =>
                                   updateHolding(row.instrument_id, { current_amount_minor: value })
@@ -578,21 +533,23 @@ export default function AssetRefreshPage() {
               ))}
             </div>
           ))}
-          <div className="flex flex-wrap items-center gap-3">
-            <MoneyInput
-              label="资产总值"
-              plain
-              valueMinor={totalAssets}
-              currency={plan.data.base_currency}
-              onChange={setTotalOverride}
-            />
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-slate-300 px-4 text-sm text-slate-700"
-              onClick={() => setTotalOverride(sumMinor)}
-            >
-              使用分项合计 {formatMoney(sumMinor, plan.data.base_currency)}
-            </button>
+          <div>
+            <span className="mb-1 block text-sm text-ink-muted">资产总值</span>
+            <div className="flex items-center gap-3">
+              <MoneyInput
+                plain
+                valueMinor={totalAssets}
+                currency={plan.data.base_currency}
+                onChange={setTotalOverride}
+              />
+              <button
+                type="button"
+                className="min-h-11 shrink-0 rounded-md border border-slate-300 px-4 text-sm text-slate-700"
+                onClick={() => setTotalOverride(sumMinor)}
+              >
+                使用分项合计 {formatMoney(sumMinor, plan.data.base_currency)}
+              </button>
+            </div>
           </div>
           {sumMinor === totalAssets && (
             <p className="text-sm text-slate-600">分项合计与资产总值一致。</p>
@@ -659,7 +616,7 @@ export default function AssetRefreshPage() {
           )}
           {structureChanged && (
             <p className="text-sm text-slate-600">
-              本次提交包含持仓配置变更（新增、移除、启停或组内配比调整）。
+              本次提交包含持仓配置变更（新增、移除或组内配比调整）。
             </p>
           )}
           <p className="text-sm text-slate-600">
@@ -720,15 +677,5 @@ export default function AssetRefreshPage() {
         </ul>
       </Dialog>
     </div>
-  );
-}
-
-function updateDraftHoldings(
-  holdings: AssetRefreshHolding[],
-  instrumentId: string,
-  patch: Partial<AssetRefreshHolding>,
-): AssetRefreshHolding[] {
-  return holdings.map((holding) =>
-    holding.instrument_id === instrumentId ? { ...holding, ...patch } : holding,
   );
 }

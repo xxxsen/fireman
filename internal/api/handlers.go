@@ -80,7 +80,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		Rebalance:       rebalanceSvc,
 		RebalanceDrafts: rebalanceDraftSvc,
 		AssetRefresh: service.NewAssetRefreshService(
-			db, plans, params, holdingsSvc, repository.NewAssetRefreshEventRepo(db),
+			db, plans, params, alloc, scenario, holdingsSvc, repository.NewAssetRefreshEventRepo(db),
 		),
 		Instruments: service.NewInstrumentService(
 			db, instRepo, marketRepo, annualRepo, jobRepo,

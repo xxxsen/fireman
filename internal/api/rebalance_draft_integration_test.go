@@ -645,6 +645,278 @@ func TestAssetRefreshSyncScaleAndAuditEvent(t *testing.T) {
 	}
 }
 
+func TestAssetRefreshAtomicRollbackOnSyncFailure(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
+	defer srv.Close()
+	client := srv.Client()
+
+	paramsRepo := repository.NewParametersRepo(db)
+	beforeParams, err := paramsRepo.Get(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeScenario := ""
+	if beforeParams.SelectedScenarioID != nil {
+		beforeScenario = *beforeParams.SelectedScenarioID
+	}
+
+	planResp, err := client.Get(srv.URL + "/api/v1/plans/" + planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := int(decodeEnvelope(t, mustRead(t, planResp))["data"].(map[string]any)["config_version"].(float64))
+
+	amounts := []int64{120_000_00, 90_000_00, 90_000_00}
+	weights := []float64{0.3334, 0.3333, 0.3333}
+	holdings := make([]map[string]any, len(instIDs))
+	for i, id := range instIDs {
+		holdings[i] = map[string]any{
+			"instrument_id":        id,
+			"current_amount_minor": amounts[i],
+			"weight_within_group":  weights[i],
+			"sort_order":           i * 10,
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"config_version":          version,
+		"scenario_id":             "scn_builtin_post_fire",
+		"holdings":                holdings,
+		"total_assets_minor":      300_000_00,
+		"sync_total_assets_minor": true,
+		"config_changed":          true,
+	})
+	resp, err := client.Post(
+		srv.URL+"/api/v1/plans/"+planID+"/asset-refresh",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respBody := mustRead(t, resp)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("expected asset refresh to fail, body=%s", string(respBody))
+	}
+	assertErrorCode(t, respBody, "plan_weights_invalid")
+
+	afterParams, err := paramsRepo.Get(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterScenario := ""
+	if afterParams.SelectedScenarioID != nil {
+		afterScenario = *afterParams.SelectedScenarioID
+	}
+	if afterScenario != beforeScenario {
+		t.Fatalf("scenario changed after failed refresh: before=%q after=%q", beforeScenario, afterScenario)
+	}
+
+	var holdingCount int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM plan_holdings WHERE plan_id=?`, planID).Scan(&holdingCount); err != nil {
+		t.Fatal(err)
+	}
+	if holdingCount != len(instIDs) {
+		t.Fatalf("holdings count changed: got %d want %d", holdingCount, len(instIDs))
+	}
+
+	var disabled int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM plan_holdings WHERE plan_id=? AND enabled=0`, planID).Scan(&disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled != 0 {
+		t.Fatalf("expected no disabled holdings after rollback, got %d", disabled)
+	}
+
+	var auditCount int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM asset_refresh_events WHERE plan_id=?`, planID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 0 {
+		t.Fatalf("expected no audit event after rollback, got %d", auditCount)
+	}
+}
+
+func TestAssetRefreshAtomicScenarioAndStructure(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
+	bondInstID := seedBondInstrumentForPlan(t, db, planID)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
+	defer srv.Close()
+	client := srv.Client()
+
+	planResp, err := client.Get(srv.URL + "/api/v1/plans/" + planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := int(decodeEnvelope(t, mustRead(t, planResp))["data"].(map[string]any)["config_version"].(float64))
+
+	equityAmounts := []int64{82_500_00, 41_250_00, 41_250_00}
+	equityWeights := []float64{0.5, 0.25, 0.25}
+	holdings := make([]map[string]any, 0, len(instIDs)+2)
+	for i, id := range instIDs {
+		holdings = append(holdings, map[string]any{
+			"instrument_id":        id,
+			"current_amount_minor": equityAmounts[i],
+			"weight_within_group":  equityWeights[i],
+			"sort_order":           i * 10,
+		})
+	}
+	holdings = append(holdings,
+		map[string]any{
+			"instrument_id":        bondInstID,
+			"current_amount_minor": 105_000_00,
+			"weight_within_group":  1.0,
+			"sort_order":           30,
+		},
+		map[string]any{
+			"instrument_id":        repository.SystemCashInstrumentID,
+			"current_amount_minor": 30_000_00,
+			"weight_within_group":  1.0,
+			"sort_order":           40,
+		},
+	)
+	body, _ := json.Marshal(map[string]any{
+		"config_version":          version,
+		"scenario_id":             "scn_builtin_post_fire",
+		"holdings":                holdings,
+		"total_assets_minor":      300_000_00,
+		"sync_total_assets_minor": true,
+		"config_changed":          true,
+	})
+	resp, err := client.Post(
+		srv.URL+"/api/v1/plans/"+planID+"/asset-refresh",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respBody := mustRead(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("asset refresh status=%d body=%s", resp.StatusCode, string(respBody))
+	}
+
+	paramsRepo := repository.NewParametersRepo(db)
+	params, err := paramsRepo.Get(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.SelectedScenarioID == nil || *params.SelectedScenarioID != "scn_builtin_post_fire" {
+		got := ""
+		if params.SelectedScenarioID != nil {
+			got = *params.SelectedScenarioID
+		}
+		t.Fatalf("expected scenario scn_builtin_post_fire, got %q", got)
+	}
+
+	var weight float64
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT weight_within_group FROM plan_holdings
+		WHERE plan_id=? AND instrument_id=?`, planID, instIDs[0]).Scan(&weight); err != nil {
+		t.Fatal(err)
+	}
+	if weight != 0.5 {
+		t.Fatalf("expected first holding weight 0.5, got %v", weight)
+	}
+
+	var auditCount int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM asset_refresh_events WHERE plan_id=?`, planID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected 1 audit event, got %d", auditCount)
+	}
+}
+
+func TestAssetRefreshScenarioSwitchRejectsMismatchedHoldings(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID, instIDs := seedThreeHoldingsRebalancePlan(t, db)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db}))
+	defer srv.Close()
+	client := srv.Client()
+
+	planResp, err := client.Get(srv.URL + "/api/v1/plans/" + planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := int(decodeEnvelope(t, mustRead(t, planResp))["data"].(map[string]any)["config_version"].(float64))
+
+	amounts := []int64{120_000_00, 90_000_00, 90_000_00}
+	weights := []float64{0.3334, 0.3333, 0.3333}
+	holdings := make([]map[string]any, len(instIDs))
+	for i, id := range instIDs {
+		holdings[i] = map[string]any{
+			"instrument_id":        id,
+			"current_amount_minor": amounts[i],
+			"weight_within_group":  weights[i],
+			"sort_order":           i * 10,
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"config_version":          version,
+		"scenario_id":             "scn_builtin_post_fire",
+		"holdings":                holdings,
+		"total_assets_minor":      300_000_00,
+		"sync_total_assets_minor": false,
+		"config_changed":          true,
+	})
+	resp, err := client.Post(
+		srv.URL+"/api/v1/plans/"+planID+"/asset-refresh",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respBody := mustRead(t, resp)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("expected asset refresh to fail on scenario switch with equity-only holdings, body=%s", string(respBody))
+	}
+	assertErrorCode(t, respBody, "plan_weights_invalid")
+
+	paramsRepo := repository.NewParametersRepo(db)
+	params, err := paramsRepo.Get(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.SelectedScenarioID != nil && *params.SelectedScenarioID == "scn_builtin_post_fire" {
+		t.Fatal("scenario must not change after failed refresh")
+	}
+}
+
+func seedBondInstrumentForPlan(t *testing.T, db *sql.DB, planID string) string {
+	t.Helper()
+	snapRepo := repository.NewSnapshotRepo(db)
+	instID := "ins_rbd_bond"
+	now := time.Now().UnixMilli()
+	if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
+		ID: instID, Code: "RBOND", Name: "测试债券基金", Market: "CN",
+		AssetClass: "bond", Region: "domestic", Currency: "CNY",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapID := "snap_" + instID
+	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
+		ID: snapID, InstrumentID: instID, PlanID: &planID,
+		InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
+		CompleteYearCount: 5, ObservationCount: 100,
+		HistoricalCAGR: 0.04, ModeledAnnualReturn: 0.04, AnnualVolatility: 0.05, MaxDrawdown: 0.05,
+		ExpenseRatioStatus: "unavailable", FeeTreatment: "embedded",
+		SourceMode: "akshare_historical", QualityStatus: "available",
+		WarningsJSON: "[]", SourceHash: "fixture", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedInstrumentMarketData(t, db, instID)
+	return instID
+}
+
 func seedCashHolding(t *testing.T, db *sql.DB, planID string, amountMinor int64) {
 	t.Helper()
 	now := time.Now().UnixMilli()

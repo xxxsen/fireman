@@ -13,9 +13,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const updateHoldings = vi.fn();
 const submitAssetRefresh = vi.fn();
-const applyScenario = vi.fn();
 
 vi.mock("@/lib/api/plans", () => ({
   getPlan: vi.fn(() =>
@@ -67,7 +65,6 @@ vi.mock("@/lib/api/allocation", () => ({
         },
       ],
     }),
-  applyScenario: (...args: unknown[]) => applyScenario(...args),
 }));
 
 vi.mock("@/lib/api/holdings", () => ({
@@ -113,7 +110,6 @@ vi.mock("@/lib/api/holdings", () => ({
       ],
       holdings: [],
     }),
-  updateHoldings: (...args: unknown[]) => updateHoldings(...args),
 }));
 
 vi.mock("@/lib/api/instruments", () => ({
@@ -162,17 +158,7 @@ describe("AssetRefreshPage", () => {
   beforeEach(() => {
     push.mockClear();
     replace.mockClear();
-    updateHoldings.mockReset();
     submitAssetRefresh.mockReset();
-    applyScenario.mockReset();
-    updateHoldings.mockResolvedValue({ holdings: [] });
-    applyScenario.mockResolvedValue({
-      scenario_id: "scn_2",
-      applied: true,
-      config_version: 2,
-      before: [],
-      after: [],
-    });
     submitAssetRefresh.mockResolvedValue({
       holdings: [],
       before_total_minor: 50_000_00,
@@ -234,37 +220,7 @@ describe("AssetRefreshPage", () => {
     expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
   });
 
-  it("can toggle instrument enabled state", async () => {
-    await goToEntryStep();
-    const toggle = screen.getByRole("checkbox", { name: "基金A 启用" });
-    fireEvent.click(toggle);
-    expect(toggle).not.toBeChecked();
-  });
-
-  it("submits structure changes via updateHoldings and config_changed", async () => {
-    const { getPlan } = await import("@/lib/api/plans");
-    vi.mocked(getPlan)
-      .mockResolvedValueOnce({
-        id: "plan_1",
-        name: "测试计划",
-        config_version: 1,
-        base_currency: "CNY",
-        valuation_date: "2026-06-09",
-        status: "active",
-        created_at: 0,
-        updated_at: 0,
-      })
-      .mockResolvedValueOnce({
-        id: "plan_1",
-        name: "测试计划",
-        config_version: 2,
-        base_currency: "CNY",
-        valuation_date: "2026-06-09",
-        status: "active",
-        created_at: 0,
-        updated_at: 0,
-      });
-
+  it("submits structure changes in a single asset refresh request", async () => {
     await goToEntryStep();
     fireEvent.click(screen.getByTestId("asset-refresh-add-instrument"));
     fireEvent.change(screen.getByTestId("asset-refresh-instrument-filter"), {
@@ -275,48 +231,21 @@ describe("AssetRefreshPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
 
-    await waitFor(() => expect(updateHoldings).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
 
-    expect(updateHoldings.mock.calls[0]?.[1]).toMatchObject({
-      config_version: 1,
-      holdings: expect.arrayContaining([
-        expect.objectContaining({ instrument_id: "i1" }),
-        expect.objectContaining({ instrument_id: "i2", enabled: true }),
-      ]),
-    });
     expect(submitAssetRefresh.mock.calls[0]?.[1]).toMatchObject({
-      config_version: 2,
+      config_version: 1,
       config_changed: true,
       sync_total_assets_minor: true,
+      holdings: expect.arrayContaining([
+        expect.objectContaining({ instrument_id: "i1" }),
+        expect.objectContaining({ instrument_id: "i2" }),
+      ]),
     });
     expect(push).toHaveBeenCalledWith("/plans/plan_1/rebalance?asset_refreshed=1");
   });
 
-  it("submits weight-only changes via updateHoldings", async () => {
-    const { getPlan } = await import("@/lib/api/plans");
-    vi.mocked(getPlan)
-      .mockResolvedValueOnce({
-        id: "plan_1",
-        name: "测试计划",
-        config_version: 1,
-        base_currency: "CNY",
-        valuation_date: "2026-06-09",
-        status: "active",
-        created_at: 0,
-        updated_at: 0,
-      })
-      .mockResolvedValueOnce({
-        id: "plan_1",
-        name: "测试计划",
-        config_version: 2,
-        base_currency: "CNY",
-        valuation_date: "2026-06-09",
-        status: "active",
-        created_at: 0,
-        updated_at: 0,
-      });
-
+  it("submits weight-only changes in a single asset refresh request", async () => {
     await goToEntryStep();
     const weightInputs = screen.getAllByTestId("percent-input");
     fireEvent.change(weightInputs[0]!, { target: { value: "70" } });
@@ -326,8 +255,10 @@ describe("AssetRefreshPage", () => {
     expect(await screen.findByTestId("asset-refresh-change-count")).toHaveTextContent("2 项");
     fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
 
-    await waitFor(() => expect(updateHoldings).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
+    expect(submitAssetRefresh.mock.calls[0]?.[1]).toMatchObject({
+      config_changed: true,
+    });
   });
 
   it("shows region group targets from selected scenario on config step", async () => {
@@ -362,30 +293,7 @@ describe("AssetRefreshPage", () => {
     expect(screen.getByRole("button", { name: "提交资产变更" })).toBeDisabled();
   });
 
-  it("calls applyScenario when scenario changed on submit", async () => {
-    const { getPlan } = await import("@/lib/api/plans");
-    vi.mocked(getPlan)
-      .mockResolvedValueOnce({
-        id: "plan_1",
-        name: "测试计划",
-        config_version: 1,
-        base_currency: "CNY",
-        valuation_date: "2026-06-09",
-        status: "active",
-        created_at: 0,
-        updated_at: 0,
-      })
-      .mockResolvedValueOnce({
-        id: "plan_1",
-        name: "测试计划",
-        config_version: 2,
-        base_currency: "CNY",
-        valuation_date: "2026-06-09",
-        status: "active",
-        created_at: 0,
-        updated_at: 0,
-      });
-
+  it("includes scenario_id in single asset refresh request when scenario changed", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
     fireEvent.change(await screen.findByTestId("asset-refresh-scenario-select"), {
@@ -395,12 +303,10 @@ describe("AssetRefreshPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
     fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
 
-    await waitFor(() =>
-      expect(applyScenario).toHaveBeenCalledWith("plan_1", {
-        scenario_id: "scn_2",
-        config_version: 1,
-        dry_run: false,
-      }),
-    );
+    await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
+    expect(submitAssetRefresh.mock.calls[0]?.[1]).toMatchObject({
+      scenario_id: "scn_2",
+      config_changed: true,
+    });
   });
 });

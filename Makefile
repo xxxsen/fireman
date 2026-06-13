@@ -14,6 +14,7 @@ DOCKER ?= docker
 COMPOSE ?= $(DOCKER) compose
 GOBIN ?= $(PROJECT_ROOT)/bin
 GOCACHE ?= $(PROJECT_ROOT)/.cache/go-build
+UV_CACHE_DIR ?= $(PROJECT_ROOT)/.cache/uv
 GOLANGCI_LINT_VERSION ?= v2.11.4
 GOLANGCI_LINT_CACHE ?= $(PROJECT_ROOT)/.cache/golangci-lint
 GOLANGCI_LINT ?= $(GOBIN)/golangci-lint
@@ -83,13 +84,13 @@ web-check: web-install web-lint web-test web-build ## Web install + lint + test 
 # -----------------------------------------------------------------------------
 
 market-provider-install: ## Resolve the sidecar venv from uv.lock.
-	cd $(PROVIDER_DIR) && $(UV) sync --frozen
+	cd $(PROVIDER_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) sync --frozen
 
 market-provider-test: ## Run sidecar pytest suite.
-	cd $(PROVIDER_DIR) && $(UV) run pytest
+	cd $(PROVIDER_DIR) && .venv/bin/pytest
 
 market-provider-start: ## Start the sidecar on :18081.
-	cd $(PROVIDER_DIR) && $(UV) run uvicorn fireman_market_provider.app:app --host 0.0.0.0 --port 18081
+	cd $(PROVIDER_DIR) && .venv/bin/uvicorn fireman_market_provider.app:app --host 0.0.0.0 --port 18081
 
 # -----------------------------------------------------------------------------
 # Container images

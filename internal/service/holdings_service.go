@@ -82,7 +82,12 @@ type pendingHoldingSnap struct {
 func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string,
 	req HoldingsUpdateRequest,
 ) ([]repository.PlanHolding, error) {
-	prep, err := s.prepareHoldingsUpdate(ctx, planID, req)
+	allocRepo := repository.NewAllocationRepo(s.sql)
+	alloc, err := allocRepo.Get(ctx, planID)
+	if err != nil {
+		return nil, fmt.Errorf("load allocation: %w", err)
+	}
+	prep, err := s.prepareHoldingsUpdateWithPendingBumps(ctx, planID, req, 0, alloc)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +110,17 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string,
 func (s *HoldingsService) prepareHoldingsUpdate(ctx context.Context, planID string,
 	req HoldingsUpdateRequest,
 ) (*preparedHoldingsUpdate, error) {
+	allocRepo := repository.NewAllocationRepo(s.sql)
+	alloc, err := allocRepo.Get(ctx, planID)
+	if err != nil {
+		return nil, fmt.Errorf("load allocation: %w", err)
+	}
+	return s.prepareHoldingsUpdateWithPendingBumps(ctx, planID, req, 0, alloc)
+}
+
+func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Context, planID string,
+	req HoldingsUpdateRequest, pendingVersionBumps int, alloc repository.PlanAllocation,
+) (*preparedHoldingsUpdate, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
@@ -112,7 +128,8 @@ func (s *HoldingsService) prepareHoldingsUpdate(ctx context.Context, planID stri
 		}
 		return nil, fmt.Errorf("load plan: %w", err)
 	}
-	if req.ConfigVersion != plan.ConfigVersion {
+	expectedVersion := plan.ConfigVersion + pendingVersionBumps
+	if req.ConfigVersion != expectedVersion {
 		return nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 	}
 
@@ -138,11 +155,6 @@ func (s *HoldingsService) prepareHoldingsUpdate(ctx context.Context, planID stri
 		built = append(built, holding)
 	}
 
-	allocRepo := repository.NewAllocationRepo(s.sql)
-	alloc, err := allocRepo.Get(ctx, planID)
-	if err != nil {
-		return nil, fmt.Errorf("load allocation: %w", err)
-	}
 	da := toDomainAllocation(alloc)
 	dh := holdingsToDomain(built)
 	check := domain.ValidateAllWeights(da, dh)

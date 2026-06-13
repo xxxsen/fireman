@@ -4,7 +4,13 @@ export function submitAssetRefresh(
   planId: string,
   body: {
     config_version: number;
-    holdings: { instrument_id: string; current_amount_minor: number }[];
+    scenario_id?: string;
+    holdings: {
+      instrument_id: string;
+      current_amount_minor: number;
+      weight_within_group?: number;
+      sort_order?: number;
+    }[];
     total_assets_minor: number;
     sync_total_assets_minor?: boolean;
     config_changed?: boolean;

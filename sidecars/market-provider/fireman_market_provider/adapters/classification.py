@@ -23,7 +23,6 @@ class FundMeta:
 
 
 UNSUPPORTED_KEYWORDS = (
-    "混合",
     "FOF",
     "REIT",
     "商品",
@@ -67,7 +66,10 @@ def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str) -> FundMeta:
         asset_class = "cash"
     elif any(k in text for k in ("债券", "纯债", "利率")):
         asset_class = "bond"
-    elif any(k in text for k in ("股票", "指数", "ETF联接", "QDII", "权益")):
+    elif any(
+        k in text
+        for k in ("混合", "混合基金", "股票", "指数", "ETF联接", "QDII", "权益")
+    ):
         asset_class = "equity"
     else:
         asset_class = None

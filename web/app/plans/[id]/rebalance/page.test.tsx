@@ -50,17 +50,8 @@ const targetLineBase = {
   plan_scale_suggested_trade_minor: 20_000_00,
 };
 
-vi.mock("@/lib/api/holdings", () => ({
-  getTargets: () =>
-    Promise.resolve({
-      total_assets_minor: 100_000_00,
-      config_hash: "hash",
-      weight_checks: { passed: true, checks: [] },
-      asset_class_targets: [{ asset_class: "equity", weight: 1 }],
-      region_targets: [{ asset_class: "equity", region: "domestic", weight_within_class: 1 }],
-      holdings: [targetLineBase],
-    }),
-  getRebalance: () =>
+const getRebalance = vi.hoisted(() =>
+  vi.fn(() =>
     Promise.resolve({
       mode: "full",
       summary: {
@@ -74,6 +65,20 @@ vi.mock("@/lib/api/holdings", () => ({
       weight_checks: { passed: true, checks: [] },
       lines: [targetLineBase],
     }),
+  ),
+);
+
+vi.mock("@/lib/api/holdings", () => ({
+  getTargets: () =>
+    Promise.resolve({
+      total_assets_minor: 100_000_00,
+      config_hash: "hash",
+      weight_checks: { passed: true, checks: [] },
+      asset_class_targets: [{ asset_class: "equity", weight: 1 }],
+      region_targets: [{ asset_class: "equity", region: "domestic", weight_within_class: 1 }],
+      holdings: [targetLineBase],
+    }),
+  getRebalance: (...args: unknown[]) => getRebalance(...args),
 }));
 
 function renderPage() {
@@ -90,6 +95,21 @@ function renderPage() {
 describe("RebalancePage (持仓预览)", () => {
   beforeEach(() => {
     mockSearchParams.set(new URLSearchParams());
+    getRebalance.mockImplementation(() =>
+      Promise.resolve({
+        mode: "full",
+        summary: {
+          actionable_count: 1,
+          structural_actionable_count: 1,
+          configured_total_minor: 100_000_00,
+          holdings_total_minor: 80_000_00,
+          scale_gap_minor: -20_000_00,
+          plan_scale_actionable_count: 1,
+        },
+        weight_checks: { passed: true, checks: [] },
+        lines: [targetLineBase],
+      }),
+    );
   });
 
   it("shows title, single primary action, and asset link", async () => {
@@ -108,6 +128,27 @@ describe("RebalancePage (持仓预览)", () => {
     expect(screen.queryByText("按计划规模对齐（高级）")).not.toBeInTheDocument();
     expect(screen.queryByText("记录调仓后快照")).not.toBeInTheDocument();
     expect(screen.queryByText("在持仓中编辑")).not.toBeInTheDocument();
+  });
+
+  it("hides zero gap amounts on holding rows", async () => {
+    getRebalance.mockResolvedValue({
+      mode: "full",
+      summary: {
+        actionable_count: 0,
+        structural_actionable_count: 0,
+        configured_total_minor: 100_000_00,
+        holdings_total_minor: 100_000_00,
+        scale_gap_minor: 0,
+        plan_scale_actionable_count: 0,
+      },
+      weight_checks: { passed: true, checks: [] },
+      lines: [{ ...targetLineBase, structural_gap_amount_minor: 0, deviation_amount_minor: 0 }],
+    });
+
+    renderPage();
+    expect(await screen.findByText("测试基金")).toBeInTheDocument();
+    expect(screen.queryByText(/待投入 ¥0\.00/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/待减配 ¥0\.00/)).not.toBeInTheDocument();
   });
 
   it("shows asset refreshed banner from query param", async () => {

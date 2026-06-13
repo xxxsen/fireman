@@ -28,17 +28,37 @@ describe("validateAssetRefreshTotal", () => {
 });
 
 describe("buildAssetRefreshBody", () => {
-  it("includes sync flag", () => {
+  it("includes sync flag and optional scenario", () => {
     const body = buildAssetRefreshBody(
       2,
-      [{ instrument_id: "a", current_amount_minor: 100 }],
+      [
+        {
+          id: "h1",
+          instrument_id: "a",
+          label: "A",
+          code: "A",
+          asset_class: "equity",
+          region: "domestic",
+          current_amount_minor: 100,
+          weight_within_group: 1,
+          sort_order: 0,
+          is_system: false,
+        },
+      ],
       100,
       true,
       true,
+      "scn_2",
     );
     expect(body.config_version).toBe(2);
+    expect(body.scenario_id).toBe("scn_2");
     expect(body.sync_total_assets_minor).toBe(true);
     expect(body.config_changed).toBe(true);
+    expect(body.holdings[0]).toMatchObject({
+      instrument_id: "a",
+      weight_within_group: 1,
+    });
+    expect(body.holdings[0]).not.toHaveProperty("enabled");
   });
 });
 
@@ -68,7 +88,6 @@ describe("hasAssetRefreshStructureChange", () => {
           code: "A",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 100,
           weight_within_group: 1,
           sort_order: 0,
@@ -81,30 +100,9 @@ describe("hasAssetRefreshStructureChange", () => {
           code: "B",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 0,
           weight_within_group: 1,
           sort_order: 10,
-          is_system: false,
-        },
-      ]),
-    ).toBe(true);
-  });
-
-  it("detects enabled flag changes", () => {
-    expect(
-      hasAssetRefreshStructureChange(base, [
-        {
-          id: "h1",
-          instrument_id: "i1",
-          label: "A",
-          code: "A",
-          asset_class: "equity",
-          region: "domestic",
-          enabled: false,
-          current_amount_minor: 100,
-          weight_within_group: 1,
-          sort_order: 0,
           is_system: false,
         },
       ]),
@@ -121,7 +119,6 @@ describe("hasAssetRefreshStructureChange", () => {
           code: "A",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 100,
           weight_within_group: 0.6,
           sort_order: 0,
@@ -171,7 +168,6 @@ describe("countAssetRefreshChanges", () => {
           code: "X",
           asset_class: holding.asset_class,
           region: holding.region,
-          enabled: holding.enabled,
           current_amount_minor: holding.current_amount_minor,
           weight_within_group: holding.weight_within_group,
           sort_order: holding.sort_order,
@@ -191,7 +187,6 @@ describe("countAssetRefreshChanges", () => {
           code: "A",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 100,
           weight_within_group: 0.7,
           sort_order: 0,
@@ -204,7 +199,6 @@ describe("countAssetRefreshChanges", () => {
           code: "B",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 100,
           weight_within_group: 0.3,
           sort_order: 1,
@@ -224,7 +218,6 @@ describe("countAssetRefreshChanges", () => {
           code: "A",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 200,
           weight_within_group: 0.6,
           sort_order: 0,
@@ -237,10 +230,28 @@ describe("countAssetRefreshChanges", () => {
           code: "B",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 100,
           weight_within_group: 0.4,
           sort_order: 1,
+          is_system: false,
+        },
+      ]),
+    ).toBe(1);
+  });
+
+  it("counts removed instruments", () => {
+    expect(
+      countAssetRefreshChanges(base, [
+        {
+          id: "h1",
+          instrument_id: "i1",
+          label: "A",
+          code: "A",
+          asset_class: "equity",
+          region: "domestic",
+          current_amount_minor: 100,
+          weight_within_group: 0.6,
+          sort_order: 0,
           is_system: false,
         },
       ]),
@@ -275,7 +286,6 @@ describe("hasAssetRefreshDraftChanges", () => {
           code: "A",
           asset_class: holding.asset_class,
           region: holding.region,
-          enabled: holding.enabled,
           current_amount_minor: holding.current_amount_minor,
           weight_within_group: holding.weight_within_group,
           sort_order: holding.sort_order,
@@ -288,7 +298,7 @@ describe("hasAssetRefreshDraftChanges", () => {
 });
 
 describe("validateAssetRefreshGroupWeights", () => {
-  it("passes when each enabled group sums to 100%", () => {
+  it("passes when each group sums to 100%", () => {
     const result = validateAssetRefreshGroupWeights([
       {
         id: "h1",
@@ -297,7 +307,6 @@ describe("validateAssetRefreshGroupWeights", () => {
         code: "A",
         asset_class: "equity",
         region: "domestic",
-        enabled: true,
         current_amount_minor: 100,
         weight_within_group: 0.6,
         sort_order: 0,
@@ -310,7 +319,6 @@ describe("validateAssetRefreshGroupWeights", () => {
         code: "B",
         asset_class: "equity",
         region: "domestic",
-        enabled: true,
         current_amount_minor: 100,
         weight_within_group: 0.4,
         sort_order: 1,
@@ -329,7 +337,6 @@ describe("validateAssetRefreshGroupWeights", () => {
         code: "A",
         asset_class: "equity",
         region: "domestic",
-        enabled: true,
         current_amount_minor: 100,
         weight_within_group: 0.5,
         sort_order: 0,
@@ -352,7 +359,6 @@ describe("defaultWeightWithinGroup", () => {
           code: "A",
           asset_class: "equity",
           region: "domestic",
-          enabled: true,
           current_amount_minor: 100,
           weight_within_group: 0.7,
           sort_order: 0,

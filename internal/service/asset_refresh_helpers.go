@@ -30,6 +30,55 @@ func validateAssetRefreshRequest(req AssetRefreshRequest) (map[string]int64, err
 	return amountByInstrument, nil
 }
 
+func buildAssetRefreshHoldingsReq(
+	req AssetRefreshRequest,
+	existing []repository.PlanHolding,
+	amountByInstrument map[string]int64,
+	pendingVersionBumps int,
+) HoldingsUpdateRequest {
+	holdingsVersion := req.ConfigVersion + pendingVersionBumps
+	if assetRefreshIncludesStructure(req) {
+		return buildAssetRefreshStructureReq(req, holdingsVersion)
+	}
+	updateReq := buildAssetRefreshUpdateReq(req, existing, amountByInstrument)
+	updateReq.ConfigVersion = holdingsVersion
+	return updateReq
+}
+
+func assetRefreshIncludesStructure(req AssetRefreshRequest) bool {
+	if req.ScenarioID != "" {
+		return true
+	}
+	for _, item := range req.Holdings {
+		if item.WeightWithinGroup != nil || item.SortOrder != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAssetRefreshStructureReq(req AssetRefreshRequest, configVersion int) HoldingsUpdateRequest {
+	items := make([]HoldingWriteItem, len(req.Holdings))
+	for i, item := range req.Holdings {
+		weight := 0.0
+		if item.WeightWithinGroup != nil {
+			weight = *item.WeightWithinGroup
+		}
+		sortOrder := i * 10
+		if item.SortOrder != nil {
+			sortOrder = *item.SortOrder
+		}
+		items[i] = HoldingWriteItem{
+			InstrumentID:       item.InstrumentID,
+			Enabled:            true,
+			WeightWithinGroup:  weight,
+			CurrentAmountMinor: item.CurrentAmountMinor,
+			SortOrder:          sortOrder,
+		}
+	}
+	return HoldingsUpdateRequest{ConfigVersion: configVersion, Holdings: items}
+}
+
 func buildAssetRefreshUpdateReq(
 	req AssetRefreshRequest,
 	existing []repository.PlanHolding,

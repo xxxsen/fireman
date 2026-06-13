@@ -24,7 +24,6 @@ export interface AssetRefreshHolding {
   code: string;
   asset_class: string;
   region: string;
-  enabled: boolean;
   current_amount_minor: number;
   weight_within_group: number;
   sort_order: number;
@@ -39,7 +38,6 @@ export function holdingFromPlan(holding: PlanHolding, isSystem = false): AssetRe
     code: holding.instrument_code ?? holding.instrument_id,
     asset_class: holding.asset_class,
     region: holding.region,
-    enabled: holding.enabled,
     current_amount_minor: holding.current_amount_minor,
     weight_within_group: holding.weight_within_group,
     sort_order: holding.sort_order,
@@ -69,10 +67,6 @@ export function countAssetRefreshChanges(
       count++;
       continue;
     }
-    if (beforeHolding.enabled !== afterHolding.enabled) {
-      count++;
-      continue;
-    }
     if (beforeHolding.current_amount_minor !== afterHolding.current_amount_minor) {
       count++;
       continue;
@@ -90,12 +84,10 @@ export function hasAssetRefreshDraftChanges(
   totalAssetsMinor: number,
 ): boolean {
   const beforeTotal = sumHoldingsMinor(
-    before
-      .filter((holding) => holding.enabled)
-      .map((holding) => ({
-        instrument_id: holding.instrument_id,
-        current_amount_minor: holding.current_amount_minor,
-      })),
+    before.map((holding) => ({
+      instrument_id: holding.instrument_id,
+      current_amount_minor: holding.current_amount_minor,
+    })),
   );
   return countAssetRefreshChanges(before, after) > 0 || totalAssetsMinor !== beforeTotal;
 }
@@ -112,11 +104,10 @@ export function defaultWeightWithinGroup(
   assetClass: string,
   region: string,
 ): number {
-  const enabledInGroup = holdings.filter(
-    (holding) =>
-      holding.asset_class === assetClass && holding.region === region && holding.enabled,
+  const inGroup = holdings.filter(
+    (holding) => holding.asset_class === assetClass && holding.region === region,
   );
-  const used = enabledInGroup.reduce((sum, holding) => sum + holding.weight_within_group, 0);
+  const used = inGroup.reduce((sum, holding) => sum + holding.weight_within_group, 0);
   const remaining = 1 - used;
   return remaining > 0 ? remaining : 0;
 }
@@ -126,7 +117,6 @@ export function validateAssetRefreshGroupWeights(
 ): { ok: boolean; message?: string } {
   const groups = new Map<string, AssetRefreshHolding[]>();
   for (const holding of holdings) {
-    if (!holding.enabled) continue;
     const key = `${holding.asset_class}:${holding.region}`;
     const bucket = groups.get(key) ?? [];
     bucket.push(holding);
@@ -150,7 +140,6 @@ export function validateAssetRefreshGroupWeights(
 export function buildHoldingsUpdateItems(holdings: AssetRefreshHolding[]) {
   return holdings.map((holding, index) => ({
     instrument_id: holding.instrument_id,
-    enabled: holding.enabled,
     weight_within_group: holding.weight_within_group,
     current_amount_minor: holding.current_amount_minor,
     sort_order: holding.sort_order ?? index * 10,
@@ -178,16 +167,20 @@ export function validateAssetRefreshTotal(
 
 export function buildAssetRefreshBody(
   configVersion: number,
-  rows: AssetRefreshRow[],
+  draftHoldings: AssetRefreshHolding[],
   totalAssetsMinor: number,
   syncTotalAssetsMinor: boolean,
   configChanged = false,
+  scenarioId?: string | null,
 ) {
   return {
     config_version: configVersion,
-    holdings: rows.map((row) => ({
+    ...(scenarioId ? { scenario_id: scenarioId } : {}),
+    holdings: draftHoldings.map((row, index) => ({
       instrument_id: row.instrument_id,
       current_amount_minor: row.current_amount_minor,
+      weight_within_group: row.weight_within_group,
+      sort_order: row.sort_order ?? index * 10,
     })),
     total_assets_minor: totalAssetsMinor,
     sync_total_assets_minor: syncTotalAssetsMinor,

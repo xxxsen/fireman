@@ -1,0 +1,31 @@
+# Default deny: the backend image only needs a small subset of the repository.
+*
+
+# Go module metadata and source needed for ./cmd/fireman.
+!go.mod
+!go.sum
+!Dockerfile
+!config.json
+!README.md
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!migrations/
+!migrations/**
+!docker/
+!docker/**
+
+# Keep git metadata, caches, frontend assets, and local environments out of
+# the backend build context so repeated docker builds do not create multi-GB
+# overlay layers from the working tree.
+.git
+.github
+.vscode
+.cache
+bin
+docs
+td
+web
+sidecars
+

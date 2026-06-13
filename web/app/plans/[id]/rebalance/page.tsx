@@ -64,6 +64,10 @@ export default function RebalancePage() {
   };
 
   const gapAmountCell = (row: RebalanceWorkspaceRow) => {
+    if (row.gap_amount_minor === 0) {
+      return <span className="text-slate-400">—</span>;
+    }
+
     const formatted =
       row.gap_amount_minor >= 0
         ? `待投入 ${formatMoney(row.gap_amount_minor)}`

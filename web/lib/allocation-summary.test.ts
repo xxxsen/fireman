@@ -164,4 +164,30 @@ describe("buildRebalanceWorkspaceRows", () => {
       "bond:domestic",
     ]);
   });
+
+  it("includes zero-target regions when holdings still exist", () => {
+    const zeroForeignTargets: TargetView = {
+      ...targets,
+      region_targets: [
+        { asset_class: "equity", region: "domestic", weight_within_class: 1 },
+        { asset_class: "equity", region: "foreign", weight_within_class: 0 },
+        { asset_class: "bond", region: "domestic", weight_within_class: 1 },
+        { asset_class: "bond", region: "foreign", weight_within_class: 0 },
+      ],
+    };
+    const rows = buildRebalanceWorkspaceRows(zeroForeignTargets, rebalanceLines);
+    expect(rows.map((row) => row.key)).toEqual([
+      "equity",
+      "equity:domestic",
+      "h1",
+      "equity:foreign",
+      "h2",
+      "bond",
+      "bond:domestic",
+    ]);
+    const foreignRegion = rows.find((row) => row.key === "equity:foreign");
+    expect(foreignRegion?.target_weight_within_parent).toBe(0);
+    expect(foreignRegion?.current_amount_minor).toBe(40_000);
+    expect(rows.find((row) => row.key === "h2")).toBeDefined();
+  });
 });

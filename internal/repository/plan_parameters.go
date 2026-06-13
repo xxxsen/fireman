@@ -71,6 +71,21 @@ func (r *ParametersRepo) SetSelectedScenarioID(
 	return wrapSQL("set selected scenario id", err)
 }
 
+func (r *ParametersRepo) SetTotalAssetsMinor(
+	ctx context.Context,
+	tx *sql.Tx,
+	planID string,
+	totalAssetsMinor int64,
+) error {
+	exec := r.exec(tx)
+	_, err := exec.ExecContext(ctx, `
+		UPDATE plan_parameters
+		SET total_assets_minor=?, updated_at=?
+		WHERE plan_id=?`,
+		totalAssetsMinor, time.Now().UnixMilli(), planID)
+	return wrapSQL("set total assets minor", err)
+}
+
 func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameters) error {
 	exec := r.exec(tx)
 	now := time.Now().UnixMilli()

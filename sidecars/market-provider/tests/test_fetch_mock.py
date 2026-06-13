@@ -318,6 +318,41 @@ def test_fetch_mutual_fund_money_fallback() -> None:
         assert body["data"]["source_kind"] == "money_fund"
 
 
+def test_fetch_mutual_fund_hybrid_open_success() -> None:
+    open_df = pd.DataFrame(
+        {
+            "净值日期": ["2024-01-02"],
+            "累计净值": [3.45],
+            "基金简称": ["华夏成长混合"],
+            "基金类型": ["混合型基金"],
+        }
+    )
+    with patch(
+        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        return_value="华夏成长混合",
+    ), patch("akshare.fund_open_fund_info_em", return_value=open_df), patch(
+        "akshare.fund_money_fund_info_em", side_effect=RuntimeError("must not fallback")
+    ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
+        "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
+    ):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "CN",
+                "instrument_type": "cn_mutual_fund",
+                "source_code": "000001",
+                "end_date": "2026-06-09",
+                "adjust_policy": "none",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["code"] == 0
+        assert body["data"]["asset_class"] == "equity"
+        assert body["data"]["source_kind"] == "open_fund"
+        assert "ak.fund_open_fund_info_em" in body["data"]["source_name"]
+
+
 def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
     money_df = pd.DataFrame(
         {

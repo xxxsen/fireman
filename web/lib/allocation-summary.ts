@@ -57,7 +57,8 @@ export function buildAllocationSummary(targets: TargetView): AllocationSummaryRo
     const classTarget = targets.asset_class_targets.find(
       (target) => target.asset_class === assetClass,
     );
-    return (classTarget?.weight ?? 0) > 0;
+    const hasHoldings = enabled.some((line) => line.asset_class === assetClass);
+    return (classTarget?.weight ?? 0) > 0 || hasHoldings;
   });
 
   for (const assetClass of activeClasses) {
@@ -71,14 +72,26 @@ export function buildAllocationSummary(targets: TargetView): AllocationSummaryRo
     );
     rows.push(classRow);
 
-    const regionTargets = targets.region_targets
-      .filter(
-        (target) =>
-          target.asset_class === assetClass && target.weight_within_class > 0,
-      )
-      .sort(
-        (left, right) => regionSortIndex(left.region) - regionSortIndex(right.region),
+    const regionWeightByKey = new Map<string, number>();
+    for (const target of targets.region_targets) {
+      if (target.asset_class !== assetClass) continue;
+      if (target.weight_within_class > 0) {
+        regionWeightByKey.set(target.region, target.weight_within_class);
+      }
+    }
+    for (const line of classLines) {
+      if (regionWeightByKey.has(line.region)) continue;
+      const configured = targets.region_targets.find(
+        (target) => target.asset_class === assetClass && target.region === line.region,
       );
+      regionWeightByKey.set(line.region, configured?.weight_within_class ?? 0);
+    }
+
+    const regionTargets = [...regionWeightByKey.entries()]
+      .sort(
+        (left, right) => regionSortIndex(left[0]) - regionSortIndex(right[0]),
+      )
+      .map(([region, weight_within_class]) => ({ region, weight_within_class }));
 
     for (const regionTarget of regionTargets) {
       const regionLines = classLines.filter(
