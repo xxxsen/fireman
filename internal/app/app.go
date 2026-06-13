@@ -179,5 +179,8 @@ func ensureDataDir(dbPath string) error {
 	if dir == "" || dir == "." {
 		return nil
 	}
-	return fmt.Errorf("ensure data dir: %w", os.MkdirAll(dir, 0o755))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("ensure data dir: %w", err)
+	}
+	return nil
 }

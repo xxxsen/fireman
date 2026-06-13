@@ -76,12 +76,6 @@ describe("OverviewPage §10 acceptance", () => {
     mockOverviewSearchParams.set(new URLSearchParams());
   });
 
-  it("shows asset refreshed banner when query param set", async () => {
-    mockOverviewSearchParams.set(new URLSearchParams("asset_refreshed=1"));
-    renderPage();
-    expect(await screen.findByText("账户资产已更新。")).toBeInTheDocument();
-  });
-
   it("E1: shows scale over label when holdings_gap is positive (§10.5 E1)", async () => {
     renderPage();
 

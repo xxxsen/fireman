@@ -91,7 +91,7 @@ export default function AssetRefreshPage() {
       for (const key of ["holdings", "targets", "rebalance", "dashboard", "plan", "parameters"]) {
         void queryClient.invalidateQueries({ queryKey: [key, planId] });
       }
-      router.push(`/plans/${planId}/overview?asset_refreshed=1`);
+      router.push(`/plans/${planId}/holdings?asset_refreshed=1`);
     },
     onError: (err) =>
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "提交失败"),

@@ -5,8 +5,6 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
-import { MoneyInput } from "@/components/ui/MoneyInput";
-import { PercentInput } from "@/components/ui/PercentInput";
 import { SaveBar } from "@/components/ui/SaveBar";
 import { usePlanEdit } from "@/hooks/usePlanEdit";
 import {
@@ -32,6 +30,7 @@ import { ApiError } from "@/lib/api/client";
 export default function HoldingsPage() {
   const planId = useParams().id as string;
   const highlight = useSearchParams().get("highlight");
+  const assetRefreshed = useSearchParams().get("asset_refreshed") === "1";
   const queryClient = useQueryClient();
   const { dirty, markDirty, markClean } = usePlanEdit();
   const [editedRows, setEditedRows] = useState<PlanHolding[] | null>(null);
@@ -159,20 +158,24 @@ export default function HoldingsPage() {
             </span>
           </td>
           <td className="px-3 py-2">
-            <PercentInput
-              value={holding.weight_within_group}
-              onChange={(value) =>
-                updateRow(holding.id, { weight_within_group: value })
-              }
-            />
+            <span className="tabular-nums">{formatPercent(holding.weight_within_group)}</span>
+            <Link
+              href={`/plans/${planId}/asset-refresh`}
+              className="mt-1 block text-xs text-slate-600 underline"
+            >
+              在更新账户资产中调整
+            </Link>
           </td>
           <td className="px-3 py-2">
-            <MoneyInput
-              valueMinor={holding.current_amount_minor}
-              onChange={(value) =>
-                updateRow(holding.id, { current_amount_minor: value })
-              }
-            />
+            <span className="tabular-nums">
+              {formatMoney(holding.current_amount_minor, plan.data?.base_currency)}
+            </span>
+            <Link
+              href={`/plans/${planId}/asset-refresh`}
+              className="mt-1 block text-xs text-slate-600 underline"
+            >
+              在更新账户资产中调整
+            </Link>
           </td>
           <td className="px-3 py-2">
             <Link href={`/assets/${holding.instrument_id}`} className="block underline">
@@ -299,7 +302,7 @@ export default function HoldingsPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-600">
             持仓合计 {formatMoney(totalCurrent, plan.data?.base_currency)}。
-            批量更新市值请走资产变更；结构调仓请查看调仓工作台。
+            在此管理标的启用与增删；修改当前金额或组内占比请走「更新账户资产」。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -324,6 +327,15 @@ export default function HoldingsPage() {
           </button>
         </div>
       </div>
+
+      {assetRefreshed && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          账户资产已更新。
+          <Link href={`/plans/${planId}/rebalance`} className="ml-2 font-medium underline">
+            查看调仓工作台
+          </Link>
+        </div>
+      )}
 
       {savedMessage && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -397,6 +409,17 @@ export default function HoldingsPage() {
                   >
                     {regionLabel(region)} 组内权重合计 {formatPercent(check.total)}
                     {check.passed ? "，通过" : `，${check.message}`}
+                    {!check.passed && (
+                      <>
+                        {" "}
+                        <Link
+                          href={`/plans/${planId}/asset-refresh`}
+                          className="font-medium underline"
+                        >
+                          前往更新账户资产调整组内占比
+                        </Link>
+                      </>
+                    )}
                   </p>
                 </div>
               );

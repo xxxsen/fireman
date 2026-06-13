@@ -15,7 +15,6 @@ export default function OverviewPage() {
   const planId = useParams().id as string;
   const searchParams = useSearchParams();
   const pendingJobId = searchParams.get("job_id");
-  const assetRefreshed = searchParams.get("asset_refreshed") === "1";
   const simulationStartFailed = searchParams.get("simulation_error") === "1";
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["dashboard", planId],
@@ -38,12 +37,6 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      {assetRefreshed && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          账户资产已更新。
-        </div>
-      )}
-
       {!data.weight_checks.passed && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {failedChecks.map((check) => check.message).join("；")}
