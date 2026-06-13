@@ -6,5 +6,5 @@ export default async function InstrumentsRedirect({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  redirect(`/plans/${id}/holdings`);
+  redirect(`/plans/${id}/rebalance`);
 }

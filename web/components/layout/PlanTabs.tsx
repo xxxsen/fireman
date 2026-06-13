@@ -6,8 +6,7 @@ import { cn } from "@/lib/cn";
 
 const TABS = [
   { segment: "overview", label: "组合总览" },
-  { segment: "rebalance", label: "调仓工作台" },
-  { segment: "holdings", label: "持仓管理" },
+  { segment: "rebalance", label: "持仓预览" },
   { segment: "settings", label: "计划设置" },
 ] as const;
 

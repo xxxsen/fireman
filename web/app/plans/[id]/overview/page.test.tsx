@@ -130,9 +130,9 @@ describe("OverviewPage §10 acceptance", () => {
     ).toHaveAttribute("href", "/plans/plan_1/rebalance");
   });
 
-  it("links asset refresh with reason=scale when scale gap is significant", async () => {
+  it("links asset refresh entry", async () => {
     renderPage();
-    const link = await screen.findByRole("link", { name: "更新账户资产" });
-    expect(link).toHaveAttribute("href", "/plans/plan_1/asset-refresh?reason=scale");
+    const link = await screen.findByRole("link", { name: "资产变更" });
+    expect(link).toHaveAttribute("href", "/plans/plan_1/asset-refresh");
   });
 });

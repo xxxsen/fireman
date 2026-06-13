@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
@@ -11,13 +11,17 @@ import { StaleBanner } from "@/components/ui/StaleBanner";
 import { CashFlowEditor } from "@/components/plans/CashFlowEditor";
 import { usePlanResultStale } from "@/hooks/usePlanResultStale";
 import { usePlanEdit } from "../layout";
-import { getPlan } from "@/lib/api/plans";
+import { getPlan, updatePlan } from "@/lib/api/plans";
 import { getParameters, updateParameters } from "@/lib/api/plans";
 import { getHoldings } from "@/lib/api/holdings";
 import { getAllocation, listScenarios, updateAllocation } from "@/lib/api/allocation";
 import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, formatMoney, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
+import {
+  buildParametersFormSnapshot,
+  isParametersFormDirty,
+} from "@/lib/form-snapshot";
 import type { AssetClassTarget, PlanCashFlow, PlanParameters, RegionTarget } from "@/types/api";
 
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
@@ -41,12 +45,13 @@ export function ParametersContent({
   showStale?: boolean;
 }) {
   const planId = useParams().id as string;
-  const { dirty, markDirty, markClean } = usePlanEdit();
+  const { markDirty, markClean } = usePlanEdit();
   const qc = useQueryClient();
   const [localParams, setLocalParams] = useState<PlanParameters | null>(null);
   const [localCashFlows, setLocalCashFlows] = useState<PlanCashFlow[] | null>(null);
+  const [localPlanName, setLocalPlanName] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [gapAction, setGapAction] = useState<"cash" | "">("");
+  const [gapAction, setGapAction] = useState<"" | "cash">("");
   const [highInflationConfirmed, setHighInflationConfirmed] = useState(false);
   const [localAssetTargets, setLocalAssetTargets] = useState<AssetClassTarget[] | null>(null);
   const [localRegionTargets, setLocalRegionTargets] = useState<RegionTarget[] | null>(null);
@@ -73,7 +78,38 @@ export function ParametersContent({
   });
 
   const params = localParams ?? paramsQ.data?.parameters ?? null;
-  const cashFlows = localCashFlows ?? paramsQ.data?.cash_flows ?? [];
+  const cashFlows = useMemo(
+    () => localCashFlows ?? paramsQ.data?.cash_flows ?? [],
+    [localCashFlows, paramsQ.data?.cash_flows],
+  );
+  const planName = localPlanName ?? planQ.data?.name ?? "";
+
+  const initialSnapshot = useMemo(() => {
+    if (!paramsQ.data || !planQ.data) return null;
+    return buildParametersFormSnapshot(
+      planQ.data.name,
+      paramsQ.data.parameters,
+      paramsQ.data.cash_flows,
+      "",
+    );
+  }, [paramsQ.data, planQ.data]);
+
+  const currentSnapshot = useMemo(() => {
+    if (!params) return null;
+    return buildParametersFormSnapshot(planName, params, cashFlows, gapAction);
+  }, [planName, params, cashFlows, gapAction]);
+
+  const formDirty = useMemo(
+    () => (currentSnapshot ? isParametersFormDirty(initialSnapshot, currentSnapshot) : false),
+    [initialSnapshot, currentSnapshot],
+  );
+
+  const allocationFormDirty = showAllocation && allocationDirty;
+
+  useEffect(() => {
+    if (formDirty || allocationFormDirty) markDirty();
+    else markClean();
+  }, [formDirty, allocationFormDirty, markDirty, markClean]);
   const assetTargets =
     allocationDirty && localAssetTargets
       ? localAssetTargets
@@ -102,6 +138,16 @@ export function ParametersContent({
         });
         version += 1;
       }
+      if (planName !== planQ.data.name) {
+        await updatePlan(planId, {
+          config_version: version,
+          name: planName,
+          base_currency: planQ.data.base_currency,
+          valuation_date: planQ.data.valuation_date,
+          status: planQ.data.status,
+        });
+        version += 1;
+      }
       return updateParameters(planId, {
         config_version: version,
         parameters: params,
@@ -113,6 +159,7 @@ export function ParametersContent({
       markClean();
       setLocalParams(null);
       setLocalCashFlows(null);
+      setLocalPlanName(null);
       setLocalAssetTargets(null);
       setLocalRegionTargets(null);
       setAllocationDirty(false);
@@ -132,7 +179,6 @@ export function ParametersContent({
   const update = <K extends keyof PlanParameters>(key: K, value: PlanParameters[K]) => {
     if (!params) return;
     setLocalParams({ ...params, [key]: value });
-    markDirty();
   };
 
   if (!params || planQ.isLoading) return <p className="text-slate-600">加载参数…</p>;
@@ -159,10 +205,10 @@ export function ParametersContent({
             计划名称
             <input
               className="mt-1 w-full rounded-md border px-3 py-2"
-              value={planQ.data?.name ?? ""}
-              disabled
+              value={planName}
+              onChange={(e) => setLocalPlanName(e.target.value)}
+              data-testid="plan-name-input"
             />
-            <span className="text-xs text-slate-500">在计划设置中修改</span>
           </label>
           <label className="block text-sm">
             估值日期
@@ -282,7 +328,6 @@ export function ParametersContent({
             flows={cashFlows}
             onChange={(next) => {
               setLocalCashFlows(next);
-              markDirty();
             }}
           />
         </div>
@@ -319,7 +364,6 @@ export function ParametersContent({
                     next[i] = { ...t, weight: v };
                     setLocalAssetTargets(next);
                     setAllocationDirty(true);
-                    markDirty();
                   }}
                 />
               ))}
@@ -346,7 +390,6 @@ export function ParametersContent({
                           next[idx] = { ...r, weight_within_class: v };
                           setLocalRegionTargets(next);
                           setAllocationDirty(true);
-                          markDirty();
                         }}
                       />
                     );
@@ -545,7 +588,7 @@ export function ParametersContent({
       </section>
 
       <SaveBar
-        dirty={dirty || (showAllocation && allocationDirty)}
+        dirty={formDirty || allocationFormDirty}
         saving={saveMut.isPending}
         error={saveError}
         onSave={() => {

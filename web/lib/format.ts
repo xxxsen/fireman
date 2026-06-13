@@ -30,6 +30,54 @@ export function formatMoneyInput(minor: number): string {
   });
 }
 
+/** Plain numeric string for money inputs (no grouping). */
+export function formatMoneyPlain(minor: number): string {
+  if (minor === 0) return "";
+  return String(minor / 100);
+}
+
+const MONEY_UNIT_HINTS: { threshold: number; unit: string; divisor: number }[] = [
+  { threshold: 1_000_000_000_000, unit: "十亿", divisor: 1_000_000_000_000 },
+  { threshold: 100_000_000, unit: "亿", divisor: 100_000_000 },
+  { threshold: 10_000_000, unit: "千万", divisor: 10_000_000 },
+  { threshold: 1_000_000, unit: "百万", divisor: 1_000_000 },
+  { threshold: 100_000, unit: "十万", divisor: 100_000 },
+  { threshold: 10_000, unit: "万", divisor: 10_000 },
+  { threshold: 1_000, unit: "千", divisor: 1_000 },
+  { threshold: 100, unit: "百", divisor: 100 },
+];
+
+/** Auxiliary unit hint for plain numeric money input (major units, yuan). */
+export function formatMoneyUnitHint(major: number): string | null {
+  if (!Number.isFinite(major) || major === 0) return null;
+  const abs = Math.abs(major);
+
+  if (abs >= 10_000) {
+    const wan = major / 10_000;
+    if (Math.abs(wan) >= 1 && Math.abs(wan) < 10_000) {
+      return `约 ${wan.toFixed(2)} 万`;
+    }
+  }
+
+  for (const item of [...MONEY_UNIT_HINTS].reverse()) {
+    if (item.unit === "万") continue;
+    if (abs < item.threshold) continue;
+    const scaled = major / item.divisor;
+    if (Math.abs(scaled) >= 1 && Math.abs(scaled) < 10_000) {
+      return `约 ${scaled.toFixed(2)} ${item.unit}`;
+    }
+  }
+
+  for (const item of MONEY_UNIT_HINTS) {
+    if (abs >= item.threshold) {
+      const scaled = major / item.divisor;
+      return `约 ${scaled.toFixed(2)} ${item.unit}`;
+    }
+  }
+
+  return null;
+}
+
 export { formatPercent };
 
 export function assetClassLabel(ac: string): string {

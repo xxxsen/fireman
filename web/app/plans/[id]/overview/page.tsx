@@ -41,10 +41,10 @@ export default function OverviewPage() {
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {failedChecks.map((check) => check.message).join("；")}
           <Link
-            href={`/plans/${planId}/settings?section=scenarios`}
+            href={`/plans/${planId}/settings?section=plan-targets`}
             className="ml-2 font-medium underline"
           >
-            检查场景与权重
+            检查计划目标配置
           </Link>
         </div>
       )}
@@ -148,10 +148,10 @@ export default function OverviewPage() {
         <section className="rounded-lg border border-dashed border-slate-300 p-8 text-center">
           <h2 className="font-medium">持仓尚未配置</h2>
           <Link
-            href={`/plans/${planId}/holdings`}
+            href={`/plans/${planId}/asset-refresh`}
             className="mt-4 inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm text-white"
           >
-            去持仓管理添加
+            资产变更
           </Link>
         </section>
       ) : (
@@ -214,7 +214,7 @@ export default function OverviewPage() {
               href={`/plans/${planId}/rebalance`}
               className="mt-3 inline-block text-sm font-medium underline"
             >
-              查看全部调仓建议 →
+              查看持仓预览 →
             </Link>
           </section>
         </>
@@ -225,23 +225,13 @@ export default function OverviewPage() {
           href={`/plans/${planId}/rebalance`}
           className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white"
         >
-          查看调仓建议
+          持仓预览
         </Link>
         <Link
-          href={
-            isSignificantScaleGap(data.holdings_gap_minor)
-              ? `/plans/${planId}/asset-refresh?reason=scale`
-              : `/plans/${planId}/asset-refresh`
-          }
+          href={`/plans/${planId}/asset-refresh`}
           className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
         >
-          更新账户资产
-        </Link>
-        <Link
-          href={`/plans/${planId}/holdings`}
-          className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
-        >
-          持仓管理
+          资产变更
         </Link>
         <button
           type="button"

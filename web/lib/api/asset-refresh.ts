@@ -7,6 +7,7 @@ export function submitAssetRefresh(
     holdings: { instrument_id: string; current_amount_minor: number }[];
     total_assets_minor: number;
     sync_total_assets_minor?: boolean;
+    config_changed?: boolean;
   },
 ) {
   return apiPost<{

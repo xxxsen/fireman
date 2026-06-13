@@ -35,8 +35,8 @@ vi.mock("@/lib/api/holdings", () => ({
     }),
 }));
 
-vi.mock("@/lib/api/rebalance-drafts", () => ({
-  getRebalanceDraft: () =>
+const { getRebalanceDraft } = vi.hoisted(() => ({
+  getRebalanceDraft: vi.fn(() =>
     Promise.resolve({
       draft: {
         id: "rbd_1",
@@ -85,6 +85,11 @@ vi.mock("@/lib/api/rebalance-drafts", () => ({
       events: [],
       fund_pool: { released_minor: 50_000_00, used_minor: 0, net_minor: 50_000_00 },
     }),
+  ),
+}));
+
+vi.mock("@/lib/api/rebalance-drafts", () => ({
+  getRebalanceDraft: (...args: unknown[]) => getRebalanceDraft(...args),
   patchRebalanceDraftLines: vi.fn(),
   undoRebalanceDraft: vi.fn(),
   commitRebalanceDraft: vi.fn(),
@@ -92,6 +97,10 @@ vi.mock("@/lib/api/rebalance-drafts", () => ({
 }));
 
 describe("RebalancePlanPage", () => {
+  beforeEach(() => {
+    getRebalanceDraft.mockClear();
+  });
+
   it("shows reference package bar and package delta column", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -125,5 +134,38 @@ describe("RebalancePlanPage", () => {
     const cashRow = screen.getByText("CNY 现金").closest("li");
     expect(cashRow).toHaveTextContent("¥10,000.00");
     expect(cashRow).toHaveTextContent("¥60,000.00");
+  });
+
+  it("links to holdings preview instead of legacy rebalance workspace copy", async () => {
+    getRebalanceDraft.mockResolvedValueOnce({
+      draft: {
+        id: "rbd_1",
+        plan_id: "plan_1",
+        status: "committed",
+        config_version: 1,
+        baseline_holdings_total_minor: 300_000_00,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      },
+      lines: [],
+      events: [],
+      fund_pool: { released_minor: 0, used_minor: 0, net_minor: 0 },
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RebalancePlanPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText(/此调仓计划已提交/)).toBeInTheDocument();
+    expect(screen.queryByText("返回调仓工作台")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回持仓预览" })).toHaveAttribute(
+      "href",
+      "/plans/plan_1/rebalance",
+    );
   });
 });

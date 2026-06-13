@@ -213,7 +213,7 @@ export default function RebalancePlanPage() {
       <div className="space-y-4">
         <p className="text-slate-600">此调仓计划已{draft.data.draft.status === "committed" ? "提交" : "放弃"}。</p>
         <Link href={`/plans/${planId}/rebalance`} className="underline">
-          返回调仓工作台
+          返回持仓预览
         </Link>
       </div>
     );
@@ -521,10 +521,10 @@ export default function RebalancePlanPage() {
                 ) : (
                   <p className="text-amber-800">
                     计划中尚无现金持仓。请先到{" "}
-                    <Link href={`/plans/${planId}/holdings`} className="underline">
-                      持仓管理
+                    <Link href={`/plans/${planId}/rebalance`} className="underline">
+                      持仓预览
                     </Link>{" "}
-                    添加 CNY 现金，或选择接受组合规模下降。
+                    通过资产变更添加 CNY 现金，或选择接受组合规模下降。
                   </p>
                 )}
                 <label className="flex items-start gap-2">

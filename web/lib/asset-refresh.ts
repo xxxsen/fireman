@@ -1,10 +1,88 @@
 /** Asset refresh validation helpers. */
 
+import type { PlanHolding } from "@/types/api";
+
 export const ASSET_REFRESH_TOLERANCE_MINOR = 100;
 
 export interface AssetRefreshRow {
   instrument_id: string;
   current_amount_minor: number;
+}
+
+export interface AssetRefreshHolding {
+  id: string;
+  instrument_id: string;
+  label: string;
+  code: string;
+  asset_class: string;
+  region: string;
+  enabled: boolean;
+  current_amount_minor: number;
+  weight_within_group: number;
+  sort_order: number;
+  is_system: boolean;
+}
+
+export function holdingFromPlan(holding: PlanHolding, isSystem = false): AssetRefreshHolding {
+  return {
+    id: holding.id,
+    instrument_id: holding.instrument_id,
+    label: holding.instrument_name ?? holding.instrument_code ?? holding.instrument_id,
+    code: holding.instrument_code ?? holding.instrument_id,
+    asset_class: holding.asset_class,
+    region: holding.region,
+    enabled: holding.enabled,
+    current_amount_minor: holding.current_amount_minor,
+    weight_within_group: holding.weight_within_group,
+    sort_order: holding.sort_order,
+    is_system: isSystem,
+  };
+}
+
+export function hasAssetRefreshStructureChange(
+  before: PlanHolding[],
+  after: AssetRefreshHolding[],
+): boolean {
+  const beforeByInstrument = new Map(
+    before.map((holding) => [holding.instrument_id, holding.enabled] as const),
+  );
+  const afterByInstrument = new Map(
+    after.map((holding) => [holding.instrument_id, holding.enabled] as const),
+  );
+  if (beforeByInstrument.size !== afterByInstrument.size) return true;
+  for (const [instrumentId, enabled] of beforeByInstrument) {
+    if (!afterByInstrument.has(instrumentId)) return true;
+    if (afterByInstrument.get(instrumentId) !== enabled) return true;
+  }
+  return false;
+}
+
+export function redistributeEnabledWeightsInGroup(
+  holdings: AssetRefreshHolding[],
+  assetClass: string,
+  region: string,
+): AssetRefreshHolding[] {
+  const enabledInGroup = holdings.filter(
+    (holding) =>
+      holding.asset_class === assetClass && holding.region === region && holding.enabled,
+  );
+  if (enabledInGroup.length === 0) return holdings;
+  const each = 1 / enabledInGroup.length;
+  return holdings.map((holding) =>
+    holding.asset_class === assetClass && holding.region === region && holding.enabled
+      ? { ...holding, weight_within_group: each }
+      : holding,
+  );
+}
+
+export function buildHoldingsUpdateItems(holdings: AssetRefreshHolding[]) {
+  return holdings.map((holding, index) => ({
+    instrument_id: holding.instrument_id,
+    enabled: holding.enabled,
+    weight_within_group: holding.weight_within_group,
+    current_amount_minor: holding.current_amount_minor,
+    sort_order: holding.sort_order ?? index * 10,
+  }));
 }
 
 export function sumHoldingsMinor(rows: AssetRefreshRow[]): number {

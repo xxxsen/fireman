@@ -8,6 +8,7 @@ import { confirmLeaveIfDirty } from "@/lib/unsavedGuard";
 const NAV = [
   { href: "/", label: "计划" },
   { href: "/assets", label: "资产资料库" },
+  { href: "/scenarios", label: "场景配置" },
   { href: "/settings", label: "设置" },
 ] as const;
 

@@ -26,16 +26,23 @@ vi.mock("@/hooks/usePlanEdit", () => ({
   usePlanEdit: () => ({ confirmLeave: () => true }),
 }));
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
-}));
-
 describe("PlanContextBar", () => {
   beforeEach(() => {
-    mockState.plans = [{ id: "plan_1", name: "测试计划" }];
+    mockState.plans = [
+      { id: "plan_1", name: "测试计划" },
+      { id: "plan_2", name: "其他计划" },
+    ];
     mockState.isLoading = false;
     mockState.isError = false;
     mockState.refetch.mockClear();
+  });
+
+  it("shows read-only current plan name without dropdown or new plan link", () => {
+    render(<PlanContextBar currentPlanId="plan_1" />);
+
+    expect(screen.getByTestId("plan-context-name")).toHaveTextContent("测试计划");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "新建计划" })).not.toBeInTheDocument();
   });
 
   it("shows retry when plan query fails", () => {

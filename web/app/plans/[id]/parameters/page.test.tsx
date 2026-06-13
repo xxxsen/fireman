@@ -183,4 +183,32 @@ describe("ParametersPage strategy enums", () => {
     expect(req.parameters.seed).toBe(maxSeed);
     expect(req.parameters.seed).not.toBe(Number(maxSeed));
   });
+
+  it("shows save bar after plan name edit in FIRE params section", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage showAllocation={false} showStale={false} />
+      </QueryClientProvider>,
+    );
+
+    const nameInput = await screen.findByTestId("plan-name-input");
+    expect(screen.queryByText("有未保存的修改")).not.toBeInTheDocument();
+    fireEvent.change(nameInput, { target: { value: "新计划名称" } });
+    expect(screen.getByText("有未保存的修改")).toBeInTheDocument();
+  });
+
+  it("does not show save bar when only focusing fields without edits", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage showAllocation={false} showStale={false} />
+      </QueryClientProvider>,
+    );
+
+    const nameInput = await screen.findByTestId("plan-name-input");
+    fireEvent.focus(nameInput);
+    fireEvent.blur(nameInput);
+    expect(screen.queryByText("有未保存的修改")).not.toBeInTheDocument();
+  });
 });

@@ -30,6 +30,17 @@ describe("AppShell", () => {
     }
   });
 
+  it("includes 场景配置 navigation entry", () => {
+    mockPathname.mockReturnValue("/scenarios");
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(screen.getAllByRole("link", { name: "场景配置" }).length).toBeGreaterThan(0);
+  });
+
   it("does not highlight 计划 on assets or settings", () => {
     for (const pathname of ["/assets", "/settings"]) {
       mockPathname.mockReturnValue(pathname);

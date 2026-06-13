@@ -2,19 +2,32 @@
 
 import { useEffect } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { AllocationSettings } from "@/components/plans/AllocationSettings";
+import { PlanTargetsContent } from "@/components/plans/AllocationSettings";
 import { usePlanEdit } from "@/hooks/usePlanEdit";
-import { ScenariosContent } from "../scenarios/page";
 import { ParametersContent } from "../parameters/page";
 import { AnalysisContent } from "../analysis/page";
 
 const SECTIONS = [
-  { key: "scenarios", label: "场景与权重" },
+  { key: "plan-targets", label: "当前计划目标配置" },
   { key: "fire-params", label: "FIRE 参数" },
   { key: "simulation", label: "FIRE 模拟" },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
+
+const LEGACY_SECTION_MAP: Record<string, SectionKey> = {
+  scenarios: "plan-targets",
+};
+
+function resolveSection(requested: string | null): SectionKey {
+  if (requested && LEGACY_SECTION_MAP[requested]) {
+    return LEGACY_SECTION_MAP[requested];
+  }
+  if (requested && SECTIONS.some((item) => item.key === requested)) {
+    return requested as SectionKey;
+  }
+  return "plan-targets";
+}
 
 export default function PlanSettingsPage() {
   const planId = useParams().id as string;
@@ -23,14 +36,13 @@ export default function PlanSettingsPage() {
   const { confirmLeave, markClean } = usePlanEdit();
   const requested = searchParams.get("section");
   const returnTo = searchParams.get("return");
-  const section: SectionKey = SECTIONS.some((item) => item.key === requested)
-    ? (requested as SectionKey)
-    : "scenarios";
+  const section = resolveSection(requested);
 
   useEffect(() => {
-    if (!requested || !SECTIONS.some((item) => item.key === requested)) {
+    const canonical = resolveSection(requested);
+    if (requested !== canonical) {
       const returnQuery = returnTo ? `&return=${encodeURIComponent(returnTo)}` : "";
-      router.replace(`/plans/${planId}/settings?section=scenarios${returnQuery}`);
+      router.replace(`/plans/${planId}/settings?section=${canonical}${returnQuery}`);
     }
   }, [planId, requested, returnTo, router]);
 
@@ -66,12 +78,7 @@ export default function PlanSettingsPage() {
         ))}
       </div>
 
-      {section === "scenarios" && (
-        <div className="space-y-8">
-          <AllocationSettings />
-          <ScenariosContent />
-        </div>
-      )}
+      {section === "plan-targets" && <PlanTargetsContent />}
       {section === "fire-params" && (
         <ParametersContent showAllocation={false} showStale={false} />
       )}

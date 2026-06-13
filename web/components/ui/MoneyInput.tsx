@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { formatMoneyInput, parseMoneyInput } from "@/lib/format";
+import { formatMoneyInput, formatMoneyPlain, formatMoneyUnitHint, parseMoneyInput } from "@/lib/format";
 
 interface MoneyInputProps {
   valueMinor: number;
@@ -9,9 +9,12 @@ interface MoneyInputProps {
   currency?: string;
   label?: string;
   disabled?: boolean;
+  /** Plain numeric display without thousand separators. */
+  plain?: boolean;
 }
 
-function draftFromMinor(minor: number): string {
+function draftFromMinor(minor: number, plain: boolean): string {
+  if (plain) return formatMoneyPlain(minor);
   if (minor === 0) return "";
   return String(minor / 100);
 }
@@ -22,9 +25,22 @@ export function MoneyInput({
   currency = "CNY",
   label,
   disabled,
+  plain = false,
 }: MoneyInputProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+
+  const displayValue = plain
+    ? editing
+      ? draft
+      : formatMoneyPlain(valueMinor)
+    : editing
+      ? draft
+      : formatMoneyInput(valueMinor);
+
+  const activeMinor = parseMoneyInput(editing ? draft : draftFromMinor(valueMinor, plain));
+  const unitHint =
+    plain && activeMinor !== null ? formatMoneyUnitHint(activeMinor / 100) : null;
 
   return (
     <label className="block">
@@ -37,10 +53,10 @@ export function MoneyInput({
           disabled={disabled}
           data-testid="money-input"
           className="input-base font-mono-numeric"
-          value={editing ? draft : formatMoneyInput(valueMinor)}
+          value={displayValue}
           onFocus={() => {
             setEditing(true);
-            setDraft(draftFromMinor(valueMinor));
+            setDraft(draftFromMinor(valueMinor, plain));
           }}
           onBlur={() => {
             setEditing(false);
@@ -60,6 +76,11 @@ export function MoneyInput({
           }}
         />
       </div>
+      {unitHint && (
+        <span className="mt-1 block text-xs text-slate-500" data-testid="money-unit-hint">
+          {unitHint}
+        </span>
+      )}
     </label>
   );
 }

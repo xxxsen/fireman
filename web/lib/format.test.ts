@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annualCompletenessLabel, dataSourceLabel, formatAnnualPeriod } from "./format";
+import { annualCompletenessLabel, dataSourceLabel, formatAnnualPeriod, formatMoneyUnitHint } from "./format";
 
 describe("annualCompletenessLabel", () => {
   it("marks current year as in-year stats", () => {
@@ -17,6 +17,13 @@ describe("annualCompletenessLabel", () => {
 describe("formatAnnualPeriod", () => {
   it("shows full cross-year range", () => {
     expect(formatAnnualPeriod("2024-12-30", "2025-12-29")).toBe("2024-12-30 ~ 2025-12-29");
+  });
+});
+
+describe("formatMoneyUnitHint", () => {
+  it("shows wan hint for plain numeric amounts", () => {
+    expect(formatMoneyUnitHint(15000)).toBe("约 1.50 万");
+    expect(formatMoneyUnitHint(2500000)).toBe("约 250.00 万");
   });
 });
 

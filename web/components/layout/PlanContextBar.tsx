@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { listPlans } from "@/lib/api/plans";
 import { usePlanEdit } from "@/hooks/usePlanEdit";
@@ -10,7 +9,6 @@ import { LoadingState } from "@/components/ui/LoadingState";
 import { Button } from "@/components/ui/Button";
 
 export function PlanContextBar({ currentPlanId }: { currentPlanId: string }) {
-  const router = useRouter();
   const { confirmLeave } = usePlanEdit();
   const { data: plans, isLoading, isError, refetch } = useQuery({
     queryKey: ["plans"],
@@ -32,7 +30,7 @@ export function PlanContextBar({ currentPlanId }: { currentPlanId: string }) {
         }}
         className="text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
       >
-        ← 全部计划
+        全部计划
       </Link>
 
       <span className="text-ink-muted" aria-hidden="true">
@@ -51,53 +49,16 @@ export function PlanContextBar({ currentPlanId }: { currentPlanId: string }) {
           </Button>
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          {plans && plans.length > 1 ? (
-            <label className="flex min-w-0 items-center gap-2 text-sm">
-              <span className="sr-only">切换计划</span>
-              <select
-                className="input-base max-w-full py-1.5 text-sm font-medium"
-                value={currentPlanId}
-                onChange={(e) => {
-                  if (!confirmLeave()) return;
-                  const nextId = e.target.value;
-                  const nextPlan = plans.find((p) => p.id === nextId);
-                  if (nextPlan) {
-                    router.push(`/plans/${nextId}/overview`);
-                  }
-                }}
-                aria-label="切换计划"
-              >
-                {plans.map((plan) => (
-                  <option key={plan.id} value={plan.id}>
-                    {plan.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <span
-              className={cn(
-                "min-w-0 text-sm font-medium text-ink",
-                !planName && "text-ink-muted",
-              )}
-              data-testid="plan-context-name"
-            >
-              {planName ?? "计划"}
-            </span>
+        <span
+          className={cn(
+            "min-w-0 text-sm font-medium text-ink",
+            !planName && "text-ink-muted",
           )}
-        </div>
+          data-testid="plan-context-name"
+        >
+          {planName ?? "计划"}
+        </span>
       )}
-
-      <Link
-        href="/plans/new"
-        onClick={(e) => {
-          if (!confirmLeave()) e.preventDefault();
-        }}
-        className="ml-auto text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
-      >
-        新建计划
-      </Link>
     </div>
   );
 }

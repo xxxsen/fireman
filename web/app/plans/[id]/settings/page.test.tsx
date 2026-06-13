@@ -15,10 +15,8 @@ vi.mock("@/hooks/usePlanEdit", () => ({
   usePlanEdit: () => ({ confirmLeave, markClean: vi.fn() }),
 }));
 vi.mock("@/components/plans/AllocationSettings", () => ({
+  PlanTargetsContent: () => <div>目标配置内容</div>,
   AllocationSettings: () => <div>目标配置内容</div>,
-}));
-vi.mock("../scenarios/page", () => ({
-  ScenariosContent: () => <div>场景内容</div>,
 }));
 vi.mock("../parameters/page", () => ({
   ParametersContent: () => <div>参数内容</div>,
@@ -28,15 +26,19 @@ vi.mock("../analysis/page", () => ({
 }));
 
 describe("PlanSettingsPage", () => {
-  it("renders segmented settings navigation and synchronizes section URL", () => {
+  it("rewrites legacy scenarios section to plan-targets", () => {
+    render(<PlanSettingsPage />);
+    expect(routerReplace).toHaveBeenCalledWith(
+      "/plans/plan_1/settings?section=plan-targets",
+    );
+  });
+
+  it("renders segmented settings navigation", () => {
+    vi.mocked(routerReplace).mockClear();
     render(<PlanSettingsPage />);
 
     expect(screen.getByText("目标配置内容")).toBeInTheDocument();
-    expect(screen.getByText("场景内容")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "FIRE 参数" }));
     expect(confirmLeave).toHaveBeenCalled();
-    expect(routerReplace).toHaveBeenCalledWith(
-      "/plans/plan_1/settings?section=fire-params",
-    );
   });
 });
