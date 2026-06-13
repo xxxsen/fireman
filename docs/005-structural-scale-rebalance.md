@@ -1,6 +1,5 @@
 # 结构偏差与规模偏差分拆（调仓工作台）
 
-- 设计来源：`td/017-structural-scale-deviation-rebalance.md`
 - 更新：2026-06-11
 
 ## 问题
@@ -59,9 +58,9 @@
 
 ---
 
-## 资产变更与调仓计划（td/019）
+## 资产变更与调仓计划
 
-设计来源：`td/019-asset-refresh-and-rebalance-plan.md`；归档：`docs/007-asset-refresh-rebalance-plan.md`
+用户路径与提交流程摘要见 [007-asset-refresh-rebalance-plan.md](./007-asset-refresh-rebalance-plan.md)。
 
 ### 资产变更 `/plans/{id}/asset-refresh`
 

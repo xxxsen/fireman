@@ -16,7 +16,8 @@ type PackageDeltaResult struct {
 }
 
 // ComputeReferencePackageDeltas derives closed package deltas from structural gaps.
-// Each delta equals structural_gap_amount_minor (td/020 PKG1–PKG2 examples); sum is adjusted to 0 within tolerance.
+// Each delta starts from structural_gap_amount_minor; when multiple non-zero lines exist,
+// the result is adjusted to remain closed within tolerance.
 func ComputeReferencePackageDeltas(inputs []PackageDeltaInput) PackageDeltaResult {
 	out := make(map[string]int64, len(inputs))
 	if len(inputs) == 0 {

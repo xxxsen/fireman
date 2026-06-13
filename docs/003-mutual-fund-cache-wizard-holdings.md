@@ -1,7 +1,5 @@
 # 公募基金名称缓存、删除刷新与计划向导选标
 
-- 设计来源：`td/013-mutual-fund-cache-delete-refresh-plan-wizard.md`
-- 实施复审：`td/014-td013-implementation-review.md`（本地，未入 Git）
 - 更新：2026-06-11
 
 ---

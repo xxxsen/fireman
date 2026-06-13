@@ -1,4 +1,4 @@
-/** Matches td/017 §4.1: ±100 minor (1 CNY) scale gap tolerance. */
+/** Scale-gap tolerance: ±100 minor units (1 CNY). */
 export const SCALE_GAP_TOLERANCE_MINOR = 100;
 
 export function isSignificantScaleGap(gapMinor: number): boolean {

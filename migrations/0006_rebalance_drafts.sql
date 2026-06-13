@@ -1,4 +1,4 @@
--- Rebalance plan drafts: frozen baseline + staged edits (td/019).
+-- Rebalance plan drafts: frozen baseline + staged edits.
 
 CREATE TABLE rebalance_drafts (
   id                            TEXT    PRIMARY KEY,

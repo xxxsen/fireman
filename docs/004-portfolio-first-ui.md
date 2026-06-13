@@ -1,6 +1,5 @@
 # 组合优先计划界面
 
-- 设计来源：`td/016-portfolio-first-ui-restructure.md`
 - 更新：2026-06-11
 
 ## 主导航

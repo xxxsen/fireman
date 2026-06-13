@@ -1,6 +1,5 @@
 # 新建计划向导：权益/债券国内外配比与分区选标
 
-- 设计来源：`td/015-wizard-region-domestic-foreign-allocation.md`
 - 更新：2026-06-13
 
 ## 1. Step 1：地区组内权重

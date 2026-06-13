@@ -130,7 +130,7 @@ func ComputeNewCashRebalance(
 	var targetTotal, currentTotal int64
 
 	for i, t := range targets {
-		// new_cash mode keeps plan-scale semantics (see td/017 non-goals).
+		// new_cash mode keeps plan-scale semantics rather than structural-gap semantics.
 		action := SuggestAction(t.Enabled, t.PlanGapWeight, t.PlanGapAmountMinor, threshold)
 		trade := int64(0)
 		if t.Enabled {

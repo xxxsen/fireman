@@ -1,4 +1,4 @@
--- Asset refresh audit events + one active rebalance draft per plan (td/019).
+-- Asset refresh audit events + one active rebalance draft per plan.
 
 CREATE TABLE asset_refresh_events (
   id                  TEXT    PRIMARY KEY,
