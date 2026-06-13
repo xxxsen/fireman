@@ -65,6 +65,7 @@ func (s *InstrumentService) checkInProgressFetchJob(ctx context.Context, inputHa
 
 func applyScenarioCopyDefaults(req *ScenarioCreateRequest, src repository.AllocationScenario) {
 	req.Weights = src.Weights
+	req.RegionTargets = src.RegionTargets
 	if req.Name == "" {
 		req.Name = src.Name + " (副本)"
 	}

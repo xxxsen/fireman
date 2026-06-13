@@ -74,7 +74,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, instRepo, hash, snapSvc, marketRepo)
 	return Services{
 		Plans:           planSvc,
-		Allocation:      service.NewAllocationService(db, plans, alloc, scenario),
+		Allocation:      service.NewAllocationService(db, plans, params, alloc, scenario),
 		Holdings:        holdingsSvc,
 		Targets:         targetSvc,
 		Rebalance:       rebalanceSvc,

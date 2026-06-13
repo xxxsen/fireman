@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { listInstruments } from "@/lib/api/instruments";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { deleteInstrument, listInstruments } from "@/lib/api/instruments";
+import { ApiError } from "@/lib/api/client";
 import {
   assetClassLabel,
   dataSourceLabel,
@@ -86,6 +87,56 @@ function InstrumentContextAction({ inst }: { inst: Instrument }) {
   return null;
 }
 
+function InstrumentDeleteAction({ inst }: { inst: Instrument }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const referenced = (inst.referencing_plan_count ?? 0) > 0;
+
+  const deleteMut = useMutation({
+    mutationFn: () => deleteInstrument(inst.id),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["instruments"] });
+    },
+    onError: (err) =>
+      setError(err instanceof ApiError ? err.message : "删除失败"),
+  });
+
+  if (inst.is_system) return null;
+
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <button
+        type="button"
+        className="text-xs text-danger underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-ink-muted disabled:no-underline"
+        disabled={referenced || deleteMut.isPending}
+        title={referenced ? "已被计划引用，无法删除" : undefined}
+        data-testid={`instrument-delete-${inst.id}`}
+        onClick={() => {
+          if (window.confirm(`确定删除 ${inst.name}？`)) {
+            deleteMut.mutate();
+          }
+        }}
+      >
+        {deleteMut.isPending ? "删除中…" : "删除"}
+      </button>
+      {referenced && (
+        <span className="text-[11px] text-ink-muted">已被计划引用，无法删除</span>
+      )}
+      {error && <span className="text-[11px] text-danger">{error}</span>}
+    </span>
+  );
+}
+
+function InstrumentRowActions({ inst }: { inst: Instrument }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <InstrumentContextAction inst={inst} />
+      <InstrumentDeleteAction inst={inst} />
+    </div>
+  );
+}
+
 function InstrumentCardBody({ inst }: { inst: Instrument }) {
   return (
     <>
@@ -115,7 +166,7 @@ function InstrumentCardBody({ inst }: { inst: Instrument }) {
         </div>
       </dl>
       <div className="mt-2">
-        <InstrumentContextAction inst={inst} />
+        <InstrumentRowActions inst={inst} />
       </div>
     </>
   );
@@ -311,7 +362,7 @@ export default function AssetsPage() {
                       {dataSourceLabel(inst.data_source_name)}
                     </td>
                     <td className="px-3 py-2.5">
-                      <InstrumentContextAction inst={inst} />
+                      <InstrumentRowActions inst={inst} />
                     </td>
                   </tr>
                 ))}

@@ -48,6 +48,11 @@ func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
 			return nil, err
 		}
 		s.Weights = weights
+		regions, err := r.getRegionTargets(ctx, s.ID)
+		if err != nil {
+			return nil, err
+		}
+		s.RegionTargets = regions
 		out = append(out, s)
 	}
 	return out, wrapSQL("iterate allocation scenarios", rows.Err())
@@ -69,6 +74,10 @@ func (r *ScenarioRepo) GetByID(ctx context.Context, id string) (AllocationScenar
 	}
 	s.IsBuiltin = builtin == 1
 	s.Weights, err = r.getWeights(ctx, id)
+	if err != nil {
+		return AllocationScenario{}, err
+	}
+	s.RegionTargets, err = r.getRegionTargets(ctx, id)
 	if err != nil {
 		return AllocationScenario{}, err
 	}
@@ -98,6 +107,25 @@ func (r *ScenarioRepo) getWeights(ctx context.Context, scenarioID string) ([]Ass
 	return out, wrapSQL("iterate scenario weights", rows.Err())
 }
 
+func (r *ScenarioRepo) getRegionTargets(ctx context.Context, scenarioID string) ([]RegionTarget, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT asset_class, region, weight_within_class FROM allocation_scenario_region_targets
+		WHERE scenario_id=? ORDER BY asset_class, region`, scenarioID)
+	if err != nil {
+		return nil, wrapSQL("list scenario region targets", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RegionTarget
+	for rows.Next() {
+		var t RegionTarget
+		if err := rows.Scan(&t.AssetClass, &t.Region, &t.WeightWithinClass); err != nil {
+			return nil, wrapSQL("scan scenario region target", err)
+		}
+		out = append(out, t)
+	}
+	return out, wrapSQL("iterate scenario region targets", rows.Err())
+}
+
 func (r *ScenarioRepo) Create(ctx context.Context, s AllocationScenario) error {
 	now := time.Now().UnixMilli()
 	if s.CreatedAt == 0 {
@@ -120,6 +148,14 @@ func (r *ScenarioRepo) Create(ctx context.Context, s AllocationScenario) error {
 			INSERT INTO allocation_scenario_weights (scenario_id, asset_class, weight) VALUES (?,?,?)`,
 			s.ID, w.AssetClass, w.Weight); err != nil {
 			return wrapSQL("insert scenario weight", err)
+		}
+	}
+	for _, t := range s.RegionTargets {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO allocation_scenario_region_targets
+				(scenario_id, asset_class, region, weight_within_class) VALUES (?,?,?,?)`,
+			s.ID, t.AssetClass, t.Region, t.WeightWithinClass); err != nil {
+			return wrapSQL("insert scenario region target", err)
 		}
 	}
 	return wrapSQL("commit create scenario tx", tx.Commit())
@@ -145,11 +181,23 @@ func (r *ScenarioRepo) Update(ctx context.Context, s AllocationScenario) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM allocation_scenario_weights WHERE scenario_id=?`, s.ID); err != nil {
 		return wrapSQL("delete scenario weights", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM allocation_scenario_region_targets WHERE scenario_id=?`, s.ID); err != nil {
+		return wrapSQL("delete scenario region targets", err)
+	}
 	for _, w := range s.Weights {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO allocation_scenario_weights (scenario_id, asset_class, weight) VALUES (?,?,?)`,
 			s.ID, w.AssetClass, w.Weight); err != nil {
 			return wrapSQL("insert scenario weight", err)
+		}
+	}
+	for _, t := range s.RegionTargets {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO allocation_scenario_region_targets
+				(scenario_id, asset_class, region, weight_within_class) VALUES (?,?,?,?)`,
+			s.ID, t.AssetClass, t.Region, t.WeightWithinClass); err != nil {
+			return wrapSQL("insert scenario region target", err)
 		}
 	}
 	return wrapSQL("commit update scenario tx", tx.Commit())

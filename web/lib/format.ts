@@ -47,6 +47,21 @@ const MONEY_UNIT_HINTS: { threshold: number; unit: string; divisor: number }[] =
   { threshold: 100, unit: "百", divisor: 100 },
 ];
 
+/** Inline unit label for plain money input: `CNY(万)` — no value conversion. */
+export function formatMoneyInlineUnit(currency: string, rawValue: string): string {
+  const cleaned = rawValue.replace(/,/g, "").trim();
+  if (cleaned === "" || cleaned === "0") return currency;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || n === 0) return currency;
+  const abs = Math.abs(n);
+  for (const item of MONEY_UNIT_HINTS) {
+    if (abs >= item.threshold) {
+      return `${currency}(${item.unit})`;
+    }
+  }
+  return `${currency}(元)`;
+}
+
 /** Auxiliary unit hint for plain numeric money input (major units, yuan). */
 export function formatMoneyUnitHint(major: number): string | null {
   if (!Number.isFinite(major) || major === 0) return null;

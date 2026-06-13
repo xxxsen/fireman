@@ -5,11 +5,13 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { PercentInput } from "@/components/ui/PercentInput";
+import { Dialog } from "@/components/ui/Dialog";
 import { getHoldings, getTargets, updateHoldings } from "@/lib/api/holdings";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
 import { listInstruments } from "@/lib/api/instruments";
-import { getPlan, listPlans, getParameters } from "@/lib/api/plans";
-import { listScenarios } from "@/lib/api/allocation";
+import { getPlan, getParameters } from "@/lib/api/plans";
+import { applyScenario, listScenarios } from "@/lib/api/allocation";
 import {
   assetClassLabel,
   formatMoney,
@@ -20,10 +22,13 @@ import { assetClassSortIndex, regionSortIndex } from "@/lib/asset-class-order";
 import {
   buildAssetRefreshBody,
   buildHoldingsUpdateItems,
+  countAssetRefreshChanges,
+  defaultWeightWithinGroup,
+  hasAssetRefreshDraftChanges,
   hasAssetRefreshStructureChange,
   holdingFromPlan,
-  redistributeEnabledWeightsInGroup,
   sumHoldingsMinor,
+  validateAssetRefreshGroupWeights,
   validateAssetRefreshTotal,
   type AssetRefreshHolding,
 } from "@/lib/asset-refresh";
@@ -31,6 +36,7 @@ import { ApiError } from "@/lib/api/client";
 import type { Instrument, PlanHolding } from "@/types/api";
 
 const STEPS = ["说明", "配置确认", "录入当前资产", "确认提交"] as const;
+const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
 function isSelectableInstrument(inst: Instrument): boolean {
   return (
@@ -47,12 +53,12 @@ export default function AssetRefreshPage() {
   const [step, setStep] = useState(0);
   const [holdingsDraft, setHoldingsDraft] = useState<AssetRefreshHolding[] | null>(null);
   const [totalOverride, setTotalOverride] = useState<number | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const plan = useQuery({ queryKey: ["plan", planId], queryFn: () => getPlan(planId) });
-  const plans = useQuery({ queryKey: ["plans"], queryFn: listPlans });
   const holdings = useQuery({
     queryKey: ["holdings", planId],
     queryFn: () => getHoldings(planId),
@@ -123,6 +129,12 @@ export default function AssetRefreshPage() {
     ),
     [enabledRows, totalAssets],
   );
+  const groupWeightValidation = useMemo(
+    () => validateAssetRefreshGroupWeights(draftHoldings),
+    [draftHoldings],
+  );
+  const canProceedFromEntry =
+    validation.ok && groupWeightValidation.ok && enabledRows.length > 0;
   const structureChanged = useMemo(
     () =>
       holdings.data
@@ -130,12 +142,40 @@ export default function AssetRefreshPage() {
         : false,
     [holdings.data, draftHoldings],
   );
+  const changeCount = useMemo(
+    () =>
+      holdings.data
+        ? countAssetRefreshChanges(holdings.data.holdings, draftHoldings)
+        : 0,
+    [holdings.data, draftHoldings],
+  );
+
+  const initialScenarioId = parameters.data?.parameters.selected_scenario_id ?? "";
+  const currentScenarioId = selectedScenarioId ?? initialScenarioId;
+
+  const hasChanges = useMemo(() => {
+    const scenarioChanged =
+      !!currentScenarioId && currentScenarioId !== initialScenarioId;
+    const holdingsChanged = holdings.data
+      ? hasAssetRefreshDraftChanges(holdings.data.holdings, draftHoldings, totalAssets)
+      : false;
+    return scenarioChanged || holdingsChanged;
+  }, [currentScenarioId, initialScenarioId, holdings.data, draftHoldings, totalAssets]);
+
+  const previewScenario = useMemo(() => {
+    if (!currentScenarioId) return undefined;
+    return scenarios.data?.scenarios.find((scenario) => scenario.id === currentScenarioId);
+  }, [currentScenarioId, scenarios.data]);
 
   const selectedScenario = useMemo(() => {
-    const scenarioId = parameters.data?.parameters.selected_scenario_id;
-    if (!scenarioId) return undefined;
-    return scenarios.data?.scenarios.find((scenario) => scenario.id === scenarioId);
-  }, [parameters.data, scenarios.data]);
+    if (!initialScenarioId) return undefined;
+    return scenarios.data?.scenarios.find((scenario) => scenario.id === initialScenarioId);
+  }, [initialScenarioId, scenarios.data]);
+
+  const previewAssetTargets =
+    previewScenario?.weights ?? targets.data?.asset_class_targets ?? [];
+  const previewRegionTargets =
+    previewScenario?.region_targets ?? targets.data?.region_targets ?? [];
 
   const groupedHoldings = useMemo(() => {
     const byClass = new Map<string, Map<string, AssetRefreshHolding[]>>();
@@ -180,12 +220,8 @@ export default function AssetRefreshPage() {
       .slice(0, 20);
   }, [filter, instruments.data, selectedInstrumentIds]);
 
-  const switchPlan = (nextPlanId: string) => {
-    if (nextPlanId === planId) return;
-    setHoldingsDraft(null);
-    setTotalOverride(null);
-    setStep(1);
-    router.replace(`/plans/${nextPlanId}/asset-refresh`);
+  const switchScenario = (nextScenarioId: string) => {
+    setSelectedScenarioId(nextScenarioId);
   };
 
   const updateDraft = (next: AssetRefreshHolding[]) => {
@@ -201,25 +237,22 @@ export default function AssetRefreshPage() {
   };
 
   const toggleEnabled = (holding: AssetRefreshHolding, enabled: boolean) => {
-    let next = updateDraftHoldings(
-      draftHoldings,
-      holding.instrument_id,
-      { enabled },
-    );
-    next = redistributeEnabledWeightsInGroup(next, holding.asset_class, holding.region);
-    updateDraft(next);
+    updateDraft(updateDraftHoldings(draftHoldings, holding.instrument_id, { enabled }));
   };
 
   const removeHolding = (holding: AssetRefreshHolding) => {
     if (holding.is_system) return;
-    let next = draftHoldings.filter((item) => item.instrument_id !== holding.instrument_id);
-    next = redistributeEnabledWeightsInGroup(next, holding.asset_class, holding.region);
-    updateDraft(next);
+    updateDraft(draftHoldings.filter((item) => item.instrument_id !== holding.instrument_id));
   };
 
   const addInstrument = (instrument: Instrument) => {
     if (selectedInstrumentIds.has(instrument.id)) return;
-    let next: AssetRefreshHolding[] = [
+    const defaultWeight = defaultWeightWithinGroup(
+      draftHoldings,
+      instrument.asset_class,
+      instrument.region,
+    );
+    updateDraft([
       ...draftHoldings,
       {
         id: `draft_${instrument.id}`,
@@ -230,23 +263,35 @@ export default function AssetRefreshPage() {
         region: instrument.region,
         enabled: true,
         current_amount_minor: 0,
-        weight_within_group: 0,
+        weight_within_group: defaultWeight,
         sort_order: draftHoldings.length * 10,
         is_system: false,
       },
-    ];
-    next = redistributeEnabledWeightsInGroup(next, instrument.asset_class, instrument.region);
-    updateDraft(next);
+    ]);
     setFilter("");
-    setDrawerOpen(false);
+    setDialogOpen(false);
   };
 
   const submit = useMutation({
     mutationFn: async () => {
       if (!plan.data) throw new Error("计划尚未加载");
       if (!validation.ok) throw new Error(validation.message ?? "校验失败");
+      if (!groupWeightValidation.ok) {
+        throw new Error(groupWeightValidation.message ?? "组内配比校验失败");
+      }
 
       let configVersion = plan.data.config_version;
+
+      if (currentScenarioId && currentScenarioId !== initialScenarioId) {
+        await applyScenario(planId, {
+          scenario_id: currentScenarioId,
+          config_version: configVersion,
+          dry_run: false,
+        });
+        const updatedPlan = await getPlan(planId);
+        configVersion = updatedPlan.config_version;
+      }
+
       if (structureChanged) {
         await updateHoldings(planId, {
           config_version: configVersion,
@@ -292,8 +337,8 @@ export default function AssetRefreshPage() {
         current_amount_minor: holding.current_amount_minor,
       })),
   );
-  const structureOnly = beforeTotal === totalAssets;
-  const scenarioName = selectedScenario?.name ?? "—";
+  const structureOnly = hasChanges && beforeTotal === totalAssets && changeCount > 0;
+  const scenarioName = previewScenario?.name ?? selectedScenario?.name ?? "—";
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 pb-16">
@@ -362,37 +407,58 @@ export default function AssetRefreshPage() {
       {step === 1 && targets.data && (
         <section className="space-y-4 rounded-lg border border-slate-200 p-4">
           <h2 className="font-medium">配置确认</h2>
+          <p className="text-sm text-slate-600">
+            当前计划：<strong>{plan.data.name}</strong>
+          </p>
           <label className="block text-sm">
-            目标计划
+            FIRE 方案
             <select
               className="mt-1 w-full rounded-md border px-3 py-2"
-              value={planId}
-              onChange={(e) => switchPlan(e.target.value)}
-              data-testid="asset-refresh-plan-select"
+              value={currentScenarioId}
+              onChange={(e) => switchScenario(e.target.value)}
+              data-testid="asset-refresh-scenario-select"
             >
-              {(plans.data ?? []).map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
+              <option value="">—</option>
+              {(scenarios.data?.scenarios ?? []).map((scenario) => (
+                <option key={scenario.id} value={scenario.id}>
+                  {scenario.name}
                 </option>
               ))}
             </select>
           </label>
           <p className="text-sm text-slate-600">
-            当前计划：<strong>{plan.data.name}</strong>
-          </p>
-          <p className="text-sm text-slate-600">
-            绑定场景模板：<strong>{scenarioName}</strong>
+            当前选择的 FIRE 方案 / 场景模板：<strong>{scenarioName}</strong>
           </p>
           <div>
             <h3 className="text-sm font-medium">大类目标（只读）</h3>
             <ul className="mt-2 text-sm text-slate-700">
-              {targets.data.asset_class_targets.map((target) => (
+              {previewAssetTargets.map((target) => (
                 <li key={target.asset_class}>
                   {assetClassLabel(target.asset_class)} {formatPercent(target.weight)}
                 </li>
               ))}
             </ul>
           </div>
+          {ASSET_CLASSES.map((assetClass) => {
+            const regions = previewRegionTargets.filter(
+              (target) => target.asset_class === assetClass,
+            );
+            if (regions.length === 0) return null;
+            return (
+              <div key={assetClass}>
+                <h3 className="text-sm font-medium">
+                  {assetClassLabel(assetClass)} · 地区组内目标（只读）
+                </h3>
+                <ul className="mt-2 text-sm text-slate-700">
+                  {regions.map((target) => (
+                    <li key={`${target.asset_class}:${target.region}`}>
+                      {regionLabel(target.region)} {formatPercent(target.weight_within_class)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
           <p className="text-sm text-slate-600">
             已启用标的 {enabledRows.length} 个
           </p>
@@ -423,7 +489,7 @@ export default function AssetRefreshPage() {
               type="button"
               className="min-h-11 rounded-md border border-slate-300 px-4 text-sm"
               data-testid="asset-refresh-add-instrument"
-              onClick={() => setDrawerOpen(true)}
+              onClick={() => setDialogOpen(true)}
             >
               添加标的
             </button>
@@ -446,6 +512,7 @@ export default function AssetRefreshPage() {
                           <th className="px-3 py-2">标的</th>
                           <th className="px-3 py-2">分类</th>
                           <th className="px-3 py-2">国别</th>
+                          <th className="px-3 py-2">组内配比</th>
                           <th className="px-3 py-2">当前金额</th>
                           <th className="px-3 py-2">操作</th>
                         </tr>
@@ -470,6 +537,15 @@ export default function AssetRefreshPage() {
                             </td>
                             <td className="px-3 py-2">{assetClassLabel(row.asset_class)}</td>
                             <td className="px-3 py-2">{regionLabel(row.region)}</td>
+                            <td className="px-3 py-2">
+                              <PercentInput
+                                disabled={!row.enabled}
+                                value={row.weight_within_group}
+                                onChange={(value) =>
+                                  updateHolding(row.instrument_id, { weight_within_group: value })
+                                }
+                              />
+                            </td>
                             <td className="px-3 py-2">
                               <MoneyInput
                                 plain
@@ -502,7 +578,7 @@ export default function AssetRefreshPage() {
               ))}
             </div>
           ))}
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <MoneyInput
               label="资产总值"
               plain
@@ -524,6 +600,11 @@ export default function AssetRefreshPage() {
           {!validation.ok && (
             <p className="text-sm text-red-700">{validation.message}</p>
           )}
+          {!groupWeightValidation.ok && (
+            <p className="text-sm text-red-700" data-testid="asset-refresh-group-weight-error">
+              {groupWeightValidation.message}
+            </p>
+          )}
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
@@ -535,7 +616,7 @@ export default function AssetRefreshPage() {
             <button
               type="button"
               className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
-              disabled={!validation.ok}
+              disabled={!canProceedFromEntry}
               onClick={() => setStep(3)}
             >
               下一步
@@ -554,9 +635,16 @@ export default function AssetRefreshPage() {
             </div>
             <div>
               <dt className="text-slate-500">影响资产数量</dt>
-              <dd className="font-medium">{enabledRows.length} 个</dd>
+              <dd className="font-medium" data-testid="asset-refresh-change-count">
+                {changeCount === 0 ? "0" : `${changeCount} 项`}
+              </dd>
             </div>
           </dl>
+          {changeCount === 0 && !hasChanges && (
+            <p className="text-sm text-amber-800" data-testid="asset-refresh-no-changes">
+              本次未修改任何资产，无需提交。
+            </p>
+          )}
           {structureOnly ? (
             <p className="text-sm text-slate-700">
               变更前合计 {formatMoney(beforeTotal, plan.data.base_currency)}，变更后合计{" "}
@@ -570,7 +658,9 @@ export default function AssetRefreshPage() {
             </p>
           )}
           {structureChanged && (
-            <p className="text-sm text-slate-600">本次提交包含标的结构变更（新增、移除或启停）。</p>
+            <p className="text-sm text-slate-600">
+              本次提交包含持仓配置变更（新增、移除、启停或组内配比调整）。
+            </p>
           )}
           <p className="text-sm text-slate-600">
             提交后，当前计划总资产将同步更新为最新持仓合计。
@@ -586,7 +676,7 @@ export default function AssetRefreshPage() {
             <button
               type="button"
               className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
-              disabled={submit.isPending}
+              disabled={submit.isPending || !hasChanges}
               onClick={() => submit.mutate()}
             >
               提交资产变更
@@ -595,47 +685,40 @@ export default function AssetRefreshPage() {
         </section>
       )}
 
-      {drawerOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
-          <div className="flex h-full w-full max-w-md flex-col bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b p-4">
-              <h3 className="font-medium">选择标的</h3>
-              <button type="button" onClick={() => setDrawerOpen(false)}>
-                关闭
+      <Dialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        title="选择标的"
+        className="max-w-md"
+      >
+        <input
+          className="w-full rounded-md border px-3 py-2 text-sm"
+          placeholder="按代码、名称过滤"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          data-testid="asset-refresh-instrument-filter"
+        />
+        <Link href="/assets/import" className="mt-2 block text-sm underline">
+          资料库中不存在？从 AKShare 录入
+        </Link>
+        <ul className="mt-4 divide-y" data-testid="asset-refresh-instrument-results">
+          {filteredInstruments.map((instrument) => (
+            <li key={instrument.id}>
+              <button
+                type="button"
+                className="w-full px-1 py-3 text-left hover:bg-slate-50"
+                onClick={() => addInstrument(instrument)}
+              >
+                <div className="font-medium">{instrument.name}</div>
+                <div className="text-xs text-slate-500">
+                  {instrument.code} · {assetClassLabel(instrument.asset_class)} ·{" "}
+                  {regionLabel(instrument.region)}
+                </div>
               </button>
-            </div>
-            <div className="p-4">
-              <input
-                className="w-full rounded-md border px-3 py-2 text-sm"
-                placeholder="按代码、名称过滤"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-                data-testid="asset-refresh-instrument-filter"
-              />
-              <Link href="/assets/import" className="mt-2 block text-sm underline">
-                资料库中不存在？从 AKShare 录入
-              </Link>
-            </div>
-            <ul className="flex-1 divide-y overflow-y-auto" data-testid="asset-refresh-instrument-results">
-              {filteredInstruments.map((instrument) => (
-                <li key={instrument.id}>
-                  <button
-                    type="button"
-                    className="w-full px-4 py-3 text-left hover:bg-slate-50"
-                    onClick={() => addInstrument(instrument)}
-                  >
-                    <div className="font-medium">{instrument.name}</div>
-                    <div className="text-xs text-slate-500">
-                      {instrument.code} · {assetClassLabel(instrument.asset_class)} ·{" "}
-                      {regionLabel(instrument.region)}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
+            </li>
+          ))}
+        </ul>
+      </Dialog>
     </div>
   );
 }

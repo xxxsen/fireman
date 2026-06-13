@@ -223,6 +223,27 @@ describe("AssetDetailPage job terminal states", () => {
     expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();
   });
 
+  it("opens centered fetch status dialog", async () => {
+    getInstrumentDetailMock.mockResolvedValue(pendingDetail());
+    getFetchStatusMock.mockResolvedValue({
+      job_id: "job_pending",
+      instrument_status: "pending_fetch",
+    });
+    useJobStatusMock.mockReturnValue({
+      job: { id: "job_pending", status: "running", progress_current: 1, progress_total: 2, phase: "fetching" },
+      progress: 0.5,
+      error: null,
+      loading: false,
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看抓取状态" }));
+    expect(screen.getByTestId("dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("fetch-status-job-status")).toHaveTextContent("running");
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+  });
+
   it("shows canceled notice instead of permanent fetching banner", async () => {
     getInstrumentDetailMock
       .mockResolvedValueOnce(pendingDetail())

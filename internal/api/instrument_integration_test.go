@@ -556,3 +556,74 @@ func TestInstrumentDataStaleWarningIntegration(t *testing.T) {
 		t.Fatalf("expected stale_warning, got %+v", inst["stale_warning"])
 	}
 }
+
+func TestInstrumentRefreshSourceConflictKeepsExistingData(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/instruments/fetch":
+			_ = json.NewEncoder(w).Encode(marketdata.FetchResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.FetchData{
+					Provider: "akshare", ProviderSymbol: "000001", Name: "华夏成长混合",
+					AssetClass: "cash", Currency: "CNY", PointType: "nav",
+					ExpenseRatioStatus: "unavailable",
+					ExpenseRatioComponents: map[string]any{"region": "domestic"},
+					Points: []marketdata.HistoricalPoint{{Date: "2024-12-31", Value: 1.0}},
+					SourceName: "ak.fund_money_fund_info_em", SourceQuality: "full", SourceKind: "money_fund",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(provider.Close)
+
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := "ins_source_conflict_test"
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO instruments (
+			id, code, name, market, instrument_type, asset_class, region, currency,
+			provider, provider_symbol, adjust_policy, is_system, expense_ratio, expense_ratio_status,
+			fee_treatment, status, created_at, updated_at
+		) VALUES (?, '000001', '华夏成长混合', 'CN', 'cn_mutual_fund', 'equity', 'domestic', 'CNY',
+			'akshare', '000001', 'none', 0, NULL, 'unavailable', 'embedded', 'active', ?, ?)`,
+		instID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO market_data_points (instrument_id, trade_date, value, point_type, source_name, fetched_at)
+		VALUES (?, '2024-12-31', 2.5, 'nav', 'ak.fund_open_fund_info_em:单位净值走势', ?)`,
+		instID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{"force": true})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("refresh status=%d body=%s", resp.StatusCode, respBody)
+	}
+	assertErrorCode(t, respBody, "market_data_source_type_conflict")
+
+	var value float64
+	var sourceName string
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT value, source_name FROM market_data_points WHERE instrument_id=? AND trade_date='2024-12-31'`,
+		instID).Scan(&value, &sourceName); err != nil {
+		t.Fatal(err)
+	}
+	if value != 2.5 {
+		t.Fatalf("expected old value preserved, got %v", value)
+	}
+	if sourceName != "ak.fund_open_fund_info_em:单位净值走势" {
+		t.Fatalf("expected old source preserved, got %q", sourceName)
+	}
+}

@@ -45,6 +45,7 @@ def test_fetch_response_shape_matches_design() -> None:
             "points",
             "source_name",
             "source_quality",
+            "source_kind",
         }
         assert data["provider"] == "akshare"
         assert data["provider_symbol"] == "510300"

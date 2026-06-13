@@ -1,0 +1,35 @@
+"""Tests for cn_mutual_fund source kind detection."""
+
+from unittest.mock import patch
+
+from fireman_market_provider.adapters.classification import detect_cn_mutual_fund_source_kind
+
+
+def test_detect_open_fund_for_hybrid_name() -> None:
+    with patch(
+        "fireman_market_provider.adapters.names.lookup_cn_lof_name",
+        return_value=None,
+    ), patch(
+        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        return_value="华夏成长混合",
+    ):
+        assert detect_cn_mutual_fund_source_kind("000001") == "open_fund"
+
+
+def test_detect_money_fund_from_name() -> None:
+    with patch(
+        "fireman_market_provider.adapters.names.lookup_cn_lof_name",
+        return_value=None,
+    ), patch(
+        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        return_value="某某货币基金A",
+    ):
+        assert detect_cn_mutual_fund_source_kind("000009") == "money_fund"
+
+
+def test_detect_lof_from_registry() -> None:
+    with patch(
+        "fireman_market_provider.adapters.names.lookup_cn_lof_name",
+        return_value="测试LOF",
+    ):
+        assert detect_cn_mutual_fund_source_kind("501018") == "lof"

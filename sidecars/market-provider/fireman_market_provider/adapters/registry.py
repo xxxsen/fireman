@@ -11,7 +11,14 @@ from ..logutil import get_logger
 from ..normalize import normalize_dataframe
 from ..schemas import AssetClass, FetchData, FetchRequest, PointType
 from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds
-from .classification import FundMeta, classify_cn_mutual_fund, classify_us_symbol, default_region
+from .classification import (
+    CnMutualFundSourceKind,
+    FundMeta,
+    classify_cn_mutual_fund,
+    classify_us_symbol,
+    default_region,
+    detect_cn_mutual_fund_source_kind,
+)
 from .cn_code import eastmoney_symbol_from_canonical, prefixed_symbol_from_canonical
 from .fallback import try_sources
 from .names import resolve_cn_exchange_fund_name, resolve_hk_name
@@ -30,6 +37,7 @@ class AdapterResult:
     expense_ratio_status: str = "unavailable"
     expense_ratio_components: dict[str, Any] | None = None
     region: str = "domestic"
+    source_kind: CnMutualFundSourceKind | None = None
 
 
 ProviderFn = Callable[[FetchRequest, str, str], AdapterResult]
@@ -227,17 +235,12 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
 
 def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
     symbol = req.source_code
+    source_kind = detect_cn_mutual_fund_source_kind(symbol)
     errors: list[str] = []
-    logger.info(
-        "fetch cn_mutual_fund %s: date range %s..%s (%d candidate sources)",
-        symbol,
-        start,
-        end,
-        5,
-    )
 
-    attempts: list[tuple[str, str, str, UpstreamCall]] = [
+    all_attempts: list[tuple[CnMutualFundSourceKind, str, str, str, UpstreamCall]] = [
         (
+            "open_fund",
             "累计净值走势",
             "total_return_index",
             "ak.fund_open_fund_info_em:累计净值走势",
@@ -247,6 +250,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
             ),
         ),
         (
+            "open_fund",
             "单位净值走势",
             "nav",
             "ak.fund_open_fund_info_em:单位净值走势",
@@ -256,18 +260,21 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
             ),
         ),
         (
+            "money_fund",
             "money",
             "nav",
             "ak.fund_money_fund_info_em",
             UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", symbol),)),
         ),
         (
+            "financial_fund",
             "financial",
             "nav",
             "ak.fund_financial_fund_info_em",
             UpstreamCall("fund_financial_fund_info_em", kwargs=(("symbol", symbol),)),
         ),
         (
+            "lof",
             "lof",
             "total_return_index",
             "ak.fund_lof_hist_em",
@@ -283,8 +290,17 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
             ),
         ),
     ]
+    attempts = [item for item in all_attempts if item[0] == source_kind]
+    logger.info(
+        "fetch cn_mutual_fund %s: date range %s..%s source_kind=%s (%d candidate sources)",
+        symbol,
+        start,
+        end,
+        source_kind,
+        len(attempts),
+    )
 
-    for _label, point_type, source_name, call in attempts:
+    for _kind, _label, point_type, source_name, call in attempts:
         try:
             df = call_with_timeout(call, fetch_timeout_seconds())
             if df is None or df.empty:
@@ -335,6 +351,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                 expense_ratio_status=meta.expense_ratio_status,
                 expense_ratio_components=meta.components,
                 region=meta.region,
+                source_kind=source_kind,
             )
         except TimeoutError:
             logger.error("fetch cn_mutual_fund %s: %s timed out", symbol, source_name)
@@ -348,7 +365,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                 exc,
             )
 
-    summary = "; ".join(errors) or "cn_mutual_fund fetch failed"
+    summary = "; ".join(errors) or f"cn_mutual_fund fetch failed for source_kind={source_kind}"
     logger.error("fetch cn_mutual_fund %s: all sources failed: %s", symbol, summary)
     raise RuntimeError(summary)
 
@@ -531,4 +548,5 @@ def fetch_instrument(req: FetchRequest) -> FetchData:
         points=points,
         source_name=result.source_name,
         source_quality=quality,
+        source_kind=result.source_kind,
     )

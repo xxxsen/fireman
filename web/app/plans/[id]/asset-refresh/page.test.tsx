@@ -15,6 +15,7 @@ vi.mock("next/navigation", () => ({
 
 const updateHoldings = vi.fn();
 const submitAssetRefresh = vi.fn();
+const applyScenario = vi.fn();
 
 vi.mock("@/lib/api/plans", () => ({
   getPlan: vi.fn(() =>
@@ -26,11 +27,6 @@ vi.mock("@/lib/api/plans", () => ({
       valuation_date: "2026-06-09",
     }),
   ),
-  listPlans: () =>
-    Promise.resolve([
-      { id: "plan_1", name: "测试计划" },
-      { id: "plan_2", name: "计划 B" },
-    ]),
   getParameters: () =>
     Promise.resolve({
       parameters: { selected_scenario_id: "scn_1" },
@@ -45,15 +41,33 @@ vi.mock("@/lib/api/allocation", () => ({
         {
           id: "scn_1",
           name: "均衡",
-          weights: [],
+          weights: [{ asset_class: "equity", weight: 1 }],
+          region_targets: [
+            { asset_class: "equity", region: "domestic", weight_within_class: 0.7 },
+            { asset_class: "equity", region: "foreign", weight_within_class: 0.3 },
+          ],
           description: "",
           is_builtin: false,
           plan_count: 1,
           created_at: 0,
           updated_at: 0,
         },
+        {
+          id: "scn_2",
+          name: "已 FIRE",
+          weights: [{ asset_class: "bond", weight: 1 }],
+          region_targets: [
+            { asset_class: "bond", region: "domestic", weight_within_class: 1 },
+          ],
+          description: "",
+          is_builtin: false,
+          plan_count: 0,
+          created_at: 0,
+          updated_at: 0,
+        },
       ],
     }),
+  applyScenario: (...args: unknown[]) => applyScenario(...args),
 }));
 
 vi.mock("@/lib/api/holdings", () => ({
@@ -69,16 +83,34 @@ vi.mock("@/lib/api/holdings", () => ({
           asset_class: "equity",
           region: "domestic",
           enabled: true,
-          weight_within_group: 1,
-          current_amount_minor: 50_000_00,
+          weight_within_group: 0.6,
+          current_amount_minor: 30_000_00,
           simulation_snapshot_id: "",
           sort_order: 0,
+        },
+        {
+          id: "h2",
+          plan_id: "plan_1",
+          instrument_id: "i3",
+          instrument_name: "基金C",
+          instrument_code: "FC",
+          asset_class: "equity",
+          region: "domestic",
+          enabled: true,
+          weight_within_group: 0.4,
+          current_amount_minor: 20_000_00,
+          simulation_snapshot_id: "",
+          sort_order: 1,
         },
       ],
     }),
   getTargets: () =>
     Promise.resolve({
       asset_class_targets: [{ asset_class: "equity", weight: 1 }],
+      region_targets: [
+        { asset_class: "equity", region: "domestic", weight_within_class: 0.7 },
+        { asset_class: "equity", region: "foreign", weight_within_class: 0.3 },
+      ],
       holdings: [],
     }),
   updateHoldings: (...args: unknown[]) => updateHoldings(...args),
@@ -132,7 +164,15 @@ describe("AssetRefreshPage", () => {
     replace.mockClear();
     updateHoldings.mockReset();
     submitAssetRefresh.mockReset();
+    applyScenario.mockReset();
     updateHoldings.mockResolvedValue({ holdings: [] });
+    applyScenario.mockResolvedValue({
+      scenario_id: "scn_2",
+      applied: true,
+      config_version: 2,
+      before: [],
+      after: [],
+    });
     submitAssetRefresh.mockResolvedValue({
       holdings: [],
       before_total_minor: 50_000_00,
@@ -147,16 +187,21 @@ describe("AssetRefreshPage", () => {
     expect(screen.getByText(/维护当前计划下的真实持仓结构/)).toBeInTheDocument();
   });
 
-  it("supports step navigation and plan switching", async () => {
+  it("supports step navigation and FIRE scenario switching without changing plan route", async () => {
     renderPage();
-    expect(await screen.findByText("下一步")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
 
     expect(await screen.findByText("配置确认")).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId("asset-refresh-plan-select"), {
-      target: { value: "plan_2" },
+    expect(screen.getByText("当前计划：")).toBeInTheDocument();
+    expect(screen.getByText("测试计划")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("asset-refresh-scenario-select"), {
+      target: { value: "scn_2" },
     });
-    expect(replace).toHaveBeenCalledWith("/plans/plan_2/asset-refresh");
+    expect(replace).not.toHaveBeenCalled();
+    expect(await screen.findByText(/债券\s*100%/)).toBeInTheDocument();
+    expect(await screen.findByText(/债券 · 地区组内目标/)).toBeInTheDocument();
+    expect(await screen.findByText(/国内\s*100%/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(await screen.findByText("录入当前资产")).toBeInTheDocument();
@@ -170,20 +215,23 @@ describe("AssetRefreshPage", () => {
     expect(await screen.findByText("配置确认")).toBeInTheDocument();
   });
 
-  it("shows money unit hint on entry step", async () => {
+  it("shows inline money unit on entry step", async () => {
     await goToEntryStep();
-    const hints = screen.getAllByTestId("money-unit-hint");
-    expect(hints.some((hint) => hint.textContent?.includes("约 5.00 万"))).toBe(true);
+    const units = screen.getAllByTestId("money-inline-unit");
+    expect(units.some((unit) => unit.textContent === "CNY(万)")).toBe(true);
   });
 
-  it("can add instrument from drawer", async () => {
+  it("opens centered dialog to add instrument", async () => {
     await goToEntryStep();
     fireEvent.click(screen.getByTestId("asset-refresh-add-instrument"));
+    expect(screen.getByTestId("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
     fireEvent.change(screen.getByTestId("asset-refresh-instrument-filter"), {
       target: { value: "FB" },
     });
     fireEvent.click(await screen.findByRole("button", { name: /基金B/ }));
     expect(screen.getByText("FB")).toBeInTheDocument();
+    expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
   });
 
   it("can toggle instrument enabled state", async () => {
@@ -245,14 +293,114 @@ describe("AssetRefreshPage", () => {
     expect(push).toHaveBeenCalledWith("/plans/plan_1/rebalance?asset_refreshed=1");
   });
 
+  it("submits weight-only changes via updateHoldings", async () => {
+    const { getPlan } = await import("@/lib/api/plans");
+    vi.mocked(getPlan)
+      .mockResolvedValueOnce({
+        id: "plan_1",
+        name: "测试计划",
+        config_version: 1,
+        base_currency: "CNY",
+        valuation_date: "2026-06-09",
+        status: "active",
+        created_at: 0,
+        updated_at: 0,
+      })
+      .mockResolvedValueOnce({
+        id: "plan_1",
+        name: "测试计划",
+        config_version: 2,
+        base_currency: "CNY",
+        valuation_date: "2026-06-09",
+        status: "active",
+        created_at: 0,
+        updated_at: 0,
+      });
+
+    await goToEntryStep();
+    const weightInputs = screen.getAllByTestId("percent-input");
+    fireEvent.change(weightInputs[0]!, { target: { value: "70" } });
+    fireEvent.change(weightInputs[1]!, { target: { value: "30" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByTestId("asset-refresh-change-count")).toHaveTextContent("2 项");
+    fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
+
+    await waitFor(() => expect(updateHoldings).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows region group targets from selected scenario on config step", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
+
+    expect(await screen.findByText("权益 · 地区组内目标（只读）")).toBeInTheDocument();
+    expect(screen.getByText(/国内\s*70%/)).toBeInTheDocument();
+    expect(screen.getByText(/国外\s*30%/)).toBeInTheDocument();
+  });
+
   it("shows structure-only message when totals match on confirm step", async () => {
+    await goToEntryStep();
+    const weightInputs = screen.getAllByTestId("percent-input");
+    fireEvent.change(weightInputs[0]!, { target: { value: "70" } });
+    fireEvent.change(weightInputs[1]!, { target: { value: "30" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText(/仅更新了持仓结构或资产分配/)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /同步计划基准规模/ })).not.toBeInTheDocument();
+  });
+
+  it("disables submit and shows zero-change hint when nothing changed", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
 
-    expect(await screen.findByText(/仅更新了持仓结构或资产分配/)).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /同步计划基准规模/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "提交资产变更" })).toBeInTheDocument();
+    expect(await screen.findByTestId("asset-refresh-change-count")).toHaveTextContent("0");
+    expect(screen.getByTestId("asset-refresh-no-changes")).toHaveTextContent("本次未修改任何资产");
+    expect(screen.queryByText(/仅更新了持仓结构或资产分配/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交资产变更" })).toBeDisabled();
+  });
+
+  it("calls applyScenario when scenario changed on submit", async () => {
+    const { getPlan } = await import("@/lib/api/plans");
+    vi.mocked(getPlan)
+      .mockResolvedValueOnce({
+        id: "plan_1",
+        name: "测试计划",
+        config_version: 1,
+        base_currency: "CNY",
+        valuation_date: "2026-06-09",
+        status: "active",
+        created_at: 0,
+        updated_at: 0,
+      })
+      .mockResolvedValueOnce({
+        id: "plan_1",
+        name: "测试计划",
+        config_version: 2,
+        base_currency: "CNY",
+        valuation_date: "2026-06-09",
+        status: "active",
+        created_at: 0,
+        updated_at: 0,
+      });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
+    fireEvent.change(await screen.findByTestId("asset-refresh-scenario-select"), {
+      target: { value: "scn_2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
+
+    await waitFor(() =>
+      expect(applyScenario).toHaveBeenCalledWith("plan_1", {
+        scenario_id: "scn_2",
+        config_version: 1,
+        dry_run: false,
+      }),
+    );
   });
 });

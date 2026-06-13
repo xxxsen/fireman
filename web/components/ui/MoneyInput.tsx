@@ -1,7 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { formatMoneyInput, formatMoneyPlain, formatMoneyUnitHint, parseMoneyInput } from "@/lib/format";
+import {
+  formatMoneyInlineUnit,
+  formatMoneyInput,
+  formatMoneyPlain,
+  parseMoneyInput,
+} from "@/lib/format";
 
 interface MoneyInputProps {
   valueMinor: number;
@@ -38,15 +43,16 @@ export function MoneyInput({
       ? draft
       : formatMoneyInput(valueMinor);
 
-  const activeMinor = parseMoneyInput(editing ? draft : draftFromMinor(valueMinor, plain));
-  const unitHint =
-    plain && activeMinor !== null ? formatMoneyUnitHint(activeMinor / 100) : null;
+  const rawForUnit = editing ? draft : draftFromMinor(valueMinor, plain);
+  const inlineUnit = plain ? formatMoneyInlineUnit(currency, rawForUnit) : currency;
 
   return (
     <label className="block">
       {label && <span className="mb-1 block text-sm text-ink-muted">{label}</span>}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-ink-muted">{currency}</span>
+        <span className="text-sm text-ink-muted whitespace-nowrap" data-testid="money-inline-unit">
+          {inlineUnit}
+        </span>
         <input
           type="text"
           inputMode="decimal"
@@ -76,11 +82,6 @@ export function MoneyInput({
           }}
         />
       </div>
-      {unitHint && (
-        <span className="mt-1 block text-xs text-slate-500" data-testid="money-unit-hint">
-          {unitHint}
-        </span>
-      )}
     </label>
   );
 }

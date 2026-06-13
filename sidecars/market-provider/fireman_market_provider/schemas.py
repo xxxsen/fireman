@@ -55,6 +55,7 @@ class FetchData(BaseModel):
     points: list[HistoricalPoint]
     source_name: str
     source_quality: SourceQuality
+    source_kind: str | None = None
 
 
 class FetchResponse(BaseModel):

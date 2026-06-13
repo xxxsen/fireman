@@ -38,16 +38,18 @@ type ApplyScenarioResult struct {
 
 // ScenarioCreateRequest creates a custom scenario.
 type ScenarioCreateRequest struct {
-	Name        string                        `json:"name"`
-	Description string                        `json:"description"`
-	Weights     []repository.AssetClassTarget `json:"weights"`
-	CopyFromID  *string                       `json:"copy_from_id,omitempty"`
+	Name          string                        `json:"name"`
+	Description   string                        `json:"description"`
+	Weights       []repository.AssetClassTarget `json:"weights"`
+	RegionTargets []repository.RegionTarget     `json:"region_targets,omitempty"`
+	CopyFromID    *string                       `json:"copy_from_id,omitempty"`
 }
 
 // AllocationService manages allocation and scenarios.
 type AllocationService struct {
 	sql      *sql.DB
 	plans    *repository.PlanRepo
+	params   *repository.ParametersRepo
 	alloc    *repository.AllocationRepo
 	scenario *repository.ScenarioRepo
 }
@@ -55,10 +57,13 @@ type AllocationService struct {
 func NewAllocationService(
 	sqlDB *sql.DB,
 	plans *repository.PlanRepo,
+	params *repository.ParametersRepo,
 	alloc *repository.AllocationRepo,
 	scenario *repository.ScenarioRepo,
 ) *AllocationService {
-	return &AllocationService{sql: sqlDB, plans: plans, alloc: alloc, scenario: scenario}
+	return &AllocationService{
+		sql: sqlDB, plans: plans, params: params, alloc: alloc, scenario: scenario,
+	}
 }
 
 func (s *AllocationService) GetAllocation(ctx context.Context, planID string) (repository.PlanAllocation, error) {
@@ -155,9 +160,16 @@ func (s *AllocationService) CreateScenario(
 	if err := validateScenarioWeights(req.Weights); err != nil {
 		return repository.AllocationScenario{}, newErr("scenario_weights_invalid", err.Error(), nil)
 	}
+	regionTargets := req.RegionTargets
+	if len(regionTargets) == 0 {
+		regionTargets = defaultRegionTargets()
+	}
+	if err := validateRegionTargets(regionTargets); err != nil {
+		return repository.AllocationScenario{}, newErr("scenario_region_targets_invalid", err.Error(), nil)
+	}
 	scn := repository.AllocationScenario{
 		ID: "scn_" + uuid.New().String(), Name: req.Name,
-		Description: req.Description, Weights: req.Weights,
+		Description: req.Description, Weights: req.Weights, RegionTargets: regionTargets,
 	}
 	if err := s.scenario.Create(ctx, scn); err != nil {
 		return repository.AllocationScenario{}, fmt.Errorf("create scenario: %w", err)
@@ -177,8 +189,23 @@ func (s *AllocationService) UpdateScenario(
 	if err := validateScenarioWeights(req.Weights); err != nil {
 		return repository.AllocationScenario{}, newErr("scenario_weights_invalid", err.Error(), nil)
 	}
+	regionTargets := req.RegionTargets
+	if len(regionTargets) == 0 {
+		existing, err := s.scenario.GetByID(ctx, scenarioID)
+		if err != nil {
+			if errors.Is(err, repository.ErrScenarioNotFound) {
+				return repository.AllocationScenario{}, newErr("scenario_not_found", "scenario not found", nil)
+			}
+			return repository.AllocationScenario{}, fmt.Errorf("load scenario region targets: %w", err)
+		}
+		regionTargets = existing.RegionTargets
+	}
+	if err := validateRegionTargets(regionTargets); err != nil {
+		return repository.AllocationScenario{}, newErr("scenario_region_targets_invalid", err.Error(), nil)
+	}
 	scn := repository.AllocationScenario{
-		ID: scenarioID, Name: req.Name, Description: req.Description, Weights: req.Weights,
+		ID: scenarioID, Name: req.Name, Description: req.Description,
+		Weights: req.Weights, RegionTargets: regionTargets,
 	}
 	if err := s.scenario.Update(ctx, scn); err != nil {
 		if errors.Is(err, repository.ErrScenarioNotFound) {
@@ -247,10 +274,13 @@ func (s *AllocationService) ApplyScenario(
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		newAlloc := repository.PlanAllocation{
 			AssetClassTargets: scn.Weights,
-			RegionTargets:     current.RegionTargets,
+			RegionTargets:     scn.RegionTargets,
 		}
 		if err := s.alloc.Replace(ctx, tx, planID, newAlloc); err != nil {
 			return fmt.Errorf("replace allocation: %w", err)
+		}
+		if err := s.params.SetSelectedScenarioID(ctx, tx, planID, req.ScenarioID); err != nil {
+			return fmt.Errorf("set selected scenario: %w", err)
 		}
 		newVer, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion)
 		if err != nil {

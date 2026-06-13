@@ -305,6 +305,14 @@ def lookup_cn_exchange_fund_name(symbol: str) -> str | None:
         return None
 
 
+def lookup_cn_lof_name(symbol: str) -> str | None:
+    code = _normalize_code(symbol)
+    try:
+        return _load_lof_name_map().get(code)
+    except Exception:  # noqa: BLE001 - name lookup is best-effort
+        return None
+
+
 def resolve_cn_exchange_fund_name(symbol: str, df: pd.DataFrame) -> str:
     from_df = name_from_dataframe(df, symbol)
     if from_df:

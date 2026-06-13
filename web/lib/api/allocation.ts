@@ -13,6 +13,7 @@ export function createScenario(body: {
   name: string;
   description?: string;
   weights: AssetClassTarget[];
+  region_targets?: RegionTarget[];
   copy_from_id?: string;
 }): Promise<AllocationScenario> {
   return apiPost("/api/v1/allocation-scenarios", body);
@@ -24,6 +25,7 @@ export function updateScenario(
     name: string;
     description?: string;
     weights: AssetClassTarget[];
+    region_targets: RegionTarget[];
   },
 ): Promise<AllocationScenario> {
   return apiPut(`/api/v1/allocation-scenarios/${scenarioId}`, body);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annualCompletenessLabel, dataSourceLabel, formatAnnualPeriod, formatMoneyUnitHint } from "./format";
+import { annualCompletenessLabel, dataSourceLabel, formatAnnualPeriod, formatMoneyInlineUnit, formatMoneyUnitHint } from "./format";
 
 describe("annualCompletenessLabel", () => {
   it("marks current year as in-year stats", () => {
@@ -17,6 +17,16 @@ describe("annualCompletenessLabel", () => {
 describe("formatAnnualPeriod", () => {
   it("shows full cross-year range", () => {
     expect(formatAnnualPeriod("2024-12-30", "2025-12-29")).toBe("2024-12-30 ~ 2025-12-29");
+  });
+});
+
+describe("formatMoneyInlineUnit", () => {
+  it("shows inline unit without converting the raw value", () => {
+    expect(formatMoneyInlineUnit("CNY", "150")).toBe("CNY(百)");
+    expect(formatMoneyInlineUnit("CNY", "1500")).toBe("CNY(千)");
+    expect(formatMoneyInlineUnit("CNY", "15000")).toBe("CNY(万)");
+    expect(formatMoneyInlineUnit("CNY", "1500000")).toBe("CNY(百万)");
+    expect(formatMoneyInlineUnit("CNY", "")).toBe("CNY");
   });
 });
 

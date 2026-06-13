@@ -81,16 +81,17 @@ type PlanAllocation struct {
 	RegionTargets     []RegionTarget     `json:"region_targets"`
 }
 
-// AllocationScenario is a reusable asset class preset.
+// AllocationScenario is a reusable asset class and region target preset.
 type AllocationScenario struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	IsBuiltin   bool               `json:"is_builtin"`
-	Weights     []AssetClassTarget `json:"weights"`
-	PlanCount   int                `json:"plan_count,omitempty"`
-	CreatedAt   int64              `json:"created_at"`
-	UpdatedAt   int64              `json:"updated_at"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	Description   string             `json:"description"`
+	IsBuiltin     bool               `json:"is_builtin"`
+	Weights       []AssetClassTarget `json:"weights"`
+	RegionTargets []RegionTarget     `json:"region_targets"`
+	PlanCount     int                `json:"plan_count,omitempty"`
+	CreatedAt     int64              `json:"created_at"`
+	UpdatedAt     int64              `json:"updated_at"`
 }
 
 // Instrument is a minimal instrument record for holdings.

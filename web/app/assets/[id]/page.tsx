@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { Dialog } from "@/components/ui/Dialog";
 import {
   deleteInstrument,
   getFetchStatus,
@@ -51,7 +52,7 @@ export default function AssetDetailPage() {
   const [refreshNotice, setRefreshNotice] = useState<{ kind: "success" | "error"; text: string } | null>(
     null,
   );
-  const [showFetchDrawer, setShowFetchDrawer] = useState(false);
+  const [showFetchDialog, setShowFetchDialog] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [fetchStatusError, setFetchStatusError] = useState<string | null>(null);
   const [fetchErrorCode, setFetchErrorCode] = useState<string | null>(null);
@@ -182,7 +183,7 @@ export default function AssetDetailPage() {
           <button
             type="button"
             className="mt-2 underline"
-            onClick={() => setShowFetchDrawer(true)}
+            onClick={() => setShowFetchDialog(true)}
           >
             查看抓取状态
           </button>
@@ -425,38 +426,41 @@ export default function AssetDetailPage() {
         </>
       )}
 
-      {showFetchDrawer && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
-          <div className="flex h-full w-full max-w-md flex-col bg-white p-4 shadow-xl">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-medium">抓取状态</h3>
-              <button type="button" onClick={() => setShowFetchDrawer(false)}>
-                关闭
-              </button>
-            </div>
-            <dl className="mt-4 space-y-2 text-sm">
-              <div>
-                <dt className="text-slate-500">任务状态</dt>
-                <dd>{jobState.job?.status ?? "—"}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">阶段</dt>
-                <dd>{jobState.job?.phase ?? "—"}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">进度</dt>
-                <dd>{Math.round(jobState.progress * 100)}%</dd>
-              </div>
-              {jobState.error && (
-                <div>
-                  <dt className="text-slate-500">错误</dt>
-                  <dd className="text-red-700">{jobState.error}</dd>
-                </div>
-              )}
-            </dl>
+      <Dialog
+        open={showFetchDialog}
+        onClose={() => setShowFetchDialog(false)}
+        title="抓取状态"
+        footer={
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm"
+            onClick={() => setShowFetchDialog(false)}
+          >
+            关闭
+          </button>
+        }
+      >
+        <dl className="space-y-2 text-sm">
+          <div>
+            <dt className="text-slate-500">任务状态</dt>
+            <dd data-testid="fetch-status-job-status">{jobState.job?.status ?? "—"}</dd>
           </div>
-        </div>
-      )}
+          <div>
+            <dt className="text-slate-500">阶段</dt>
+            <dd>{jobState.job?.phase ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">进度</dt>
+            <dd>{Math.round(jobState.progress * 100)}%</dd>
+          </div>
+          {jobState.error && (
+            <div>
+              <dt className="text-slate-500">错误</dt>
+              <dd className="text-red-700">{jobState.error}</dd>
+            </div>
+          )}
+        </dl>
+      </Dialog>
     </div>
   );
 }

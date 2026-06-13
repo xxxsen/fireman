@@ -29,6 +29,7 @@ type FetchData struct {
 	Points                 []HistoricalPoint `json:"points"`
 	SourceName             string            `json:"source_name"`
 	SourceQuality          string            `json:"source_quality"`
+	SourceKind             string            `json:"source_kind,omitempty"`
 }
 
 // FetchResponse is the sidecar envelope.

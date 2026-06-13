@@ -294,6 +294,119 @@ func TestApplyScenarioDryRun(t *testing.T) {
 	}
 }
 
+func TestApplyScenarioSyncsSelectedScenarioID(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	plan := createTestPlan(t, db)
+	r := NewRouter(context.Background(), Deps{DB: db})
+
+	paramsRepo := repository.NewParametersRepo(db)
+	params, err := paramsRepo.Get(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.SelectedScenarioID == nil || *params.SelectedScenarioID != "scn_builtin_near_fire" {
+		t.Fatalf("expected initial scenario scn_builtin_near_fire, got %v", params.SelectedScenarioID)
+	}
+
+	planRepo := repository.NewPlanRepo(db)
+	planRow, err := planRepo.GetByID(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyBody, _ := json.Marshal(map[string]any{
+		"scenario_id": "scn_builtin_post_fire", "config_version": planRow.ConfigVersion, "dry_run": false,
+	})
+	applyReq := httptest.NewRequest(http.MethodPost, "/api/v1/plans/"+plan.ID+"/apply-scenario", bytes.NewReader(applyBody))
+	applyReq.Header.Set("Content-Type", "application/json")
+	applyW := httptest.NewRecorder()
+	r.ServeHTTP(applyW, applyReq)
+	if applyW.Code != http.StatusOK {
+		t.Fatalf("apply scenario status=%d %s", applyW.Code, applyW.Body.String())
+	}
+
+	params, err = paramsRepo.Get(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.SelectedScenarioID == nil || *params.SelectedScenarioID != "scn_builtin_post_fire" {
+		t.Fatalf("expected selected_scenario_id scn_builtin_post_fire, got %v", params.SelectedScenarioID)
+	}
+}
+
+func TestScenarioRegionTargetsRoundTrip(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	r := NewRouter(context.Background(), Deps{DB: db})
+
+	createBody, _ := json.Marshal(map[string]any{
+		"name":        "区域测试",
+		"description": "custom region split",
+		"weights": []map[string]any{
+			{"asset_class": "equity", "weight": 0.7},
+			{"asset_class": "bond", "weight": 0.3},
+			{"asset_class": "cash", "weight": 0},
+		},
+		"region_targets": []map[string]any{
+			{"asset_class": "equity", "region": "domestic", "weight_within_class": 0.6},
+			{"asset_class": "equity", "region": "foreign", "weight_within_class": 0.4},
+			{"asset_class": "bond", "region": "domestic", "weight_within_class": 1},
+			{"asset_class": "bond", "region": "foreign", "weight_within_class": 0},
+			{"asset_class": "cash", "region": "domestic", "weight_within_class": 1},
+			{"asset_class": "cash", "region": "foreign", "weight_within_class": 0},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/allocation-scenarios", bytes.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create scenario status=%d %s", w.Code, w.Body.String())
+	}
+	env := decodeEnvelope(t, w.Body.Bytes())
+	scn := env["data"].(map[string]any)
+	scenarioID := scn["id"].(string)
+	regions := scn["region_targets"].([]any)
+	if len(regions) != 6 {
+		t.Fatalf("expected 6 region targets, got %d", len(regions))
+	}
+
+	plan := createTestPlan(t, db)
+	planRepo := repository.NewPlanRepo(db)
+	planRow, err := planRepo.GetByID(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyBody, _ := json.Marshal(map[string]any{
+		"scenario_id": scenarioID, "config_version": planRow.ConfigVersion, "dry_run": false,
+	})
+	applyReq := httptest.NewRequest(http.MethodPost, "/api/v1/plans/"+plan.ID+"/apply-scenario", bytes.NewReader(applyBody))
+	applyReq.Header.Set("Content-Type", "application/json")
+	applyW := httptest.NewRecorder()
+	r.ServeHTTP(applyW, applyReq)
+	if applyW.Code != http.StatusOK {
+		t.Fatalf("apply scenario status=%d %s", applyW.Code, applyW.Body.String())
+	}
+
+	allocReq := httptest.NewRequest(http.MethodGet, "/api/v1/plans/"+plan.ID+"/allocation", nil)
+	allocW := httptest.NewRecorder()
+	r.ServeHTTP(allocW, allocReq)
+	if allocW.Code != http.StatusOK {
+		t.Fatalf("get allocation status=%d %s", allocW.Code, allocW.Body.String())
+	}
+	allocEnv := decodeEnvelope(t, allocW.Body.Bytes())
+	alloc := allocEnv["data"].(map[string]any)
+	gotRegions := alloc["region_targets"].([]any)
+	var equityDomestic float64
+	for _, item := range gotRegions {
+		row := item.(map[string]any)
+		if row["asset_class"] == "equity" && row["region"] == "domestic" {
+			equityDomestic = row["weight_within_class"].(float64)
+		}
+	}
+	if equityDomestic != 0.6 {
+		t.Fatalf("expected equity domestic 0.6 after apply, got %v", equityDomestic)
+	}
+}
+
 func TestRebalanceModes(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	plan := createTestPlan(t, db)

@@ -10,30 +10,31 @@ import (
 
 // InstrumentRecord is the full instruments table row.
 type InstrumentRecord struct {
-	ID                 string   `json:"id"`
-	Code               string   `json:"code"`
-	Name               string   `json:"name"`
-	Market             string   `json:"market"`
-	InstrumentType     string   `json:"instrument_type"`
-	AssetClass         string   `json:"asset_class"`
-	Region             string   `json:"region"`
-	Currency           string   `json:"currency"`
-	Provider           string   `json:"provider"`
-	ProviderSymbol     string   `json:"provider_symbol"`
-	AdjustPolicy       string   `json:"adjust_policy"`
-	IsSystem           bool     `json:"is_system"`
-	ExpenseRatio       *float64 `json:"expense_ratio,omitempty"`
-	ExpenseRatioStatus string   `json:"expense_ratio_status"`
-	FeeTreatment       string   `json:"fee_treatment"`
-	Status             string   `json:"status"`
-	QualityStatus      string   `json:"quality_status,omitempty"`
-	DataAsOf           string   `json:"data_as_of,omitempty"`
-	DataSourceName     string   `json:"data_source_name,omitempty"`
-	PointType          string   `json:"point_type,omitempty"`
-	DataStale          bool     `json:"data_stale"`
-	StaleWarning       string   `json:"stale_warning,omitempty"`
-	CreatedAt          int64    `json:"created_at"`
-	UpdatedAt          int64    `json:"updated_at"`
+	ID                   string   `json:"id"`
+	Code                 string   `json:"code"`
+	Name                 string   `json:"name"`
+	Market               string   `json:"market"`
+	InstrumentType       string   `json:"instrument_type"`
+	AssetClass           string   `json:"asset_class"`
+	Region               string   `json:"region"`
+	Currency             string   `json:"currency"`
+	Provider             string   `json:"provider"`
+	ProviderSymbol       string   `json:"provider_symbol"`
+	AdjustPolicy         string   `json:"adjust_policy"`
+	IsSystem             bool     `json:"is_system"`
+	ExpenseRatio         *float64 `json:"expense_ratio,omitempty"`
+	ExpenseRatioStatus   string   `json:"expense_ratio_status"`
+	FeeTreatment         string   `json:"fee_treatment"`
+	Status               string   `json:"status"`
+	QualityStatus        string   `json:"quality_status,omitempty"`
+	DataAsOf             string   `json:"data_as_of,omitempty"`
+	DataSourceName       string   `json:"data_source_name,omitempty"`
+	PointType            string   `json:"point_type,omitempty"`
+	DataStale            bool     `json:"data_stale"`
+	StaleWarning         string   `json:"stale_warning,omitempty"`
+	ReferencingPlanCount int      `json:"referencing_plan_count,omitempty"`
+	CreatedAt            int64    `json:"created_at"`
+	UpdatedAt            int64    `json:"updated_at"`
 }
 
 // InstrumentRepo manages the asset library.
@@ -171,6 +172,28 @@ func (r *InstrumentRepo) IsReferencedByPlan(ctx context.Context, instrumentID st
 		return false, fmt.Errorf("count plan references: %w", err)
 	}
 	return n > 0, nil
+}
+
+func (r *InstrumentRepo) ReferenceCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT instrument_id, COUNT(*) FROM plan_holdings GROUP BY instrument_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query plan reference counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]int)
+	for rows.Next() {
+		var instrumentID string
+		var count int
+		if err := rows.Scan(&instrumentID, &count); err != nil {
+			return nil, fmt.Errorf("scan plan reference count: %w", err)
+		}
+		out[instrumentID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate plan reference counts: %w", err)
+	}
+	return out, nil
 }
 
 func (r *InstrumentRepo) exec(tx *sql.Tx) dbExec {

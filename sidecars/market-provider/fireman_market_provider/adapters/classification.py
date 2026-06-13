@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
 from ..schemas import AssetClass
+
+CnMutualFundSourceKind = Literal["open_fund", "money_fund", "financial_fund", "lof"]
 
 
 @dataclass
@@ -77,6 +79,26 @@ def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str) -> FundMeta:
         region=region,
         components={"fund_type": fund_type, "region": region},
     )
+
+
+def detect_cn_mutual_fund_source_kind(symbol: str) -> CnMutualFundSourceKind:
+    """Pick the allowed fetch source family before trying AKShare providers."""
+    from .names import get_cn_mutual_fund_name, lookup_cn_lof_name
+
+    bare = symbol.strip()
+    if lookup_cn_lof_name(bare):
+        return "lof"
+
+    name = get_cn_mutual_fund_name(bare) or bare
+    text = f"{name}"
+    upper = text.upper()
+    if "LOF" in upper:
+        return "lof"
+    if any(k in text for k in ("货币", "货币基金")):
+        return "money_fund"
+    if "理财" in text:
+        return "financial_fund"
+    return "open_fund"
 
 
 def classify_us_symbol(symbol: str, default_type: AssetClass) -> FundMeta:

@@ -90,6 +90,7 @@ export interface AllocationScenario {
   is_builtin: boolean;
   plan_count: number;
   weights: AssetClassTarget[];
+  region_targets: RegionTarget[];
   created_at: number;
   updated_at: number;
 }
@@ -258,6 +259,7 @@ export interface Instrument {
   point_type?: string;
   data_stale: boolean;
   stale_warning?: string;
+  referencing_plan_count?: number;
   created_at: number;
   updated_at: number;
 }

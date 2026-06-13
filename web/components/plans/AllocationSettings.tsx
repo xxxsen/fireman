@@ -52,7 +52,8 @@ export function PlanTargetsContent() {
   );
 
   const assetTargets = previewScenario?.weights ?? allocation.data?.asset_class_targets ?? [];
-  const regionTargets = allocation.data?.region_targets ?? [];
+  const regionTargets =
+    previewScenario?.region_targets ?? allocation.data?.region_targets ?? [];
 
   const save = useMutation({
     mutationFn: async () => {
@@ -104,7 +105,7 @@ export function PlanTargetsContent() {
         </label>
         {dirty && (
           <p className="mt-2 text-sm text-amber-800" data-testid="plan-targets-preview-note">
-            大类权重随所选场景预览；地区组内权重沿用当前计划配置，保存场景切换后生效。
+            大类与地区组内权重均随所选场景预览；保存后将应用完整模板配置。
           </p>
         )}
         <p className="mt-3 text-sm text-slate-600">

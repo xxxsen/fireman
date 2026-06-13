@@ -123,6 +123,10 @@ func (r *InstrumentFetchRunner) Run(
 		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")
 		return fmt.Errorf("resolve instrument classification: %w", err)
 	}
+	if err := validateFetchSourceForPayload(payload, class, data); err != nil {
+		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")
+		return err
+	}
 	processed := marketdata.ProcessProviderData(data, end)
 	if processed.HasAnomaly {
 		_ = r.instRepo.UpdateStatusTx(ctx, nil, payload.InstrumentID, "fetch_failed")
@@ -203,4 +207,19 @@ func resolveFetchClassification(
 		return out, fmt.Errorf("resolve classification: %w", err)
 	}
 	return out, nil
+}
+
+func validateFetchSourceForPayload(
+	payload repository.InstrumentFetchPayload,
+	class marketdata.Classification,
+	data *marketdata.FetchData,
+) error {
+	assetClass := class.AssetClass
+	if payload.UserAssetClass != "" {
+		assetClass = payload.UserAssetClass
+	}
+	if err := marketdata.ValidateFetchSourceCompatibility(payload.InstrumentType, assetClass, data); err != nil {
+		return newCodedError("market_data_source_type_conflict")
+	}
+	return nil
 }

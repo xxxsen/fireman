@@ -56,6 +56,21 @@ func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters
 	return p, nil
 }
 
+func (r *ParametersRepo) SetSelectedScenarioID(
+	ctx context.Context,
+	tx *sql.Tx,
+	planID string,
+	scenarioID string,
+) error {
+	exec := r.exec(tx)
+	_, err := exec.ExecContext(ctx, `
+		UPDATE plan_parameters
+		SET selected_scenario_id=?, updated_at=?
+		WHERE plan_id=?`,
+		scenarioID, time.Now().UnixMilli(), planID)
+	return wrapSQL("set selected scenario id", err)
+}
+
 func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameters) error {
 	exec := r.exec(tx)
 	now := time.Now().UnixMilli()

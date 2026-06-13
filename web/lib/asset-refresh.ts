@@ -1,8 +1,16 @@
 /** Asset refresh validation helpers. */
 
 import type { PlanHolding } from "@/types/api";
+import { assetClassLabel, regionLabel } from "@/lib/format";
+import { validatePercentSum } from "@/lib/percent";
 
 export const ASSET_REFRESH_TOLERANCE_MINOR = 100;
+
+const WEIGHT_EPSILON = 1e-6;
+
+function weightWithinGroupChanged(before: number, after: number): boolean {
+  return Math.abs(before - after) > WEIGHT_EPSILON;
+}
 
 export interface AssetRefreshRow {
   instrument_id: string;
@@ -39,40 +47,104 @@ export function holdingFromPlan(holding: PlanHolding, isSystem = false): AssetRe
   };
 }
 
+export function countAssetRefreshChanges(
+  before: PlanHolding[],
+  after: AssetRefreshHolding[],
+): number {
+  const beforeByInstrument = new Map(
+    before.map((holding) => [holding.instrument_id, holding] as const),
+  );
+  const afterByInstrument = new Map(
+    after.map((holding) => [holding.instrument_id, holding] as const),
+  );
+  const instrumentIds = new Set([
+    ...beforeByInstrument.keys(),
+    ...afterByInstrument.keys(),
+  ]);
+  let count = 0;
+  for (const instrumentId of instrumentIds) {
+    const beforeHolding = beforeByInstrument.get(instrumentId);
+    const afterHolding = afterByInstrument.get(instrumentId);
+    if (!beforeHolding || !afterHolding) {
+      count++;
+      continue;
+    }
+    if (beforeHolding.enabled !== afterHolding.enabled) {
+      count++;
+      continue;
+    }
+    if (beforeHolding.current_amount_minor !== afterHolding.current_amount_minor) {
+      count++;
+      continue;
+    }
+    if (weightWithinGroupChanged(beforeHolding.weight_within_group, afterHolding.weight_within_group)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+export function hasAssetRefreshDraftChanges(
+  before: PlanHolding[],
+  after: AssetRefreshHolding[],
+  totalAssetsMinor: number,
+): boolean {
+  const beforeTotal = sumHoldingsMinor(
+    before
+      .filter((holding) => holding.enabled)
+      .map((holding) => ({
+        instrument_id: holding.instrument_id,
+        current_amount_minor: holding.current_amount_minor,
+      })),
+  );
+  return countAssetRefreshChanges(before, after) > 0 || totalAssetsMinor !== beforeTotal;
+}
+
 export function hasAssetRefreshStructureChange(
   before: PlanHolding[],
   after: AssetRefreshHolding[],
 ): boolean {
-  const beforeByInstrument = new Map(
-    before.map((holding) => [holding.instrument_id, holding.enabled] as const),
-  );
-  const afterByInstrument = new Map(
-    after.map((holding) => [holding.instrument_id, holding.enabled] as const),
-  );
-  if (beforeByInstrument.size !== afterByInstrument.size) return true;
-  for (const [instrumentId, enabled] of beforeByInstrument) {
-    if (!afterByInstrument.has(instrumentId)) return true;
-    if (afterByInstrument.get(instrumentId) !== enabled) return true;
-  }
-  return false;
+  return countAssetRefreshChanges(before, after) > 0;
 }
 
-export function redistributeEnabledWeightsInGroup(
+export function defaultWeightWithinGroup(
   holdings: AssetRefreshHolding[],
   assetClass: string,
   region: string,
-): AssetRefreshHolding[] {
+): number {
   const enabledInGroup = holdings.filter(
     (holding) =>
       holding.asset_class === assetClass && holding.region === region && holding.enabled,
   );
-  if (enabledInGroup.length === 0) return holdings;
-  const each = 1 / enabledInGroup.length;
-  return holdings.map((holding) =>
-    holding.asset_class === assetClass && holding.region === region && holding.enabled
-      ? { ...holding, weight_within_group: each }
-      : holding,
-  );
+  const used = enabledInGroup.reduce((sum, holding) => sum + holding.weight_within_group, 0);
+  const remaining = 1 - used;
+  return remaining > 0 ? remaining : 0;
+}
+
+export function validateAssetRefreshGroupWeights(
+  holdings: AssetRefreshHolding[],
+): { ok: boolean; message?: string } {
+  const groups = new Map<string, AssetRefreshHolding[]>();
+  for (const holding of holdings) {
+    if (!holding.enabled) continue;
+    const key = `${holding.asset_class}:${holding.region}`;
+    const bucket = groups.get(key) ?? [];
+    bucket.push(holding);
+    groups.set(key, bucket);
+  }
+  for (const [key, rows] of groups) {
+    const [assetClass, region] = key.split(":");
+    const check = validatePercentSum(
+      rows.map((row) => ({ label: row.instrument_id, value: row.weight_within_group })),
+    );
+    if (!check.passed) {
+      return {
+        ok: false,
+        message: `${assetClassLabel(assetClass)} · ${regionLabel(region)} 组内配比：${check.message}`,
+      };
+    }
+  }
+  return { ok: true };
 }
 
 export function buildHoldingsUpdateItems(holdings: AssetRefreshHolding[]) {

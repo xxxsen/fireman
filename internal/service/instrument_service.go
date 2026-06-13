@@ -53,7 +53,12 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 	if err != nil {
 		return nil, wrapRepo("list instruments", err)
 	}
+	refCounts, err := s.instRepo.ReferenceCounts(ctx)
+	if err != nil {
+		return nil, wrapRepo("list instrument reference counts", err)
+	}
 	for i := range items {
+		items[i].ReferencingPlanCount = refCounts[items[i].ID]
 		if items[i].ID == repository.SystemCashInstrumentID {
 			items[i].QualityStatus = "available"
 			continue
@@ -200,11 +205,10 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string,
 	lastDate, _ := s.marketRepo.LastTradeDate(ctx, instrumentID)
 	start := refreshOverlapStart(fullReplace, lastDate)
 	end := time.Now().Format("2006-01-02")
-	req := InstrumentImportRequest{Market: inst.Market, InstrumentType: inst.InstrumentType, Code: inst.Code}
-	data, processed, err := s.fetchAndProcess(ctx, req, start)
+	data, processed, err := s.fetchAndProcessForInstrument(ctx, inst, start)
 	if err != nil {
 		// upstream failure: keep existing data
-		return inst, newErr("market_provider_unavailable", err.Error(), nil)
+		return inst, err
 	}
 	if processed.HasAnomaly {
 		return inst, newErr("provider_data_anomaly", "refresh rejected due to abnormal daily returns", nil)
@@ -350,27 +354,33 @@ func toMarketAnnualFromRepo(rows []repository.AnnualReturnRecord) []marketdata.A
 	return out
 }
 
-func (s *InstrumentService) fetchAndProcess(ctx context.Context, req InstrumentImportRequest,
+func (s *InstrumentService) fetchAndProcessForInstrument(
+	ctx context.Context,
+	inst repository.InstrumentRecord,
 	start *string,
 ) (*marketdata.FetchData, marketdata.ProcessFetchResult, error) {
 	end := time.Now().Format("2006-01-02")
 	fetchReq := marketdata.FetchRequest{
-		Market: req.Market, InstrumentType: req.InstrumentType,
-		SourceCode: req.Code, StartDate: start, EndDate: end,
-		AdjustPolicy: marketdata.DefaultAdjustPolicy(req.InstrumentType),
+		Market: inst.Market, InstrumentType: inst.InstrumentType,
+		SourceCode: inst.Code, StartDate: start, EndDate: end,
+		AdjustPolicy: marketdata.DefaultAdjustPolicy(inst.InstrumentType),
 	}
 	data, err := s.provider.Fetch(ctx, fetchReq)
 	if err != nil {
 		slog.WarnContext(
 			ctx, "instrument fetch failed",
-			"market", req.Market,
-			"instrument_type", req.InstrumentType,
-			"code", req.Code,
+			"instrument_id", inst.ID,
+			"market", inst.Market,
+			"instrument_type", inst.InstrumentType,
+			"code", inst.Code,
 			"error", err,
 		)
 		return nil, marketdata.ProcessFetchResult{}, newErr("market_provider_unavailable", err.Error(), nil)
 	}
-	if _, err := marketdata.ResolveClassification(req.Market, req.InstrumentType, data); err != nil {
+	if err := marketdata.ValidateFetchSourceCompatibility(inst.InstrumentType, inst.AssetClass, data); err != nil {
+		return nil, marketdata.ProcessFetchResult{}, mapSourceConflictError(err)
+	}
+	if _, err := marketdata.ResolveClassification(inst.Market, inst.InstrumentType, data); err != nil {
 		return nil, marketdata.ProcessFetchResult{}, mapClassifyError(err)
 	}
 	processed := marketdata.ProcessProviderData(data, end)
@@ -397,6 +407,17 @@ func mapClassifyError(err error) *AppError {
 	default:
 		return newErr("invalid_request", msg, nil)
 	}
+}
+
+func mapSourceConflictError(err error) *AppError {
+	if errors.Is(err, marketdata.ErrSourceTypeConflict) {
+		return newErr(
+			"market_data_source_type_conflict",
+			"fetch source does not match instrument asset class; existing data kept",
+			nil,
+		)
+	}
+	return newErr("invalid_request", err.Error(), nil)
 }
 
 func (s *InstrumentService) libraryQuality(ctx context.Context, instrumentID string) string {

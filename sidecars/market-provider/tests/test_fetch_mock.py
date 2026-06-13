@@ -292,7 +292,10 @@ def test_fetch_mutual_fund_money_fallback() -> None:
             "赎回状态": ["开放赎回"],
         }
     )
-    with patch("akshare.fund_open_fund_info_em", side_effect=RuntimeError("em blocked")), patch(
+    with patch(
+        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        return_value="测试货币基金",
+    ), patch("akshare.fund_open_fund_info_em", side_effect=RuntimeError("em blocked")), patch(
         "akshare.fund_money_fund_info_em", return_value=df
     ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
         "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
@@ -312,6 +315,36 @@ def test_fetch_mutual_fund_money_fallback() -> None:
         assert body["code"] == 0
         assert body["data"]["source_name"] == "ak.fund_money_fund_info_em"
         assert body["data"]["asset_class"] == "cash"
+        assert body["data"]["source_kind"] == "money_fund"
+
+
+def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
+    money_df = pd.DataFrame(
+        {
+            "净值日期": ["2024-01-02"],
+            "每万份收益": [0.45],
+            "7日年化收益率": [1.8],
+        }
+    )
+    with patch(
+        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        return_value="华夏成长混合",
+    ), patch("akshare.fund_open_fund_info_em", side_effect=RuntimeError("open blocked")), patch(
+        "akshare.fund_money_fund_info_em", return_value=money_df
+    ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
+        "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
+    ):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "CN",
+                "instrument_type": "cn_mutual_fund",
+                "source_code": "000001",
+                "end_date": "2026-06-09",
+                "adjust_policy": "none",
+            },
+        )
+        assert response.status_code != 200 or response.json()["code"] != 0
 
 
 def test_fetch_timeout_returns_provider_error_envelope() -> None:

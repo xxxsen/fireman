@@ -9,10 +9,50 @@ import {
   listScenarios,
   updateScenario,
 } from "@/lib/api/allocation";
-import { assetClassLabel, formatPercent } from "@/lib/format";
+import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
-import type { AllocationScenario } from "@/types/api";
+import {
+  buildRegionTargetsPayload,
+  defaultWizardRegionTargets,
+} from "@/lib/wizard-allocation";
+import type { AllocationScenario, RegionTarget } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
+
+const EDITABLE_REGION_CLASSES = ["equity", "bond", "cash"] as const;
+
+function defaultScenarioRegionTargets(): RegionTarget[] {
+  return buildRegionTargetsPayload(defaultWizardRegionTargets());
+}
+
+function ensureRegionTargets(targets: RegionTarget[] | undefined): RegionTarget[] {
+  return targets && targets.length > 0 ? targets : defaultScenarioRegionTargets();
+}
+
+function updateRegionTarget(
+  targets: RegionTarget[],
+  assetClass: string,
+  region: string,
+  weight: number,
+): RegionTarget[] {
+  return targets.map((target) =>
+    target.asset_class === assetClass && target.region === region
+      ? { ...target, weight_within_class: weight }
+      : target,
+  );
+}
+
+function validateScenarioRegionTargets(targets: RegionTarget[]): string | null {
+  for (const assetClass of ["equity", "bond", "cash"] as const) {
+    const group = targets.filter((target) => target.asset_class === assetClass);
+    const check = validatePercentSum(
+      group.map((target) => ({ label: target.region, value: target.weight_within_class })),
+    );
+    if (!check.passed) {
+      return `${assetClassLabel(assetClass)} 地区组内权重：${check.message}`;
+    }
+  }
+  return null;
+}
 
 export function ScenariosPageContent() {
   const qc = useQueryClient();
@@ -26,11 +66,17 @@ export function ScenariosPageContent() {
 
   const saveScenario = async () => {
     if (!editing) return;
-    const check = validatePercentSum(
+    const weightCheck = validatePercentSum(
       editing.weights.map((w) => ({ label: w.asset_class, value: w.weight })),
     );
-    if (!check.passed) {
-      setError(check.message);
+    if (!weightCheck.passed) {
+      setError(weightCheck.message);
+      return;
+    }
+    const regionTargets = ensureRegionTargets(editing.region_targets);
+    const regionError = validateScenarioRegionTargets(regionTargets);
+    if (regionError) {
+      setError(regionError);
       return;
     }
     try {
@@ -39,15 +85,18 @@ export function ScenariosPageContent() {
           name: editing.name,
           description: editing.description,
           weights: editing.weights,
+          region_targets: regionTargets,
         });
       } else {
         await updateScenario(editing.id, {
           name: editing.name,
           description: editing.description,
           weights: editing.weights,
+          region_targets: regionTargets,
         });
       }
       setEditing(null);
+      setError(null);
       void qc.invalidateQueries({ queryKey: ["scenarios"] });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "保存失败");
@@ -80,6 +129,7 @@ export function ScenariosPageContent() {
                 { asset_class: "bond", weight: 0.3 },
                 { asset_class: "cash", weight: 0 },
               ],
+              region_targets: defaultScenarioRegionTargets(),
               created_at: 0,
               updated_at: 0,
             });
@@ -124,7 +174,15 @@ export function ScenariosPageContent() {
                 <button
                   type="button"
                   className="text-sm underline"
-                  onClick={() => setEditing({ ...scn, weights: [...scn.weights] })}
+                  onClick={() =>
+                    setEditing({
+                      ...scn,
+                      weights: [...scn.weights],
+                      region_targets: ensureRegionTargets(scn.region_targets).map((target) => ({
+                        ...target,
+                      })),
+                    })
+                  }
                 >
                   编辑
                 </button>
@@ -138,6 +196,9 @@ export function ScenariosPageContent() {
                       name: scn.name + " 副本",
                       is_builtin: false,
                       weights: [...scn.weights],
+                      region_targets: ensureRegionTargets(scn.region_targets).map((target) => ({
+                        ...target,
+                      })),
                     });
                   }}
                 >
@@ -175,6 +236,7 @@ export function ScenariosPageContent() {
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}
               />
             </label>
+            <p className="mt-4 text-sm font-medium">大类权重</p>
             {editing.weights.map((w, i) => (
               <div key={w.asset_class} className="mt-3">
                 <PercentInput
@@ -188,6 +250,36 @@ export function ScenariosPageContent() {
                 />
               </div>
             ))}
+            <p className="mt-4 text-sm font-medium">地区组内权重</p>
+            {EDITABLE_REGION_CLASSES.map((assetClass) => {
+              const regions = ensureRegionTargets(editing.region_targets).filter(
+                (target) => target.asset_class === assetClass,
+              );
+              return (
+                <div key={assetClass} className="mt-3 rounded-md border border-slate-200 p-3">
+                  <p className="text-sm font-medium">{assetClassLabel(assetClass)}</p>
+                  {regions.map((target) => (
+                    <div key={`${target.asset_class}:${target.region}`} className="mt-2">
+                      <PercentInput
+                        label={regionLabel(target.region)}
+                        value={target.weight_within_class}
+                        onChange={(value) =>
+                          setEditing({
+                            ...editing,
+                            region_targets: updateRegionTarget(
+                              ensureRegionTargets(editing.region_targets),
+                              target.asset_class,
+                              target.region,
+                              value,
+                            ),
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
             <div className="mt-6 flex justify-end gap-2">
               <button type="button" className="px-3 py-2 text-sm" onClick={() => setEditing(null)}>
                 取消
