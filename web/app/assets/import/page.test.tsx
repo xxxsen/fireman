@@ -195,6 +195,10 @@ describe("ImportAssetPage", () => {
 
     const etfRadio = etfRow.querySelector("input") as HTMLInputElement;
     const lofRadio = lofRow.querySelector("input") as HTMLInputElement;
+    expect(etfRadio.checked).toBe(false);
+    expect(lofRadio.checked).toBe(false);
+
+    fireEvent.click(etfRadio);
     expect(etfRadio.checked).toBe(true);
     expect(lofRadio.checked).toBe(false);
 

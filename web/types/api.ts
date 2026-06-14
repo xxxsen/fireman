@@ -238,6 +238,78 @@ export interface RebalanceDraftDetail {
   };
 }
 
+export interface RebalanceExecution {
+  id: string;
+  plan_id: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  started_at?: number;
+  completed_at?: number;
+  baseline_holdings_total_minor: number;
+  baseline_config_version: number;
+  baseline_snapshot_json: string;
+  cash_pool_minor: number;
+  note?: string;
+}
+
+export interface RebalanceExecutionLine {
+  id: string;
+  execution_id: string;
+  holding_id: string;
+  instrument_id: string;
+  instrument_code?: string;
+  instrument_name?: string;
+  baseline_current_minor: number;
+  target_delta_minor: number;
+  executed_delta_minor: number;
+  remaining_delta_minor: number;
+  action_direction: string;
+  execution_status: string;
+  sort_order: number;
+}
+
+export interface RebalanceExecutionEvent {
+  id: string;
+  execution_id: string;
+  seq: number;
+  event_type: string;
+  instrument_id?: string;
+  amount_minor: number;
+  cash_pool_after_minor: number;
+  payload_json: string;
+  created_at: number;
+}
+
+export interface RebalanceExecutionStats {
+  line_count: number;
+  done_line_count: number;
+  skipped_line_count?: number;
+  sold_total_minor: number;
+  bought_total_minor: number;
+}
+
+export interface RebalanceExecutionDetail {
+  execution: RebalanceExecution;
+  lines: RebalanceExecutionLine[];
+  events: RebalanceExecutionEvent[];
+  stats: RebalanceExecutionStats;
+}
+
+export interface RebalanceExecutionSummary extends RebalanceExecution {
+  line_count: number;
+  done_line_count: number;
+  last_event_at?: number;
+}
+
+export interface ActiveRebalanceExecution {
+  id: string;
+  status: string;
+  cash_pool_minor: number;
+  done_line_count: number;
+  line_count: number;
+}
+
 export interface Instrument {
   id: string;
   code: string;
@@ -408,8 +480,11 @@ export interface DashboardView {
   parameters: PlanParameters;
   weight_checks: WeightValidationResult;
   holdings_sum_minor: number;
+  invested_minor: number;
+  invested_ratio: number;
   holdings_gap_minor: number;
   rebalance_summary: RebalanceSummary;
+  active_rebalance_execution?: ActiveRebalanceExecution | null;
   allocation_bars: {
     asset_class: string;
     target_weight: number;

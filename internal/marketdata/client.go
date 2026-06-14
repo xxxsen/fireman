@@ -25,7 +25,7 @@ var (
 )
 
 func resolveTimeout() time.Duration {
-	return envDuration("MARKET_PROVIDER_RESOLVE_TIMEOUT", 20*time.Second)
+	return envDuration("MARKET_PROVIDER_RESOLVE_TIMEOUT", 90*time.Second)
 }
 
 func fetchTimeout() time.Duration {
@@ -36,6 +36,9 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
 	}
 	secs, err := strconv.Atoi(raw)
 	if err != nil || secs <= 0 {
@@ -78,12 +81,15 @@ func (c *ProviderClient) FetchClient() *ProviderClient {
 }
 
 func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*ResolveData, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resolveTimeout())
+	defer cancel()
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal resolve request: %w", err)
 	}
 	httpReq, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, c.baseURL+"/v1/instruments/resolve", bytes.NewReader(body),
+		resolveCtx, http.MethodPost, c.baseURL+"/v1/instruments/resolve", bytes.NewReader(body),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build resolve request: %w", err)

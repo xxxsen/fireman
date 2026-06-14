@@ -8,6 +8,7 @@ import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { Dialog } from "@/components/ui/Dialog";
 import { getHoldings, getTargets } from "@/lib/api/holdings";
+import { getActiveRebalanceExecution } from "@/lib/api/rebalance-executions";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
 import { listInstruments } from "@/lib/api/instruments";
 import { getPlan, getParameters } from "@/lib/api/plans";
@@ -81,6 +82,10 @@ export default function AssetRefreshPage() {
         plan.data?.valuation_date ? { valuationDate: plan.data.valuation_date } : undefined,
       ),
     enabled: !!plan.data,
+  });
+  const activeExecution = useQuery({
+    queryKey: ["rebalance-execution-active", planId],
+    queryFn: () => getActiveRebalanceExecution(planId),
   });
 
   const systemInstrumentIds = useMemo(
@@ -296,8 +301,32 @@ export default function AssetRefreshPage() {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "提交失败"),
   });
 
-  if (plan.isLoading || holdings.isLoading || !plan.data || !holdings.data) {
-    return <p className="text-slate-600">加载资产变更向导…</p>;
+  if (plan.isLoading || holdings.isLoading || activeExecution.isLoading || !plan.data || !holdings.data) {
+    return <p className="text-slate-600">加载资产变更…</p>;
+  }
+
+  if (activeExecution.data?.execution) {
+    const executionId = activeExecution.data.execution.id;
+    return (
+      <div className="space-y-4">
+        <h1 className="text-xl font-semibold">资产变更</h1>
+        <div
+          className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+          data-testid="asset-refresh-blocked"
+        >
+          调仓执行进行中，完成或放弃后才可使用资产变更。
+          <Link
+            href={`/plans/${planId}/rebalance/executions/${executionId}`}
+            className="ml-2 font-medium underline"
+          >
+            继续调仓执行
+          </Link>
+        </div>
+        <Link href={`/plans/${planId}/rebalance`} className="text-sm underline">
+          返回持仓预览
+        </Link>
+      </div>
+    );
   }
 
   const beforeTotal = sumHoldingsMinor(

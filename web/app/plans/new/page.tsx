@@ -36,6 +36,12 @@ import { ApiError } from "@/lib/api/client";
 
 const STEPS = ["计划基础", "目标配置", "建立持仓", "确认组合"] as const;
 const DEFAULT_RUNS = 10000;
+const FIRE_DURATION_PRESETS = [30, 40, 50] as const;
+
+function defaultPlanName(): string {
+  const today = new Date().toISOString().slice(0, 10);
+  return `我的 FIRE 计划 (${today})`;
+}
 
 function defaultParameters(
   totalAssets: number,
@@ -78,14 +84,14 @@ function defaultParameters(
 export default function NewPlanWizardPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [name, setName] = useState("我的 FIRE 计划");
+  const [name, setName] = useState(defaultPlanName);
   const [valuationDate] = useState(new Date().toISOString().slice(0, 10));
   const [currentAge, setCurrentAge] = useState(30);
-  const [retirementAge, setRetirementAge] = useState(55);
-  const [endAge, setEndAge] = useState(90);
-  const [totalAssets, setTotalAssets] = useState(1_000_000_00);
-  const [annualSpending, setAnnualSpending] = useState(400_000_00);
-  const [annualSavings, setAnnualSavings] = useState(200_000_00);
+  const [retirementAge, setRetirementAge] = useState(35);
+  const [fireDurationYears, setFireDurationYears] = useState(30);
+  const [totalAssets, setTotalAssets] = useState(4_000_000_00);
+  const [annualSpending, setAnnualSpending] = useState(120_000_00);
+  const [annualSavings, setAnnualSavings] = useState(100_000_00);
   const [scenarioId, setScenarioId] = useState("");
   const [regionTargets, setRegionTargets] = useState<WizardRegionTargets>(defaultWizardRegionTargets);
   const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
@@ -95,6 +101,8 @@ export default function NewPlanWizardPage() {
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
   const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: () => listInstruments() });
+
+  const endAge = retirementAge + fireDurationYears;
 
   const finishMut = useMutation({
     mutationFn: async () => {
@@ -290,18 +298,48 @@ export default function NewPlanWizardPage() {
                 />
               </label>
               <label className="text-sm">
-                终止年龄
-                <input
-                  type="number"
-                  className="mt-1 w-full rounded-md border px-3 py-2"
-                  value={endAge}
-                  onChange={(e) => setEndAge(Number(e.target.value))}
-                />
+                预计 FIRE 时长
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <select
+                    className="rounded-md border px-3 py-2"
+                    value={
+                      FIRE_DURATION_PRESETS.includes(fireDurationYears as (typeof FIRE_DURATION_PRESETS)[number])
+                        ? String(fireDurationYears)
+                        : "custom"
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value !== "custom") setFireDurationYears(Number(value));
+                    }}
+                  >
+                    {FIRE_DURATION_PRESETS.map((years) => (
+                      <option key={years} value={years}>
+                        {years} 年
+                      </option>
+                    ))}
+                    <option value="custom">其他年限</option>
+                  </select>
+                  <input
+                    type="number"
+                    min={1}
+                    className="w-24 rounded-md border px-3 py-2"
+                    value={fireDurationYears}
+                    onChange={(e) => setFireDurationYears(Number(e.target.value))}
+                    aria-label="预计 FIRE 时长（年）"
+                  />
+                  <span className="text-slate-500">年</span>
+                </div>
               </label>
             </div>
-            <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} />
-            <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} />
-            <MoneyInput label="年储蓄" valueMinor={annualSavings} onChange={setAnnualSavings} />
+            <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
+            <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
+            <label className="block text-sm">
+              <span className="mb-1 flex items-center gap-1">
+                年储蓄
+                <MetricHelp termKey="annual_savings_wizard" />
+              </span>
+              <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
+            </label>
           </>
         )}
 

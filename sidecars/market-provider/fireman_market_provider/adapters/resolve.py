@@ -10,6 +10,8 @@ from ..schemas import ResolveCandidate, ResolveData, ResolveRequest
 from ..timeout_util import UpstreamCall, call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
 from .cn_code import (
     CNExchangeCode,
+    build_from_market_id,
+    heuristic_cn_stock_from_bare,
     parse_cn_etf_code,
     parse_cn_lof_code,
     parse_cn_stock_code,
@@ -20,6 +22,8 @@ from .names import (
     _load_lof_name_map,
     _load_stock_name_map,
     get_cn_mutual_fund_name,
+    lookup_cn_exchange_fund_name,
+    lookup_cn_lof_name,
 )
 from .symbols import hk_exchange_symbol
 
@@ -94,10 +98,19 @@ def _maybe_raise_mutual_fund_mismatch(
         raise ValueError("instrument_type_mismatch")
 
 
-def _load_cn_exchange_spot_maps(deadline: float) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+@dataclass(frozen=True)
+class _SpotMaps:
+    etf: dict[str, str]
+    lof: dict[str, str]
+    stock: dict[str, str]
+    load_failed: bool
+
+
+def _load_cn_exchange_spot_maps(deadline: float) -> _SpotMaps:
     etf_map: dict[str, str] = {}
     lof_map: dict[str, str] = {}
     stock_map: dict[str, str] = {}
+    load_failed = False
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
             pool.submit(_load_etf_name_map, deadline): "etf",
@@ -109,8 +122,10 @@ def _load_cn_exchange_spot_maps(deadline: float) -> tuple[dict[str, str], dict[s
             try:
                 result = fut.result()
             except (TimeoutError, RuntimeError):
+                load_failed = True
                 continue
             except Exception:  # noqa: BLE001 - partial spot data is acceptable
+                load_failed = True
                 continue
             if key == "etf":
                 etf_map = result
@@ -118,7 +133,7 @@ def _load_cn_exchange_spot_maps(deadline: float) -> tuple[dict[str, str], dict[s
                 lof_map = result
             else:
                 stock_map = result
-    return etf_map, lof_map, stock_map
+    return _SpotMaps(etf_map, lof_map, stock_map, load_failed)
 
 
 def _candidate_from_cn(parsed: CNExchangeCode, name: str, kind: str) -> _Candidate:
@@ -158,9 +173,133 @@ def _dedupe_candidates(items: list[_Candidate]) -> list[_Candidate]:
     return out
 
 
+def _stock_candidates_from_bare(bare: str, stock_name: str) -> list[_Candidate]:
+    out: list[_Candidate] = []
+    for prefix in ("sh", "sz", "bj"):
+        parsed_stock = parse_cn_stock_code(f"{prefix}{bare}")
+        if parsed_stock is not None:
+            out.append(_candidate_from_cn(parsed_stock, stock_name, "stock"))
+    return _dedupe_candidates(out)
+
+
+def _cross_listed_etf_candidate(
+    bare: str,
+    etf_name: str,
+    stock_candidates: list[_Candidate],
+) -> _Candidate | None:
+    """Same bare code as ETF on one exchange and stock on another (e.g. 000510)."""
+    stock_exchanges = {c.exchange for c in stock_candidates if c.instrument_kind == "stock"}
+    if len(stock_exchanges) == 1:
+        opposite_mid = {"SZ": 1, "SH": 0}.get(next(iter(stock_exchanges)))
+        if opposite_mid is not None:
+            return _candidate_from_cn(
+                build_from_market_id(bare, opposite_mid),
+                etf_name,
+                "index_etf",
+            )
+    parsed = parse_cn_etf_code(bare)
+    if parsed is None:
+        return None
+    return _candidate_from_cn(parsed, etf_name, "index_etf")
+
+
+def _etf_and_stock_candidates_for_bare(
+    bare: str,
+    *,
+    etf_name: str | None,
+    in_etf_map: bool,
+    in_stock_map: bool,
+    stock_name: str | None,
+) -> list[_Candidate]:
+    stock_part: list[_Candidate] = []
+    if in_stock_map and stock_name:
+        stock_part = _stock_candidates_from_bare(bare, stock_name)
+
+    out: list[_Candidate] = []
+    if in_etf_map and etf_name:
+        etf = _cross_listed_etf_candidate(bare, etf_name, stock_part)
+        if etf is not None:
+            out.append(etf)
+    elif stock_part:
+        # ETF spot missing but stock exists — still offer the cross-listed ETF candidate.
+        name = etf_name or lookup_cn_exchange_fund_name(bare) or bare
+        etf = _cross_listed_etf_candidate(bare, name, stock_part)
+        if etf is not None:
+            out.append(etf)
+
+    out.extend(stock_part)
+    return _dedupe_candidates(out)
+
+
+_SH_FUND_PREFIXES = ("51", "56", "58")
+_SZ_FUND_PREFIXES = ("15", "16", "18")
+_CROSS_LIST_BARE_PREFIXES = ("00", "30")
+
+
+def _heuristic_stock_candidates_from_bare(bare: str, stock_name: str) -> list[_Candidate]:
+    parsed = heuristic_cn_stock_from_bare(bare)
+    if parsed is None:
+        return []
+    return [_candidate_from_cn(parsed, stock_name, "stock")]
+
+
+def _fallback_bare_cn_exchange_fund(bare: str, deadline: float) -> list[_Candidate]:
+    """Resolve bare fund codes without spot tables."""
+    if bare.startswith(_SH_FUND_PREFIXES) or bare.startswith(_SZ_FUND_PREFIXES):
+        parsed_etf = parse_cn_etf_code(bare)
+        if parsed_etf is not None:
+            name = bare
+            if time.monotonic() < deadline - 2:
+                name = lookup_cn_exchange_fund_name(bare) or bare
+            return [_candidate_from_cn(parsed_etf, name, "index_etf")]
+
+    if bare.startswith(_CROSS_LIST_BARE_PREFIXES):
+        stock_part = _heuristic_stock_candidates_from_bare(bare, bare)
+        if stock_part:
+            cross_etf = _cross_listed_etf_candidate(bare, bare, stock_part)
+            if cross_etf is not None and cross_etf.exchange != stock_part[0].exchange:
+                return _dedupe_candidates([cross_etf, *stock_part])
+
+    parsed_etf = parse_cn_etf_code(bare)
+    if parsed_etf is not None:
+        return [_candidate_from_cn(parsed_etf, bare, "index_etf")]
+
+    stock_part = _heuristic_stock_candidates_from_bare(bare, bare)
+    return stock_part
+
+
+def _fallback_cn_exchange_fund_candidates(code: str, bare: str, deadline: float) -> list[_Candidate]:
+    """Resolve via code parsing when spot tables timed out or missed the symbol."""
+    if not _has_exchange_prefix(code):
+        fast = _fallback_bare_cn_exchange_fund(bare, deadline)
+        if fast:
+            return fast
+
+    resolve_code = code.strip().lower()
+    parsed_etf = parse_cn_etf_code(resolve_code)
+    out: list[_Candidate] = []
+    if parsed_etf is not None:
+        name = bare
+        if time.monotonic() < deadline - 2:
+            name = lookup_cn_exchange_fund_name(bare) or bare
+        out.append(_candidate_from_cn(parsed_etf, name, "index_etf"))
+
+    if time.monotonic() < deadline - 2:
+        try:
+            parsed_lof = parse_cn_lof_code(resolve_code, deadline=deadline)
+        except Exception:  # noqa: BLE001 - LOF map lookup is best-effort
+            parsed_lof = None
+        if parsed_lof is not None:
+            name = lookup_cn_lof_name(bare) or bare
+            out.append(_candidate_from_cn(parsed_lof, name, "lof"))
+
+    return _dedupe_candidates(out)
+
+
 def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
     bare = _bare_digits(code)
-    etf_map, lof_map, stock_map = _load_cn_exchange_spot_maps(deadline)
+    spots = _load_cn_exchange_spot_maps(deadline)
+    etf_map, lof_map, stock_map = spots.etf, spots.lof, spots.stock
 
     if _has_exchange_prefix(code):
         out: list[_Candidate] = []
@@ -173,27 +312,31 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
             parsed_lof = parse_cn_lof_code(code, deadline=deadline)
             if parsed_lof:
                 out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
-        return _dedupe_candidates(out)
+        result = _dedupe_candidates(out)
+        if not result and spots.load_failed:
+            result = _fallback_cn_exchange_fund_candidates(code, bare, deadline)
+        return result
 
-    if bare in etf_map:
-        parsed = parse_cn_etf_code(bare)
-        if parsed:
-            out = [_candidate_from_cn(parsed, etf_map[bare], "index_etf")]
-        else:
-            out = []
-    else:
-        out = []
+    out: list[_Candidate] = []
     if bare in lof_map:
         parsed_lof = parse_cn_lof_code(bare, deadline=deadline)
         if parsed_lof:
             out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
-    if bare in stock_map:
-        for prefix in ("sh", "sz", "bj"):
-            parsed_stock = parse_cn_stock_code(f"{prefix}{bare}")
-            if parsed_stock:
-                out.append(_candidate_from_cn(parsed_stock, stock_map[bare], "stock"))
 
-    result = _dedupe_candidates(out)
+    out = _dedupe_candidates(
+        _etf_and_stock_candidates_for_bare(
+            bare,
+            etf_name=etf_map.get(bare),
+            in_etf_map=bare in etf_map,
+            in_stock_map=bare in stock_map,
+            stock_name=stock_map.get(bare),
+        )
+        + out
+    )
+
+    result = out
+    if not result and spots.load_failed:
+        result = _fallback_cn_exchange_fund_candidates(code, bare, deadline)
     if not result:
         _maybe_raise_mutual_fund_mismatch(code, bare, etf_map, lof_map, stock_map)
     return result
@@ -201,7 +344,8 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
 
 def _resolve_cn_exchange_stock(code: str, deadline: float) -> list[_Candidate]:
     bare = _bare_digits(code)
-    _, _, stock_map = _load_cn_exchange_spot_maps(deadline)
+    spots = _load_cn_exchange_spot_maps(deadline)
+    stock_map = spots.stock
     if bare not in stock_map:
         return []
 

@@ -9,14 +9,13 @@ import { MetricHelp } from "@/components/ui/MetricHelp";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { getDashboard } from "@/lib/api/dashboard";
 import { formatMoney, formatPercent } from "@/lib/format";
-import { isSignificantScaleGap, SCALE_GAP_TOLERANCE_MINOR } from "@/lib/scale-gap";
 
 export default function OverviewPage() {
   const planId = useParams().id as string;
   const searchParams = useSearchParams();
   const pendingJobId = searchParams.get("job_id");
   const simulationStartFailed = searchParams.get("simulation_error") === "1";
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["dashboard", planId],
     queryFn: () => getDashboard(planId),
   });
@@ -34,6 +33,10 @@ export default function OverviewPage() {
   const enabledHoldings = data.allocation_bars.length > 0;
   const failedChecks = data.weight_checks.checks.filter((check) => !check.passed);
   const simulationSettingsHref = `/plans/${planId}/settings?section=simulation`;
+  const activeExecution = data.active_rebalance_execution;
+  const rebalanceHref = activeExecution
+    ? `/plans/${planId}/rebalance/executions/${activeExecution.id}`
+    : `/plans/${planId}/rebalance`;
 
   return (
     <div className="space-y-6">
@@ -87,41 +90,19 @@ export default function OverviewPage() {
           </div>
           <div>
             <dt className="flex items-center text-sm text-slate-500">
-              持仓合计
-              <MetricHelp termKey="holdings_sum" />
+              已投资金
+              <MetricHelp termKey="invested_minor" />
             </dt>
             <dd className="mt-1 text-lg font-semibold">
-              {formatMoney(data.holdings_sum_minor, data.plan.base_currency)}
+              {formatMoney(data.invested_minor ?? 0, data.plan.base_currency)}
             </dd>
           </div>
           <div>
             <dt className="flex items-center text-sm text-slate-500">
-              {data.holdings_gap_minor > SCALE_GAP_TOLERANCE_MINOR
-                ? "规模超出"
-                : data.holdings_gap_minor < -SCALE_GAP_TOLERANCE_MINOR
-                  ? "规模缺口"
-                  : "规模一致"}
-              <MetricHelp
-                termKey={
-                  data.holdings_gap_minor > SCALE_GAP_TOLERANCE_MINOR
-                    ? "scale_gap_over"
-                    : data.holdings_gap_minor < -SCALE_GAP_TOLERANCE_MINOR
-                      ? "unallocated_gap"
-                      : undefined
-                }
-              />
+              已投资金占比
             </dt>
-            <dd
-              className={`mt-1 text-lg font-semibold ${
-                isSignificantScaleGap(data.holdings_gap_minor) ? "text-amber-700" : ""
-              }`}
-            >
-              {!isSignificantScaleGap(data.holdings_gap_minor)
-                ? "—"
-                : formatMoney(
-                    Math.abs(data.holdings_gap_minor),
-                    data.plan.base_currency,
-                  )}
+            <dd className="mt-1 text-lg font-semibold">
+              {formatPercent(data.invested_ratio ?? 0)}
             </dd>
           </div>
           <div>
@@ -129,15 +110,17 @@ export default function OverviewPage() {
               需调仓标的
               <MetricHelp termKey="actionable_rebalance" />
             </dt>
-            <dd className="mt-1 flex items-center gap-3 text-lg font-semibold">
-              {data.rebalance_summary.actionable_count}
-              {data.rebalance_summary.actionable_count > 0 && (
+            <dd className="mt-1 text-lg font-semibold">
+              {data.rebalance_summary.actionable_count > 0 ? (
                 <Link
-                  href={`/plans/${planId}/rebalance`}
-                  className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white"
+                  href={rebalanceHref}
+                  className="underline decoration-slate-400 underline-offset-2 hover:decoration-slate-900"
+                  data-testid="actionable-rebalance-link"
                 >
-                  查看调仓建议
+                  {data.rebalance_summary.actionable_count}
                 </Link>
+              ) : (
+                data.rebalance_summary.actionable_count
               )}
             </dd>
           </div>
@@ -189,7 +172,11 @@ export default function OverviewPage() {
                       {deviation.instrument_name}{" "}
                       <span className="text-slate-500">({deviation.instrument_code})</span>
                     </span>
-                    <span>
+                    <Link
+                      href={rebalanceHref}
+                      className="text-right underline decoration-slate-300 underline-offset-2 hover:decoration-slate-900"
+                      data-testid="deviation-amount-link"
+                    >
                       <strong
                         className={
                           deviation.deviation_amount_minor >= 0
@@ -203,44 +190,16 @@ export default function OverviewPage() {
                       <span className="ml-2 text-xs text-slate-500">
                         偏离 {formatPercent(Math.abs(deviation.deviation_weight))}
                       </span>
-                    </span>
+                    </Link>
                   </li>
                 ))}
               </ul>
             ) : (
               <p className="mt-3 text-sm text-slate-600">当前持仓与目标配置一致。</p>
             )}
-            <Link
-              href={`/plans/${planId}/rebalance`}
-              className="mt-3 inline-block text-sm font-medium underline"
-            >
-              查看持仓预览 →
-            </Link>
           </section>
         </>
       )}
-
-      <div className="flex flex-wrap gap-3">
-        <Link
-          href={`/plans/${planId}/rebalance`}
-          className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white"
-        >
-          持仓预览
-        </Link>
-        <Link
-          href={`/plans/${planId}/asset-refresh`}
-          className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
-        >
-          资产变更
-        </Link>
-        <button
-          type="button"
-          onClick={() => void refetch()}
-          className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm"
-        >
-          刷新
-        </button>
-      </div>
 
       {data.data_warnings.length > 0 && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">

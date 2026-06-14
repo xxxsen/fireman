@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from fireman_market_provider import create_app
 from fireman_market_provider.adapters.cn_code import reset_cn_code_caches
 from fireman_market_provider.adapters.names import reset_name_caches
-from fireman_market_provider.adapters.resolve import resolve_instrument
+from fireman_market_provider.adapters.resolve import _SpotMaps, resolve_instrument
 from fireman_market_provider.schemas import ResolveRequest
 from fireman_market_provider.timeout_util import (
     clear_test_dispatch,
@@ -70,6 +70,28 @@ def test_resolve_cn_exchange_fund_unambiguous() -> None:
     assert resolved["code"] == "sh510300"
     assert resolved["provider_symbol"] == "sh510300"
     assert resolved["name"] == "沪深300ETF"
+
+
+def test_resolve_510300_when_etf_spot_times_out() -> None:
+    """Regression: resolve must not depend solely on slow fund_etf_spot_em."""
+    reset_name_caches()
+    reset_cn_code_caches()
+    empty = pd.DataFrame({"代码": [], "名称": []})
+    with patch("akshare.fund_etf_spot_em", side_effect=TimeoutError("spot slow")), patch(
+        "akshare.fund_lof_spot_em", return_value=empty
+    ), patch("akshare.stock_zh_a_spot_em", return_value=empty):
+        response = _client().post(
+            "/v1/instruments/resolve",
+            json={
+                "market": "CN",
+                "instrument_type": "cn_exchange_fund",
+                "code": "510300",
+            },
+        )
+    assert response.status_code == 200
+    resolved = response.json()["data"]["resolved"]
+    assert resolved["code"] == "sh510300"
+    assert resolved["provider_symbol"] == "sh510300"
 
 
 def test_resolve_cn_exchange_fund_ambiguous_510300() -> None:
@@ -277,11 +299,7 @@ def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
 
     def slow_spot_maps(deadline: float):
         time.sleep(1.5)
-        return (
-            {},
-            {"166009": "测试LOF"},
-            {},
-        )
+        return _SpotMaps({}, {"166009": "测试LOF"}, {}, False)
 
     monkeypatch.setattr(
         "fireman_market_provider.adapters.resolve._load_cn_exchange_spot_maps",

@@ -32,9 +32,11 @@ vi.mock("@/components/charts/RegionAllocationBarChart", () => ({
 const mockDashboard = vi.hoisted(() => ({
   data: {
     plan: { id: "plan_1", base_currency: "CNY" },
-    parameters: { total_assets_minor: 450_000_00 },
+    parameters: { total_assets_minor: 500_000_00 },
     weight_checks: { passed: true, checks: [] },
-    holdings_sum_minor: 500_000_00,
+    holdings_sum_minor: 400_000_00,
+    invested_minor: 320_000_00,
+    invested_ratio: 0.64,
     holdings_gap_minor: 50_000_00,
     rebalance_summary: { actionable_count: 2 },
     allocation_bars: [
@@ -71,68 +73,53 @@ function renderPage() {
   );
 }
 
-describe("OverviewPage §10 acceptance", () => {
+describe("OverviewPage", () => {
   beforeEach(() => {
     mockOverviewSearchParams.set(new URLSearchParams());
-  });
-
-  it("E1: shows scale over label when holdings_gap is positive (§10.5 E1)", async () => {
-    renderPage();
-
-    expect(await screen.findByText("规模超出")).toBeInTheDocument();
-    expect(screen.getByText("¥50,000.00")).toBeInTheDocument();
-    const gapRow = screen.getByText("规模超出").closest("div");
-    expect(gapRow?.querySelector("dd")?.className).toMatch(/amber/);
-  });
-
-  it("E3: B1-style dashboard shows zero actionable and empty structural deviations (§10.5 E3)", async () => {
     mockDashboard.data = {
       ...mockDashboard.data,
-      parameters: { total_assets_minor: 450_000_00 },
-      holdings_sum_minor: 400_000_00,
-      holdings_gap_minor: -50_000_00,
-      rebalance_summary: { actionable_count: 0 },
-      top_deviations: [],
+      active_rebalance_execution: undefined,
+    };
+  });
+
+  it("shows invested metrics instead of scale gap", async () => {
+    renderPage();
+
+    expect(await screen.findByText("已投资金")).toBeInTheDocument();
+    expect(screen.getByText("已投资金占比")).toBeInTheDocument();
+    expect(screen.getByText("64%")).toBeInTheDocument();
+    expect(screen.queryByText("规模一致")).not.toBeInTheDocument();
+    expect(screen.queryByText("规模超出")).not.toBeInTheDocument();
+  });
+
+  it("links actionable count to rebalance preview when no active execution", async () => {
+    renderPage();
+
+    const link = await screen.findByTestId("actionable-rebalance-link");
+    expect(link).toHaveAttribute("href", "/plans/plan_1/rebalance");
+  });
+
+  it("links deviations to active execution workspace when in progress", async () => {
+    mockDashboard.data = {
+      ...mockDashboard.data,
+      active_rebalance_execution: {
+        id: "rbx_1",
+        status: "in_progress",
+        cash_pool_minor: 0,
+        done_line_count: 1,
+        line_count: 3,
+      },
     };
     renderPage();
 
-    expect(await screen.findByText("需调仓标的")).toBeInTheDocument();
-    const actionableRow = screen.getByText("需调仓标的").closest("div");
-    expect(actionableRow?.querySelector("dd")?.textContent?.trim()).toMatch(/^0/);
-    expect(screen.getByText("规模缺口")).toBeInTheDocument();
-    expect(screen.getByText("当前持仓与目标配置一致。")).toBeInTheDocument();
+    const links = await screen.findAllByTestId("deviation-amount-link");
+    expect(links[0]).toHaveAttribute("href", "/plans/plan_1/rebalance/executions/rbx_1");
   });
 
-  it("shows portfolio status, both allocation charts and rebalance CTA when actionable", async () => {
-    mockDashboard.data = {
-      ...mockDashboard.data,
-      holdings_sum_minor: 490_000_00,
-      holdings_gap_minor: -10_000_00,
-      rebalance_summary: { actionable_count: 2 },
-      top_deviations: [
-        {
-          instrument_name: "测试基金",
-          instrument_code: "T1",
-          deviation_weight: 0.1,
-          deviation_amount_minor: 10_000_00,
-        },
-      ],
-    };
+  it("does not show bottom action button row", async () => {
     renderPage();
-
-    expect(await screen.findByText("需调仓标的")).toBeInTheDocument();
-    expect(screen.getByTestId("allocation-chart")).toBeInTheDocument();
-    expect(screen.getByTestId("region-chart")).toBeInTheDocument();
-    expect(screen.getByText("规模缺口")).toBeInTheDocument();
-    expect(screen.getByText("¥10,000.00")).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("link", { name: "查看调仓建议" })[0],
-    ).toHaveAttribute("href", "/plans/plan_1/rebalance");
-  });
-
-  it("links asset refresh entry", async () => {
-    renderPage();
-    const link = await screen.findByRole("link", { name: "资产变更" });
-    expect(link).toHaveAttribute("href", "/plans/plan_1/asset-refresh");
+    await screen.findByText("已投资金");
+    expect(screen.queryByRole("link", { name: "刷新" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "持仓预览" })).not.toBeInTheDocument();
   });
 });

@@ -150,10 +150,16 @@ def _load_lof_market_id_cache(
     return mapping
 
 
-def etf_market_id(bare: str) -> int:
-    from akshare.fund.fund_etf_em import get_market_id
+def etf_market_id(bare: str) -> int | None:
+    try:
+        from akshare.fund.fund_etf_em import get_market_id
 
-    return get_market_id(bare)
+        return get_market_id(bare)
+    except Exception:  # noqa: BLE001 - fall back to prefix heuristics when upstream fails
+        prefix = _stock_prefix_from_bare(bare)
+        if prefix is None:
+            return None
+        return _prefix_to_market_id(prefix)
 
 
 def stock_market_id(bare: str) -> int | None:
@@ -211,6 +217,22 @@ def parse_cn_lof_code(code: str, *, deadline: float | None = None) -> CNExchange
     return parse_cn_exchange_code(code, lambda bare: lof_market_id(bare, deadline=deadline))
 
 
+def heuristic_cn_stock_from_bare(bare: str) -> CNExchangeCode | None:
+    """Best-effort stock exchange from code prefix rules (no upstream calls)."""
+    digits = _bare_digits(bare)
+    if len(digits) != 6 or not digits.isdigit():
+        return None
+    prefix = _stock_prefix_from_bare(digits)
+    if prefix is None:
+        return None
+    return build_from_market_id(digits, _prefix_to_market_id(prefix))
+
+
+def heuristic_cn_etf_from_bare(bare: str) -> CNExchangeCode | None:
+    """Best-effort ETF exchange from code prefix rules (no upstream calls)."""
+    return heuristic_cn_stock_from_bare(bare)
+
+
 def eastmoney_symbol_from_canonical(canonical: str) -> str:
     """Strip sh/sz/bj prefix for Eastmoney hist APIs."""
     _, bare = _split_prefixed(canonical)
@@ -222,3 +244,21 @@ def prefixed_symbol_from_canonical(canonical: str) -> str:
     if parsed_prefix is not None:
         return f"{parsed_prefix}{bare}"
     return canonical.strip().lower()
+
+
+def resolve_cn_etf_fetch_code(source_code: str) -> CNExchangeCode:
+    """Resolve ETF identifiers for fetch; falls back to prefix heuristics when needed."""
+    parsed = parse_cn_etf_code(source_code)
+    if parsed is not None:
+        return parsed
+    from .symbols import cn_exchange_symbol
+
+    prefixed = cn_exchange_symbol(source_code)
+    bare = eastmoney_symbol_from_canonical(prefixed)
+    prefix = prefixed[:2]
+    return CNExchangeCode(
+        canonical_code=prefixed,
+        eastmoney_symbol=bare,
+        prefixed_symbol=prefixed,
+        exchange=_market_id_to_exchange(_prefix_to_market_id(prefix)),
+    )

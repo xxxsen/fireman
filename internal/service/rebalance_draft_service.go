@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/domain"
@@ -153,13 +152,6 @@ func (s *RebalanceDraftService) Create(ctx context.Context, planID string,
 		return RebalanceDraftDetail{}, wrapRepo("create rebalance draft tx", err)
 	}
 	return s.Get(ctx, planID, draft.ID)
-}
-
-func isUniqueConstraintErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "unique constraint failed")
 }
 
 func (s *RebalanceDraftService) PatchLines(ctx context.Context, planID, draftID string,

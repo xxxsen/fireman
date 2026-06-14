@@ -1,6 +1,9 @@
 package service
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 var (
 	ErrNotFound          = errors.New("not found")
@@ -31,4 +34,11 @@ func (e *AppError) Unwrap() error { return e.Err }
 
 func newErr(code, message string, details map[string]any) *AppError {
 	return &AppError{Code: code, Message: message, Details: details}
+}
+
+func isUniqueConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "unique constraint failed")
 }

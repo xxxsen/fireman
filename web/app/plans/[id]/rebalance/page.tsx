@@ -1,20 +1,41 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { CurrentWeightCell, TargetWeightCell } from "@/components/plans/TargetWeightCell";
 import { InlineTooltip } from "@/components/ui/InlineTooltip";
 import type { RebalanceWorkspaceRow } from "@/lib/allocation-summary";
 import { buildRebalanceWorkspaceRows } from "@/lib/allocation-summary";
 import { getRebalance, getTargets } from "@/lib/api/holdings";
+import {
+  createRebalanceExecution,
+  getActiveRebalanceExecution,
+} from "@/lib/api/rebalance-executions";
 import { assetClassLabel, formatMoney, regionLabel } from "@/lib/format";
+import { ApiError } from "@/lib/api/client";
+
+function lineStatusHint(status: string, remainingMinor: number): string | null {
+  switch (status) {
+    case "partial":
+      return `执行中 · 剩余 ${formatMoney(Math.abs(remainingMinor))}`;
+    case "done":
+      return "已完成";
+    case "not_started":
+      return remainingMinor !== 0 ? `剩余 ${formatMoney(Math.abs(remainingMinor))}` : null;
+    default:
+      return null;
+  }
+}
 
 export default function RebalancePage() {
   const planId = useParams().id as string;
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const assetRefreshed = searchParams.get("asset_refreshed") === "1";
+  const executionCompleted = searchParams.get("execution_completed") === "1";
 
   const targets = useQuery({
     queryKey: ["targets", planId],
@@ -24,16 +45,47 @@ export default function RebalancePage() {
     queryKey: ["rebalance", planId],
     queryFn: () => getRebalance(planId, "full"),
   });
+  const activeExecution = useQuery({
+    queryKey: ["rebalance-execution-active", planId],
+    queryFn: () => getActiveRebalanceExecution(planId),
+  });
+
+  const createExecution = useMutation({
+    mutationFn: () => createRebalanceExecution(planId),
+    onSuccess: (detail) => {
+      void queryClient.invalidateQueries({ queryKey: ["rebalance-execution-active", planId] });
+      router.push(`/plans/${planId}/rebalance/executions/${detail.execution.id}`);
+    },
+  });
 
   const summary = rebalance.data?.summary;
   const hasEnabledHoldings = (summary?.holdings_total_minor ?? 0) > 0;
+  const active = activeExecution.data;
+  const executionInProgress = !!active?.execution;
+
+  const executionLineByInstrument = useMemo(() => {
+    const map = new Map<string, { status: string; remaining_delta_minor: number }>();
+    for (const line of active?.lines ?? []) {
+      map.set(line.instrument_id, {
+        status: line.execution_status,
+        remaining_delta_minor: line.remaining_delta_minor,
+      });
+    }
+    return map;
+  }, [active?.lines]);
 
   const workspaceRows = useMemo(() => {
     if (!targets.data || !rebalance.data) return [];
     return buildRebalanceWorkspaceRows(targets.data, rebalance.data.lines);
   }, [targets.data, rebalance.data]);
 
-  if (targets.isLoading || rebalance.isLoading || !targets.data || !rebalance.data) {
+  if (
+    targets.isLoading ||
+    rebalance.isLoading ||
+    activeExecution.isLoading ||
+    !targets.data ||
+    !rebalance.data
+  ) {
     return <p className="text-slate-600">加载持仓预览…</p>;
   }
 
@@ -93,6 +145,10 @@ export default function RebalancePage() {
     );
   };
 
+  const executionHref = executionInProgress
+    ? `/plans/${planId}/rebalance/executions/${active!.execution.id}`
+    : `/plans/${planId}/rebalance/executions`;
+
   return (
     <div className="space-y-6">
       {assetRefreshed && (
@@ -101,6 +157,14 @@ export default function RebalancePage() {
           className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
         >
           资产变更已提交，持仓预览已更新。
+        </div>
+      )}
+      {executionCompleted && (
+        <div
+          role="status"
+          className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
+        >
+          调仓执行已完成，持仓已同步更新。
         </div>
       )}
 
@@ -125,17 +189,68 @@ export default function RebalancePage() {
           <p className="mt-1 text-sm text-slate-600">
             对比当前持仓与目标结构；本页仅展示差异，不直接编辑持仓。
           </p>
+          {executionInProgress && (
+            <p className="mt-2 text-sm text-amber-800" data-testid="execution-blocking-hint">
+              当前有进行中的调仓执行。请先完成或放弃调仓，再进行资产变更。
+            </p>
+          )}
+          {executionInProgress && active && (
+            <p className="mt-1 text-sm text-slate-600">
+              进行中 · 已完成 {active.stats.done_line_count}/{active.stats.line_count} 个资产
+              {active.stats.skipped_line_count ? ` · 跳过 ${active.stats.skipped_line_count} 个` : ""} · 现金池{" "}
+              {formatMoney(active.execution.cash_pool_minor)}
+            </p>
+          )}
         </div>
         {hasEnabledHoldings && (
-          <Link
-            href={`/plans/${planId}/asset-refresh`}
-            className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white"
-            data-testid="asset-refresh-primary"
-          >
-            资产变更
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {executionInProgress ? (
+              <span
+                className="inline-flex min-h-11 cursor-not-allowed items-center rounded-md border border-slate-200 bg-slate-100 px-4 text-sm font-medium text-slate-400"
+                data-testid="asset-refresh-primary-disabled"
+                aria-disabled="true"
+              >
+                资产变更
+              </span>
+            ) : (
+              <Link
+                href={`/plans/${planId}/asset-refresh`}
+                className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
+                data-testid="asset-refresh-primary"
+              >
+                资产变更
+              </Link>
+            )}
+            {executionInProgress ? (
+              <Link
+                href={executionHref}
+                className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white"
+                data-testid="continue-rebalance-execution"
+              >
+                继续调仓执行
+              </Link>
+            ) : (
+              <button
+                type="button"
+                className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white disabled:opacity-50"
+                data-testid="start-rebalance-execution"
+                disabled={createExecution.isPending}
+                onClick={() => createExecution.mutate()}
+              >
+                调仓执行
+              </button>
+            )}
+          </div>
         )}
       </div>
+
+      {createExecution.error && (
+        <p className="text-sm text-red-600" role="alert">
+          {createExecution.error instanceof ApiError
+            ? createExecution.error.message
+            : "创建调仓执行失败"}
+        </p>
+      )}
 
       {!hasEnabledHoldings ? (
         <section className="rounded-lg border border-dashed border-slate-300 p-8 text-center">
@@ -165,49 +280,66 @@ export default function RebalancePage() {
                 </tr>
               </thead>
               <tbody>
-                {workspaceRows.map((row) => (
-                  <tr
-                    key={row.key}
-                    className={`border-t ${
-                      row.level === "holding" ? "bg-white hover:bg-slate-50" : "bg-slate-50/60"
-                    }`}
-                  >
-                    <td className={`px-3 py-2 ${dimensionClass(row)}`}>
-                      {row.level === "holding" && row.instrument_id ? (
-                        <Link
-                          href={`/assets/${row.instrument_id}`}
-                          className="font-medium underline-offset-2 hover:underline"
-                        >
-                          {dimensionLabel(row)}
-                        </Link>
-                      ) : (
-                        dimensionLabel(row)
-                      )}
-                      {row.level === "holding" && row.instrument_code && (
-                        <span className="block text-xs font-normal text-slate-500">
-                          {row.instrument_code}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <TargetWeightCell row={row} />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <CurrentWeightCell row={row} />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {row.level === "holding"
-                        ? formatMoney(row.target_amount_minor)
-                        : summaryAmountPlaceholder(row, "target")}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {row.level === "holding"
-                        ? formatMoney(row.current_amount_minor)
-                        : summaryAmountPlaceholder(row, "current")}
-                    </td>
-                    <td className="px-3 py-2 text-right">{gapAmountCell(row)}</td>
-                  </tr>
-                ))}
+                {workspaceRows.map((row) => {
+                  const execLine =
+                    row.level === "holding" && row.instrument_id
+                      ? executionLineByInstrument.get(row.instrument_id)
+                      : undefined;
+                  const execHint = execLine
+                    ? lineStatusHint(execLine.status, execLine.remaining_delta_minor)
+                    : null;
+                  return (
+                    <tr
+                      key={row.key}
+                      className={`border-t ${
+                        row.level === "holding" ? "bg-white hover:bg-slate-50" : "bg-slate-50/60"
+                      }`}
+                    >
+                      <td className={`px-3 py-2 ${dimensionClass(row)}`}>
+                        {row.level === "holding" && row.instrument_id ? (
+                          <Link
+                            href={`/assets/${row.instrument_id}`}
+                            className="font-medium underline-offset-2 hover:underline"
+                          >
+                            {dimensionLabel(row)}
+                          </Link>
+                        ) : (
+                          dimensionLabel(row)
+                        )}
+                        {row.level === "holding" && row.instrument_code && (
+                          <span className="block text-xs font-normal text-slate-500">
+                            {row.instrument_code}
+                          </span>
+                        )}
+                        {execHint && (
+                          <span
+                            className="mt-1 block text-xs text-sky-700"
+                            data-testid="execution-line-hint"
+                          >
+                            {execHint}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <TargetWeightCell row={row} />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <CurrentWeightCell row={row} />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {row.level === "holding"
+                          ? formatMoney(row.target_amount_minor)
+                          : summaryAmountPlaceholder(row, "target")}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {row.level === "holding"
+                          ? formatMoney(row.current_amount_minor)
+                          : summaryAmountPlaceholder(row, "current")}
+                      </td>
+                      <td className="px-3 py-2 text-right">{gapAmountCell(row)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -67,6 +67,8 @@ services:
       TZ: "Asia/Shanghai"
       MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH: /cache/mutual_fund_names.json
       MARKET_PROVIDER_MUTUAL_FUND_FETCH_TIMEOUT: "60"
+      MARKET_PROVIDER_RESOLVE_TIMEOUT: "90"
+      MARKET_PROVIDER_RESOLVE_DEADLINE: "90"
     volumes:
       - fireman-provider-cache:/cache
     ports:

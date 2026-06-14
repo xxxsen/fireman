@@ -60,10 +60,6 @@ function isCandidateCompatible(candidate: ResolveCandidate): boolean {
   return candidate.is_importable ?? false;
 }
 
-function firstCompatibleCandidate(candidates: ResolveCandidate[]): ResolveCandidate | null {
-  return candidates.find((c) => isCandidateCompatible(c)) ?? null;
-}
-
 type Stage = "search" | "disambiguate" | "confirm" | "error";
 
 export default function ImportAssetPage() {
@@ -93,7 +89,7 @@ export default function ImportAssetPage() {
       const data = await resolveImport({ market, instrument_type: instrumentType, code });
       if (data.ambiguous && data.candidates?.length) {
         setCandidates(data.candidates);
-        setSelected(firstCompatibleCandidate(data.candidates));
+        setSelected(null);
         setStage("disambiguate");
         return;
       }

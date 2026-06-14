@@ -47,8 +47,11 @@ type DashboardView struct {
 	Parameters       repository.PlanParameters     `json:"parameters"`
 	WeightChecks     domain.WeightValidationResult `json:"weight_checks"`
 	HoldingsSumMinor int64                         `json:"holdings_sum_minor"`
+	InvestedMinor    int64                         `json:"invested_minor"`
+	InvestedRatio    float64                       `json:"invested_ratio"`
 	HoldingsGapMinor int64                         `json:"holdings_gap_minor"`
 	RebalanceSummary domain.RebalanceSummary       `json:"rebalance_summary"`
+	ActiveExecution  *ActiveRebalanceExecution     `json:"active_rebalance_execution,omitempty"`
 	AllocationBars   []DashboardAllocationBar      `json:"allocation_bars"`
 	RegionBars       []DashboardRegionBar          `json:"region_bars"`
 	TopDeviations    []DashboardDeviation          `json:"top_deviations"`
@@ -56,6 +59,15 @@ type DashboardView struct {
 	LatestSimulation *SimulationRunView            `json:"latest_simulation,omitempty"`
 	StressTest       *DashboardAnalysisSummary     `json:"stress_test,omitempty"`
 	SensitivityTest  *DashboardAnalysisSummary     `json:"sensitivity_test,omitempty"`
+}
+
+// ActiveRebalanceExecution is the in-progress execution summary for dashboard navigation.
+type ActiveRebalanceExecution struct {
+	ID            string `json:"id"`
+	Status        string `json:"status"`
+	CashPoolMinor int64  `json:"cash_pool_minor"`
+	DoneLineCount int    `json:"done_line_count"`
+	LineCount     int    `json:"line_count"`
 }
 
 // DashboardAnalysisSummary holds stress/sensitivity summary for the dashboard.
@@ -87,6 +99,7 @@ type DashboardService struct {
 	simulations *SimulationService
 	stress      *StressService
 	sensitivity *SensitivityService
+	executions  *repository.RebalanceExecutionRepo
 }
 
 func NewDashboardService(
@@ -104,12 +117,13 @@ func NewDashboardService(
 	simulations *SimulationService,
 	stress *StressService,
 	sensitivity *SensitivityService,
+	executions *repository.RebalanceExecutionRepo,
 ) *DashboardService {
 	return &DashboardService{
 		plans: plans, params: params, alloc: alloc, scenario: scenario,
 		holdings: holdings, instRepo: instRepo, sims: sims, analysis: analysis, hash: hash,
 		targets: targets, rebalance: rebalance, simulations: simulations,
-		stress: stress, sensitivity: sensitivity,
+		stress: stress, sensitivity: sensitivity, executions: executions,
 	}
 }
 
@@ -142,13 +156,19 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 		return DashboardView{}, err
 	}
 
-	var holdingsSum int64
+	var holdingsSum, investedMinor int64
 	holds, _ := s.holdings.ListByPlan(ctx, planID)
 	for _, h := range holds {
 		if h.Enabled {
 			holdingsSum += h.CurrentAmountMinor
+			if h.AssetClass != domain.AssetClassCash {
+				investedMinor += h.CurrentAmountMinor
+			}
 		}
 	}
+	investedRatio := computeInvestedRatio(investedMinor, params.TotalAssetsMinor)
+
+	activeExecution := s.loadActiveExecution(ctx, planID)
 
 	bars := buildAllocationBars(targets)
 	regionBars := buildRegionBars(targets)
@@ -163,8 +183,11 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 		Parameters:       params,
 		WeightChecks:     targets.WeightChecks,
 		HoldingsSumMinor: holdingsSum,
+		InvestedMinor:    investedMinor,
+		InvestedRatio:    investedRatio,
 		HoldingsGapMinor: holdingsSum - params.TotalAssetsMinor,
 		RebalanceSummary: reb.Summary,
+		ActiveExecution:  activeExecution,
 		AllocationBars:   bars,
 		RegionBars:       regionBars,
 		TopDeviations:    topDev,
@@ -373,6 +396,33 @@ func collectDataWarnings(ctx context.Context, instRepo *repository.InstrumentRep
 		}
 	}
 	return warnings
+}
+
+func (s *DashboardService) loadActiveExecution(ctx context.Context, planID string) *ActiveRebalanceExecution {
+	if s.executions == nil {
+		return nil
+	}
+	active, err := s.executions.GetActiveByPlan(ctx, planID)
+	if err != nil {
+		return nil
+	}
+	summaries, err := s.executions.ListByPlan(ctx, planID)
+	if err != nil {
+		return &ActiveRebalanceExecution{
+			ID: active.ID, Status: active.Status, CashPoolMinor: active.CashPoolMinor,
+		}
+	}
+	for _, summary := range summaries {
+		if summary.ID == active.ID {
+			return &ActiveRebalanceExecution{
+				ID: summary.ID, Status: summary.Status, CashPoolMinor: summary.CashPoolMinor,
+				DoneLineCount: summary.DoneLineCount, LineCount: summary.LineCount,
+			}
+		}
+	}
+	return &ActiveRebalanceExecution{
+		ID: active.ID, Status: active.Status, CashPoolMinor: active.CashPoolMinor,
+	}
 }
 
 func absFloat(v float64) float64 {

@@ -27,7 +27,7 @@ def test_fetch_timeout_from_env(monkeypatch) -> None:
 def test_resolve_timeout_default(monkeypatch) -> None:
     monkeypatch.delenv("MARKET_PROVIDER_RESOLVE_TIMEOUT", raising=False)
     assert resolve_timeout_seconds() == DEFAULT_RESOLVE_TIMEOUT_SECONDS
-    assert resolve_timeout_seconds() == 5
+    assert resolve_timeout_seconds() == 90
 
 
 def test_resolve_timeout_from_env(monkeypatch) -> None:

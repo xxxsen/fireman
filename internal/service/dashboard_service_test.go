@@ -86,3 +86,16 @@ func TestTopDeviationsB1AllStructuralHoldReturnsEmpty(t *testing.T) {
 		t.Fatalf("len = %d, want 0 for B1-style zero structural gap", len(got))
 	}
 }
+
+func TestComputeInvestedRatioUsesPlanTotalAssets(t *testing.T) {
+	got := computeInvestedRatio(320_000_00, 500_000_00)
+	if got != 0.64 {
+		t.Fatalf("ratio = %v, want 0.64", got)
+	}
+	if computeInvestedRatio(320_000_00, 0) != 0 {
+		t.Fatal("zero total assets should return 0")
+	}
+	if computeInvestedRatio(320_000_00, -1) != 0 {
+		t.Fatal("negative total assets should return 0")
+	}
+}

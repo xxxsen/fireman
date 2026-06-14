@@ -152,6 +152,19 @@ describe("NewPlanWizardPage", () => {
     createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
   });
 
+  it("uses updated default plan name and financial inputs", async () => {
+    renderWizard();
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(screen.getByDisplayValue(`我的 FIRE 计划 (${today})`)).toBeInTheDocument();
+    expect(screen.getByLabelText("当前年龄")).toHaveValue(30);
+    expect(screen.getByLabelText("退休年龄")).toHaveValue(35);
+    expect(screen.getByDisplayValue("4000000")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("120000")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("100000")).toBeInTheDocument();
+    expect(screen.getByText("预计 FIRE 时长")).toBeInTheDocument();
+  });
+
   it("does not call create until final step", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
@@ -210,7 +223,7 @@ describe("NewPlanWizardPage", () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument();
-    expect(await screen.findByText("¥1,000,000.00")).toBeInTheDocument();
+    expect(await screen.findByText("¥4,000,000.00")).toBeInTheDocument();
   });
 
   it("creates without simulation by default and navigates to overview", async () => {

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +14,7 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
+//nolint:dupl // mirrors execution create validation with draft-specific active check
 func validateRebalanceDraftCreate(
 	ctx context.Context,
 	s *RebalanceDraftService,
@@ -32,23 +32,9 @@ func validateRebalanceDraftCreate(
 			})
 	}
 
-	result, err := s.rebalance.GetRebalance(ctx, planID, domain.RebalanceModeFull, 0)
+	result, err := loadStructuralRebalanceForCreate(ctx, s.sql, s.rebalance, planID)
 	if err != nil {
-		return nil, domain.RebalanceResult{}, wrapRepo("get rebalance for draft create", err)
-	}
-	if result.Summary.HoldingsTotalMinor <= 0 {
-		return nil, domain.RebalanceResult{}, newErr("validation_failed", "no enabled holdings", nil)
-	}
-	if result.Summary.StructuralActionableCount <= 0 {
-		return nil, domain.RebalanceResult{}, newErr("validation_failed", "no structural rebalance actions", nil)
-	}
-	maxGap := maxStructuralGapWeight(result.Lines)
-	params, err := repository.NewParametersRepo(s.sql).Get(ctx, planID)
-	if err != nil {
-		return nil, domain.RebalanceResult{}, wrapRepo("get plan parameters for draft create", err)
-	}
-	if math.Abs(maxGap) <= params.RebalanceThreshold {
-		return nil, domain.RebalanceResult{}, newErr("validation_failed", "structural gap below rebalance threshold", nil)
+		return nil, domain.RebalanceResult{}, err
 	}
 	return active, result, nil
 }

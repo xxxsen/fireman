@@ -31,6 +31,8 @@ export const TERMS: Record<string, string> = {
     "当前计划中已启用标的的持仓金额合计，应与券商账户大致一致（不含未录入资产）",
   holdings_market_value:
     "已录入持仓的当前市值合计，反映真实账户规模",
+  invested_minor:
+    "当前计划中已启用标的的持仓金额合计，用于衡量已投资金占计划基准规模的比例",
   configured_total_assets:
     "创建或更新计划时填写的基准规模；用于 FIRE 模拟与录入校验，不等于实时市值。市值变化后可在调仓页一键同步",
   scale_gap_over:
@@ -57,6 +59,8 @@ export const TERMS: Record<string, string> = {
     "仅用本次新增资金买入欠配标的，不主动卖出超配部分",
   asset_refresh:
     "更新账户真实资产金额；可选同步计划基准；不等同于新建计划",
+  annual_savings_wizard:
+    "指 FIRE 之前，你每年预计还能新增积攒多少资金。",
   asset_refresh_vs_rebalance_plan:
     "资产变更=刷新事实基准；调仓计划=按冻结建议调整持仓，编辑时不重算其他行目标",
   rebalance_plan_draft:

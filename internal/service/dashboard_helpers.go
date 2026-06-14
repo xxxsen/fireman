@@ -9,6 +9,13 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
+func computeInvestedRatio(investedMinor, totalAssetsMinor int64) float64 {
+	if totalAssetsMinor <= 0 {
+		return 0
+	}
+	return float64(investedMinor) / float64(totalAssetsMinor)
+}
+
 func (s *DashboardService) loadScenarioName(ctx context.Context, scenarioID *string) string {
 	if scenarioID == nil || *scenarioID == "" {
 		return ""

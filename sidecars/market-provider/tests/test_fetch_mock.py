@@ -153,13 +153,19 @@ def test_fetch_cn_exchange_fund_resolves_display_name() -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["data"]["name"] == "沪深300ETF华泰柏瑞"
+        assert body["data"]["provider_symbol"] == "sh510300"
 
 
 def test_fetch_fallback_second_source() -> None:
     df = pd.DataFrame({"date": ["2024-06-01"], "close": [2.5]})
+    captured: dict[str, str] = {}
+
+    def _tx_hist(**kwargs: str) -> pd.DataFrame:
+        captured["symbol"] = kwargs["symbol"]
+        return df
 
     with patch("akshare.fund_etf_hist_em", side_effect=RuntimeError("primary failed")), patch(
-        "akshare.stock_zh_a_hist_tx", return_value=df
+        "akshare.stock_zh_a_hist_tx", side_effect=_tx_hist
     ), patch(
         "akshare.fund_etf_hist_sina",
         side_effect=AssertionError("sina should not run when tx succeeds"),
@@ -177,6 +183,7 @@ def test_fetch_fallback_second_source() -> None:
         )
         assert response.status_code == 200
         assert response.json()["data"]["source_name"] == "ak.stock_zh_a_hist_tx"
+        assert captured["symbol"] == "sh510300"
 
 
 def test_fetch_cn_stock_fallback_tx() -> None:

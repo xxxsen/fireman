@@ -48,7 +48,7 @@ def test_fetch_response_shape_matches_design() -> None:
             "source_kind",
         }
         assert data["provider"] == "akshare"
-        assert data["provider_symbol"] == "510300"
+        assert data["provider_symbol"] == "sh510300"
         assert len(data["points"]) == 1
 
 

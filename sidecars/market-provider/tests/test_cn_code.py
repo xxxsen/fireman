@@ -9,6 +9,7 @@ from fireman_market_provider.adapters.cn_code import (
     parse_cn_stock_code,
     prefixed_symbol_from_canonical,
     reset_cn_code_caches,
+    resolve_cn_etf_fetch_code,
 )
 from fireman_market_provider.timeout_util import clear_test_dispatch, register_test_dispatch
 
@@ -31,6 +32,13 @@ def test_etf_510300_sh() -> None:
     assert parsed.canonical_code == "sh510300"
     assert parsed.eastmoney_symbol == "510300"
     assert parsed.prefixed_symbol == "sh510300"
+
+
+def test_resolve_cn_etf_fetch_code_normalizes_bare_510300() -> None:
+    parsed = resolve_cn_etf_fetch_code("510300")
+    assert parsed.canonical_code == "sh510300"
+    assert parsed.prefixed_symbol == "sh510300"
+    assert prefixed_symbol_from_canonical("510300") == "510300"
 
 
 def test_etf_159915_sz() -> None:

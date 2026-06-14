@@ -11,6 +11,9 @@ CONFIG_PATH="${FIREMAN_CONFIG:-$ROOT/config.json}"
 DEV_DATA_DIR="${FIREMAN_DEV_DATA_DIR:-$ROOT/.dev-data}"
 mkdir -p "$DEV_DATA_DIR"
 
+export MARKET_PROVIDER_RESOLVE_TIMEOUT="${MARKET_PROVIDER_RESOLVE_TIMEOUT:-90}"
+export MARKET_PROVIDER_RESOLVE_DEADLINE="${MARKET_PROVIDER_RESOLVE_DEADLINE:-90}"
+
 pids=()
 cleanup() {
   trap - INT TERM EXIT
@@ -24,7 +27,10 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 echo "[fireman] starting market-provider on :18081"
-( cd "$PROVIDER_DIR" && uv run uvicorn fireman_market_provider.app:app --host 0.0.0.0 --port 18081 --reload ) &
+(
+  cd "$PROVIDER_DIR"
+  uv run uvicorn fireman_market_provider.app:app --host 0.0.0.0 --port 18081 --reload
+) &
 pids+=("$!")
 
 echo "[fireman] starting backend with config=$CONFIG_PATH"

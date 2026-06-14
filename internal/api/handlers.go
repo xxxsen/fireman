@@ -16,23 +16,24 @@ import (
 
 // Services groups business services.
 type Services struct {
-	Plans            *service.PlanService
-	Allocation       *service.AllocationService
-	Holdings         *service.HoldingsService
-	Targets          *service.TargetService
-	Rebalance        *service.RebalanceService
-	RebalanceDrafts  *service.RebalanceDraftService
-	AssetRefresh     *service.AssetRefreshService
-	Instruments      *service.InstrumentService
-	HoldingSnapshots *service.HoldingSnapshotService
-	Simulations      *service.SimulationService
-	Stress           *service.StressService
-	Sensitivity      *service.SensitivityService
-	Jobs             *service.JobService
-	Dashboard        *service.DashboardService
-	System           *service.SystemService
-	EventHub         *jobs.EventHub
-	Maintenance      *service.MaintenanceGate
+	Plans               *service.PlanService
+	Allocation          *service.AllocationService
+	Holdings            *service.HoldingsService
+	Targets             *service.TargetService
+	Rebalance           *service.RebalanceService
+	RebalanceDrafts     *service.RebalanceDraftService
+	RebalanceExecutions *service.RebalanceExecutionService
+	AssetRefresh        *service.AssetRefreshService
+	Instruments         *service.InstrumentService
+	HoldingSnapshots    *service.HoldingSnapshotService
+	Simulations         *service.SimulationService
+	Stress              *service.StressService
+	Sensitivity         *service.SensitivityService
+	Jobs                *service.JobService
+	Dashboard           *service.DashboardService
+	System              *service.SystemService
+	EventHub            *jobs.EventHub
+	Maintenance         *service.MaintenanceGate
 }
 
 func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *service.MaintenanceGate) Services {
@@ -61,6 +62,10 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	rebalanceDraftSvc := service.NewRebalanceDraftService(
 		db, plans, repository.NewRebalanceDraftRepo(db), holdings, holdingsSvc, rebalanceSvc,
 	)
+	executionRepo := repository.NewRebalanceExecutionRepo(db)
+	rebalanceExecutionSvc := service.NewRebalanceExecutionService(
+		db, plans, executionRepo, holdings, holdingsSvc, rebalanceSvc,
+	)
 	simSvc := service.NewSimulationService(
 		db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, hash,
 	)
@@ -68,19 +73,20 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	sensitivitySvc := service.NewSensitivityService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	dashboardSvc := service.NewDashboardService(
 		plans, params, alloc, scenario, holdings, instRepo, simRepo, analysisRepo, hash,
-		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc,
+		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc, executionRepo,
 	)
 
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, instRepo, hash, snapSvc, marketRepo)
 	return Services{
-		Plans:           planSvc,
-		Allocation:      service.NewAllocationService(db, plans, params, alloc, scenario),
-		Holdings:        holdingsSvc,
-		Targets:         targetSvc,
-		Rebalance:       rebalanceSvc,
-		RebalanceDrafts: rebalanceDraftSvc,
+		Plans:               planSvc,
+		Allocation:          service.NewAllocationService(db, plans, params, alloc, scenario),
+		Holdings:            holdingsSvc,
+		Targets:             targetSvc,
+		Rebalance:           rebalanceSvc,
+		RebalanceDrafts:     rebalanceDraftSvc,
+		RebalanceExecutions: rebalanceExecutionSvc,
 		AssetRefresh: service.NewAssetRefreshService(
-			db, plans, params, alloc, scenario, holdingsSvc, repository.NewAssetRefreshEventRepo(db),
+			db, plans, params, alloc, scenario, holdingsSvc, repository.NewAssetRefreshEventRepo(db), executionRepo,
 		),
 		Instruments: service.NewInstrumentService(
 			db, instRepo, marketRepo, annualRepo, jobRepo,
@@ -118,6 +124,7 @@ func (s Services) registerPlanRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans/:plan_id/apply-scenario", s.applyScenario)
 	rg.GET("/plans/:plan_id/dashboard", s.getDashboard)
 	s.registerRebalanceDraftRoutes(rg)
+	s.registerRebalanceExecutionRoutes(rg)
 }
 
 func (s Services) getDashboard(c *gin.Context) {

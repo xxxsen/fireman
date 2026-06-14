@@ -33,13 +33,14 @@ type AssetRefreshRequest struct {
 
 // AssetRefreshService applies asset refresh submissions atomically.
 type AssetRefreshService struct {
-	sql      *sql.DB
-	plans    *repository.PlanRepo
-	params   *repository.ParametersRepo
-	alloc    *repository.AllocationRepo
-	scenario *repository.ScenarioRepo
-	holdings *HoldingsService
-	events   *repository.AssetRefreshEventRepo
+	sql        *sql.DB
+	plans      *repository.PlanRepo
+	params     *repository.ParametersRepo
+	alloc      *repository.AllocationRepo
+	scenario   *repository.ScenarioRepo
+	holdings   *HoldingsService
+	events     *repository.AssetRefreshEventRepo
+	executions *repository.RebalanceExecutionRepo
 }
 
 func NewAssetRefreshService(
@@ -50,10 +51,11 @@ func NewAssetRefreshService(
 	scenario *repository.ScenarioRepo,
 	holdingsSvc *HoldingsService,
 	events *repository.AssetRefreshEventRepo,
+	executions *repository.RebalanceExecutionRepo,
 ) *AssetRefreshService {
 	return &AssetRefreshService{
 		sql: sqlDB, plans: plans, params: params, alloc: alloc, scenario: scenario,
-		holdings: holdingsSvc, events: events,
+		holdings: holdingsSvc, events: events, executions: executions,
 	}
 }
 
@@ -71,6 +73,15 @@ func (s *AssetRefreshService) prepareAssetRefresh(
 	planID string,
 	req AssetRefreshRequest,
 ) (*assetRefreshPrepared, error) {
+	active, err := s.executions.HasActiveByPlan(ctx, planID)
+	if err != nil {
+		return nil, wrapRepo("check active rebalance execution", err)
+	}
+	if active {
+		return nil, newErr("rebalance_execution_in_progress",
+			"asset refresh blocked while a rebalance execution is in progress; complete or cancel it first", nil)
+	}
+
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {

@@ -14,9 +14,12 @@ const mockSearchParams = vi.hoisted(() => {
   };
 });
 
+const routerPush = vi.fn();
+
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "plan_1" }),
   useSearchParams: () => mockSearchParams.get(),
+  useRouter: () => ({ push: routerPush }),
 }));
 
 const targetLineBase = {
@@ -68,6 +71,18 @@ const getRebalance = vi.hoisted(() =>
   ),
 );
 
+const getActiveRebalanceExecution = vi.hoisted(() => vi.fn(() => Promise.resolve(null)));
+const createRebalanceExecution = vi.hoisted(() =>
+  vi.fn(() =>
+    Promise.resolve({
+      execution: { id: "rbx_1" },
+      lines: [],
+      events: [],
+      stats: { line_count: 0, done_line_count: 0, sold_total_minor: 0, bought_total_minor: 0 },
+    }),
+  ),
+);
+
 vi.mock("@/lib/api/holdings", () => ({
   getTargets: () =>
     Promise.resolve({
@@ -79,6 +94,11 @@ vi.mock("@/lib/api/holdings", () => ({
       holdings: [targetLineBase],
     }),
   getRebalance: (...args: unknown[]) => getRebalance(...args),
+}));
+
+vi.mock("@/lib/api/rebalance-executions", () => ({
+  getActiveRebalanceExecution: (...args: unknown[]) => getActiveRebalanceExecution(...args),
+  createRebalanceExecution: (...args: unknown[]) => createRebalanceExecution(...args),
 }));
 
 function renderPage() {
@@ -95,6 +115,7 @@ function renderPage() {
 describe("RebalancePage (持仓预览)", () => {
   beforeEach(() => {
     mockSearchParams.set(new URLSearchParams());
+    getActiveRebalanceExecution.mockResolvedValue(null);
     getRebalance.mockImplementation(() =>
       Promise.resolve({
         mode: "full",
@@ -112,43 +133,39 @@ describe("RebalancePage (持仓预览)", () => {
     );
   });
 
-  it("shows title, single primary action, and asset link", async () => {
+  it("shows dual primary actions: asset refresh and rebalance execution", async () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "持仓预览" })).toBeInTheDocument();
-    const primaryButtons = screen.getAllByTestId("asset-refresh-primary");
-    expect(primaryButtons).toHaveLength(1);
-    expect(primaryButtons[0]).toHaveAttribute("href", "/plans/plan_1/asset-refresh");
-
-    const assetLink = screen.getByRole("link", { name: "测试基金" });
-    expect(assetLink).toHaveAttribute("href", "/assets/instrument_1");
-
-    expect(screen.queryByText("动作筛选")).not.toBeInTheDocument();
-    expect(screen.queryByText("导出 CSV")).not.toBeInTheDocument();
-    expect(screen.queryByText("按计划规模对齐（高级）")).not.toBeInTheDocument();
-    expect(screen.queryByText("记录调仓后快照")).not.toBeInTheDocument();
-    expect(screen.queryByText("在持仓中编辑")).not.toBeInTheDocument();
+    expect(screen.getByTestId("asset-refresh-primary")).toHaveAttribute(
+      "href",
+      "/plans/plan_1/asset-refresh",
+    );
+    expect(screen.getByTestId("start-rebalance-execution")).toBeInTheDocument();
   });
 
-  it("hides zero gap amounts on holding rows", async () => {
-    getRebalance.mockResolvedValue({
-      mode: "full",
-      summary: {
-        actionable_count: 0,
-        structural_actionable_count: 0,
-        configured_total_minor: 100_000_00,
-        holdings_total_minor: 100_000_00,
-        scale_gap_minor: 0,
-        plan_scale_actionable_count: 0,
-      },
-      weight_checks: { passed: true, checks: [] },
-      lines: [{ ...targetLineBase, structural_gap_amount_minor: 0, deviation_amount_minor: 0 }],
+  it("disables asset refresh and shows continue when execution is active", async () => {
+    getActiveRebalanceExecution.mockResolvedValue({
+      execution: { id: "rbx_active", cash_pool_minor: 50_000_00, status: "in_progress" },
+      lines: [
+        {
+          instrument_id: "instrument_1",
+          execution_status: "partial",
+          remaining_delta_minor: 10_000_00,
+        },
+      ],
+      events: [],
+      stats: { line_count: 2, done_line_count: 1, sold_total_minor: 0, bought_total_minor: 0 },
     });
 
     renderPage();
-    expect(await screen.findByText("测试基金")).toBeInTheDocument();
-    expect(screen.queryByText(/待投入 ¥0\.00/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/待减配 ¥0\.00/)).not.toBeInTheDocument();
+
+    expect(await screen.findByTestId("execution-blocking-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("asset-refresh-primary-disabled")).toBeInTheDocument();
+    expect(screen.getByTestId("continue-rebalance-execution")).toHaveAttribute(
+      "href",
+      "/plans/plan_1/rebalance/executions/rbx_active",
+    );
   });
 
   it("shows asset refreshed banner from query param", async () => {
