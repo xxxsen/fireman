@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
-import { assetClassLabel, regionLabel } from "@/lib/format";
+import { assetClassLabel, historyDepthLabel, regionLabel } from "@/lib/format";
 import {
   addInstrumentToGroup,
   computeExpectedAmountMinor,
@@ -28,11 +28,7 @@ export interface AssetClassHoldingPickerProps {
 }
 
 function isSelectableInstrument(inst: Instrument): boolean {
-  return (
-    !inst.is_system &&
-    inst.status === "active" &&
-    (inst.quality_status ?? "available") === "available"
-  );
+  return !inst.is_system && inst.status === "active" && inst.simulation_eligible === true;
 }
 
 export function AssetClassHoldingPicker({
@@ -123,6 +119,15 @@ export function AssetClassHoldingPicker({
               >
                 <span className="font-medium">{inst.name}</span>
                 <span className="ml-2 text-slate-500">{inst.code}</span>
+                {inst.complete_year_count != null && (
+                  <span className="ml-2 text-xs text-slate-500">{inst.complete_year_count} 完整年</span>
+                )}
+                {inst.monthly_return_count != null && (
+                  <span className="ml-2 text-xs text-slate-500">{inst.monthly_return_count} 月</span>
+                )}
+                {inst.history_depth === "one_year" && (
+                  <span className="ml-2 text-xs text-amber-700">{historyDepthLabel(inst.history_depth)}</span>
+                )}
               </button>
             </li>
           ))}

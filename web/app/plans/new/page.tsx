@@ -641,6 +641,19 @@ export default function NewPlanWizardPage() {
                 「现金/其他」。
               </p>
             )}
+            {selectedInstruments
+              .filter(
+                (s) => s.inst.simulation_eligible && s.inst.history_depth === "one_year",
+              )
+              .map((s) => (
+                <p
+                  key={s.inst.id}
+                  className="mt-2 text-sm text-amber-800"
+                  data-testid="wizard-short-history"
+                >
+                  {s.inst.name}（{s.inst.code}）历史样本有限，模拟长期估计不确定性较高。
+                </p>
+              ))}
             {assetGap < -100 && (
               <p className="text-sm text-red-600">持仓合计超过总资产，请返回上一步调整。</p>
             )}

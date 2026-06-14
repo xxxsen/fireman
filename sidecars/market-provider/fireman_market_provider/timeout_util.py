@@ -12,9 +12,10 @@ from typing import Any, TypeVar
 T = TypeVar("T")
 
 DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_FETCH_TIMEOUT_SECONDS = 180
-DEFAULT_RESOLVE_TIMEOUT_SECONDS = 90
-DEFAULT_RESOLVE_DEADLINE_SECONDS = 90
+DEFAULT_FETCH_TIMEOUT_SECONDS = 240
+DEFAULT_FETCH_UPSTREAM_TIMEOUT_SECONDS = 180
+DEFAULT_RESOLVE_TIMEOUT_SECONDS = 60
+DEFAULT_RESOLVE_DEADLINE_SECONDS = 70
 DEFAULT_MUTUAL_FUND_NAME_FETCH_TIMEOUT_SECONDS = 60
 
 # Registry of test-only dispatch overrides (keyed by operation name).
@@ -132,6 +133,11 @@ def _env_timeout(key: str, default: int) -> int:
 
 def fetch_timeout_seconds() -> int:
     return _env_timeout("MARKET_PROVIDER_FETCH_TIMEOUT", DEFAULT_FETCH_TIMEOUT_SECONDS)
+
+
+def fetch_upstream_timeout_seconds(deadline_remaining: int) -> int:
+    """Per historical-source call cap: min(180s, remaining fetch budget)."""
+    return max(1, min(DEFAULT_FETCH_UPSTREAM_TIMEOUT_SECONDS, deadline_remaining))
 
 
 def resolve_timeout_seconds() -> int:

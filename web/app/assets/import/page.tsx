@@ -108,6 +108,8 @@ export default function ImportAssetPage() {
         } else {
           setError(e.message);
         }
+      } else if (e instanceof ApiError && e.code === "market_provider_timeout") {
+        setError("数据源响应超时，请重试");
       } else {
         setError(e instanceof ApiError ? e.message : "解析失败");
       }

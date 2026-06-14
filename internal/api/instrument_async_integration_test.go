@@ -805,3 +805,90 @@ func TestResolveStockCandidateNoTicketForFundTypeIntegration(t *testing.T) {
 		t.Fatalf("stock candidate_id=%q want composite identity", candidateID)
 	}
 }
+
+func mockMutualFund270042ProviderServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	const fundName = "广发纳指100ETF联接（QDII）人民币A"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			var req marketdata.ResolveRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.InstrumentType == "cn_exchange_fund" && req.Code == "270042" {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"detail": "instrument_type_mismatch"})
+				return
+			}
+			if req.InstrumentType != "cn_mutual_fund" || req.Code != "270042" {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: "270042", ProviderSymbol: "270042",
+						Name: fundName, Exchange: "", InstrumentKind: "mutual_fund",
+					},
+				},
+			})
+		case "/v1/instruments/fetch":
+			_ = json.NewEncoder(w).Encode(marketdata.FetchResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.FetchData{
+					Provider: "akshare", ProviderSymbol: "270042", Name: fundName,
+					AssetClass: "equity", Currency: "CNY", PointType: "nav",
+					ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "foreign"},
+					Points: buildFixturePoints(), SourceName: "ak.fund_open_fund_info_em:单位净值走势", SourceQuality: "full",
+					SourceKind: "open_fund",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func TestImportMutualFund270042StoresDisplayNameIntegration(t *testing.T) {
+	provider := mockMutualFund270042ProviderServer(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	mismatchResp, err := client.Post(
+		srv.URL+"/api/v1/instruments/resolve",
+		"application/json",
+		strings.NewReader(`{"market":"CN","instrument_type":"cn_exchange_fund","code":"270042"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mismatchResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("exchange resolve status=%d want 400", mismatchResp.StatusCode)
+	}
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_mutual_fund", "270042")
+	waitForInstrumentActive(t, client, srv.URL, instID)
+
+	resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get instrument status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	if inst["name"] != "广发纳指100ETF联接（QDII）人民币A" {
+		t.Fatalf("instrument name=%q want 广发纳指100ETF联接（QDII）人民币A", inst["name"])
+	}
+	if inst["code"] != "270042" {
+		t.Fatalf("instrument code=%q want 270042", inst["code"])
+	}
+	if inst["instrument_type"] != "cn_mutual_fund" {
+		t.Fatalf("instrument_type=%q want cn_mutual_fund", inst["instrument_type"])
+	}
+}

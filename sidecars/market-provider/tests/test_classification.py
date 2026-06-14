@@ -31,7 +31,7 @@ def test_classify_open_fund_from_nav_history_and_name_cache() -> None:
         }
     )
     with patch(
-        "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name",
+        "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name_readonly",
         return_value="华夏成长混合",
     ):
         meta = classify_cn_mutual_fund(df, "000001")

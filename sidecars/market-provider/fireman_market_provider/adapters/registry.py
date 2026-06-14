@@ -10,7 +10,10 @@ import pandas as pd
 from ..logutil import get_logger
 from ..normalize import normalize_dataframe
 from ..schemas import AssetClass, FetchData, FetchRequest, PointType
-from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds
+import time
+
+from ..logutil import get_logger
+from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds, fetch_upstream_timeout_seconds
 from .classification import (
     CnMutualFundSourceKind,
     FundMeta,
@@ -92,6 +95,7 @@ def _cn_stock_em_adjust(adjust_policy: str) -> str:
 
 
 def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> AdapterResult:
+    deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
     canonical = req.source_code.strip().lower()
@@ -142,7 +146,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
         ),
     ]
 
-    df, source_name = try_sources("cn_exchange_stock", sources)
+    df, source_name = try_sources("cn_exchange_stock", sources, deadline)
     name = canonical
     if "股票名称" in df.columns and not df["股票名称"].empty:
         name = str(df["股票名称"].iloc[0])
@@ -158,6 +162,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
 
 
 def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
+    deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
     parsed = resolve_cn_etf_fetch_code(req.source_code)
@@ -228,7 +233,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
         ]
     )
 
-    df, source_name = try_sources("cn_exchange_fund", sources)
+    df, source_name = try_sources("cn_exchange_fund", sources, deadline)
     if source_name == "ak.stock_zh_a_hist_tx":
         df = _filter_df_by_date(df, start, end)
     name = resolve_cn_exchange_fund_name(em_symbol, df)
@@ -244,8 +249,9 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
 
 
 def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
+    deadline = time.monotonic() + fetch_timeout_seconds()
     symbol = req.source_code
-    source_kind = detect_cn_mutual_fund_source_kind(symbol)
+    source_kind = detect_cn_mutual_fund_source_kind(symbol, req.resolved_name)
     errors: list[str] = []
 
     all_attempts: list[tuple[CnMutualFundSourceKind, str, str, str, UpstreamCall]] = [
@@ -311,8 +317,12 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
     )
 
     for _kind, _label, point_type, source_name, call in attempts:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            raise TimeoutError(f"fetch cn_mutual_fund {symbol}: deadline exceeded")
+        timeout = fetch_upstream_timeout_seconds(remaining)
         try:
-            df = call_with_timeout(call, fetch_timeout_seconds())
+            df = call_with_timeout(call, timeout)
             if df is None or df.empty:
                 errors.append(f"{source_name}: empty")
                 logger.warning("fetch cn_mutual_fund %s: %s returned empty", symbol, source_name)
@@ -325,7 +335,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                     components={"fund_type": "LOF", "region": "domestic"},
                 )
             else:
-                meta = classify_cn_mutual_fund(df, symbol)
+                meta = classify_cn_mutual_fund(df, symbol, req.resolved_name)
             if meta.asset_class is None:
                 errors.append(f"{source_name}: unsupported fund classification")
                 logger.warning(
@@ -381,6 +391,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
 
 
 def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: AssetClass) -> AdapterResult:
+    deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
     symbol = req.source_code
@@ -402,7 +413,7 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: Asse
             ),
         ),
     ]
-    df, source_name = try_sources("us equity", sources)
+    df, source_name = try_sources("us equity", sources, deadline)
     meta = classify_us_symbol(symbol, default_type)
     return AdapterResult(
         df=df,
@@ -416,6 +427,7 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: Asse
 
 
 def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: AssetClass) -> AdapterResult:
+    deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
     symbol = hk_exchange_symbol(req.source_code)
@@ -439,7 +451,7 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
             UpstreamCall("stock_hk_daily", kwargs=(("symbol", symbol), ("adjust", adjust))),
         ),
     ]
-    df, source_name = try_sources("hk equity", sources)
+    df, source_name = try_sources("hk equity", sources, deadline)
     if source_name == "ak.stock_hk_daily":
         df = _filter_df_by_date(df, start, end)
     name = resolve_hk_name(symbol)
@@ -456,6 +468,7 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
 
 
 def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
+    deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
     code = req.source_code.upper()
@@ -470,7 +483,7 @@ def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
         ("ak.currency_boc_sina", UpstreamCall("currency_boc_sina", kwargs=(("symbol", label),))),
         ("ak.fx_pair_quote", UpstreamCall("fx_pair_quote", kwargs=(("symbol", code),))),
     ]
-    df, source_name = try_sources("fx_rate", sources)
+    df, source_name = try_sources("fx_rate", sources, deadline)
     return AdapterResult(
         df=df,
         source_name=source_name,

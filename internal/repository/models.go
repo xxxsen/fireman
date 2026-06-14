@@ -117,8 +117,9 @@ type PlanHolding struct {
 	Region               string  `json:"region"`
 	WeightWithinGroup    float64 `json:"weight_within_group"`
 	CurrentAmountMinor   int64   `json:"current_amount_minor"`
-	SimulationSnapshotID string  `json:"simulation_snapshot_id"`
-	SortOrder            int     `json:"sort_order"`
+	SimulationSnapshotID         string  `json:"simulation_snapshot_id"`
+	SimulationSnapshotCreatedAt  int64   `json:"simulation_snapshot_created_at,omitempty"`
+	SortOrder                    int     `json:"sort_order"`
 	CreatedAt            int64   `json:"created_at"`
 	UpdatedAt            int64   `json:"updated_at"`
 	// Enriched fields for API responses.

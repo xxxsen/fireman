@@ -25,6 +25,65 @@ vi.mock("@/lib/api/plans", () => ({
       parameters: { simulation_runs: 20000, plan_id: "plan_1" },
       cash_flows: [],
     }),
+  getPlan: () =>
+    Promise.resolve({
+      id: "plan_1",
+      name: "测试计划",
+      valuation_date: "2026-06-14",
+      base_currency: "CNY",
+      status: "active",
+      config_version: 1,
+      created_at: 0,
+      updated_at: 0,
+    }),
+}));
+
+vi.mock("@/lib/api/holdings", () => ({
+  getHoldings: () =>
+    Promise.resolve({
+      holdings: [
+        {
+          id: "hold_1",
+          plan_id: "plan_1",
+          instrument_id: "inst_short",
+          enabled: true,
+          asset_class: "equity",
+          region: "domestic",
+          weight_within_group: 1,
+          current_amount_minor: 1_000_000_00,
+          simulation_snapshot_id: "snap_1",
+          sort_order: 1,
+        },
+      ],
+    }),
+}));
+
+vi.mock("@/lib/api/instruments", () => ({
+  listInstruments: () =>
+    Promise.resolve({
+      instruments: [
+        {
+          id: "inst_short",
+          code: "SHORT01",
+          name: "短历史基金",
+          market: "CN",
+          instrument_type: "cn_exchange_fund",
+          asset_class: "equity",
+          region: "domestic",
+          currency: "CNY",
+          provider: "akshare",
+          is_system: false,
+          expense_ratio_status: "unknown",
+          fee_treatment: "deduct",
+          status: "active",
+          simulation_eligible: true,
+          history_depth: "one_year",
+          data_stale: false,
+          created_at: 0,
+          updated_at: 0,
+        },
+      ],
+    }),
 }));
 
 vi.mock("@/lib/api/simulations", () => ({
@@ -41,6 +100,9 @@ vi.mock("@/lib/api/simulations", () => ({
             success_probability: 0,
             terminal_quantiles: { p50: 0 },
             monthly_wealth_quantiles: [{ month_offset: 0, p50_minor: 100 }],
+            model_warnings: [
+              "短历史基金（SHORT01）仅有 1 个完整自然年度，收益与风险估计的不确定性较高",
+            ],
           },
           runs: 100,
           seed: "42",
@@ -243,6 +305,21 @@ describe("AnalysisPage zero success", () => {
     await waitFor(() => expect(createSensitivityTest).toHaveBeenCalledTimes(2));
     expect(createSimulation).not.toHaveBeenCalled();
     expect(createStressTest).not.toHaveBeenCalled();
+  });
+
+  it("shows model_warnings with visible asset names", async () => {
+    renderAnalysis();
+    expect(
+      await screen.findByText(/短历史基金（SHORT01）仅有 1 个完整自然年度/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows short-history warning before running simulation", async () => {
+    renderAnalysis();
+    expect(
+      await screen.findByText(/以下持仓历史样本有限/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/短历史基金/).length).toBeGreaterThan(0);
   });
 
   it("clears active job after canceled terminal state without cross-panel retry", async () => {

@@ -8,6 +8,7 @@ type FetchRequest struct {
 	StartDate      *string `json:"start_date"`
 	EndDate        string  `json:"end_date"`
 	AdjustPolicy   string  `json:"adjust_policy"`
+	ResolvedName   string  `json:"resolved_name,omitempty"`
 }
 
 // HistoricalPoint is one cleaned daily observation.
@@ -99,20 +100,37 @@ type SimulationYear struct {
 	Observations int
 }
 
+// ExcludedYear describes why a calendar year is excluded from simulation metrics.
+type ExcludedYear struct {
+	Year   int    `json:"year"`
+	Reason string `json:"reason"`
+}
+
 // SnapshotMetrics holds computed simulation parameters.
 type SnapshotMetrics struct {
-	WindowStart         *string
-	WindowEnd           *string
-	CompleteYearStart   *int
-	CompleteYearEnd     *int
-	CompleteYearCount   int
-	ObservationCount    int
-	HistoricalCAGR      float64
-	ModeledAnnualReturn float64
-	AnnualVolatility    float64
-	MaxDrawdown         float64
-	SourceHash          string
-	QualityStatus       string
-	Warnings            []string
-	Years               []SimulationYear
+	WindowStart           *string
+	WindowEnd             *string
+	CompleteYearStart     *int
+	CompleteYearEnd       *int
+	CompleteYearCount     int
+	DailyObservationCount int
+	MonthlyReturnCount    int
+
+	HistoricalCAGR      *float64
+	ModeledAnnualReturn *float64
+	AnnualVolatility    *float64
+	MaxDrawdown         *float64
+
+	CAGRStatus        string
+	VolatilityStatus  string
+	DrawdownStatus    string
+	QualityStatus     string
+	SimulationEligible bool
+	HistoryDepth      string
+	VolatilityMethod  string
+	MetricsVersion    string
+
+	SourceHash string
+	Warnings   []string
+	Years      []SimulationYear
 }

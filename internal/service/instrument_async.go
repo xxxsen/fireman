@@ -137,7 +137,10 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 		if strings.Contains(msg, "invalid_request") {
 			return nil, newErr("invalid_request", msg, nil)
 		}
-		return nil, newErr("market_provider_unavailable", msg, nil)
+		if ae := mapMarketProviderError(err); ae != nil {
+			return nil, ae
+		}
+		return nil, newErr("market_provider_unavailable", err.Error(), nil)
 	}
 	out := map[string]any{"ambiguous": data.Ambiguous}
 	if data.Resolved != nil {

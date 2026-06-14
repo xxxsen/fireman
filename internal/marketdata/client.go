@@ -81,7 +81,7 @@ func (c *ProviderClient) FetchClient() *ProviderClient {
 }
 
 func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*ResolveData, error) {
-	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resolveTimeout())
+	resolveCtx, cancel := context.WithTimeout(ctx, resolveTimeout())
 	defer cancel()
 
 	body, err := json.Marshal(req)
@@ -105,6 +105,9 @@ func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*Reso
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read resolve response: %w", err)
+	}
+	if resp.StatusCode == http.StatusGatewayTimeout {
+		return nil, fmt.Errorf("market provider resolve timeout: %w", errProviderTimeout)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf(
@@ -217,4 +220,9 @@ func (c *ProviderClient) Fetch(ctx context.Context, req FetchRequest) (*FetchDat
 		"source_quality", envelope.Data.SourceQuality,
 	)
 	return &envelope.Data, nil
+}
+
+// IsProviderTimeout reports whether err indicates a sidecar upstream timeout.
+func IsProviderTimeout(err error) bool {
+	return errors.Is(err, errProviderTimeout)
 }

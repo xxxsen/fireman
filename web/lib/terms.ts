@@ -10,7 +10,7 @@ export const TERMS: Record<string, string> = {
   annual_return:
     "最近最多 20 个完整自然年度收益的几何年化，不使用不完整年度",
   annual_volatility:
-    "同一批完整自然年度对数收益的样本标准差",
+    "参与模拟的完整自然年度内月度对数收益的样本标准差，按 √12 年化",
   rebalance_threshold:
     "当前权重与目标权重相差多少个百分点时触发调仓",
   weight_within_group:

@@ -61,6 +61,7 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 		items[i].ReferencingPlanCount = refCounts[items[i].ID]
 		if items[i].ID == repository.SystemCashInstrumentID {
 			items[i].QualityStatus = "available"
+			items[i].SimulationEligible = true
 			continue
 		}
 		if items[i].IsSystem {
@@ -68,12 +69,23 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 			continue
 		}
 		if valuationDate != "" {
-			items[i].QualityStatus = LibraryQualityAtDate(ctx, s.marketRepo, items[i].ID, valuationDate)
+			metrics, quality := libraryMetricsAtDate(ctx, s.marketRepo, items[i].ID, valuationDate)
+			items[i].QualityStatus = quality
+			applySimulationMeta(&items[i], metrics)
 		} else {
 			s.enrichMarketMeta(ctx, &items[i])
 		}
 	}
 	return items, nil
+}
+
+func applySimulationMeta(inst *repository.InstrumentRecord, metrics marketdata.SnapshotMetrics) {
+	inst.SimulationEligible = metrics.SimulationEligible
+	inst.HistoryDepth = metrics.HistoryDepth
+	inst.CompleteYearCount = metrics.CompleteYearCount
+	inst.MonthlyReturnCount = metrics.MonthlyReturnCount
+	inst.MetricsVersion = metrics.MetricsVersion
+	inst.Warnings = metrics.Warnings
 }
 
 func (s *InstrumentService) enrichMarketMeta(ctx context.Context, inst *repository.InstrumentRecord) {
@@ -82,7 +94,9 @@ func (s *InstrumentService) enrichMarketMeta(ctx context.Context, inst *reposito
 	src, pt, _ := s.marketRepo.LatestPointMeta(ctx, inst.ID)
 	inst.DataSourceName = src
 	inst.PointType = pt
-	inst.QualityStatus = s.libraryQuality(ctx, inst.ID)
+	metrics, quality := libraryMetricsAtDate(ctx, s.marketRepo, inst.ID, "")
+	inst.QualityStatus = quality
+	applySimulationMeta(inst, metrics)
 	applyDataStale(inst, last)
 }
 
@@ -289,6 +303,7 @@ type InstrumentDetailView struct {
 	Instrument          repository.InstrumentRecord          `json:"instrument"`
 	AnnualReturns       []repository.AnnualReturnRecord      `json:"annual_returns"`
 	SimulationWindow    map[string]any                       `json:"simulation_window"`
+	TrailingReturns     map[string]any                       `json:"trailing_returns"`
 	HistoricalSnapshots []repository.SimulationSnapshot      `json:"historical_snapshots"`
 	ReferencingPlans    []repository.PlanInstrumentReference `json:"referencing_plans"`
 }
@@ -304,14 +319,21 @@ func (s *InstrumentService) GetDetail(ctx context.Context, id string) (Instrumen
 		return InstrumentDetailView{}, err
 	}
 	points, _ := s.marketRepo.ListByInstrument(ctx, id)
+	dp := repoToDataPoints(points)
 	annualRows := toMarketAnnualFromRepo(returns)
-	simYears := marketdata.SelectSimulationYears(repoToDataPoints(points), annualRows, inclusionDate)
-	simMetrics := marketdata.BuildSnapshotMetrics(repoToDataPoints(points), inclusionDate, "adjusted_close", "library")
-	excluded := excludedYearLabels(marketdata.ComputeAnnualReturns(repoToDataPoints(points)), simYears)
+	simYears := marketdata.SelectSimulationYears(dp, annualRows, inclusionDate)
+	pointType, sourceName := "adjusted_close", "library"
+	if len(dp) > 0 {
+		pointType = dp[0].PointType
+		sourceName = dp[0].SourceName
+	}
+	simMetrics := marketdata.ComputeMetrics(dp, simYears, pointType, sourceName)
+	excluded := marketdata.BuildExcludedYears(dp, marketdata.ComputeAnnualReturns(dp), simYears, inclusionDate)
 	selectedYears := make([]int, len(simYears))
 	for i, y := range simYears {
 		selectedYears[i] = y.Year
 	}
+	trailing := marketdata.ComputeTrailingReturns(dp, inclusionDate, pointType, sourceName)
 	snapRepo := repository.NewSnapshotRepo(s.sql)
 	snaps, _ := snapRepo.ListByInstrument(ctx, id)
 	holdRepo := repository.NewHoldingsRepo(s.sql)
@@ -326,20 +348,68 @@ func (s *InstrumentService) GetDetail(ctx context.Context, id string) (Instrumen
 		returns = []repository.AnnualReturnRecord{}
 	}
 	if excluded == nil {
-		excluded = []int{}
+		excluded = []marketdata.ExcludedYear{}
 	}
 	return InstrumentDetailView{
 		Instrument: inst, AnnualReturns: returns,
-		SimulationWindow: map[string]any{
-			"inclusion_date": inclusionDate, "selected_years": selectedYears,
-			"excluded_years": excluded, "complete_year_count": simMetrics.CompleteYearCount,
-			"historical_cagr": simMetrics.HistoricalCAGR, "annual_volatility": simMetrics.AnnualVolatility,
-			"max_drawdown": simMetrics.MaxDrawdown, "observation_count": simMetrics.ObservationCount,
-			"fee_treatment": inst.FeeTreatment, "expense_ratio_status": inst.ExpenseRatioStatus,
-			"quality_status": simMetrics.QualityStatus,
-		},
+		SimulationWindow: buildSimulationWindowMap(inclusionDate, selectedYears, excluded, simMetrics, inst),
+		TrailingReturns:  trailingReturnsToMap(trailing),
 		HistoricalSnapshots: snaps, ReferencingPlans: refs,
 	}, nil
+}
+
+func buildSimulationWindowMap(
+	inclusionDate string,
+	selectedYears []int,
+	excluded []marketdata.ExcludedYear,
+	simMetrics marketdata.SnapshotMetrics,
+	inst repository.InstrumentRecord,
+) map[string]any {
+	out := map[string]any{
+		"inclusion_date": inclusionDate, "selected_years": selectedYears,
+		"excluded_years": excluded, "complete_year_count": simMetrics.CompleteYearCount,
+		"daily_observation_count": simMetrics.DailyObservationCount,
+		"monthly_return_count": simMetrics.MonthlyReturnCount,
+		"cagr_status": simMetrics.CAGRStatus, "volatility_status": simMetrics.VolatilityStatus,
+		"drawdown_status": simMetrics.DrawdownStatus,
+		"quality_status": simMetrics.QualityStatus, "simulation_eligible": simMetrics.SimulationEligible,
+		"history_depth": simMetrics.HistoryDepth,
+		"volatility_method": simMetrics.VolatilityMethod, "metrics_version": simMetrics.MetricsVersion,
+		"warnings": simMetrics.Warnings,
+		"fee_treatment": inst.FeeTreatment, "expense_ratio_status": inst.ExpenseRatioStatus,
+	}
+	if simMetrics.HistoricalCAGR != nil {
+		out["historical_cagr"] = *simMetrics.HistoricalCAGR
+	} else {
+		out["historical_cagr"] = nil
+	}
+	if simMetrics.AnnualVolatility != nil {
+		out["annual_volatility"] = *simMetrics.AnnualVolatility
+	} else {
+		out["annual_volatility"] = nil
+	}
+	if simMetrics.MaxDrawdown != nil {
+		out["max_drawdown"] = *simMetrics.MaxDrawdown
+	} else {
+		out["max_drawdown"] = nil
+	}
+	return out
+}
+
+func trailingReturnsToMap(t marketdata.TrailingReturns) map[string]any {
+	periods := map[string]any{}
+	for key, p := range t.Periods {
+		periods[key] = map[string]any{
+			"status": p.Status, "target_start_date": p.TargetStartDate,
+			"start_date": p.StartDate, "end_date": p.EndDate,
+			"actual_days": p.ActualDays, "cumulative_return": p.CumulativeReturn,
+			"annualized_return": p.AnnualizedReturn,
+		}
+	}
+	return map[string]any{
+		"as_of_date": t.AsOfDate, "point_type": t.PointType, "source_name": t.SourceName,
+		"periods": periods,
+	}
 }
 
 func toMarketAnnualFromRepo(rows []repository.AnnualReturnRecord) []marketdata.AnnualReturnRow {
@@ -364,6 +434,7 @@ func (s *InstrumentService) fetchAndProcessForInstrument(
 		Market: inst.Market, InstrumentType: inst.InstrumentType,
 		SourceCode: inst.Code, StartDate: start, EndDate: end,
 		AdjustPolicy: marketdata.DefaultAdjustPolicy(inst.InstrumentType),
+		ResolvedName: inst.Name,
 	}
 	data, err := s.provider.Fetch(ctx, fetchReq)
 	if err != nil {
@@ -375,7 +446,7 @@ func (s *InstrumentService) fetchAndProcessForInstrument(
 			"code", inst.Code,
 			"error", err,
 		)
-		return nil, marketdata.ProcessFetchResult{}, newErr("market_provider_unavailable", err.Error(), nil)
+		return nil, marketdata.ProcessFetchResult{}, mapMarketProviderError(err)
 	}
 	if err := marketdata.ValidateFetchSourceCompatibility(inst.InstrumentType, inst.AssetClass, data); err != nil {
 		return nil, marketdata.ProcessFetchResult{}, mapSourceConflictError(err)
@@ -494,24 +565,6 @@ func toHistorical(points []marketdata.DataPoint) []marketdata.HistoricalPoint {
 	return out
 }
 
-func excludedYearLabels(all []marketdata.AnnualReturnRow, selected []marketdata.SimulationYear) []int {
-	selectedSet := map[int]struct{}{}
-	for _, y := range selected {
-		selectedSet[y.Year] = struct{}{}
-	}
-	var out []int
-	for _, row := range all {
-		if row.IsPartial {
-			out = append(out, row.Year)
-			continue
-		}
-		if _, ok := selectedSet[row.Year]; !ok {
-			out = append(out, row.Year)
-		}
-	}
-	return out
-}
-
 func applyDataStale(inst *repository.InstrumentRecord, lastTradeDate string) {
 	stale, warning := marketdata.DataStale(lastTradeDate, time.Now())
 	inst.DataStale = stale
@@ -556,7 +609,7 @@ func checkInstrumentReadOnlyFields(body []byte, allowed map[string]struct{}) err
 func MapSnapshotError(err error) error {
 	var se *marketdata.SnapshotError
 	if errors.As(err, &se) {
-		return newErr(se.Code, se.Message, nil)
+		return newErr(se.Code, se.Message, se.Details)
 	}
 	return err
 }

@@ -126,6 +126,7 @@ export function qualityStatusLabel(status: string): string {
   const map: Record<string, string> = {
     available: "可用",
     insufficient_history: "历史不足",
+    provider_data_anomaly: "数据异常",
     pending_sync: "待同步",
     classification_failed: "分类失败",
     data_anomaly: "数据异常",
@@ -134,6 +135,61 @@ export function qualityStatusLabel(status: string): string {
     active: "正常",
   };
   return map[status] ?? status;
+}
+
+export function historyDepthLabel(depth: string | undefined): string {
+  const map: Record<string, string> = {
+    one_year: "历史样本有限",
+    two_to_four_years: "历史样本较短",
+    five_plus_years: "历史样本充足",
+    system: "系统固定参数",
+  };
+  return depth ? (map[depth] ?? depth) : "—";
+}
+
+export function metricStatusLabel(status: string | undefined | null): string {
+  if (!status) return "—";
+  const map: Record<string, string> = {
+    available: "可用",
+    insufficient_complete_years: "完整年度不足",
+    insufficient_monthly_coverage: "月份覆盖不足",
+    invalid_metric_value: "指标无效",
+    unavailable: "不可用",
+  };
+  return map[status] ?? status;
+}
+
+export function instrumentSimulationStatusLabel(inst: {
+  status: string;
+  simulation_eligible?: boolean;
+  history_depth?: string;
+  quality_status?: string;
+}): string | null {
+  if (inst.status === "pending_fetch" || inst.status === "fetch_failed") {
+    return null;
+  }
+  if (inst.simulation_eligible && inst.history_depth === "one_year") {
+    return "可用于模拟·历史样本有限";
+  }
+  if (inst.simulation_eligible) {
+    return "可用于模拟";
+  }
+  return null;
+}
+
+export function excludedYearReasonLabel(reason: string): string {
+  const map: Record<string, string> = {
+    missing_opening_anchor: "成立首年，缺少年初锚点",
+    current_year: "当前年度尚未结束",
+    incomplete_year: "不完整年度",
+    insufficient_monthly_coverage: "月份覆盖不足",
+  };
+  return map[reason] ?? reason;
+}
+
+export function formatNullablePercent(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "—";
+  return formatPercent(value);
 }
 
 export function instrumentStatusLabel(status: string): string {

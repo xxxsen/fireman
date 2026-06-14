@@ -19,9 +19,13 @@ import {
   annualCompletenessLabel,
   assetClassLabel,
   dataSourceLabel,
+  excludedYearReasonLabel,
   formatAnnualPeriod,
+  formatNullablePercent,
   formatPercent,
+  historyDepthLabel,
   instrumentStatusLabel,
+  metricStatusLabel,
   pointTypeLabel,
   qualityStatusLabel,
   regionLabel,
@@ -34,6 +38,8 @@ function refreshFeedbackMessage(err: unknown): string {
         return "24 小时内已刷新过。如需立即验证数据，请使用「强制刷新」。";
       case "market_provider_unavailable":
         return `数据源暂时不可用：${err.message}`;
+      case "market_provider_timeout":
+        return "数据源响应超时，请重试";
       case "provider_data_anomaly":
         return "刷新被拒绝：检测到异常日收益率。";
       case "instrument_not_refreshable":
@@ -274,7 +280,12 @@ export default function AssetDetailPage() {
 
       {isActive && (
       <section className="mt-6 rounded-lg border p-4 text-sm">
-        <h2 className="font-medium">模拟窗口预览（最近完整年度）</h2>
+        {win.history_depth === "one_year" && (
+          <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900" role="status">
+            历史样本有限：当前指标仅基于 {win.complete_year_count} 个完整自然年度，可参与模拟但长期估计不确定性较高。
+          </p>
+        )}
+        <h2 className="font-medium">模拟窗口预览（完整自然年度）</h2>
         <dl className="mt-3 grid gap-2 sm:grid-cols-2">
           <div>
             <dt className="text-slate-500">入选年份</dt>
@@ -282,26 +293,92 @@ export default function AssetDetailPage() {
           </div>
           <div>
             <dt className="text-slate-500">排除年份</dt>
-            <dd>{(win.excluded_years ?? []).join("、") || "无"}</dd>
+            <dd>
+              {(win.excluded_years ?? []).length === 0
+                ? "无"
+                : (win.excluded_years ?? []).map((y) =>
+                    typeof y === "object" && y !== null && "year" in y
+                      ? `${y.year}（${excludedYearReasonLabel(y.reason)}）`
+                      : String(y),
+                  ).join("；")}
+            </dd>
           </div>
           <div>
             <dt className="text-slate-500">CAGR</dt>
-            <dd>{formatPercent(win.historical_cagr)}</dd>
+            <dd>
+              {formatNullablePercent(win.historical_cagr)}
+              {win.historical_cagr == null && win.cagr_status && (
+                <span className="ml-1 text-xs text-slate-500">{metricStatusLabel(win.cagr_status)}</span>
+              )}
+              {win.complete_year_count != null && (
+                <span className="ml-1 text-xs text-slate-500">{win.complete_year_count} 个完整自然年度</span>
+              )}
+            </dd>
           </div>
           <div>
-            <dt className="text-slate-500">波动率</dt>
-            <dd>{formatPercent(win.annual_volatility)}</dd>
+            <dt className="text-slate-500">年化波动率</dt>
+            <dd>
+              {formatNullablePercent(win.annual_volatility)}
+              {win.annual_volatility == null && win.volatility_status && (
+                <span className="ml-1 text-xs text-slate-500">{metricStatusLabel(win.volatility_status)}</span>
+              )}
+              {win.monthly_return_count != null && (
+                <span className="ml-1 text-xs text-slate-500">{win.monthly_return_count} 个月度收益样本</span>
+              )}
+            </dd>
           </div>
           <div>
             <dt className="text-slate-500">最大回撤</dt>
-            <dd>{formatPercent(win.max_drawdown)}</dd>
+            <dd>{formatNullablePercent(win.max_drawdown)}
+              {win.max_drawdown == null && win.drawdown_status && (
+                <span className="ml-1 text-xs text-slate-500">{metricStatusLabel(win.drawdown_status)}</span>
+              )}
+            </dd>
           </div>
           <div>
-            <dt className="text-slate-500">观测数</dt>
-            <dd>{win.observation_count}</dd>
+            <dt className="text-slate-500">数据覆盖</dt>
+            <dd>
+              日度 {win.daily_observation_count ?? "—"} · 月度 {win.monthly_return_count ?? "—"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">历史深度</dt>
+            <dd>{historyDepthLabel(win.history_depth)}</dd>
           </div>
         </dl>
       </section>
+      )}
+
+      {isActive && data.trailing_returns && (
+        <section className="mt-6 rounded-lg border p-4 text-sm">
+          <h2 className="font-medium">
+            区间收益
+            <span className="ml-2 text-xs text-slate-500">截至 {data.trailing_returns.as_of_date}</span>
+          </h2>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {(["1m", "3m", "6m", "1y", "3y", "5y"] as const).map((key) => {
+              const p = data.trailing_returns?.periods[key];
+              const label = { "1m": "近 1 月", "3m": "近 3 月", "6m": "近 6 月", "1y": "近 1 年", "3y": "近 3 年", "5y": "近 5 年" }[key];
+              const available = p?.status === "available" && p.cumulative_return != null;
+              return (
+                <div key={key} className="rounded border px-3 py-2">
+                  <div className="text-xs text-slate-500">{label}</div>
+                  <div className="text-lg font-medium">
+                    {available && p ? formatPercent(p.cumulative_return!) : "—"}
+                  </div>
+                  {!available && (
+                    <div className="text-xs text-slate-500">
+                      {p?.status === "insufficient_history" ? "历史不足" : p?.status === "start_point_too_stale" ? "起点过旧" : "不可用"}
+                    </div>
+                  )}
+                  {available && p && p.annualized_return != null && (key === "3y" || key === "5y") && (
+                    <div className="text-xs text-slate-500">年化 {formatPercent(p.annualized_return)}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {isActive && (

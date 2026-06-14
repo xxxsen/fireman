@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 
 from ..logutil import get_logger
-from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds
+from ..timeout_util import (
+    UpstreamCall,
+    call_with_timeout,
+    fetch_timeout_seconds,
+    fetch_upstream_timeout_seconds,
+)
 
 logger = get_logger(__name__)
 
@@ -13,13 +20,20 @@ logger = get_logger(__name__)
 def try_sources(
     label: str,
     sources: list[tuple[str, UpstreamCall]],
+    deadline: float | None = None,
 ) -> tuple[pd.DataFrame, str]:
     """Try providers in order until one returns a non-empty DataFrame."""
+    if deadline is None:
+        deadline = time.monotonic() + fetch_timeout_seconds()
     errors: list[str] = []
     logger.info("fetch %s: trying %d source(s)", label, len(sources))
     for source_name, call in sources:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            raise TimeoutError(f"fetch deadline exceeded for {label}")
+        timeout = fetch_upstream_timeout_seconds(remaining)
         try:
-            df = call_with_timeout(call, fetch_timeout_seconds())
+            df = call_with_timeout(call, timeout)
             if df is not None and not df.empty:
                 logger.info(
                     "fetch %s: success via %s (%d rows)",

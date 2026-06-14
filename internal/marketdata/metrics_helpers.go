@@ -2,23 +2,33 @@ package marketdata
 
 import "math"
 
-func computeAnnualVolatility(returns []float64) float64 {
-	if len(returns) < 2 {
-		return 0
+func computeMonthlyAnnualVolatility(monthly []MonthlyReturn) *float64 {
+	n := len(monthly)
+	if n < 2 {
+		if n == 1 && monthly[0].LogReturn == 0 {
+			zero := 0.0
+			return &zero
+		}
+		return nil
 	}
-	logReturns := make([]float64, len(returns))
+	logReturns := make([]float64, n)
 	var mean float64
-	for i, r := range returns {
-		logReturns[i] = math.Log(1 + r)
-		mean += logReturns[i]
+	for i, m := range monthly {
+		logReturns[i] = m.LogReturn
+		mean += m.LogReturn
 	}
-	mean /= float64(len(returns))
+	mean /= float64(n)
 	var varSum float64
 	for _, g := range logReturns {
 		d := g - mean
 		varSum += d * d
 	}
-	return math.Sqrt(varSum / float64(len(returns)-1))
+	monthlyVol := math.Sqrt(varSum / float64(n-1))
+	annual := monthlyVol * math.Sqrt(12)
+	if math.IsNaN(annual) || math.IsInf(annual, 0) {
+		return nil
+	}
+	return &annual
 }
 
 func segmentPointsWithAnchor(
@@ -69,4 +79,12 @@ func maxDrawdownAcrossSegments(
 		}
 	}
 	return maxDD
+}
+
+// MetricFloat returns a metric pointer value or zero for persisted snapshots.
+func MetricFloat(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }

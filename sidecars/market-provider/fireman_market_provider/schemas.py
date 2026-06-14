@@ -32,6 +32,7 @@ class FetchRequest(BaseModel):
     start_date: str | None = None
     end_date: str = Field(min_length=10, max_length=10)
     adjust_policy: Literal["none", "qfq", "hfq"] = "none"
+    resolved_name: str | None = None
 
 
 class HistoricalPoint(BaseModel):

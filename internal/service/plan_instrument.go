@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
@@ -10,9 +9,13 @@ import (
 
 // PlanInstrumentEval is the unified plan availability result for an instrument.
 type PlanInstrumentEval struct {
-	Status        string `json:"status"`
-	QualityStatus string `json:"quality_status"`
-	Available     bool   `json:"available"`
+	Status             string `json:"status"`
+	QualityStatus      string `json:"quality_status"`
+	SimulationEligible bool   `json:"simulation_eligible"`
+	Available          bool   `json:"available"`
+	CompleteYearCount  int    `json:"complete_year_count,omitempty"`
+	MonthlyReturnCount int    `json:"monthly_return_count,omitempty"`
+	HistoryDepth       string `json:"history_depth,omitempty"`
 }
 
 // IsImportableCandidate reports whether instrument_kind may be imported as instrument_type.
@@ -53,7 +56,8 @@ func EvaluateInstrumentForPlan(
 ) (PlanInstrumentEval, error) {
 	if inst.ID == repository.SystemCashInstrumentID {
 		return PlanInstrumentEval{
-			Status: inst.Status, QualityStatus: "available", Available: inst.Status == "active",
+			Status: inst.Status, QualityStatus: "available", SimulationEligible: true,
+			Available: inst.Status == "active",
 		}, nil
 	}
 	if inst.IsSystem {
@@ -64,33 +68,59 @@ func EvaluateInstrumentForPlan(
 	}
 	if inst.Status != "active" {
 		return PlanInstrumentEval{
-				Status: inst.Status, QualityStatus: "unavailable", Available: false,
-			}, newErr("instrument_not_ready", fmt.Sprintf("instrument status is %s", inst.Status), map[string]any{
-				"instrument_id": inst.ID, "status": inst.Status,
-			})
+			Status: inst.Status, QualityStatus: "unavailable", Available: false,
+		}, newErr("instrument_not_ready", "instrument status is not active", map[string]any{
+			"instrument_id": inst.ID, "status": inst.Status,
+		})
 	}
-	quality := LibraryQualityAtDate(ctx, marketRepo, inst.ID, valuationDate)
-	available := quality == "available"
-	eval := PlanInstrumentEval{Status: inst.Status, QualityStatus: quality, Available: available}
+	metrics, quality := libraryMetricsAtDate(ctx, marketRepo, inst.ID, valuationDate)
+	available := metrics.SimulationEligible
+	eval := PlanInstrumentEval{
+		Status: inst.Status, QualityStatus: quality, SimulationEligible: available,
+		Available: available, CompleteYearCount: metrics.CompleteYearCount,
+		MonthlyReturnCount: metrics.MonthlyReturnCount, HistoryDepth: metrics.HistoryDepth,
+	}
 	if !available {
 		return eval, newErr(
 			"instrument_insufficient_history",
-			"instrument does not have enough complete years for simulation",
+			insufficientHistoryMessage(metrics),
 			map[string]any{
 				"instrument_id": inst.ID, "quality_status": quality, "valuation_date": valuationDate,
+				"complete_year_count": metrics.CompleteYearCount, "monthly_return_count": metrics.MonthlyReturnCount,
+				"cagr_status": metrics.CAGRStatus, "volatility_status": metrics.VolatilityStatus,
+				"drawdown_status": metrics.DrawdownStatus,
 			},
 		)
 	}
 	return eval, nil
 }
 
+func insufficientHistoryMessage(metrics marketdata.SnapshotMetrics) string {
+	if metrics.CompleteYearCount < 1 {
+		return "没有完整自然年度，无法生成模拟指标"
+	}
+	if metrics.VolatilityStatus == marketdata.MetricStatusInsufficientMonthlyCoverage {
+		return "完整年度月份覆盖不足，无法计算月度年化波动率"
+	}
+	return "instrument does not have enough complete years for simulation"
+}
+
 // LibraryQualityAtDate computes library quality truncated to valuationDate.
 func LibraryQualityAtDate(ctx context.Context, marketRepo *repository.MarketDataRepo, instrumentID,
 	valuationDate string,
 ) string {
+	_, quality := libraryMetricsAtDate(ctx, marketRepo, instrumentID, valuationDate)
+	return quality
+}
+
+func libraryMetricsAtDate(
+	ctx context.Context,
+	marketRepo *repository.MarketDataRepo,
+	instrumentID, valuationDate string,
+) (marketdata.SnapshotMetrics, string) {
 	points, err := marketRepo.ListByInstrument(ctx, instrumentID)
 	if err != nil || len(points) == 0 {
-		return "insufficient_history"
+		return marketdata.SnapshotMetrics{}, marketdata.QualityStatusInsufficientHistory
 	}
 	dp := repoToDataPoints(points)
 	filtered := make([]marketdata.DataPoint, 0, len(dp))
@@ -100,11 +130,25 @@ func LibraryQualityAtDate(ctx context.Context, marketRepo *repository.MarketData
 		}
 	}
 	if len(filtered) == 0 {
-		return "insufficient_history"
+		return marketdata.SnapshotMetrics{}, marketdata.QualityStatusInsufficientHistory
+	}
+	if marketdata.DetectDailyAnomaly(filtered) {
+		return marketdata.SnapshotMetrics{QualityStatus: marketdata.QualityStatusProviderDataAnomaly},
+			marketdata.QualityStatusProviderDataAnomaly
 	}
 	annual := marketdata.ComputeAnnualReturns(filtered)
-	if marketdata.DetectDailyAnomaly(filtered) {
-		return "provider_data_anomaly"
+	pointType, sourceName := "adjusted_close", "library"
+	if len(filtered) > 0 {
+		pointType = filtered[0].PointType
+		sourceName = filtered[0].SourceName
 	}
-	return marketdata.DetermineLibraryQuality(filtered, annual, valuationDate, false)
+	years := marketdata.SelectSimulationYears(filtered, annual, valuationDate)
+	metrics := marketdata.ComputeMetrics(filtered, years, pointType, sourceName)
+	quality := metrics.QualityStatus
+	if metrics.SimulationEligible {
+		quality = marketdata.QualityStatusAvailable
+	} else if quality == marketdata.QualityStatusAvailable {
+		quality = marketdata.QualityStatusInsufficientHistory
+	}
+	return metrics, quality
 }

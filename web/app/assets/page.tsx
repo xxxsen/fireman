@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   assetClassLabel,
   dataSourceLabel,
+  instrumentSimulationStatusLabel,
   instrumentStatusLabel,
   qualityStatusLabel,
   regionLabel,
@@ -60,7 +61,13 @@ function InstrumentStatusBadge({ inst }: { inst: Instrument }) {
     inst.status === "pending_fetch" || inst.status === "fetch_failed"
       ? inst.status
       : (inst.quality_status ?? inst.status);
-  return <Badge variant={instrumentStatusBadgeVariant(statusKey)}>{displayStatusLabel(inst)}</Badge>;
+  const simLabel = instrumentSimulationStatusLabel(inst);
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <Badge variant={instrumentStatusBadgeVariant(statusKey)}>{displayStatusLabel(inst)}</Badge>
+      {simLabel && <span className="text-[11px] text-amber-800">{simLabel}</span>}
+    </div>
+  );
 }
 
 function InstrumentContextAction({ inst }: { inst: Instrument }) {

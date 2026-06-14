@@ -105,6 +105,7 @@ export interface PlanHolding {
   weight_within_group: number;
   current_amount_minor: number;
   simulation_snapshot_id: string;
+  simulation_snapshot_created_at?: number;
   sort_order: number;
   instrument_code?: string;
   instrument_name?: string;
@@ -332,6 +333,12 @@ export interface Instrument {
   data_stale: boolean;
   stale_warning?: string;
   referencing_plan_count?: number;
+  simulation_eligible?: boolean;
+  history_depth?: string;
+  complete_year_count?: number;
+  monthly_return_count?: number;
+  metrics_version?: string;
+  warnings?: string[];
   created_at: number;
   updated_at: number;
 }

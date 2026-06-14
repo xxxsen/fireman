@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
 
 const routerPush = vi.fn();
+const listInstruments = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPush }),
@@ -57,51 +58,53 @@ vi.mock("@/lib/api/allocation", () => ({
 }));
 
 vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: () =>
-    Promise.resolve({
-      instruments: [
-        {
-          id: "ins_equity_domestic",
-          code: "T1",
-          name: "测试权益基金",
-          market: "CN",
-          instrument_type: "fund",
-          asset_class: "equity",
-          region: "domestic",
-          currency: "CNY",
-          quality_status: "available",
-          status: "active",
-          is_system: false,
-        },
-        {
-          id: "ins_equity_foreign",
-          code: "F1",
-          name: "测试国外权益基金",
-          market: "CN",
-          instrument_type: "fund",
-          asset_class: "equity",
-          region: "foreign",
-          currency: "CNY",
-          quality_status: "available",
-          status: "active",
-          is_system: false,
-        },
-        {
-          id: "ins_bond",
-          code: "B1",
-          name: "测试债券基金",
-          market: "CN",
-          instrument_type: "fund",
-          asset_class: "bond",
-          region: "domestic",
-          currency: "CNY",
-          quality_status: "available",
-          status: "active",
-          is_system: false,
-        },
-      ],
-    }),
+  listInstruments: (...args: unknown[]) => listInstruments(...args),
 }));
+
+const defaultInstruments = [
+  {
+    id: "ins_equity_domestic",
+    code: "T1",
+    name: "测试权益基金",
+    market: "CN",
+    instrument_type: "fund",
+    asset_class: "equity",
+    region: "domestic",
+    currency: "CNY",
+    quality_status: "available",
+    simulation_eligible: true,
+    status: "active",
+    is_system: false,
+  },
+  {
+    id: "ins_equity_foreign",
+    code: "F1",
+    name: "测试国外权益基金",
+    market: "CN",
+    instrument_type: "fund",
+    asset_class: "equity",
+    region: "foreign",
+    currency: "CNY",
+    quality_status: "available",
+    simulation_eligible: true,
+    status: "active",
+    is_system: false,
+  },
+  {
+    id: "ins_bond",
+    code: "B1",
+    name: "测试债券基金",
+    market: "CN",
+    instrument_type: "fund",
+    asset_class: "bond",
+    region: "domestic",
+    currency: "CNY",
+    quality_status: "available",
+    simulation_eligible: true,
+    status: "active",
+    is_system: false,
+  },
+];
 
 function renderWizard() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -143,13 +146,65 @@ async function selectEquityInstrument() {
   fireEvent.click(await screen.findByRole("button", { name: /测试权益基金/ }));
 }
 
+async function goToConfirmStep(scenarioId = "scn_a") {
+  await goToInstrumentStep(scenarioId);
+  await selectEquityInstrument();
+  fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+  await waitFor(() => expect(screen.getByText(/确认组合/)).toBeInTheDocument());
+}
+
 describe("NewPlanWizardPage", () => {
   beforeEach(() => {
     createPlanWizard.mockReset();
     createSimulation.mockReset();
     routerPush.mockReset();
+    listInstruments.mockReset();
+    listInstruments.mockResolvedValue({ instruments: defaultInstruments });
     createPlanWizard.mockResolvedValue({ id: "plan_new", config_version: 1 });
     createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
+  });
+
+  it("shows short-history warning on confirm step for one-year instruments", async () => {
+    listInstruments.mockResolvedValueOnce({
+      instruments: [
+        {
+          id: "ins_short",
+          code: "SHORT01",
+          name: "短历史基金",
+          market: "CN",
+          instrument_type: "fund",
+          asset_class: "equity",
+          region: "domestic",
+          currency: "CNY",
+          quality_status: "available",
+          simulation_eligible: true,
+          history_depth: "one_year",
+          status: "active",
+          is_system: false,
+        },
+      ],
+    });
+
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    const search = await screen.findByLabelText("权益国内搜索");
+    fireEvent.change(search, { target: { value: "SHORT" } });
+    fireEvent.click(await screen.findByRole("button", { name: /短历史基金/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    const warning = await screen.findByTestId("wizard-short-history");
+    expect(warning).toHaveTextContent("短历史基金（SHORT01）历史样本有限");
+    expect(warning).toHaveTextContent("模拟长期估计不确定性较高");
+  });
+
+  it("shows confirm checklist on final step", async () => {
+    renderWizard();
+    await goToConfirmStep();
+
+    expect(screen.getByText("组内权重：通过")).toBeInTheDocument();
+    expect(screen.getByText("全组合目标权重：通过")).toBeInTheDocument();
+    expect(screen.getByText(/已选标的：1 个/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建计划" })).toBeInTheDocument();
   });
 
   it("uses updated default plan name and financial inputs", async () => {

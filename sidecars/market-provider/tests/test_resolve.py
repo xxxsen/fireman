@@ -321,10 +321,13 @@ def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
 
     req = ResolveRequest(market="CN", instrument_type="cn_exchange_fund", code="166009")
     start = time.monotonic()
-    with pytest.raises(ValueError, match="instrument_not_found"):
-        resolve_instrument(req)
+    data = resolve_instrument(req)
     elapsed = time.monotonic() - start
 
+    assert not data.ambiguous
+    assert data.resolved is not None
+    assert data.resolved.name == "测试LOF"
+    assert data.resolved.instrument_kind == "lof"
     assert len(lof_timeouts) == 1
     assert lof_timeouts[0] <= 1
     assert lof_timeouts[0] < resolve_timeout_seconds()

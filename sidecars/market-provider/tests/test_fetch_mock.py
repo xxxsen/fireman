@@ -300,7 +300,7 @@ def test_fetch_mutual_fund_money_fallback() -> None:
         }
     )
     with patch(
-        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name_readonly",
         return_value="测试货币基金",
     ), patch("akshare.fund_open_fund_info_em", side_effect=RuntimeError("em blocked")), patch(
         "akshare.fund_money_fund_info_em", return_value=df
@@ -335,7 +335,7 @@ def test_fetch_mutual_fund_hybrid_open_success() -> None:
         }
     )
     with patch(
-        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name_readonly",
         return_value="华夏成长混合",
     ), patch("akshare.fund_open_fund_info_em", return_value=open_df), patch(
         "akshare.fund_money_fund_info_em", side_effect=RuntimeError("must not fallback")
@@ -369,7 +369,7 @@ def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
         }
     )
     with patch(
-        "fireman_market_provider.adapters.names.get_cn_mutual_fund_name",
+        "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name_readonly",
         return_value="华夏成长混合",
     ), patch("akshare.fund_open_fund_info_em", side_effect=RuntimeError("open blocked")), patch(
         "akshare.fund_money_fund_info_em", return_value=money_df
@@ -387,6 +387,50 @@ def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
             },
         )
         assert response.status_code != 200 or response.json()["code"] != 0
+
+
+def test_fetch_mutual_fund_skips_name_upstream_calls() -> None:
+    """Fetch classification must not trigger fund_name_em / fund_lof_spot_em / XQ."""
+    reset_name_caches()
+    money_df = pd.DataFrame(
+        {
+            "净值日期": ["2024-01-02"],
+            "每万份收益": [0.45],
+            "7日年化收益率": [1.8],
+        }
+    )
+    blocked: dict[str, int] = {"fund_name_em": 0, "fund_lof_spot_em": 0, "fund_individual_basic_info_xq": 0}
+
+    def _block(op: str):
+        def _fn(*_args, **_kwargs):
+            blocked[op] += 1
+            raise RuntimeError(f"{op} must not be called on fetch path")
+
+        return _fn
+
+    with patch("akshare.fund_name_em", side_effect=_block("fund_name_em")), patch(
+        "akshare.fund_lof_spot_em", side_effect=_block("fund_lof_spot_em")
+    ), patch(
+        "akshare.fund_individual_basic_info_xq", side_effect=_block("fund_individual_basic_info_xq")
+    ), patch("akshare.fund_open_fund_info_em", side_effect=RuntimeError("open blocked")), patch(
+        "akshare.fund_money_fund_info_em", return_value=money_df
+    ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
+        "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
+    ):
+        response = _client().post(
+            "/v1/instruments/fetch",
+            json={
+                "market": "CN",
+                "instrument_type": "cn_mutual_fund",
+                "source_code": "000009",
+                "resolved_name": "测试货币基金",
+                "end_date": "2026-06-09",
+                "adjust_policy": "none",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["source_kind"] == "money_fund"
+    assert blocked == {"fund_name_em": 0, "fund_lof_spot_em": 0, "fund_individual_basic_info_xq": 0}
 
 
 def test_fetch_timeout_returns_provider_error_envelope() -> None:

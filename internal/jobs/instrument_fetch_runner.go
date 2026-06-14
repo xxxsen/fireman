@@ -102,7 +102,7 @@ func (r *InstrumentFetchRunner) Run(
 	fetchReq := marketdata.FetchRequest{
 		Market: payload.Market, InstrumentType: payload.InstrumentType,
 		SourceCode: payload.ProviderSymbol, EndDate: end,
-		AdjustPolicy: payload.AdjustPolicy,
+		AdjustPolicy: payload.AdjustPolicy, ResolvedName: payload.ResolvedName,
 	}
 	data, err := r.provider.Fetch(fetchCtx, fetchReq)
 	if cancelCheck != nil && cancelCheck() {

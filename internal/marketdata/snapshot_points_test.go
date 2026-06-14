@@ -54,7 +54,7 @@ func TestIncompleteYearDailyChangeIgnored(t *testing.T) {
 		}
 	}
 	m2 := ComputeMetrics(points2, years, "adjusted_close", "test")
-	if m1.ObservationCount != m2.ObservationCount || m1.SourceHash != m2.SourceHash {
+	if m1.DailyObservationCount != m2.DailyObservationCount || m1.SourceHash != m2.SourceHash {
 		t.Fatal("incomplete year daily change should not affect snapshot metrics")
 	}
 }
@@ -65,7 +65,7 @@ func TestSourceHashMatchesPointSet(t *testing.T) {
 	years := SelectSimulationYears(points, annual, "2026-06-09")
 	set := BuildSnapshotPointSet(points, years, "adjusted_close", "golden")
 	m := ComputeMetrics(points, years, "adjusted_close", "golden")
-	if m.SourceHash != ComputeSourceHash(set, "adjusted_close", "golden") {
+	if m.SourceHash != ComputeMetricsSourceHash(set, "adjusted_close", "golden", years, MetricsVersionMonthlyLogReturnV1) {
 		t.Fatal("source_hash must match canonical hash of snapshot point set")
 	}
 }

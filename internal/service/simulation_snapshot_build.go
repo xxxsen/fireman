@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 
@@ -82,10 +83,14 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		return simulation.SnapshotAsset{}, newErr("snapshot_not_found", "simulation snapshot missing for holding",
 			map[string]any{"holding_id": line.HoldingID})
 	}
-	if snap.SourceMode != "system_cash" && snap.CompleteYearCount < 2 {
+	if snap.SourceMode != "system_cash" && snap.MonthlyReturnCount < 12 {
 		return simulation.SnapshotAsset{}, newErr("instrument_insufficient_history",
-			"holding snapshot needs at least 2 complete years",
-			map[string]any{"holding_id": line.HoldingID})
+			"holding snapshot does not meet simulation eligibility",
+			map[string]any{
+				"holding_id": line.HoldingID,
+				"complete_year_count": snap.CompleteYearCount,
+				"monthly_return_count": snap.MonthlyReturnCount,
+			})
 	}
 	years := make([]simulation.SnapshotYear, len(snap.Years))
 	for i, y := range snap.Years {
@@ -96,17 +101,26 @@ func (s *SimulationService) buildOneSnapshotAsset(
 	}
 	inst, err := s.holdings.GetInstrument(ctx, line.InstrumentID)
 	currency := plan.BaseCurrency
+	instrumentName := ""
+	instrumentCode := ""
 	if err == nil {
 		currency = inst.Currency
+		instrumentName = inst.Name
+		instrumentCode = inst.Code
 	}
 	isCash := snap.SourceMode == "system_cash" || line.AssetClass == domain.AssetClassCash
 	sa := simulation.SnapshotAsset{
-		HoldingID: line.HoldingID, InstrumentID: line.InstrumentID, SnapshotID: line.SimulationSnapshotID,
+		HoldingID: line.HoldingID, InstrumentID: line.InstrumentID,
+		InstrumentName: instrumentName, InstrumentCode: instrumentCode,
+		SnapshotID: line.SimulationSnapshotID,
 		Currency: currency, AssetClass: line.AssetClass, IsCash: isCash,
 		InitialMinor: line.CurrentAmountMinor, TargetWeight: line.PortfolioTargetWeight,
 		ModeledAnnualReturn: snap.ModeledAnnualReturn, AnnualVolatility: snap.AnnualVolatility,
 		MaxDrawdown: snap.MaxDrawdown, FeeTreatment: snap.FeeTreatment, ExpenseRatio: snap.ExpenseRatio,
 		SourceHash: snap.SourceHash, Years: years,
+		CompleteYearCount: snap.CompleteYearCount, MonthlyReturnCount: snap.MonthlyReturnCount,
+		HistoryDepth: snap.HistoryDepth, MetricsVersion: snap.MetricsVersion,
+		DataWarnings: parseSnapshotWarnings(snap.WarningsJSON),
 	}
 	if currency == plan.BaseCurrency {
 		return sa, nil
@@ -132,21 +146,37 @@ func (s *SimulationService) enrichSnapshotAssetFX(
 					"holding_id": line.HoldingID, "currency": currency, "error": err.Error(),
 				})
 		}
-		if fxMetrics.CompleteYearCount < 2 || fxMetrics.QualityStatus != "available" {
+		if fxMetrics.CompleteYearCount < 1 || !fxMetrics.SimulationEligible {
 			return simulation.SnapshotAsset{}, newErr(
 				"fx_insufficient_history",
-				"FX snapshot needs at least 2 complete years",
+				"FX snapshot does not meet simulation eligibility",
 				map[string]any{
 					"holding_id": line.HoldingID, "currency": currency,
+					"complete_year_count": fxMetrics.CompleteYearCount,
+					"monthly_return_count": fxMetrics.MonthlyReturnCount,
 				},
 			)
 		}
 		fxCache[currency] = fxMetrics
 	}
 	sa.FXSnapshotID = fxMetrics.SourceHash
-	sa.FXModeledReturn = fxMetrics.ModeledAnnualReturn
-	sa.FXAnnualVolatility = fxMetrics.AnnualVolatility
+	sa.FXModeledReturn = marketdata.MetricFloat(fxMetrics.ModeledAnnualReturn)
+	sa.FXAnnualVolatility = marketdata.MetricFloat(fxMetrics.AnnualVolatility)
+	sa.FXCompleteYearCount = fxMetrics.CompleteYearCount
+	sa.FXMonthlyReturnCount = fxMetrics.MonthlyReturnCount
+	sa.FXHistoryDepth = fxMetrics.HistoryDepth
+	sa.FXMetricsVersion = fxMetrics.MetricsVersion
+	sa.FXDataWarnings = fxMetrics.Warnings
 	return sa, nil
+}
+
+func parseSnapshotWarnings(raw string) []string {
+	var out []string
+	if raw == "" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out
 }
 
 func snapshotCashFlows(flows []repository.PlanCashFlow) []simulation.SnapshotCashFlow {

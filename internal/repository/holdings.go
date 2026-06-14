@@ -27,9 +27,10 @@ func (r *HoldingsRepo) ListByPlan(ctx context.Context, planID string) ([]PlanHol
 		SELECT h.id, h.plan_id, h.instrument_id, h.enabled, h.asset_class, h.region,
 			h.weight_within_group, h.current_amount_minor, h.simulation_snapshot_id,
 			h.sort_order, h.created_at, h.updated_at,
-			i.code, i.name
+			i.code, i.name, COALESCE(s.created_at, 0)
 		FROM plan_holdings h
 		JOIN instruments i ON i.id = h.instrument_id
+		LEFT JOIN instrument_simulation_snapshots s ON s.id = h.simulation_snapshot_id
 		WHERE h.plan_id=? ORDER BY h.sort_order, h.created_at`, planID)
 	if err != nil {
 		return nil, fmt.Errorf("query plan holdings: %w", err)
@@ -89,14 +90,15 @@ func (r *HoldingsRepo) GetByID(ctx context.Context, planID, holdingID string) (P
 		SELECT h.id, h.plan_id, h.instrument_id, h.enabled, h.asset_class, h.region,
 			h.weight_within_group, h.current_amount_minor, h.simulation_snapshot_id,
 			h.sort_order, h.created_at, h.updated_at,
-			i.code, i.name
+			i.code, i.name, COALESCE(s.created_at, 0)
 		FROM plan_holdings h
 		JOIN instruments i ON i.id = h.instrument_id
+		LEFT JOIN instrument_simulation_snapshots s ON s.id = h.simulation_snapshot_id
 		WHERE h.plan_id=? AND h.id=?`, planID, holdingID).Scan(
 		&h.ID, &h.PlanID, &h.InstrumentID, &enabled,
 		&h.AssetClass, &h.Region, &h.WeightWithinGroup, &h.CurrentAmountMinor,
 		&h.SimulationSnapshotID, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
-		&h.InstrumentCode, &h.InstrumentName,
+		&h.InstrumentCode, &h.InstrumentName, &h.SimulationSnapshotCreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PlanHolding{}, ErrHoldingNotFound
@@ -146,7 +148,7 @@ func scanHoldings(rows *sql.Rows) ([]PlanHolding, error) {
 		if err := rows.Scan(&h.ID, &h.PlanID, &h.InstrumentID, &enabled,
 			&h.AssetClass, &h.Region, &h.WeightWithinGroup, &h.CurrentAmountMinor,
 			&h.SimulationSnapshotID, &h.SortOrder, &h.CreatedAt, &h.UpdatedAt,
-			&h.InstrumentCode, &h.InstrumentName); err != nil {
+			&h.InstrumentCode, &h.InstrumentName, &h.SimulationSnapshotCreatedAt); err != nil {
 			return nil, fmt.Errorf("scan holding row: %w", err)
 		}
 		h.Enabled = enabled == 1

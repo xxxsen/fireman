@@ -67,10 +67,31 @@ function activeDetail() {
     simulation_window: {
       selected_years: [2023],
       excluded_years: [],
+      complete_year_count: 1,
+      daily_observation_count: 242,
+      monthly_return_count: 12,
       historical_cagr: 0.12,
       annual_volatility: 0.18,
-      max_drawdown: -0.1,
-      observation_count: 242,
+      max_drawdown: 0.1,
+      history_depth: "one_year",
+      simulation_eligible: true,
+      quality_status: "available",
+      inclusion_date: "2026-06-14",
+      fee_treatment: "embedded",
+      expense_ratio_status: "unavailable",
+    },
+    trailing_returns: {
+      as_of_date: "2026-06-12",
+      point_type: "adjusted_close",
+      source_name: "akshare",
+      periods: {
+        "1m": { status: "available", cumulative_return: 0.02, end_date: "2026-06-12", target_start_date: "2026-05-12", start_date: "2026-05-12", actual_days: 31, annualized_return: null },
+        "3m": { status: "available", cumulative_return: 0.04, end_date: "2026-06-12", target_start_date: "2026-03-12", start_date: "2026-03-12", actual_days: 92, annualized_return: null },
+        "6m": { status: "available", cumulative_return: 0.06, end_date: "2026-06-12", target_start_date: "2025-12-12", start_date: "2025-12-12", actual_days: 182, annualized_return: null },
+        "1y": { status: "available", cumulative_return: 0.12, end_date: "2026-06-12", target_start_date: "2025-06-12", start_date: "2025-06-12", actual_days: 365, annualized_return: null },
+        "3y": { status: "insufficient_history", cumulative_return: null, end_date: "2026-06-12", target_start_date: "2023-06-12", start_date: null, actual_days: null, annualized_return: null },
+        "5y": { status: "insufficient_history", cumulative_return: null, end_date: "2026-06-12", target_start_date: "2021-06-12", start_date: null, actual_days: null, annualized_return: null },
+      },
     },
     historical_snapshots: [],
     referencing_plans: [],
@@ -217,7 +238,7 @@ describe("AssetDetailPage job terminal states", () => {
 
     await waitFor(() => expect(getInstrumentDetailMock).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("年度收益")).toBeInTheDocument();
-    expect(screen.getByText("模拟窗口预览（最近完整年度）")).toBeInTheDocument();
+    expect(screen.getByText("模拟窗口预览（完整自然年度）")).toBeInTheDocument();
     expect(screen.getByText("2023-01-03 ~ 2023-12-29")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "刷新 AKShare 数据" })).toBeInTheDocument();
     expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();

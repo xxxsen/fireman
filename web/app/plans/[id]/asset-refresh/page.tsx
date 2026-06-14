@@ -39,11 +39,7 @@ const STEPS = ["说明", "配置确认", "录入当前资产", "确认提交"] a
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
 function isSelectableInstrument(inst: Instrument): boolean {
-  return (
-    !inst.is_system &&
-    inst.status === "active" &&
-    (inst.quality_status ?? "available") === "available"
-  );
+  return !inst.is_system && inst.status === "active" && inst.simulation_eligible === true;
 }
 
 export default function AssetRefreshPage() {
@@ -648,6 +644,17 @@ export default function AssetRefreshPage() {
               本次提交包含持仓配置变更（新增、移除或组内配比调整）。
             </p>
           )}
+          {(instruments.data?.instruments ?? [])
+            .filter((inst) =>
+              holdingsDraft?.some((h) => h.instrument_id === inst.id) &&
+              inst.simulation_eligible &&
+              inst.history_depth === "one_year",
+            )
+            .map((inst) => (
+              <p key={inst.id} className="text-sm text-amber-800" data-testid="asset-refresh-short-history">
+                {inst.name}（{inst.code}）历史样本有限，模拟长期估计不确定性较高。
+              </p>
+            ))}
           <p className="text-sm text-slate-600">
             提交后，当前计划总资产将同步更新为最新持仓合计。
           </p>

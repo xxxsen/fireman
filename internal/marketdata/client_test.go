@@ -40,3 +40,10 @@ func TestResolveTimeoutDefault(t *testing.T) {
 		t.Fatalf("resolveTimeout() = %v, want 90s", got)
 	}
 }
+
+func TestFetchTimeoutDefault(t *testing.T) {
+	t.Setenv("MARKET_PROVIDER_FETCH_TIMEOUT", "")
+	if got := fetchTimeout(); got != 300*time.Second {
+		t.Fatalf("fetchTimeout() = %v, want 300s", got)
+	}
+}

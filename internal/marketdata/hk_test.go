@@ -23,15 +23,18 @@ func TestHKAssetTwentyCompleteYearsGoldenMetrics(t *testing.T) {
 	if m.QualityStatus != "available" {
 		t.Fatalf("quality=%s want available", m.QualityStatus)
 	}
-	if m.ModeledAnnualReturn != m.HistoricalCAGR {
+	if metricVal(m.ModeledAnnualReturn) != metricVal(m.HistoricalCAGR) {
 		t.Fatal("modeled annual return must equal historical cagr")
 	}
 	if m.SourceHash == "" {
 		t.Fatal("expected source hash")
 	}
+	if m.MonthlyReturnCount != 240 {
+		t.Fatalf("monthly count %d", m.MonthlyReturnCount)
+	}
 
 	set := BuildSnapshotPointSet(points, selected, "adjusted_close", "golden_hk")
-	if m.SourceHash != ComputeSourceHash(set, "adjusted_close", "golden_hk") {
+	if m.SourceHash != ComputeMetricsSourceHash(set, "adjusted_close", "golden_hk", selected, MetricsVersionMonthlyLogReturnV1) {
 		t.Fatal("HK golden source_hash must match canonical hash of snapshot point set")
 	}
 }

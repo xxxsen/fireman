@@ -51,7 +51,7 @@ func FailErr(c *gin.Context, err error) {
 			"instrument_in_use", "instrument_not_refreshable", "instrument_refresh_throttled",
 			"instrument_insufficient_history", "instrument_already_exists", "instrument_type_mismatch":
 			status = http.StatusBadRequest
-		case "market_provider_unavailable":
+		case "market_provider_unavailable", "market_provider_timeout":
 			status = http.StatusBadGateway
 		case "plan_version_conflict":
 			status = http.StatusConflict

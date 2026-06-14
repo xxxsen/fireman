@@ -42,14 +42,16 @@ func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap 
 		INSERT INTO instrument_simulation_snapshots (
 			id, instrument_id, plan_id, inclusion_date, as_of_date,
 			window_start, window_end, complete_year_start, complete_year_end,
-			complete_year_count, observation_count,
+			complete_year_count, daily_observation_count, monthly_return_count,
+			volatility_method, metrics_version, history_depth,
 			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
 			expense_ratio, expense_ratio_status, fee_treatment,
 			source_mode, quality_status, warnings_json, source_hash, created_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		snap.ID, snap.InstrumentID, snap.PlanID, snap.InclusionDate, snap.AsOfDate,
 		snap.WindowStart, snap.WindowEnd, snap.CompleteYearStart, snap.CompleteYearEnd,
-		snap.CompleteYearCount, snap.ObservationCount,
+		snap.CompleteYearCount, snap.DailyObservationCount, snap.MonthlyReturnCount,
+		snap.VolatilityMethod, snap.MetricsVersion, snap.HistoryDepth,
 		snap.HistoricalCAGR, snap.ModeledAnnualReturn, snap.AnnualVolatility, snap.MaxDrawdown,
 		snap.ExpenseRatio, snap.ExpenseRatioStatus, snap.FeeTreatment,
 		snap.SourceMode, snap.QualityStatus, snap.WarningsJSON, snap.SourceHash, snap.CreatedAt); err != nil {
@@ -96,8 +98,12 @@ type SimulationSnapshot struct {
 	WindowEnd           *string        `json:"window_end,omitempty"`
 	CompleteYearStart   *int           `json:"complete_year_start,omitempty"`
 	CompleteYearEnd     *int           `json:"complete_year_end,omitempty"`
-	CompleteYearCount   int            `json:"complete_year_count"`
-	ObservationCount    int            `json:"observation_count"`
+	CompleteYearCount       int            `json:"complete_year_count"`
+	DailyObservationCount   int            `json:"daily_observation_count"`
+	MonthlyReturnCount      int            `json:"monthly_return_count"`
+	VolatilityMethod        string         `json:"volatility_method"`
+	MetricsVersion          string         `json:"metrics_version"`
+	HistoryDepth            string         `json:"history_depth"`
 	HistoricalCAGR      float64        `json:"historical_cagr"`
 	ModeledAnnualReturn float64        `json:"modeled_annual_return"`
 	AnnualVolatility    float64        `json:"annual_volatility"`
@@ -126,7 +132,8 @@ func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapsh
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, instrument_id, plan_id, inclusion_date, as_of_date,
 			window_start, window_end, complete_year_start, complete_year_end,
-			complete_year_count, observation_count,
+			complete_year_count, daily_observation_count, monthly_return_count,
+			volatility_method, metrics_version, history_depth,
 			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
 			expense_ratio, expense_ratio_status, fee_treatment,
 			source_mode, quality_status, warnings_json, source_hash, created_at
@@ -172,7 +179,8 @@ func scanSnapshot(row *sql.Row) (SimulationSnapshot, error) {
 	err := row.Scan(
 		&snap.ID, &snap.InstrumentID, &planID, &snap.InclusionDate, &snap.AsOfDate,
 		&windowStart, &windowEnd, &yearStart, &yearEnd,
-		&snap.CompleteYearCount, &snap.ObservationCount,
+		&snap.CompleteYearCount, &snap.DailyObservationCount, &snap.MonthlyReturnCount,
+		&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
 		&snap.HistoricalCAGR, &snap.ModeledAnnualReturn, &snap.AnnualVolatility, &snap.MaxDrawdown,
 		&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
 		&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,
@@ -221,7 +229,8 @@ func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, instrument_id, plan_id, inclusion_date, as_of_date,
 			window_start, window_end, complete_year_start, complete_year_end,
-			complete_year_count, observation_count,
+			complete_year_count, daily_observation_count, monthly_return_count,
+			volatility_method, metrics_version, history_depth,
 			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
 			expense_ratio, expense_ratio_status, fee_treatment,
 			source_mode, quality_status, warnings_json, source_hash, created_at
@@ -242,7 +251,8 @@ func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string
 		if err := rows.Scan(
 			&snap.ID, &snap.InstrumentID, &planID, &snap.InclusionDate, &snap.AsOfDate,
 			&windowStart, &windowEnd, &yearStart, &yearEnd,
-			&snap.CompleteYearCount, &snap.ObservationCount,
+			&snap.CompleteYearCount, &snap.DailyObservationCount, &snap.MonthlyReturnCount,
+		&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
 			&snap.HistoricalCAGR, &snap.ModeledAnnualReturn, &snap.AnnualVolatility, &snap.MaxDrawdown,
 			&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
 			&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,

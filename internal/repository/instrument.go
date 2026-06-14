@@ -33,6 +33,12 @@ type InstrumentRecord struct {
 	DataStale            bool     `json:"data_stale"`
 	StaleWarning         string   `json:"stale_warning,omitempty"`
 	ReferencingPlanCount int      `json:"referencing_plan_count,omitempty"`
+	SimulationEligible   bool     `json:"simulation_eligible,omitempty"`
+	HistoryDepth         string   `json:"history_depth,omitempty"`
+	CompleteYearCount    int      `json:"complete_year_count,omitempty"`
+	MonthlyReturnCount   int      `json:"monthly_return_count,omitempty"`
+	MetricsVersion       string   `json:"metrics_version,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
 	CreatedAt            int64    `json:"created_at"`
 	UpdatedAt            int64    `json:"updated_at"`
 }

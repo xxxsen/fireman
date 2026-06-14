@@ -20,6 +20,7 @@ services:
       - fireman-data:/data
     environment:
       MARKET_PROVIDER_RESOLVE_TIMEOUT: "90s"
+      MARKET_PROVIDER_FETCH_TIMEOUT: "300s"
     depends_on:
       data-init:
         condition: service_completed_successfully
@@ -67,8 +68,9 @@ services:
       TZ: "Asia/Shanghai"
       MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH: /cache/mutual_fund_names.json
       MARKET_PROVIDER_MUTUAL_FUND_FETCH_TIMEOUT: "60"
-      MARKET_PROVIDER_RESOLVE_TIMEOUT: "90"
-      MARKET_PROVIDER_RESOLVE_DEADLINE: "90"
+      MARKET_PROVIDER_FETCH_TIMEOUT: "240"
+      MARKET_PROVIDER_RESOLVE_TIMEOUT: "60"
+      MARKET_PROVIDER_RESOLVE_DEADLINE: "70"
     volumes:
       - fireman-provider-cache:/cache
     ports:

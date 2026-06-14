@@ -10,6 +10,7 @@ from fireman_market_provider.adapters.names import (
     _load_mutual_fund_name_map,
     lookup_cn_exchange_fund_name,
     lookup_cn_mutual_fund_name,
+    lookup_cn_mutual_fund_name_readonly,
     name_from_dataframe,
     refresh_cn_mutual_fund_names,
     reset_name_caches,
@@ -38,6 +39,51 @@ def test_resolve_cn_exchange_fund_name_uses_spot_lookup() -> None:
     with patch("akshare.fund_etf_spot_em", return_value=spot):
         assert resolve_cn_exchange_fund_name("510300", hist) == "沪深300ETF华泰柏瑞"
         assert lookup_cn_exchange_fund_name("510300") == "沪深300ETF华泰柏瑞"
+
+
+def test_lookup_cn_exchange_fund_name_prefers_lof_for_27_prefix() -> None:
+    empty = pd.DataFrame({"代码": [], "名称": []})
+    lof = pd.DataFrame({"代码": ["270042"], "名称": ["测试LOF名称"]})
+    with patch("akshare.fund_etf_spot_em", return_value=empty), patch(
+        "akshare.fund_lof_spot_em", return_value=lof
+    ):
+        assert lookup_cn_exchange_fund_name("270042") == "测试LOF名称"
+
+
+def test_lookup_cn_exchange_fund_name_uses_xq_when_spot_missing() -> None:
+    empty = pd.DataFrame({"代码": [], "名称": []})
+    xq = pd.DataFrame(
+        {"item": ["基金代码", "基金名称"], "value": ["270042", "广发纳指100ETF联接（QDII）人民币A"]}
+    )
+    with patch("akshare.fund_etf_spot_em", return_value=empty), patch(
+        "akshare.fund_lof_spot_em", return_value=empty
+    ), patch("akshare.fund_individual_basic_info_xq", return_value=xq):
+        assert lookup_cn_exchange_fund_name("270042") == "广发纳指100ETF联接（QDII）人民币A"
+
+
+def test_lookup_cross_listed_etf_name_uses_index_not_xq() -> None:
+    empty = pd.DataFrame({"代码": [], "名称": []})
+    index = pd.DataFrame({"index_code": ["000510"], "display_name": ["中证A500"], "publish_date": ["2005-01-04"]})
+    xq = pd.DataFrame({"item": ["基金名称"], "value": ["诺安永鑫一年定开债券"]})
+
+    def _xq_should_not_run(**_kwargs: str) -> pd.DataFrame:
+        raise AssertionError("XQ lookup must not run for cross-listed bare codes")
+
+    with patch("akshare.fund_etf_spot_em", return_value=empty), patch(
+        "akshare.index_stock_info", return_value=index
+    ), patch("akshare.fund_individual_basic_info_xq", side_effect=_xq_should_not_run):
+        assert lookup_cn_exchange_fund_name("000510") == "中证A500"
+
+
+def test_lookup_cn_stock_name_uses_individual_when_spot_missing() -> None:
+    empty = pd.DataFrame({"代码": [], "名称": []})
+    info = pd.DataFrame({"item": ["股票简称"], "value": ["新金路"]})
+    with patch("akshare.stock_zh_a_spot_em", return_value=empty), patch(
+        "akshare.stock_individual_info_em", return_value=info
+    ):
+        from fireman_market_provider.adapters.names import lookup_cn_stock_name
+
+        assert lookup_cn_stock_name("000510") == "新金路"
 
 
 def _fresh_refreshed_at() -> str:
@@ -90,6 +136,40 @@ def test_mutual_fund_name_map_loads_from_disk_without_upstream(tmp_path, monkeyp
 
     register_test_dispatch("fund_name_em", fetch)
     assert lookup_cn_mutual_fund_name("007194") == "长城短债A"
+
+
+def test_mutual_fund_name_readonly_miss_without_cache(tmp_path, monkeypatch) -> None:
+    cache_path = tmp_path / "mutual_fund_names.json"
+    monkeypatch.setenv("MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH", str(cache_path))
+    reset_name_caches()
+
+    def fetch() -> pd.DataFrame:
+        raise AssertionError("readonly lookup must not call upstream")
+
+    register_test_dispatch("fund_name_em", fetch)
+    assert lookup_cn_mutual_fund_name_readonly("007194") is None
+
+
+def test_mutual_fund_name_readonly_from_disk(tmp_path, monkeypatch) -> None:
+    cache_path = tmp_path / "mutual_fund_names.json"
+    monkeypatch.setenv("MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH", str(cache_path))
+    reset_name_caches()
+    cache_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "refreshed_at": _fresh_refreshed_at(),
+                "names": {"007194": "长城短债A"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fetch() -> pd.DataFrame:
+        raise AssertionError("readonly lookup must not call upstream")
+
+    register_test_dispatch("fund_name_em", fetch)
+    assert lookup_cn_mutual_fund_name_readonly("007194") == "长城短债A"
 
 
 def test_expired_disk_cache_triggers_upstream(tmp_path, monkeypatch) -> None:

@@ -78,15 +78,41 @@ export function getInstrumentDetail(id: string) {
     simulation_window: {
       inclusion_date: string;
       selected_years: number[];
-      excluded_years: number[];
+      excluded_years: Array<{ year: number; reason: string }>;
       complete_year_count: number;
-      historical_cagr: number;
-      annual_volatility: number;
-      max_drawdown: number;
-      observation_count: number;
+      daily_observation_count: number;
+      monthly_return_count: number;
+      historical_cagr: number | null;
+      annual_volatility: number | null;
+      max_drawdown: number | null;
+      cagr_status?: string;
+      volatility_status?: string;
+      drawdown_status?: string;
+      quality_status: string;
+      simulation_eligible?: boolean;
+      history_depth?: string;
+      volatility_method?: string;
+      metrics_version?: string;
+      warnings?: string[];
       fee_treatment: string;
       expense_ratio_status: string;
-      quality_status: string;
+    };
+    trailing_returns?: {
+      as_of_date: string;
+      point_type: string;
+      source_name: string;
+      periods: Record<
+        string,
+        {
+          status: string;
+          target_start_date: string;
+          start_date: string | null;
+          end_date: string;
+          actual_days: number | null;
+          cumulative_return: number | null;
+          annualized_return: number | null;
+        }
+      >;
     };
     historical_snapshots: {
       id: string;

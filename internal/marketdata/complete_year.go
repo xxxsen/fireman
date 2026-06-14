@@ -30,13 +30,27 @@ func IsCompleteYear(points []DataPoint, year int, inclusionDate string) bool {
 	if len(yearPoints) < 126 {
 		return false
 	}
-	if monthOf(yearPoints[0].TradeDate) > 2 {
+	if monthOf(yearPoints[0].TradeDate) != 1 {
 		return false
 	}
-	if monthOf(yearPoints[len(yearPoints)-1].TradeDate) < 11 {
+	if monthOf(yearPoints[len(yearPoints)-1].TradeDate) != 12 {
 		return false
+	}
+	for month := 1; month <= 12; month++ {
+		if !hasMonthData(yearPoints, month) {
+			return false
+		}
 	}
 	return true
+}
+
+func hasMonthData(yearPoints []DataPoint, month int) bool {
+	for _, p := range yearPoints {
+		if monthOf(p.TradeDate) == month {
+			return true
+		}
+	}
+	return false
 }
 
 func yearFromDate(date string) (int, error) {

@@ -13,7 +13,7 @@ import {
   TornadoChart,
 } from "@/components/charts/SensitivityCharts";
 import { useJobStatus } from "@/hooks/useJobStatus";
-import { getParameters } from "@/lib/api/plans";
+import { getParameters, getPlan } from "@/lib/api/plans";
 import {
   createSensitivityTest,
   createStressTest,
@@ -22,6 +22,8 @@ import {
   listSensitivityTests,
   listStressTests,
 } from "@/lib/api/analysis";
+import { getHoldings } from "@/lib/api/holdings";
+import { listInstruments } from "@/lib/api/instruments";
 import {
   cancelJob,
   createSimulation,
@@ -29,7 +31,7 @@ import {
   listPaths,
   listSimulations,
 } from "@/lib/api/simulations";
-import { formatMoney, formatPercent } from "@/lib/format";
+import { formatMoney, formatPercent, historyDepthLabel } from "@/lib/format";
 
 type JobKind = "sim" | "stress" | "sensitivity";
 
@@ -310,6 +312,22 @@ export function AnalysisContent() {
     queryKey: ["parameters", planId],
     queryFn: () => getParameters(planId),
   });
+  const planQ = useQuery({
+    queryKey: ["plan", planId],
+    queryFn: () => getPlan(planId),
+  });
+  const holdingsQ = useQuery({
+    queryKey: ["holdings", planId],
+    queryFn: () => getHoldings(planId),
+  });
+  const instrumentsQ = useQuery({
+    queryKey: ["instruments", planQ.data?.valuation_date],
+    queryFn: () =>
+      listInstruments(
+        planQ.data?.valuation_date ? { valuationDate: planQ.data.valuation_date } : undefined,
+      ),
+    enabled: !!planQ.data,
+  });
 
   const serverRuns = paramsQ.data?.parameters.simulation_runs;
   const runs = runsOverride ?? (serverRuns && serverRuns >= 1000 ? serverRuns : 10000);
@@ -440,6 +458,20 @@ export function AnalysisContent() {
   const simPanelError =
     jobErrors.sim ?? (activeJobKind === "sim" ? jobState.error : null);
 
+  const shortHistoryLabels = (() => {
+    const instById = new Map(
+      (instrumentsQ.data?.instruments ?? []).map((inst) => [inst.id, inst]),
+    );
+    const labels: string[] = [];
+    for (const h of holdingsQ.data?.holdings ?? []) {
+      const inst = instById.get(h.instrument_id);
+      if (inst?.simulation_eligible && inst.history_depth === "one_year") {
+        labels.push(`${inst.name}（${inst.code}）· ${historyDepthLabel(inst.history_depth)}`);
+      }
+    }
+    return labels;
+  })();
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -451,6 +483,11 @@ export function AnalysisContent() {
 
       <section className="rounded-lg border p-4">
         <h2 className="font-medium">Monte Carlo 模拟</h2>
+        {shortHistoryLabels.length > 0 && (
+          <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+            以下持仓历史样本有限，模拟结果长期不确定性较高：{shortHistoryLabels.join("；")}
+          </p>
+        )}
         <div className="mt-3 flex flex-wrap items-end gap-4">
           <label className="text-sm">
             模拟次数
@@ -530,6 +567,16 @@ export function AnalysisContent() {
           {latest.summary_json?.monthly_wealth_quantiles && (
             <div className="mt-4">
               <WealthPathChart series={latest.summary_json.monthly_wealth_quantiles} />
+            </div>
+          )}
+          {((latest.summary_json?.model_warnings as string[] | undefined) ?? []).length > 0 && (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <h3 className="font-medium">模型提示</h3>
+              <ul className="mt-1 list-disc pl-5">
+                {(latest.summary_json?.model_warnings as string[]).map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
             </div>
           )}
           {repPaths.length > 0 && (

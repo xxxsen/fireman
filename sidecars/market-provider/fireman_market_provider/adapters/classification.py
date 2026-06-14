@@ -40,17 +40,17 @@ def default_region(market: str, instrument_type: str) -> str:
     return "domestic"
 
 
-def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str) -> FundMeta:
-    from .names import lookup_cn_mutual_fund_name, name_from_dataframe
+def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str, resolved_name: str | None = None) -> FundMeta:
+    from .names import lookup_cn_mutual_fund_name_readonly, name_from_dataframe
 
-    name = name_from_dataframe(df, symbol) or symbol
+    name = resolved_name or name_from_dataframe(df, symbol) or symbol
     fund_type = ""
     if "基金类型" in df.columns and not df["基金类型"].empty:
         fund_type = str(df["基金类型"].iloc[0])
 
-    # akshare NAV history frames omit name/type metadata; resolve from name cache.
+    # akshare NAV history frames omit name/type metadata; use resolve name or read-only cache.
     if name == symbol or not name.strip():
-        cached = lookup_cn_mutual_fund_name(symbol)
+        cached = lookup_cn_mutual_fund_name_readonly(symbol)
         if cached:
             name = cached
 
@@ -89,15 +89,16 @@ def classify_cn_mutual_fund(df: pd.DataFrame, symbol: str) -> FundMeta:
     )
 
 
-def detect_cn_mutual_fund_source_kind(symbol: str) -> CnMutualFundSourceKind:
+def detect_cn_mutual_fund_source_kind(
+    symbol: str,
+    resolved_name: str | None = None,
+) -> CnMutualFundSourceKind:
     """Pick the allowed fetch source family before trying AKShare providers."""
-    from .names import get_cn_mutual_fund_name, lookup_cn_lof_name
+    from .names import lookup_cn_mutual_fund_name_readonly
 
     bare = symbol.strip()
-    if lookup_cn_lof_name(bare):
-        return "lof"
-
-    name = get_cn_mutual_fund_name(bare) or bare
+    # Fetch path: resolved_name + read-only cache only — no LOF spot / fund_name_em upstream.
+    name = resolved_name or lookup_cn_mutual_fund_name_readonly(bare) or bare
     text = f"{name}"
     upper = text.upper()
     if "LOF" in upper:

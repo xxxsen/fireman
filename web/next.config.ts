@@ -9,9 +9,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,
-  // Instrument resolve can load CN spot tables for 60–90s on cold start.
+  // Web resolve: backend 90s + sidecar margin (§4.4).
   experimental: {
-    proxyTimeout: 120_000,
+    proxyTimeout: 105_000,
   },
   async rewrites() {
     return [

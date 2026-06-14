@@ -116,6 +116,7 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 	if summary.TruncationPathRatio > 0.001 {
 		summary.ModelWarnings = append(summary.ModelWarnings, "超过 0.1% 的路径出现收益截断，请关注尾部风险")
 	}
+	summary.ModelWarnings = append(summary.ModelWarnings, collectDataWarnings(in)...)
 
 	rep := pickRepresentativePaths(paths, summary.TerminalQuantiles)
 
@@ -326,4 +327,33 @@ func maxInt(a, b int) int {
 func RegeneratePathDetail(in *InputSnapshot, pathNo int) *PathDetail {
 	_, detail := RunPath(in, pathNo, PathRunOpts{CollectDetail: true})
 	return detail
+}
+
+func collectDataWarnings(in *InputSnapshot) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(warnings []string, instName, code string) {
+		for _, w := range warnings {
+			if w == "" {
+				continue
+			}
+			msg := w
+			if instName != "" {
+				msg = instName + "（" + code + "）" + w
+			}
+			if _, ok := seen[msg]; ok {
+				continue
+			}
+			seen[msg] = struct{}{}
+			out = append(out, msg)
+		}
+	}
+	for _, a := range in.Assets {
+		if a.IsCash {
+			continue
+		}
+		add(a.DataWarnings, a.InstrumentName, a.InstrumentCode)
+		add(a.FXDataWarnings, a.Currency+" FX", "")
+	}
+	return out
 }

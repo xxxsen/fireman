@@ -129,6 +129,21 @@ describe("AssetsPage", () => {
     window.confirm = vi.fn(() => true);
   });
 
+  it("shows short-history simulation label for one-year instruments", () => {
+    mockState.instruments = defaultInstruments.map((i) =>
+      i.id === "inst_1"
+        ? {
+            ...i,
+            simulation_eligible: true,
+            history_depth: "one_year",
+            complete_year_count: 1,
+          }
+        : { ...i },
+    );
+    renderPage();
+    expect(screen.getAllByText("可用于模拟·历史样本有限").length).toBeGreaterThan(0);
+  });
+
   it("renders instruments in table and mobile cards", () => {
     renderPage();
     expect(screen.getByRole("heading", { name: "资产资料库" })).toBeInTheDocument();

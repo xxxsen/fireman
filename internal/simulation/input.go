@@ -9,7 +9,7 @@ import (
 )
 
 // EngineVersion is bumped when simulation semantics change.
-const EngineVersion = "1.0.0"
+const EngineVersion = "2.0.0"
 
 // SnapshotYear is one complete year in a holding snapshot.
 type SnapshotYear struct {
@@ -24,6 +24,8 @@ type SnapshotYear struct {
 type SnapshotAsset struct {
 	HoldingID           string         `json:"holding_id"`
 	InstrumentID        string         `json:"instrument_id"`
+	InstrumentName      string         `json:"instrument_name,omitempty"`
+	InstrumentCode      string         `json:"instrument_code,omitempty"`
 	SnapshotID          string         `json:"snapshot_id"`
 	Currency            string         `json:"currency"`
 	AssetClass          string         `json:"asset_class"`
@@ -37,9 +39,19 @@ type SnapshotAsset struct {
 	ExpenseRatio        *float64       `json:"expense_ratio,omitempty"`
 	SourceHash          string         `json:"source_hash"`
 	Years               []SnapshotYear `json:"years"`
+	CompleteYearCount   int            `json:"complete_year_count"`
+	MonthlyReturnCount  int            `json:"monthly_return_count"`
+	HistoryDepth        string         `json:"history_depth"`
+	MetricsVersion      string         `json:"metrics_version"`
+	DataWarnings        []string       `json:"data_warnings,omitempty"`
 	FXSnapshotID        string         `json:"fx_snapshot_id,omitempty"`
 	FXModeledReturn     float64        `json:"fx_modeled_return,omitempty"`
 	FXAnnualVolatility  float64        `json:"fx_annual_volatility,omitempty"`
+	FXCompleteYearCount int            `json:"fx_complete_year_count,omitempty"`
+	FXMonthlyReturnCount int           `json:"fx_monthly_return_count,omitempty"`
+	FXHistoryDepth      string         `json:"fx_history_depth,omitempty"`
+	FXMetricsVersion    string         `json:"fx_metrics_version,omitempty"`
+	FXDataWarnings      []string       `json:"fx_data_warnings,omitempty"`
 }
 
 // SnapshotCashFlow is a frozen cash-flow event.

@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -137,6 +138,20 @@ func TestPathRegenerateMatchesSummary(t *testing.T) {
 			t.Fatalf("terminal wealth mismatch: detail=%d summary=%d", last, p.TerminalWealthMinor)
 		}
 	}
+}
+
+func TestCollectDataWarningsUsesFrozenInstrumentName(t *testing.T) {
+	in := testInputSnapshot()
+	in.Assets[0].DataWarnings = []string{"仅有 1 个完整自然年度，收益与风险估计的不确定性较高"}
+	in.Assets[0].InstrumentName = "沪深300ETF"
+	in.Assets[0].InstrumentCode = "510300"
+	result := Run(in, RunOptions{Runs: 10})
+	for _, w := range result.Summary.ModelWarnings {
+		if strings.Contains(w, "沪深300ETF") && strings.Contains(w, "510300") {
+			return
+		}
+	}
+	t.Fatalf("model warnings: %v", result.Summary.ModelWarnings)
 }
 
 func testInputSnapshot() *InputSnapshot {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +37,9 @@ func seedSimulationReadyPlan(t *testing.T, db *sql.DB) string {
 	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
 		ID: snapID, InstrumentID: instID, PlanID: &planID,
 		InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
-		CompleteYearCount: 5, ObservationCount: 100,
+		CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
+		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
+		MetricsVersion: "monthly_log_return_v1", HistoryDepth: "five_plus_years",
 		HistoricalCAGR: 0.08, ModeledAnnualReturn: 0.08, AnnualVolatility: 0.15, MaxDrawdown: 0.2,
 		ExpenseRatioStatus: "unavailable", FeeTreatment: "embedded",
 		SourceMode: "akshare_historical", QualityStatus: "available",
@@ -86,6 +89,156 @@ func seedSimulationReadyPlan(t *testing.T, db *sql.DB) string {
 		t.Fatal(err)
 	}
 	return planID
+}
+
+func seedOneYearSimulationPlan(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	plan := createTestPlan(t, db)
+	planID := plan.ID
+
+	snapRepo := repository.NewSnapshotRepo(db)
+	instID := "ins_one_year"
+	if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
+		ID: instID, Code: "ONE001", Name: "一年样本基金", Market: "CN",
+		AssetClass: "equity", Region: "domestic", Currency: "CNY",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapID := "snap_one_year"
+	now := time.Now().UnixMilli()
+	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
+		ID: snapID, InstrumentID: instID, PlanID: &planID,
+		InclusionDate: "2026-06-14", AsOfDate: "2026-06-14",
+		CompleteYearCount: 1, DailyObservationCount: 252, MonthlyReturnCount: 12,
+		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
+		MetricsVersion: "monthly_log_return_v1", HistoryDepth: "one_year",
+		HistoricalCAGR: 0.05, ModeledAnnualReturn: 0.05, AnnualVolatility: 0.12, MaxDrawdown: 0.1,
+		ExpenseRatioStatus: "unavailable", FeeTreatment: "embedded",
+		SourceMode: "akshare_historical", QualityStatus: "available",
+		WarningsJSON: `["仅有 1 个完整自然年度，收益与风险估计的不确定性较高"]`,
+		SourceHash: "one_year_hash", CreatedAt: now,
+		Years: []repository.SnapshotYear{
+			{Year: 2025, AnnualReturn: 0.05, StartDate: "2025-01-01", EndDate: "2025-12-31", Observations: 250},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	holdID := "hold_one_year"
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO plan_holdings (
+			id, plan_id, instrument_id, enabled, asset_class, region,
+			weight_within_group, current_amount_minor, simulation_snapshot_id,
+			sort_order, created_at, updated_at
+		) VALUES (?,?,?,1,'equity','domestic',1.0,?,?,1,?,?)`,
+		holdID, planID, instID, 1_000_000_00, snapID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_parameters SET total_assets_minor=? WHERE plan_id=?`, 1_000_000_00, planID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_asset_class_targets SET weight=1.0 WHERE plan_id=? AND asset_class='equity'`, planID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_asset_class_targets SET weight=0 WHERE plan_id=? AND asset_class IN ('bond','cash')`,
+		planID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_region_targets SET weight_within_class=1.0
+		WHERE plan_id=? AND asset_class='equity' AND region='domestic'`, planID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_region_targets SET weight_within_class=0
+		WHERE plan_id=? AND asset_class='equity' AND region='foreign'`, planID); err != nil {
+		t.Fatal(err)
+	}
+	return planID
+}
+
+func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedOneYearSimulationPlan(t, db)
+
+	services := buildServices(db, "")
+	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Start(ctx, 1)
+
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "11"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/simulations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "one-year-sim")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create simulation status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
+	}
+	env := decodeEnvelope(t, mustRead(t, resp))
+	data := env["data"].(map[string]any)
+	jobID := data["job_id"].(string)
+	runID := data["run_id"].(string)
+
+	deadline := time.Now().Add(15 * time.Second)
+	jobSucceeded := false
+	for time.Now().Before(deadline) {
+		job, err := repository.NewJobRepo(db).GetByID(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == repository.JobStatusSucceeded {
+			jobSucceeded = true
+			break
+		}
+		if job.Status == repository.JobStatusFailed {
+			t.Fatalf("job failed: %s %s", job.ErrorCode, job.ErrorMessage)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !jobSucceeded {
+		t.Fatal("simulation job did not complete")
+	}
+
+	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/simulations/" + runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get simulation status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
+	}
+	env = decodeEnvelope(t, mustRead(t, resp))
+	run := env["data"].(map[string]any)
+	summary, ok := run["summary_json"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing summary_json: %+v", run)
+	}
+	rawWarnings, ok := summary["model_warnings"].([]any)
+	if !ok || len(rawWarnings) == 0 {
+		t.Fatalf("expected model_warnings in summary: %+v", summary)
+	}
+	for _, w := range rawWarnings {
+		msg, ok := w.(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(msg, "一年样本基金") && strings.Contains(msg, "ONE001") &&
+			strings.Contains(msg, "仅有 1 个完整自然年度") {
+			return
+		}
+	}
+	t.Fatalf("model_warnings missing one-year asset warning: %v", rawWarnings)
 }
 
 func TestSimulationJobFlow(t *testing.T) {

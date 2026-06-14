@@ -40,7 +40,9 @@ func seedInvestedRatioDashboardPlan(t *testing.T, db *sql.DB) string {
 		if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
 			ID: snapID, InstrumentID: spec.instID, PlanID: &planID,
 			InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
-			CompleteYearCount: 5, ObservationCount: 100,
+			CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
+			VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
+			MetricsVersion: "monthly_log_return_v1", HistoryDepth: "five_plus_years",
 			HistoricalCAGR: 0.08, ModeledAnnualReturn: 0.08, AnnualVolatility: 0.15, MaxDrawdown: 0.2,
 			ExpenseRatioStatus: "unavailable", FeeTreatment: "embedded",
 			SourceMode: "akshare_historical", QualityStatus: "available",

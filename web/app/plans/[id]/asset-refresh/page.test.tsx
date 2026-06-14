@@ -124,6 +124,7 @@ vi.mock("@/lib/api/instruments", () => ({
           region: "domestic",
           status: "active",
           quality_status: "available",
+          simulation_eligible: true,
           is_system: false,
           market: "CN",
           instrument_type: "fund",
