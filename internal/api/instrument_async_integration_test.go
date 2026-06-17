@@ -816,7 +816,10 @@ func mockMutualFund270042ProviderServer(t *testing.T) *httptest.Server {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if req.InstrumentType == "cn_exchange_fund" && req.Code == "270042" {
 				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"detail": "instrument_type_mismatch"})
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": 1, "error_code": "instrument_type_mismatch",
+					"message": "instrument_type_mismatch", "data": nil,
+				})
 				return
 			}
 			if req.InstrumentType != "cn_mutual_fund" || req.Code != "270042" {

@@ -21,6 +21,7 @@ type InstrumentRecord struct {
 	Provider             string   `json:"provider"`
 	ProviderSymbol       string   `json:"provider_symbol"`
 	AdjustPolicy         string   `json:"adjust_policy"`
+	InstrumentKind       string   `json:"instrument_kind,omitempty"`
 	IsSystem             bool     `json:"is_system"`
 	ExpenseRatio         *float64 `json:"expense_ratio,omitempty"`
 	ExpenseRatioStatus   string   `json:"expense_ratio_status"`
@@ -55,7 +56,7 @@ func NewInstrumentRepo(db *sql.DB) *InstrumentRepo {
 func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system,
+			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
 			expense_ratio, expense_ratio_status, fee_treatment, status,
 			created_at, updated_at
 		FROM instruments
@@ -71,7 +72,7 @@ func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 func (r *InstrumentRepo) GetByID(ctx context.Context, id string) (InstrumentRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system,
+			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
 			expense_ratio, expense_ratio_status, fee_treatment, status,
 			created_at, updated_at
 		FROM instruments WHERE id=?`, id)
@@ -83,7 +84,7 @@ func (r *InstrumentRepo) FindByKey(ctx context.Context, market, instrumentType, 
 ) (InstrumentRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system,
+			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
 			expense_ratio, expense_ratio_status, fee_treatment, status,
 			created_at, updated_at
 		FROM instruments
@@ -101,13 +102,13 @@ func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst Instrument
 	_, err := r.exec(tx).ExecContext(ctx, `
 		INSERT INTO instruments (
 			id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system,
+			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
 			expense_ratio, expense_ratio_status, fee_treatment, status,
 			created_at, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		inst.ID, inst.Code, inst.Name, inst.Market, inst.InstrumentType,
 		inst.AssetClass, inst.Region, inst.Currency,
-		inst.Provider, inst.ProviderSymbol, inst.AdjustPolicy, boolToInt(inst.IsSystem),
+		inst.Provider, inst.ProviderSymbol, inst.AdjustPolicy, inst.InstrumentKind, boolToInt(inst.IsSystem),
 		inst.ExpenseRatio, inst.ExpenseRatioStatus, inst.FeeTreatment, inst.Status,
 		inst.CreatedAt, inst.UpdatedAt)
 	if err != nil {
@@ -146,6 +147,16 @@ func (r *InstrumentRepo) TouchUpdated(ctx context.Context, tx *sql.Tx, id string
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
 	if err != nil {
 		return fmt.Errorf("touch instrument updated_at: %w", err)
+	}
+	return nil
+}
+
+func (r *InstrumentRepo) UpdateInstrumentKindTx(ctx context.Context, tx *sql.Tx, id, kind string) error {
+	now := time.Now().UnixMilli()
+	_, err := r.exec(tx).ExecContext(ctx,
+		`UPDATE instruments SET instrument_kind=?, updated_at=? WHERE id=?`, kind, now, id)
+	if err != nil {
+		return fmt.Errorf("update instrument kind: %w", err)
 	}
 	return nil
 }
@@ -216,7 +227,7 @@ func scanInstrumentRecord(row *sql.Row) (InstrumentRecord, error) {
 	err := row.Scan(
 		&inst.ID, &inst.Code, &inst.Name, &inst.Market, &inst.InstrumentType,
 		&inst.AssetClass, &inst.Region, &inst.Currency,
-		&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &isSystem,
+		&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
 		&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
 		&inst.CreatedAt, &inst.UpdatedAt,
 	)
@@ -243,7 +254,7 @@ func scanInstrumentRecords(rows *sql.Rows) ([]InstrumentRecord, error) {
 		if err := rows.Scan(
 			&inst.ID, &inst.Code, &inst.Name, &inst.Market, &inst.InstrumentType,
 			&inst.AssetClass, &inst.Region, &inst.Currency,
-			&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &isSystem,
+			&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
 			&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
 			&inst.CreatedAt, &inst.UpdatedAt,
 		); err != nil {

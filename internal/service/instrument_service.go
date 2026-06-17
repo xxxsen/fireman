@@ -210,6 +210,13 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string,
 		)
 	}
 
+	// Heal identity before fetching so refresh requests carry instrument_kind and
+	// the sidecar selects an identity-consistent history source (td/038 P1-1).
+	inst, err = s.ensureInstrumentKind(ctx, inst)
+	if err != nil {
+		return inst, err
+	}
+
 	existingRows, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
 	if err != nil {
 		return repository.InstrumentRecord{}, wrapRepo("load instrument", err)
@@ -473,8 +480,9 @@ func (s *InstrumentService) fetchAndProcessForInstrument(
 	fetchReq := marketdata.FetchRequest{
 		Market: inst.Market, InstrumentType: inst.InstrumentType,
 		SourceCode: inst.Code, StartDate: start, EndDate: end,
-		AdjustPolicy: marketdata.DefaultAdjustPolicy(inst.InstrumentType),
-		ResolvedName: inst.Name,
+		AdjustPolicy:   marketdata.DefaultAdjustPolicy(inst.InstrumentType),
+		ResolvedName:   inst.Name,
+		InstrumentKind: inst.InstrumentKind,
 	}
 	data, err := s.provider.Fetch(ctx, fetchReq)
 	if err != nil {
@@ -496,6 +504,92 @@ func (s *InstrumentService) fetchAndProcessForInstrument(
 	}
 	processed := marketdata.ProcessProviderData(data, end)
 	return data, processed, nil
+}
+
+// identitySensitiveInstrumentType reports whether an instrument type relies on a
+// resolved instrument_kind to pick identity-consistent history sources. Only
+// cn_exchange_fund currently shares bare codes across ETF/LOF/stock variants in
+// the sidecar fallback chain (td/037 现象-4).
+func identitySensitiveInstrumentType(instrumentType string) bool {
+	return instrumentType == "cn_exchange_fund"
+}
+
+// ensureInstrumentKind backfills a missing resolved instrument_kind before a
+// refresh fetch. Legacy assets imported before instrument_kind was persisted
+// would otherwise let the sidecar fall back to the legacy ETF->LOF->stock chain
+// and mix data across instruments sharing a bare code (td/038 P1-1). Identity is
+// healed here via one controlled resolve, then persisted so future refreshes are
+// identity-safe.
+func (s *InstrumentService) ensureInstrumentKind(
+	ctx context.Context, inst repository.InstrumentRecord,
+) (repository.InstrumentRecord, error) {
+	if inst.InstrumentKind != "" || !identitySensitiveInstrumentType(inst.InstrumentType) {
+		return inst, nil
+	}
+	data, err := s.provider.Resolve(ctx, marketdata.ResolveRequest{
+		Market: inst.Market, InstrumentType: inst.InstrumentType, Code: inst.Code,
+	})
+	if err != nil {
+		if ae := mapMarketProviderError(err); ae != nil {
+			return inst, ae
+		}
+		return inst, newErr("market_provider_unavailable", err.Error(), nil)
+	}
+	kind := matchResolvedInstrumentKind(data, inst.Code, inst.ProviderSymbol)
+	if kind == "" {
+		return inst, newErr("instrument_identity_unresolved",
+			"cannot establish instrument identity for refresh; re-import the asset", nil)
+	}
+	if err := s.instRepo.UpdateInstrumentKindTx(ctx, nil, inst.ID, kind); err != nil {
+		return inst, wrapRepo("backfill instrument kind", err)
+	}
+	inst.InstrumentKind = kind
+	slog.InfoContext(ctx, "instrument kind backfilled for refresh",
+		"instrument_id", inst.ID, "code", inst.Code, "instrument_kind", kind)
+	return inst, nil
+}
+
+// matchResolvedInstrumentKind picks the kind of the resolved candidate whose
+// identity (code/provider_symbol) matches the stored instrument, tolerating
+// prefixed (sh510300) and bare (510300) forms.
+func matchResolvedInstrumentKind(data *marketdata.ResolveData, code, providerSymbol string) string {
+	if data == nil {
+		return ""
+	}
+	match := func(c marketdata.ResolveCandidate) bool {
+		return identityCodeMatch(c.ProviderSymbol, providerSymbol) ||
+			identityCodeMatch(c.Code, code) ||
+			identityCodeMatch(c.Code, providerSymbol) ||
+			identityCodeMatch(c.ProviderSymbol, code)
+	}
+	if data.Resolved != nil && match(*data.Resolved) {
+		return data.Resolved.InstrumentKind
+	}
+	for _, c := range data.Candidates {
+		if match(c) {
+			return c.InstrumentKind
+		}
+	}
+	return ""
+}
+
+func identityCodeMatch(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || bareInstrumentCode(a) == bareInstrumentCode(b)
+}
+
+func bareInstrumentCode(s string) string {
+	for _, p := range []string{"sh", "sz", "bj"} {
+		if strings.HasPrefix(s, p) {
+			s = s[len(p):]
+			break
+		}
+	}
+	return strings.TrimLeft(s, "0")
 }
 
 // isPlaceholderInstrumentName reports whether a stored name is just the code

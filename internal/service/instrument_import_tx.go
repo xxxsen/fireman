@@ -40,6 +40,7 @@ func (s *InstrumentService) createPendingInstrumentImport(
 			Market: market, InstrumentType: instrumentType,
 			AssetClass: req.AssetClass, Region: req.Region, Currency: defaultCurrency(market),
 			Provider: "akshare", ProviderSymbol: ticket.ProviderSymbol, AdjustPolicy: adjust,
+			InstrumentKind:     ticket.InstrumentKind,
 			ExpenseRatioStatus: "unavailable",
 			FeeTreatment:       marketdata.FeeTreatmentForType(instrumentType),
 			Status:             "pending_fetch",

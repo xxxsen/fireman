@@ -63,6 +63,11 @@ def test_fetch_rejects_unknown_fields() -> None:
     }
     response = client.post("/v1/instruments/fetch", json=payload)
     assert response.status_code == 422
+    body = response.json()
+    assert set(body.keys()) == {"code", "error_code", "message", "data"}
+    assert body["code"] == 1
+    assert body["error_code"] == "invalid_request"
+    assert body["data"] is None
 
 
 def test_metadata_refresh_cn_mutual_fund_names(tmp_path, monkeypatch) -> None:

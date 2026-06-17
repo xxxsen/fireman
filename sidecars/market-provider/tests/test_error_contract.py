@@ -130,5 +130,22 @@ def test_fetch_timeout_returns_structured_envelope() -> None:
 @pytest.mark.parametrize("target", ["bogus_target"])
 def test_metadata_refresh_unsupported_target(target: str) -> None:
     response = _client().post("/v1/metadata/refresh", json={"target": target})
-    # pydantic rejects values outside the Literal enum before our handler runs.
+    # Body-validation failures join the unified structured error contract.
     assert response.status_code == 422
+    _assert_error_envelope(response.json(), "invalid_request")
+
+
+def test_request_validation_errors_share_one_envelope() -> None:
+    """resolve/fetch/metadata body-validation failures all yield the same envelope."""
+    client = _client()
+    requests = [
+        ("/v1/instruments/resolve", {"market": "CN"}),  # missing code/instrument_type
+        ("/v1/instruments/fetch", {"market": "CN", "bogus": 1}),  # unknown + missing fields
+        ("/v1/metadata/refresh", {"target": "nope"}),  # value outside Literal enum
+    ]
+    for path, body in requests:
+        response = client.post(path, json=body)
+        assert response.status_code == 422, path
+        envelope = response.json()
+        _assert_error_envelope(envelope, "invalid_request")
+        assert set(envelope.keys()) == {"code", "error_code", "message", "data"}, path
