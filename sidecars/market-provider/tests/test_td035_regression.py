@@ -59,7 +59,7 @@ def test_sh_lof_bare_market_id_timeout_returns_timeout_not_sz() -> None:
         response = _resolve(SH_LOF)
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "upstream timeout"
+    assert response.json()["error_code"] == "market_provider_timeout"
 
 
 def test_sh_lof_prefixed_market_id_timeout_returns_timeout() -> None:
@@ -72,7 +72,7 @@ def test_sh_lof_prefixed_market_id_timeout_returns_timeout() -> None:
         response = _resolve(f"sh{SH_LOF}")
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "upstream timeout"
+    assert response.json()["error_code"] == "market_provider_timeout"
 
 
 def test_sz_lof_bare_market_id_timeout_returns_timeout_not_fabricated() -> None:
@@ -84,7 +84,7 @@ def test_sz_lof_bare_market_id_timeout_returns_timeout_not_fabricated() -> None:
         response = _resolve(SZ_LOF)
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "upstream timeout"
+    assert response.json()["error_code"] == "market_provider_timeout"
 
 
 def test_sh_lof_resolves_sh_after_market_id_recovers() -> None:

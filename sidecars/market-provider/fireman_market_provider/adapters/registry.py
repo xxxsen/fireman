@@ -183,65 +183,79 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     em_adjust = _cn_em_adjust(adjust)
     tx_adjust = tx_adjust_policy(adjust)
 
-    sources: list[tuple[str, UpstreamCall]] = [
-        (
-            "ak.fund_etf_hist_em",
-            UpstreamCall(
-                "fund_etf_hist_em",
-                kwargs=(
-                    ("symbol", em_symbol),
-                    ("period", "daily"),
-                    ("start_date", start),
-                    ("end_date", end),
-                    ("adjust", em_adjust),
-                ),
+    etf_hist = (
+        "ak.fund_etf_hist_em",
+        UpstreamCall(
+            "fund_etf_hist_em",
+            kwargs=(
+                ("symbol", em_symbol),
+                ("period", "daily"),
+                ("start_date", start),
+                ("end_date", end),
+                ("adjust", em_adjust),
             ),
         ),
-        (
-            "ak.stock_zh_a_hist_tx",
-            UpstreamCall(
-                "stock_zh_a_hist_tx",
-                kwargs=(
-                    ("symbol", prefixed),
-                    ("start_date", start),
-                    ("end_date", end),
-                    ("adjust", tx_adjust),
-                ),
-            ),
-        ),
-    ]
-    # fund_etf_hist_sina has no qfq/hfq; skip when adjusted close is required.
-    if adjust == "none":
-        sources.append(
-            (
-                "ak.fund_etf_hist_sina",
-                UpstreamCall("fund_etf_hist_sina", kwargs=(("symbol", prefixed),)),
-            ),
-        )
-    sources.extend(
-        [
-            (
-                "ak.fund_lof_hist_em",
-                UpstreamCall(
-                    "fund_lof_hist_em",
-                    kwargs=(
-                        ("symbol", em_symbol),
-                        ("period", "daily"),
-                        ("start_date", start),
-                        ("end_date", end),
-                        ("adjust", em_adjust),
-                    ),
-                ),
-            ),
-            (
-                "ak.fund_etf_fund_info_em",
-                UpstreamCall(
-                    "fund_etf_fund_info_em",
-                    kwargs=(("fund", em_symbol), ("start_date", start), ("end_date", end)),
-                ),
-            ),
-        ]
     )
+    # stock_zh_a_hist_tx is keyed by the *prefixed* (exchange-qualified) symbol, so it
+    # always returns the same security's quote — identity-safe for both ETF and LOF.
+    tx_hist = (
+        "ak.stock_zh_a_hist_tx",
+        UpstreamCall(
+            "stock_zh_a_hist_tx",
+            kwargs=(
+                ("symbol", prefixed),
+                ("start_date", start),
+                ("end_date", end),
+                ("adjust", tx_adjust),
+            ),
+        ),
+    )
+    sina_hist = (
+        "ak.fund_etf_hist_sina",
+        UpstreamCall("fund_etf_hist_sina", kwargs=(("symbol", prefixed),)),
+    )
+    lof_hist = (
+        "ak.fund_lof_hist_em",
+        UpstreamCall(
+            "fund_lof_hist_em",
+            kwargs=(
+                ("symbol", em_symbol),
+                ("period", "daily"),
+                ("start_date", start),
+                ("end_date", end),
+                ("adjust", em_adjust),
+            ),
+        ),
+    )
+    etf_info = (
+        "ak.fund_etf_fund_info_em",
+        UpstreamCall(
+            "fund_etf_fund_info_em",
+            kwargs=(("fund", em_symbol), ("start_date", start), ("end_date", end)),
+        ),
+    )
+
+    # Select an identity-consistent source set from the resolved kind so a code that
+    # collides across ETF/LOF/stock never gets its history silently pulled from the
+    # wrong instrument. fund_etf_hist_em (ETF) and fund_lof_hist_em (LOF) are both keyed
+    # by the bare 6-digit code, so mixing them is the core data-mixing risk.
+    kind = (req.instrument_kind or "").strip().lower()
+    sources: list[tuple[str, UpstreamCall]]
+    if kind == "lof":
+        sources = [lof_hist, tx_hist]
+        if adjust == "none":
+            sources.append(sina_hist)
+    elif kind in ("etf", "index_etf"):
+        sources = [etf_hist, tx_hist]
+        if adjust == "none":
+            sources.append(sina_hist)
+        sources.append(etf_info)
+    else:
+        # Unknown/absent kind (e.g. refresh path): keep the legacy full chain.
+        sources = [etf_hist, tx_hist]
+        if adjust == "none":
+            sources.append(sina_hist)
+        sources.extend([lof_hist, etf_info])
 
     df, source_name = try_sources("cn_exchange_fund", sources, deadline)
     if source_name == "ak.stock_zh_a_hist_tx":

@@ -153,8 +153,8 @@ def test_resolve_not_found() -> None:
                 "code": "999999",
             },
         )
-    assert response.status_code == 400
-    assert "instrument_not_found" in response.json()["detail"]
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "instrument_not_found"
 
 
 def test_resolve_cn_stock_spot_cached_within_ttl() -> None:
@@ -226,8 +226,8 @@ def test_resolve_cn_exchange_fund_prefixed_lof_wrong_prefix_rejected(
                 "code": "sh166009",
             },
         )
-    assert response.status_code == 400
-    assert "instrument_not_found" in response.json()["detail"]
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "instrument_not_found"
 
 
 def test_resolve_cn_exchange_fund_prefixed_etf_unchanged() -> None:
@@ -354,7 +354,7 @@ def test_resolve_cn_exchange_fund_mutual_fund_code_type_mismatch() -> None:
             },
         )
     assert response.status_code == 400
-    assert response.json()["detail"] == "instrument_type_mismatch"
+    assert response.json()["error_code"] == "instrument_type_mismatch"
 
 
 def test_resolve_cn_mutual_fund_007194() -> None:
@@ -401,4 +401,4 @@ def test_resolve_upstream_timeout_returns_504() -> None:
             },
         )
     assert response.status_code == 504
-    assert response.json()["detail"] == "upstream timeout"
+    assert response.json()["error_code"] == "market_provider_timeout"

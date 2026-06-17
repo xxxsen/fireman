@@ -124,19 +124,6 @@ func (s *InstrumentService) Resolve(ctx context.Context, req InstrumentResolveRe
 		Market: req.Market, InstrumentType: req.InstrumentType, Code: req.Code,
 	})
 	if err != nil {
-		msg := err.Error()
-		if strings.Contains(msg, "instrument_not_found") {
-			return nil, newErr("instrument_not_found", "instrument not found", nil)
-		}
-		if strings.Contains(msg, "instrument_type_mismatch") {
-			return nil, newErr("instrument_type_mismatch",
-				"code belongs to a different instrument type; try cn_mutual_fund for off-exchange funds", map[string]any{
-					"suggested_instrument_type": "cn_mutual_fund",
-				})
-		}
-		if strings.Contains(msg, "invalid_request") {
-			return nil, newErr("invalid_request", msg, nil)
-		}
 		if ae := mapMarketProviderError(err); ae != nil {
 			return nil, ae
 		}

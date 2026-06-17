@@ -47,8 +47,8 @@ def test_otc_fund_prefix_rejected_as_exchange_fund_when_spot_fails(code: str) ->
         )
 
     assert response.status_code in (400, 504)
-    detail = response.json()["detail"]
-    assert detail in ("instrument_type_mismatch", "upstream timeout")
+    error_code = response.json()["error_code"]
+    assert error_code in ("instrument_type_mismatch", "market_provider_timeout")
 
 
 def test_resolve_mutual_fund_mismatch_never_calls_fund_name_em() -> None:
@@ -81,7 +81,7 @@ def test_resolve_mutual_fund_mismatch_never_calls_fund_name_em() -> None:
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "instrument_type_mismatch"
+    assert response.json()["error_code"] == "instrument_type_mismatch"
     assert fund_name_calls["count"] == 0
 
 

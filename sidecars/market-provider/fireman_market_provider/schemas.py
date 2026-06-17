@@ -7,6 +7,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 Market = Literal["CN", "HK", "US"]
+ProviderErrorCode = Literal[
+    "invalid_request",
+    "instrument_not_found",
+    "instrument_type_mismatch",
+    "source_data_conflict",
+    "market_provider_timeout",
+    "market_provider_unavailable",
+]
 InstrumentType = Literal[
     "cn_exchange_stock",
     "cn_exchange_fund",
@@ -33,6 +41,7 @@ class FetchRequest(BaseModel):
     end_date: str = Field(min_length=10, max_length=10)
     adjust_policy: Literal["none", "qfq", "hfq"] = "none"
     resolved_name: str | None = None
+    instrument_kind: str | None = None
 
 
 class HistoricalPoint(BaseModel):
@@ -71,6 +80,17 @@ class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["ok"]
+
+
+class ProviderErrorResponse(BaseModel):
+    """Unified structured error envelope for all sidecar failure paths."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: int = 1
+    error_code: ProviderErrorCode
+    message: str
+    data: None = None
 
 
 class ResolveRequest(BaseModel):

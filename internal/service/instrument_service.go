@@ -232,7 +232,7 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string,
 	reprocessed := mergeRefreshProcessedData(ctx, instrumentID, existing, processed, opts.Force, end)
 
 	newName := strings.TrimSpace(data.Name)
-	shouldUpdateName := newName != "" && newName != inst.Code && newName != inst.Name
+	shouldUpdateName := shouldUpgradeInstrumentName(inst.Name, newName, inst.Code)
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		return persistRefreshMarketDataTx(ctx, s, tx, instrumentID, fullReplace, reprocessed, shouldUpdateName, newName)
@@ -496,6 +496,46 @@ func (s *InstrumentService) fetchAndProcessForInstrument(
 	}
 	processed := marketdata.ProcessProviderData(data, end)
 	return data, processed, nil
+}
+
+// isPlaceholderInstrumentName reports whether a stored name is just the code
+// (a placeholder left behind when name resolution failed). It tolerates the
+// prefixed (sh510300), bare (510300) and zero-stripped forms.
+func isPlaceholderInstrumentName(name, code string) bool {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return true
+	}
+	c := strings.TrimSpace(code)
+	candidates := map[string]struct{}{
+		strings.ToLower(c): {},
+	}
+	bare := strings.ToLower(c)
+	for _, p := range []string{"sh", "sz", "bj"} {
+		if strings.HasPrefix(bare, p) {
+			bare = bare[len(p):]
+			break
+		}
+	}
+	candidates[bare] = struct{}{}
+	candidates[strings.TrimLeft(bare, "0")] = struct{}{}
+	_, ok := candidates[strings.ToLower(n)]
+	return ok
+}
+
+// shouldUpgradeInstrumentName decides whether a freshly fetched name should
+// overwrite the stored one. A real name always replaces a placeholder (code)
+// name, enabling self-heal of instruments that were imported before the name
+// was resolvable; a placeholder fetch result never overwrites a real name.
+func shouldUpgradeInstrumentName(current, fetched, code string) bool {
+	fetched = strings.TrimSpace(fetched)
+	if fetched == "" || isPlaceholderInstrumentName(fetched, code) {
+		return false
+	}
+	if isPlaceholderInstrumentName(current, code) {
+		return true
+	}
+	return fetched != strings.TrimSpace(current)
 }
 
 func validateImportRequest(req InstrumentImportRequest) error {

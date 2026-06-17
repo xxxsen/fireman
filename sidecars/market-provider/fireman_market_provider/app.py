@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import threading
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from .adapters import fetch_instrument, resolve_instrument
 from .adapters.names import (
@@ -13,6 +14,7 @@ from .adapters.names import (
     warm_cn_mutual_fund_name_cache,
 )
 from .logutil import configure_logging, get_logger
+from .provider_errors import ProviderError, provider_error_from_exception
 from .schemas import (
     FetchData,
     FetchRequest,
@@ -28,6 +30,18 @@ from .schemas import (
 logger = get_logger(__name__)
 
 
+def _provider_error_response(exc: ProviderError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={
+            "code": 1,
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "data": None,
+        },
+    )
+
+
 def create_app() -> FastAPI:
     configure_logging()
     app = FastAPI(
@@ -37,6 +51,10 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
+
+    @app.exception_handler(ProviderError)
+    def _handle_provider_error(_request: Request, exc: ProviderError) -> JSONResponse:
+        return _provider_error_response(exc)
 
     @app.on_event("startup")
     def start_mutual_fund_cache_warm() -> None:
@@ -69,36 +87,27 @@ def create_app() -> FastAPI:
         try:
             data = resolve_instrument(payload)
             return ResolveResponse(code=0, message="success", data=data)
-        except ValueError as exc:
-            logger.warning(
-                "resolve rejected code=%s type=%s: %s",
-                payload.code,
-                payload.instrument_type,
-                exc,
-            )
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except TimeoutError as exc:
-            logger.error(
-                "resolve timeout code=%s type=%s",
-                payload.code,
-                payload.instrument_type,
-            )
-            raise HTTPException(status_code=504, detail="upstream timeout") from exc
-        except RuntimeError as exc:
-            logger.error(
-                "resolve upstream failed code=%s type=%s: %s",
-                payload.code,
-                payload.instrument_type,
-                exc,
-            )
-            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "resolve failed code=%s type=%s",
-                payload.code,
-                payload.instrument_type,
-            )
-            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - mapped to structured error envelope
+            provider_exc = provider_error_from_exception(exc)
+            if provider_exc.error_code in ("invalid_request", "instrument_not_found", "instrument_type_mismatch"):
+                logger.warning(
+                    "resolve rejected code=%s type=%s error_code=%s: %s",
+                    payload.code,
+                    payload.instrument_type,
+                    provider_exc.error_code,
+                    provider_exc.message,
+                )
+            else:
+                logger.error(
+                    "resolve failed code=%s type=%s error_code=%s: %s",
+                    payload.code,
+                    payload.instrument_type,
+                    provider_exc.error_code,
+                    provider_exc.message,
+                )
+            raise provider_exc from exc
 
     @app.post("/v1/instruments/fetch", response_model=FetchResponse)
     def fetch(payload: FetchRequest) -> FetchResponse:
@@ -118,29 +127,19 @@ def create_app() -> FastAPI:
                 data.source_quality,
             )
             return FetchResponse(code=0, message="success", data=data)
-        except ValueError as exc:
-            logger.warning(
-                "fetch rejected code=%s type=%s: %s",
-                payload.source_code,
-                payload.instrument_type,
-                exc,
-            )
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except TimeoutError as exc:
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - mapped to structured error envelope
+            provider_exc = provider_error_from_exception(exc)
             logger.error(
-                "fetch timeout code=%s type=%s",
-                payload.source_code,
-                payload.instrument_type,
-            )
-            raise HTTPException(status_code=504, detail="upstream timeout") from exc
-        except Exception as exc:  # noqa: BLE001 - mapped to provider error envelope
-            logger.exception(
-                "fetch failed code=%s type=%s market=%s",
+                "fetch failed code=%s type=%s market=%s error_code=%s: %s",
                 payload.source_code,
                 payload.instrument_type,
                 payload.market,
+                provider_exc.error_code,
+                provider_exc.message,
             )
-            return FetchResponse(code=1, message=str(exc), data=_empty_data(payload))
+            raise provider_exc from exc
 
     @app.post("/v1/metadata/refresh", response_model=MetadataRefreshResponse)
     def refresh_metadata(payload: MetadataRefreshRequest) -> MetadataRefreshResponse:
@@ -166,35 +165,19 @@ def create_app() -> FastAPI:
                     ),
                 )
             raise ValueError(f"unsupported refresh target: {payload.target}")
-        except TimeoutError as exc:
-            logger.error("metadata refresh timeout target=%s", payload.target)
-            raise HTTPException(status_code=504, detail="upstream timeout") from exc
-        except RuntimeError as exc:
-            logger.error("metadata refresh upstream failed target=%s: %s", payload.target, exc)
-            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("metadata refresh failed target=%s", payload.target)
-            raise HTTPException(status_code=503, detail="upstream unavailable") from exc
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - mapped to structured error envelope
+            provider_exc = provider_error_from_exception(exc)
+            logger.error(
+                "metadata refresh failed target=%s error_code=%s: %s",
+                payload.target,
+                provider_exc.error_code,
+                provider_exc.message,
+            )
+            raise provider_exc from exc
 
     return app
-
-
-def _empty_data(payload: FetchRequest) -> FetchData:
-    return FetchData(
-        provider="akshare",
-        provider_symbol=payload.source_code,
-        name="",
-        asset_class="equity",
-        currency="CNY",
-        point_type="adjusted_close",
-        expense_ratio_status="unavailable",
-        expense_ratio_components={},
-        points=[],
-        source_name="error",
-        source_quality="empty",
-    )
 
 
 app = create_app()

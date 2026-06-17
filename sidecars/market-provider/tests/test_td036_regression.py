@@ -58,7 +58,7 @@ def test_dual_etf_lof_bare_lof_timeout_returns_timeout_not_etf() -> None:
         response = _resolve(DUAL)
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "upstream timeout"
+    assert response.json()["error_code"] == "market_provider_timeout"
     assert "data" not in response.json() or response.json().get("data") is None
 
 
@@ -73,7 +73,7 @@ def test_dual_etf_lof_prefixed_lof_timeout_returns_timeout_not_etf() -> None:
         response = _resolve(f"sz{DUAL}")
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "upstream timeout"
+    assert response.json()["error_code"] == "market_provider_timeout"
 
 
 def test_dual_etf_lof_recovers_to_ambiguous_after_market_id_restored() -> None:

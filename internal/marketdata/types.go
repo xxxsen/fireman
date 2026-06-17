@@ -9,6 +9,10 @@ type FetchRequest struct {
 	EndDate        string  `json:"end_date"`
 	AdjustPolicy   string  `json:"adjust_policy"`
 	ResolvedName   string  `json:"resolved_name,omitempty"`
+	// InstrumentKind carries the resolved identity (etf/index_etf/lof/stock/...)
+	// so the sidecar selects an identity-consistent history source instead of
+	// blindly falling back across ETF/LOF/stock sources for the same bare code.
+	InstrumentKind string `json:"instrument_kind,omitempty"`
 }
 
 // HistoricalPoint is one cleaned daily observation.
@@ -54,6 +58,7 @@ type ResolveCandidate struct {
 	Name           string `json:"name"`
 	Exchange       string `json:"exchange"`
 	InstrumentKind string `json:"instrument_kind"`
+	CandidateID    string `json:"candidate_id"`
 }
 
 // ResolveData is the resolve payload.
@@ -68,6 +73,13 @@ type ResolveResponse struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    ResolveData `json:"data"`
+}
+
+// errorEnvelope is the structured failure body returned by the sidecar.
+type errorEnvelope struct {
+	Code      int    `json:"code"`
+	ErrorCode string `json:"error_code"`
+	Message   string `json:"message"`
 }
 
 // DataPoint is a persisted market observation.

@@ -202,7 +202,7 @@ def test_regression_270042_exchange_fund_type_mismatch() -> None:
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "instrument_type_mismatch"
+    assert response.json()["error_code"] == "instrument_type_mismatch"
 
 
 def test_regression_270042_mutual_fund_resolves_with_name() -> None:

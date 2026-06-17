@@ -23,8 +23,9 @@ def test_fetch_failure_emits_logs(caplog) -> None:
             "adjust_policy": "qfq",
         }
         response = client.post("/v1/instruments/fetch", json=payload)
-    assert response.status_code == 200
+    assert response.status_code == 503
     body = response.json()
     assert body["code"] == 1
+    assert body["error_code"] == "market_provider_unavailable"
     assert "all sources down" in body["message"]
     assert any("fetch failed" in rec.message for rec in caplog.records)

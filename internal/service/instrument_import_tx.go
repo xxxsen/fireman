@@ -47,7 +47,8 @@ func (s *InstrumentService) createPendingInstrumentImport(
 		payload := InstrumentFetchPayload{
 			InstrumentID: instID, Market: market, InstrumentType: instrumentType,
 			Code: code, ProviderSymbol: ticket.ProviderSymbol, AdjustPolicy: adjust,
-			ResolvedName: ticket.Name, UserAssetClass: req.AssetClass, UserRegion: req.Region,
+			ResolvedName: ticket.Name, InstrumentKind: ticket.InstrumentKind,
+			UserAssetClass: req.AssetClass, UserRegion: req.Region,
 		}
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {

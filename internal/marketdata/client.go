@@ -14,15 +14,73 @@ import (
 	"time"
 )
 
-const defaultTimeout = 30 * time.Second
-
 var (
-	errProviderResolveHTTP = errors.New("market provider resolve http error")
-	errProviderResolve     = errors.New("market provider resolve rejected")
-	errProviderHTTP        = errors.New("market provider http error")
-	errProviderTimeout     = errors.New("market provider timeout")
-	errProviderRejected    = errors.New("market provider rejected")
+	errProviderHTTP           = errors.New("market provider http error")
+	errProviderTimeout        = errors.New("market provider timeout")
+	errProviderRejected       = errors.New("market provider rejected")
+	errProviderUnavailable    = errors.New("market provider unavailable")
+	errInstrumentNotFound     = errors.New("instrument_not_found")
+	errInstrumentTypeMismatch = errors.New("instrument_type_mismatch")
+	errProviderInvalidRequest = errors.New("market provider invalid request")
+	errSourceDataConflict     = errors.New("source_data_conflict")
 )
+
+// classifyProviderError converts a sidecar error envelope body into a typed
+// sentinel error keyed solely by error_code. Falls back to HTTP status when the
+// body carries no structured error_code (defensive against older sidecars).
+func classifyProviderError(status int, body []byte) error {
+	var env errorEnvelope
+	_ = json.Unmarshal(body, &env)
+	message := env.Message
+	if message == "" {
+		message = string(body)
+	}
+	code := env.ErrorCode
+	if code == "" {
+		switch status {
+		case http.StatusGatewayTimeout:
+			code = "market_provider_timeout"
+		case http.StatusServiceUnavailable:
+			code = "market_provider_unavailable"
+		case http.StatusNotFound:
+			code = "instrument_not_found"
+		}
+	}
+	switch code {
+	case "market_provider_timeout":
+		return fmt.Errorf("market provider error (%s): %w", message, errProviderTimeout)
+	case "market_provider_unavailable":
+		return fmt.Errorf("market provider error (%s): %w", message, errProviderUnavailable)
+	case "instrument_not_found":
+		return fmt.Errorf("market provider error (%s): %w", message, errInstrumentNotFound)
+	case "instrument_type_mismatch":
+		return fmt.Errorf("market provider error (%s): %w", message, errInstrumentTypeMismatch)
+	case "invalid_request":
+		return fmt.Errorf("market provider error (%s): %w", message, errProviderInvalidRequest)
+	case "source_data_conflict":
+		return fmt.Errorf("market provider error (%s): %w", message, errSourceDataConflict)
+	default:
+		return fmt.Errorf("market provider http %d (%s): %w", status, message, errProviderHTTP)
+	}
+}
+
+// Typed-error predicates used by the service layer to map sidecar failures to
+// AppErrors without inspecting message text.
+
+// IsProviderUnavailable reports a non-retryable upstream unavailability.
+func IsProviderUnavailable(err error) bool { return errors.Is(err, errProviderUnavailable) }
+
+// IsInstrumentNotFound reports the sidecar confirmed the code does not exist.
+func IsInstrumentNotFound(err error) bool { return errors.Is(err, errInstrumentNotFound) }
+
+// IsInstrumentTypeMismatch reports the code belongs to a different instrument type.
+func IsInstrumentTypeMismatch(err error) bool { return errors.Is(err, errInstrumentTypeMismatch) }
+
+// IsProviderInvalidRequest reports the sidecar rejected the request as invalid.
+func IsProviderInvalidRequest(err error) bool { return errors.Is(err, errProviderInvalidRequest) }
+
+// IsSourceDataConflict reports the fetched data identity conflicted with the request.
+func IsSourceDataConflict(err error) bool { return errors.Is(err, errSourceDataConflict) }
 
 func resolveTimeout() time.Duration {
 	return envDuration("MARKET_PROVIDER_RESOLVE_TIMEOUT", 90*time.Second)
@@ -47,12 +105,13 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
-// ProviderClient calls the AKShare sidecar.
+// ProviderClient calls the AKShare sidecar. Each operation applies its own
+// timeout (resolve vs fetch); there is no shared default that can silently
+// truncate a long fetch.
 type ProviderClient struct {
 	baseURL     string
 	resolveHTTP *http.Client
 	fetchHTTP   *http.Client
-	defaultHTTP *http.Client
 }
 
 func NewProviderClient(baseURL string) *ProviderClient {
@@ -64,21 +123,13 @@ func NewProviderClient(baseURL string) *ProviderClient {
 		fetchHTTP: &http.Client{
 			Timeout: fetchTimeout(),
 		},
-		defaultHTTP: &http.Client{
-			Timeout: defaultTimeout,
-		},
 	}
 }
 
-// FetchClient returns the long-timeout client used by Worker fetches.
-func (c *ProviderClient) FetchClient() *ProviderClient {
-	return &ProviderClient{
-		baseURL:     c.baseURL,
-		resolveHTTP: c.resolveHTTP,
-		fetchHTTP:   c.fetchHTTP,
-		defaultHTTP: c.fetchHTTP,
-	}
-}
+// FetchClient is retained for backward compatibility. The client now always
+// applies the correct per-operation timeout, so fetches are never capped by a
+// short default regardless of how the client was constructed.
+func (c *ProviderClient) FetchClient() *ProviderClient { return c }
 
 func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*ResolveData, error) {
 	start := time.Now()
@@ -119,13 +170,8 @@ func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*Reso
 	if err != nil {
 		return nil, fmt.Errorf("read resolve response: %w", err)
 	}
-	if resp.StatusCode == http.StatusGatewayTimeout {
-		return nil, fmt.Errorf("market provider resolve timeout: %w", errProviderTimeout)
-	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf(
-			"market provider resolve http %d: %s: %w", resp.StatusCode, string(raw), errProviderResolveHTTP,
-		)
+		return nil, classifyProviderError(resp.StatusCode, raw)
 	}
 
 	var envelope ResolveResponse
@@ -133,7 +179,7 @@ func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*Reso
 		return nil, fmt.Errorf("decode resolve response: %w", err)
 	}
 	if envelope.Code != 0 {
-		return nil, fmt.Errorf("market provider resolve error: %s: %w", envelope.Message, errProviderResolve)
+		return nil, classifyProviderError(http.StatusServiceUnavailable, raw)
 	}
 	return &envelope.Data, nil
 }
@@ -163,11 +209,7 @@ func (c *ProviderClient) fetchHTTPRaw(
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := c.defaultHTTP
-	if client == nil {
-		client = c.fetchHTTP
-	}
-	resp, err := client.Do(httpReq)
+	resp, err := c.fetchHTTP.Do(httpReq)
 	if err != nil {
 		elapsedMs := time.Since(start).Milliseconds()
 		remainingMs := max(int64(0), deadlineMs-elapsedMs)
@@ -216,9 +258,7 @@ func (c *ProviderClient) fetchHTTPRaw(
 			"status", resp.StatusCode,
 			"body", string(raw),
 		)
-		return nil, fmt.Errorf(
-			"market provider http %d: %s: %w", resp.StatusCode, string(raw), errProviderHTTP,
-		)
+		return nil, classifyProviderError(resp.StatusCode, raw)
 	}
 	return raw, nil
 }
