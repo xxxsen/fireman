@@ -377,7 +377,6 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
 
     if _has_exchange_prefix(code):
         out: list[_Candidate] = []
-        lof_authoritative_failed = False
         if bare in etf_map:
             parsed_etf = parse_cn_etf_code(code)
             if parsed_etf:
@@ -388,24 +387,28 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
             if parsed_lof:
                 out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
             elif not lof_map_available:
-                lof_authoritative_failed = True
+                # LOF name hit but authoritative market-id failed/timed out: the code
+                # identity is unconfirmed. Surface a retryable timeout with priority over
+                # any partial result — never silently narrow to an ETF-only candidate.
+                _raise_resolve_timeout(code, deadline)
         result = _dedupe_candidates(_prefer_lof_over_placeholder_etf(out))
         if not result and spots.load_failed:
             result = _fallback_cn_exchange_fund_candidates(
                 code, bare, deadline, etf_map=etf_map, lof_map=lof_map,
             )
-        if not result and (spots.load_failed or lof_authoritative_failed):
+        if not result and spots.load_failed:
             _raise_resolve_timeout(code, deadline)
         return result
 
     out: list[_Candidate] = []
-    lof_authoritative_failed = False
     if bare in lof_map:
         parsed_lof, lof_map_available = _parse_authoritative_lof(code, bare, deadline)
         if parsed_lof:
             out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
         elif not lof_map_available:
-            lof_authoritative_failed = True
+            # See prefixed branch: LOF authoritative failure must win over any ETF/stock
+            # candidate for the same bare code, so the identity is never silently narrowed.
+            _raise_resolve_timeout(code, deadline)
 
     out = _dedupe_candidates(
         _etf_and_stock_candidates_for_bare(
@@ -427,10 +430,6 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
         if not result:
             result = _fallback_bare_cn_exchange_fund(bare, deadline, stock_map=stock_map)
     if not result:
-        # LOF name hit but authoritative market-id lookup failed/timed out: never
-        # fabricate an exchange; surface a retryable timeout instead.
-        if lof_authoritative_failed:
-            _raise_resolve_timeout(code, deadline)
         _maybe_raise_mutual_fund_mismatch(code, bare, etf_map, lof_map, stock_map, deadline)
         if spots.load_failed:
             _raise_resolve_timeout(code, deadline)
