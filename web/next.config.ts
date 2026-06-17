@@ -9,9 +9,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,
-  // Web resolve: backend 90s + sidecar margin (§4.4).
+  // resolve: sidecar 70s < Go 90s < Web 105s; refresh: sidecar 240s < Go 300s < Web 330s < proxy 360s
   experimental: {
-    proxyTimeout: 105_000,
+    proxyTimeout: 360_000,
   },
   async rewrites() {
     return [

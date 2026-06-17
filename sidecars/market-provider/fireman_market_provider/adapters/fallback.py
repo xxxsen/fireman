@@ -12,6 +12,7 @@ from ..timeout_util import (
     call_with_timeout,
     fetch_timeout_seconds,
     fetch_upstream_timeout_seconds,
+    log_timeout_event,
 )
 
 logger = get_logger(__name__)
@@ -30,6 +31,15 @@ def try_sources(
     for source_name, call in sources:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:
+            log_timeout_event(
+                logger,
+                operation=f"fetch_{label}",
+                symbol=label,
+                elapsed_ms=fetch_timeout_seconds() * 1000,
+                remaining_ms=0,
+                layer="sidecar",
+                message="fetch deadline exceeded",
+            )
             raise TimeoutError(f"fetch deadline exceeded for {label}")
         timeout = fetch_upstream_timeout_seconds(remaining)
         try:

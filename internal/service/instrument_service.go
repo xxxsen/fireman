@@ -298,13 +298,53 @@ func (s *InstrumentService) AnnualReturns(ctx context.Context, instrumentID stri
 	return rows, nil
 }
 
+// HistoricalSnapshotView is a plan-specific frozen snapshot summary for the asset detail UI.
+type HistoricalSnapshotView struct {
+	ID                 string   `json:"id"`
+	PlanID             *string  `json:"plan_id,omitempty"`
+	InclusionDate      string   `json:"inclusion_date"`
+	CompleteYearCount  int      `json:"complete_year_count"`
+	MonthlyReturnCount int      `json:"monthly_return_count"`
+	HistoryDepth       string   `json:"history_depth"`
+	MetricsVersion     string   `json:"metrics_version"`
+	Warnings           []string `json:"warnings"`
+	CreatedAt          int64    `json:"created_at"`
+}
+
+func toHistoricalSnapshotViews(snaps []repository.SimulationSnapshot) []HistoricalSnapshotView {
+	out := make([]HistoricalSnapshotView, len(snaps))
+	for i, snap := range snaps {
+		out[i] = HistoricalSnapshotView{
+			ID:                 snap.ID,
+			PlanID:             snap.PlanID,
+			InclusionDate:      snap.InclusionDate,
+			CompleteYearCount:  snap.CompleteYearCount,
+			MonthlyReturnCount: snap.MonthlyReturnCount,
+			HistoryDepth:       snap.HistoryDepth,
+			MetricsVersion:     snap.MetricsVersion,
+			Warnings:           parseHistoricalSnapshotWarnings(snap.WarningsJSON),
+			CreatedAt:          snap.CreatedAt,
+		}
+	}
+	return out
+}
+
+func parseHistoricalSnapshotWarnings(raw string) []string {
+	var out []string
+	if raw == "" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out
+}
+
 // InstrumentDetailView aggregates asset library detail for the UI.
 type InstrumentDetailView struct {
 	Instrument          repository.InstrumentRecord          `json:"instrument"`
 	AnnualReturns       []repository.AnnualReturnRecord      `json:"annual_returns"`
 	SimulationWindow    map[string]any                       `json:"simulation_window"`
 	TrailingReturns     map[string]any                       `json:"trailing_returns"`
-	HistoricalSnapshots []repository.SimulationSnapshot      `json:"historical_snapshots"`
+	HistoricalSnapshots []HistoricalSnapshotView             `json:"historical_snapshots"`
 	ReferencingPlans    []repository.PlanInstrumentReference `json:"referencing_plans"`
 }
 
@@ -352,9 +392,9 @@ func (s *InstrumentService) GetDetail(ctx context.Context, id string) (Instrumen
 	}
 	return InstrumentDetailView{
 		Instrument: inst, AnnualReturns: returns,
-		SimulationWindow: buildSimulationWindowMap(inclusionDate, selectedYears, excluded, simMetrics, inst),
-		TrailingReturns:  trailingReturnsToMap(trailing),
-		HistoricalSnapshots: snaps, ReferencingPlans: refs,
+		SimulationWindow:    buildSimulationWindowMap(inclusionDate, selectedYears, excluded, simMetrics, inst),
+		TrailingReturns:     trailingReturnsToMap(trailing),
+		HistoricalSnapshots: toHistoricalSnapshotViews(snaps), ReferencingPlans: refs,
 	}, nil
 }
 
@@ -369,13 +409,13 @@ func buildSimulationWindowMap(
 		"inclusion_date": inclusionDate, "selected_years": selectedYears,
 		"excluded_years": excluded, "complete_year_count": simMetrics.CompleteYearCount,
 		"daily_observation_count": simMetrics.DailyObservationCount,
-		"monthly_return_count": simMetrics.MonthlyReturnCount,
-		"cagr_status": simMetrics.CAGRStatus, "volatility_status": simMetrics.VolatilityStatus,
+		"monthly_return_count":    simMetrics.MonthlyReturnCount,
+		"cagr_status":             simMetrics.CAGRStatus, "volatility_status": simMetrics.VolatilityStatus,
 		"drawdown_status": simMetrics.DrawdownStatus,
-		"quality_status": simMetrics.QualityStatus, "simulation_eligible": simMetrics.SimulationEligible,
-		"history_depth": simMetrics.HistoryDepth,
+		"quality_status":  simMetrics.QualityStatus, "simulation_eligible": simMetrics.SimulationEligible,
+		"history_depth":     simMetrics.HistoryDepth,
 		"volatility_method": simMetrics.VolatilityMethod, "metrics_version": simMetrics.MetricsVersion,
-		"warnings": simMetrics.Warnings,
+		"warnings":      simMetrics.Warnings,
 		"fee_treatment": inst.FeeTreatment, "expense_ratio_status": inst.ExpenseRatioStatus,
 	}
 	if simMetrics.HistoricalCAGR != nil {

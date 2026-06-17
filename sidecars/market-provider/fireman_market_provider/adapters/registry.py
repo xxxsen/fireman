@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -10,9 +11,6 @@ import pandas as pd
 from ..logutil import get_logger
 from ..normalize import normalize_dataframe
 from ..schemas import AssetClass, FetchData, FetchRequest, PointType
-import time
-
-from ..logutil import get_logger
 from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds, fetch_upstream_timeout_seconds
 from .classification import (
     CnMutualFundSourceKind,
@@ -28,7 +26,7 @@ from .cn_code import (
     resolve_cn_etf_fetch_code,
 )
 from .fallback import try_sources
-from .names import resolve_cn_exchange_fund_name, resolve_hk_name
+from .names import lookup_cn_mutual_fund_name_readonly, name_from_dataframe
 from .symbols import hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
 
 
@@ -161,6 +159,18 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     )
 
 
+def _fetch_display_name(resolved_name: str | None, symbol: str, df: pd.DataFrame) -> str:
+    if resolved_name and resolved_name.strip() and resolved_name.strip() != symbol:
+        return resolved_name.strip()
+    from_df = name_from_dataframe(df, symbol)
+    if from_df:
+        return from_df
+    cached = lookup_cn_mutual_fund_name_readonly(symbol)
+    if cached:
+        return cached
+    return symbol
+
+
 def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
@@ -236,7 +246,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     df, source_name = try_sources("cn_exchange_fund", sources, deadline)
     if source_name == "ak.stock_zh_a_hist_tx":
         df = _filter_df_by_date(df, start, end)
-    name = resolve_cn_exchange_fund_name(em_symbol, df)
+    name = _fetch_display_name(req.resolved_name, em_symbol, df)
     return AdapterResult(
         df=df,
         source_name=source_name,
@@ -289,22 +299,6 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
             "ak.fund_financial_fund_info_em",
             UpstreamCall("fund_financial_fund_info_em", kwargs=(("symbol", symbol),)),
         ),
-        (
-            "lof",
-            "lof",
-            "total_return_index",
-            "ak.fund_lof_hist_em",
-            UpstreamCall(
-                "fund_lof_hist_em",
-                kwargs=(
-                    ("symbol", symbol),
-                    ("period", "daily"),
-                    ("start_date", start),
-                    ("end_date", end),
-                    ("adjust", ""),
-                ),
-            ),
-        ),
     ]
     attempts = [item for item in all_attempts if item[0] == source_kind]
     logger.info(
@@ -327,15 +321,7 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                 errors.append(f"{source_name}: empty")
                 logger.warning("fetch cn_mutual_fund %s: %s returned empty", symbol, source_name)
                 continue
-            if source_name == "ak.fund_lof_hist_em":
-                meta = FundMeta(
-                    name=symbol,
-                    asset_class="equity",
-                    region="domestic",
-                    components={"fund_type": "LOF", "region": "domestic"},
-                )
-            else:
-                meta = classify_cn_mutual_fund(df, symbol, req.resolved_name)
+            meta = classify_cn_mutual_fund(df, symbol, req.resolved_name)
             if meta.asset_class is None:
                 errors.append(f"{source_name}: unsupported fund classification")
                 logger.warning(
@@ -454,7 +440,7 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
     df, source_name = try_sources("hk equity", sources, deadline)
     if source_name == "ak.stock_hk_daily":
         df = _filter_df_by_date(df, start, end)
-    name = resolve_hk_name(symbol)
+    name = _fetch_display_name(req.resolved_name, symbol, df)
     meta = classify_us_symbol(name, default_type)
     return AdapterResult(
         df=df,

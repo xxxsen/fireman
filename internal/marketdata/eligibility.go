@@ -10,7 +10,7 @@ func DetermineHistoryDepth(completeYearCount int) string {
 	case completeYearCount == 1:
 		return HistoryDepthOneYear
 	default:
-		return HistoryDepthOneYear
+		return HistoryDepthInsufficient
 	}
 }
 
@@ -22,10 +22,16 @@ func EvaluateSimulationEligibility(m SnapshotMetrics, hasAnomaly bool) bool {
 	if m.QualityStatus != QualityStatusAvailable {
 		return false
 	}
+	if m.MetricsVersion != MetricsVersionMonthlyLogReturnV1 {
+		return false
+	}
+	if m.VolatilityMethod != VolatilityMethodMonthlyLogReturn {
+		return false
+	}
 	if m.CompleteYearCount < 1 {
 		return false
 	}
-	if m.MonthlyReturnCount < 12 {
+	if m.MonthlyReturnCount != m.CompleteYearCount*12 {
 		return false
 	}
 	if m.CAGRStatus != MetricStatusAvailable {

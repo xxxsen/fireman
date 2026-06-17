@@ -139,6 +139,7 @@ export function qualityStatusLabel(status: string): string {
 
 export function historyDepthLabel(depth: string | undefined): string {
   const map: Record<string, string> = {
+    insufficient: "历史不足",
     one_year: "历史样本有限",
     two_to_four_years: "历史样本较短",
     five_plus_years: "历史样本充足",

@@ -121,14 +121,14 @@ type SnapshotMetrics struct {
 	AnnualVolatility    *float64
 	MaxDrawdown         *float64
 
-	CAGRStatus        string
-	VolatilityStatus  string
-	DrawdownStatus    string
-	QualityStatus     string
+	CAGRStatus         string
+	VolatilityStatus   string
+	DrawdownStatus     string
+	QualityStatus      string
 	SimulationEligible bool
-	HistoryDepth      string
-	VolatilityMethod  string
-	MetricsVersion    string
+	HistoryDepth       string
+	VolatilityMethod   string
+	MetricsVersion     string
 
 	SourceHash string
 	Warnings   []string

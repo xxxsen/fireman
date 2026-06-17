@@ -25,13 +25,13 @@ def test_detect_money_fund_from_name() -> None:
         assert detect_cn_mutual_fund_source_kind("000009") == "money_fund"
 
 
-def test_detect_lof_from_resolved_name() -> None:
-    assert detect_cn_mutual_fund_source_kind("501018", resolved_name="测试LOF") == "lof"
+def test_detect_lof_name_still_uses_open_fund() -> None:
+    assert detect_cn_mutual_fund_source_kind("501018", resolved_name="测试LOF") == "open_fund"
 
 
-def test_detect_lof_from_readonly_cache() -> None:
+def test_detect_lof_from_readonly_cache_uses_open_fund() -> None:
     with patch(
         "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name_readonly",
         return_value="某某LOF基金",
     ):
-        assert detect_cn_mutual_fund_source_kind("501018") == "lof"
+        assert detect_cn_mutual_fund_source_kind("501018") == "open_fund"

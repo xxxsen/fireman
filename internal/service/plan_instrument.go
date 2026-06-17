@@ -68,10 +68,10 @@ func EvaluateInstrumentForPlan(
 	}
 	if inst.Status != "active" {
 		return PlanInstrumentEval{
-			Status: inst.Status, QualityStatus: "unavailable", Available: false,
-		}, newErr("instrument_not_ready", "instrument status is not active", map[string]any{
-			"instrument_id": inst.ID, "status": inst.Status,
-		})
+				Status: inst.Status, QualityStatus: "unavailable", Available: false,
+			}, newErr("instrument_not_ready", "instrument status is not active", map[string]any{
+				"instrument_id": inst.ID, "status": inst.Status,
+			})
 	}
 	metrics, quality := libraryMetricsAtDate(ctx, marketRepo, inst.ID, valuationDate)
 	available := metrics.SimulationEligible
@@ -123,10 +123,18 @@ func libraryMetricsAtDate(
 		return marketdata.SnapshotMetrics{}, marketdata.QualityStatusInsufficientHistory
 	}
 	dp := repoToDataPoints(points)
-	filtered := make([]marketdata.DataPoint, 0, len(dp))
-	for _, p := range dp {
-		if p.TradeDate <= valuationDate {
-			filtered = append(filtered, p)
+	inclusionDate := valuationDate
+	var filtered []marketdata.DataPoint
+	if inclusionDate == "" {
+		// Library list/detail without plan valuation: use full history as-of latest point.
+		inclusionDate = dp[len(dp)-1].TradeDate
+		filtered = dp
+	} else {
+		filtered = make([]marketdata.DataPoint, 0, len(dp))
+		for _, p := range dp {
+			if p.TradeDate <= inclusionDate {
+				filtered = append(filtered, p)
+			}
 		}
 	}
 	if len(filtered) == 0 {
@@ -142,7 +150,7 @@ func libraryMetricsAtDate(
 		pointType = filtered[0].PointType
 		sourceName = filtered[0].SourceName
 	}
-	years := marketdata.SelectSimulationYears(filtered, annual, valuationDate)
+	years := marketdata.SelectSimulationYears(filtered, annual, inclusionDate)
 	metrics := marketdata.ComputeMetrics(filtered, years, pointType, sourceName)
 	quality := metrics.QualityStatus
 	if metrics.SimulationEligible {

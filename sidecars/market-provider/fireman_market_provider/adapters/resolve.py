@@ -6,8 +6,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+from ..logutil import get_logger
 from ..schemas import ResolveCandidate, ResolveData, ResolveRequest
-from ..timeout_util import UpstreamCall, call_with_timeout, resolve_deadline_seconds, resolve_timeout_seconds
+from ..timeout_util import UpstreamCall, call_with_timeout, log_timeout_event, resolve_deadline_seconds, resolve_timeout_seconds
 from .cn_code import (
     CNExchangeCode,
     build_from_market_id,
@@ -21,14 +22,31 @@ from .names import (
     _load_hk_name_map,
     _load_lof_name_map,
     _load_stock_name_map,
-    lookup_cn_exchange_fund_name,
     lookup_cn_lof_name,
-    lookup_cn_mutual_fund_name,
+    lookup_cn_mutual_fund_name_readonly,
     lookup_cn_stock_name,
     lookup_cross_listed_etf_name,
     resolve_cn_mutual_fund_name,
 )
 from .symbols import hk_exchange_symbol
+
+logger = get_logger(__name__)
+
+
+def _raise_resolve_timeout(code: str, deadline: float, message: str = "resolve deadline exceeded") -> None:
+    elapsed_ms = int((time.monotonic() + resolve_deadline_seconds() - deadline) * 1000)
+    remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+    log_timeout_event(
+        logger,
+        operation="resolve_cn_exchange_fund",
+        symbol=code,
+        elapsed_ms=max(0, elapsed_ms),
+        remaining_ms=remaining_ms,
+        layer="sidecar",
+        message=message,
+    )
+    raise TimeoutError("market_provider_timeout")
+
 
 _VALID_MARKET_TYPES: dict[str, frozenset[str]] = {
     "CN": frozenset({"cn_exchange_fund", "cn_exchange_stock", "cn_mutual_fund", "fx_rate"}),
@@ -98,7 +116,7 @@ def _maybe_raise_mutual_fund_mismatch(
         return
     if bare in etf_map or bare in lof_map or bare in stock_map:
         return
-    if lookup_cn_mutual_fund_name(bare, deadline) or resolve_cn_mutual_fund_name(bare, deadline):
+    if lookup_cn_mutual_fund_name_readonly(bare) or resolve_cn_mutual_fund_name(bare, deadline):
         raise ValueError("instrument_type_mismatch")
 
 
@@ -178,6 +196,9 @@ def _load_cn_exchange_spot_maps(deadline: float) -> _SpotMaps:
 
 
 def _stock_candidates_from_bare(bare: str, stock_name: str) -> list[_Candidate]:
+    heuristic = _heuristic_stock_candidates_from_bare(bare, stock_name)
+    if heuristic:
+        return heuristic
     out: list[_Candidate] = []
     for prefix in ("sh", "sz", "bj"):
         parsed_stock = parse_cn_stock_code(f"{prefix}{bare}")
@@ -225,18 +246,81 @@ def _etf_and_stock_candidates_for_bare(
         if etf is not None:
             out.append(etf)
     elif stock_part:
-        name = etf_name or lookup_cn_exchange_fund_name(bare, deadline) or bare
-        etf = _cross_listed_etf_candidate(bare, name, stock_part)
-        if etf is not None:
-            out.append(etf)
+        cross_name = etf_name or lookup_cross_listed_etf_name(bare, deadline)
+        if cross_name:
+            etf = _cross_listed_etf_candidate(bare, cross_name, stock_part)
+            if etf is not None:
+                out.append(etf)
 
     out.extend(stock_part)
     return _dedupe_candidates(out)
 
 
-_SH_FUND_PREFIXES = ("51", "56", "58")
-_SZ_FUND_PREFIXES = ("15", "16", "17", "18")
 _CROSS_LIST_BARE_PREFIXES = ("00", "30")
+
+
+def _fallback_bare_cn_exchange_fund(
+    bare: str,
+    deadline: float,
+    *,
+    stock_map: dict[str, str],
+) -> list[_Candidate]:
+    """Cross-listed bare codes only; never infer on-exchange identity from fund prefixes."""
+    if not bare.startswith(_CROSS_LIST_BARE_PREFIXES):
+        return []
+
+    stock_name = stock_map.get(bare)
+    if not stock_name:
+        return []
+    stock_part = _heuristic_stock_candidates_from_bare(bare, stock_name)
+    if not stock_part:
+        return []
+
+    etf_name = lookup_cross_listed_etf_name(bare, deadline)
+    if not etf_name:
+        return _dedupe_candidates(stock_part)
+
+    cross_etf = _cross_listed_etf_candidate(bare, etf_name, stock_part)
+    if cross_etf is not None and cross_etf.exchange != stock_part[0].exchange:
+        return _dedupe_candidates([cross_etf, *stock_part])
+    return _dedupe_candidates(stock_part)
+
+
+def _fallback_cn_exchange_fund_candidates(
+    code: str,
+    bare: str,
+    deadline: float,
+    *,
+    etf_map: dict[str, str],
+    lof_map: dict[str, str],
+) -> list[_Candidate]:
+    """Authoritative spot maps, explicit exchange prefix, or LOF code-id map only."""
+    out: list[_Candidate] = []
+
+    if bare in etf_map:
+        parsed_etf = parse_cn_etf_code(code if _has_exchange_prefix(code) else bare)
+        if parsed_etf is not None:
+            kind = "lof" if bare in lof_map else "index_etf"
+            out.append(_candidate_from_cn(parsed_etf, etf_map[bare], kind))
+
+    if bare in lof_map:
+        parsed_lof = _parse_authoritative_lof(code, bare, deadline, in_lof_map=True)
+        if parsed_lof is not None:
+            out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
+
+    if _has_exchange_prefix(code):
+        resolve_code = code.strip().lower()
+        if bare not in etf_map and bare not in lof_map:
+            parsed_etf = parse_cn_etf_code(resolve_code)
+            if parsed_etf is not None:
+                out.append(_candidate_from_cn(parsed_etf, bare, "index_etf"))
+        if time.monotonic() < deadline - 2:
+            parsed_lof = _parse_authoritative_lof(code, bare, deadline)
+            if parsed_lof is not None:
+                name = lof_map.get(bare) or bare
+                out.append(_candidate_from_cn(parsed_lof, name, "lof"))
+
+    return _dedupe_candidates(out)
 
 
 def _parse_authoritative_lof(
@@ -282,72 +366,6 @@ def _heuristic_stock_candidates_from_bare(bare: str, stock_name: str) -> list[_C
     return [_candidate_from_cn(parsed, stock_name, "stock")]
 
 
-def _fallback_bare_cn_exchange_fund(bare: str, deadline: float) -> list[_Candidate]:
-    if bare.startswith(_SH_FUND_PREFIXES) or bare.startswith(_SZ_FUND_PREFIXES):
-        parsed_etf = parse_cn_etf_code(bare)
-        if parsed_etf is not None:
-            name = bare
-            if time.monotonic() < deadline - 2:
-                name = lookup_cn_exchange_fund_name(bare, deadline) or bare
-            return [_candidate_from_cn(parsed_etf, name, "index_etf")]
-
-    if bare.startswith(_CROSS_LIST_BARE_PREFIXES):
-        stock_name = lookup_cn_stock_name(bare, deadline) or bare
-        stock_part = _heuristic_stock_candidates_from_bare(bare, stock_name)
-        if stock_part:
-            etf_name = (
-                lookup_cross_listed_etf_name(bare, deadline)
-                or lookup_cn_exchange_fund_name(bare, deadline)
-                or bare
-            )
-            cross_etf = _cross_listed_etf_candidate(bare, etf_name, stock_part)
-            if cross_etf is not None and cross_etf.exchange != stock_part[0].exchange:
-                return _dedupe_candidates([cross_etf, *stock_part])
-
-    parsed_etf = parse_cn_etf_code(bare)
-    if parsed_etf is not None:
-        name = bare
-        if time.monotonic() < deadline - 2:
-            name = lookup_cn_exchange_fund_name(bare, deadline) or bare
-        if not _is_placeholder_fund_name(name, bare):
-            return [_candidate_from_cn(parsed_etf, name, "index_etf")]
-
-    stock_name = bare
-    if time.monotonic() < deadline - 2:
-        stock_name = lookup_cn_stock_name(bare, deadline) or bare
-    if not _is_placeholder_fund_name(stock_name, bare):
-        stock_part = _heuristic_stock_candidates_from_bare(bare, stock_name)
-        if stock_part:
-            return stock_part
-
-    return []
-
-
-def _fallback_cn_exchange_fund_candidates(code: str, bare: str, deadline: float) -> list[_Candidate]:
-    if not _has_exchange_prefix(code):
-        fast = _fallback_bare_cn_exchange_fund(bare, deadline)
-        if fast:
-            return fast
-
-    resolve_code = code.strip().lower()
-    parsed_etf = parse_cn_etf_code(resolve_code)
-    out: list[_Candidate] = []
-    if parsed_etf is not None:
-        name = bare
-        if time.monotonic() < deadline - 2:
-            name = lookup_cn_exchange_fund_name(bare, deadline) or bare
-        if not _is_placeholder_fund_name(name, bare):
-            out.append(_candidate_from_cn(parsed_etf, name, "index_etf"))
-
-    if time.monotonic() < deadline - 2:
-        parsed_lof = _parse_authoritative_lof(code, bare, deadline)
-        if parsed_lof is not None:
-            name = lookup_cn_lof_name(bare, deadline) or bare
-            out.append(_candidate_from_cn(parsed_lof, name, "lof"))
-
-    return _dedupe_candidates(out)
-
-
 def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
     bare = _bare_digits(code)
     spots = _load_cn_exchange_spot_maps(deadline)
@@ -366,7 +384,11 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
                 out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
         result = _dedupe_candidates(_prefer_lof_over_placeholder_etf(out))
         if not result and spots.load_failed:
-            result = _fallback_cn_exchange_fund_candidates(code, bare, deadline)
+            result = _fallback_cn_exchange_fund_candidates(
+                code, bare, deadline, etf_map=etf_map, lof_map=lof_map,
+            )
+        if not result and spots.load_failed:
+            _raise_resolve_timeout(code, deadline)
         return result
 
     out: list[_Candidate] = []
@@ -389,9 +411,15 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
 
     result = out
     if not result and spots.load_failed:
-        result = _fallback_cn_exchange_fund_candidates(code, bare, deadline)
+        result = _fallback_cn_exchange_fund_candidates(
+            code, bare, deadline, etf_map=etf_map, lof_map=lof_map,
+        )
+        if not result:
+            result = _fallback_bare_cn_exchange_fund(bare, deadline, stock_map=stock_map)
     if not result:
         _maybe_raise_mutual_fund_mismatch(code, bare, etf_map, lof_map, stock_map, deadline)
+        if spots.load_failed:
+            _raise_resolve_timeout(code, deadline)
     return result
 
 

@@ -155,10 +155,7 @@ export default function NewPlanWizardPage() {
   const selectableInstruments = useMemo(
     () =>
       instrumentsQ.data?.instruments.filter(
-        (i) =>
-          !i.is_system &&
-          i.status === "active" &&
-          (i.quality_status ?? "available") === "available",
+        (i) => !i.is_system && i.status === "active",
       ) ?? [],
     [instrumentsQ.data?.instruments],
   );

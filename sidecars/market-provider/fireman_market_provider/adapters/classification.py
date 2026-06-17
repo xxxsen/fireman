@@ -9,7 +9,7 @@ import pandas as pd
 
 from ..schemas import AssetClass
 
-CnMutualFundSourceKind = Literal["open_fund", "money_fund", "financial_fund", "lof"]
+CnMutualFundSourceKind = Literal["open_fund", "money_fund", "financial_fund"]
 
 
 @dataclass
@@ -100,9 +100,6 @@ def detect_cn_mutual_fund_source_kind(
     # Fetch path: resolved_name + read-only cache only — no LOF spot / fund_name_em upstream.
     name = resolved_name or lookup_cn_mutual_fund_name_readonly(bare) or bare
     text = f"{name}"
-    upper = text.upper()
-    if "LOF" in upper:
-        return "lof"
     if any(k in text for k in ("货币", "货币基金")):
         return "money_fund"
     if "理财" in text:

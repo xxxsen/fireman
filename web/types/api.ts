@@ -106,6 +106,11 @@ export interface PlanHolding {
   current_amount_minor: number;
   simulation_snapshot_id: string;
   simulation_snapshot_created_at?: number;
+  snapshot_complete_year_count?: number;
+  snapshot_monthly_return_count?: number;
+  snapshot_history_depth?: string;
+  snapshot_metrics_version?: string;
+  snapshot_warnings?: string[];
   sort_order: number;
   instrument_code?: string;
   instrument_name?: string;

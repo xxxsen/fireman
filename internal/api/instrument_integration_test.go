@@ -566,10 +566,10 @@ func TestInstrumentRefreshSourceConflictKeepsExistingData(t *testing.T) {
 				Data: marketdata.FetchData{
 					Provider: "akshare", ProviderSymbol: "000001", Name: "华夏成长混合",
 					AssetClass: "cash", Currency: "CNY", PointType: "nav",
-					ExpenseRatioStatus: "unavailable",
+					ExpenseRatioStatus:     "unavailable",
 					ExpenseRatioComponents: map[string]any{"region": "domestic"},
-					Points: []marketdata.HistoricalPoint{{Date: "2024-12-31", Value: 1.0}},
-					SourceName: "ak.fund_money_fund_info_em", SourceQuality: "full", SourceKind: "money_fund",
+					Points:                 []marketdata.HistoricalPoint{{Date: "2024-12-31", Value: 1.0}},
+					SourceName:             "ak.fund_money_fund_info_em", SourceQuality: "full", SourceKind: "money_fund",
 				},
 			})
 		default:
@@ -625,5 +625,240 @@ func TestInstrumentRefreshSourceConflictKeepsExistingData(t *testing.T) {
 	}
 	if sourceName != "ak.fund_open_fund_info_em:单位净值走势" {
 		t.Fatalf("expected old source preserved, got %q", sourceName)
+	}
+}
+
+type holdingSnapshotFields struct {
+	CompleteYearCount int
+	HistoryDepth      string
+	MetricsVersion    string
+	Warnings          []string
+}
+
+func getPlanHoldingsSnapshotFields(t *testing.T, client *http.Client, baseURL, planID string) holdingSnapshotFields {
+	t.Helper()
+	resp, err := client.Get(baseURL + "/api/v1/plans/" + planID + "/holdings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("holdings status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	env := decodeEnvelope(t, readBody(t, resp))
+	holdings := env["data"].(map[string]any)["holdings"].([]any)
+	if len(holdings) == 0 {
+		t.Fatal("expected at least one holding")
+	}
+	h := holdings[0].(map[string]any)
+	var warnings []string
+	if raw, ok := h["snapshot_warnings"]; ok && raw != nil {
+		for _, w := range raw.([]any) {
+			warnings = append(warnings, w.(string))
+		}
+	}
+	return holdingSnapshotFields{
+		CompleteYearCount: int(h["snapshot_complete_year_count"].(float64)),
+		HistoryDepth:      h["snapshot_history_depth"].(string),
+		MetricsVersion:    h["snapshot_metrics_version"].(string),
+		Warnings:          warnings,
+	}
+}
+
+func TestHistoricalSnapshotDTOContractIntegration(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+
+	valuationDate := "2025-06-01"
+	instID := importFixtureInstrument(t, client, srv.URL)
+	plan := createPlanWithValuationDate(t, db, valuationDate)
+	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
+	holdingID, version := addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
+
+	var snapshotID string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT simulation_snapshot_id FROM plan_holdings WHERE id=?`, holdingID).Scan(&snapshotID); err != nil {
+		t.Fatal(err)
+	}
+	warnings := `["仅有 1 个完整自然年度，收益与风险估计的不确定性较高"]`
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE instrument_simulation_snapshots SET warnings_json=? WHERE id=?`, warnings, snapshotID); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{"config_version": version})
+	resp, err := client.Post(
+		srv.URL+"/api/v1/plans/"+plan.ID+"/holdings/"+holdingID+"/sync-simulation-snapshot",
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+
+	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + instID + "/detail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	env := decodeEnvelope(t, readBody(t, resp))
+	data := env["data"].(map[string]any)
+	snapsRaw, ok := data["historical_snapshots"].([]any)
+	if !ok || len(snapsRaw) == 0 {
+		t.Fatalf("expected non-empty historical_snapshots, got %#v", data["historical_snapshots"])
+	}
+
+	required := []string{
+		"id", "plan_id", "inclusion_date", "complete_year_count", "monthly_return_count",
+		"history_depth", "metrics_version", "warnings", "created_at",
+	}
+	foundWarnings := false
+	for _, snapAny := range snapsRaw {
+		snap, ok := snapAny.(map[string]any)
+		if !ok {
+			t.Fatalf("snapshot is not an object: %#v", snapAny)
+		}
+		for _, key := range required {
+			if _, exists := snap[key]; !exists {
+				t.Fatalf("historical_snapshots missing field %q: %+v", key, snap)
+			}
+		}
+		if snap["warnings"] == nil {
+			t.Fatalf("warnings must not be null: %+v", snap)
+		}
+		warns, ok := snap["warnings"].([]any)
+		if !ok {
+			t.Fatalf("warnings must be array, got %T", snap["warnings"])
+		}
+		if len(warns) > 0 {
+			foundWarnings = true
+			if _, ok := warns[0].(string); !ok {
+				t.Fatalf("warnings items must be strings, got %T", warns[0])
+			}
+		}
+	}
+	if !foundWarnings {
+		t.Fatal("expected at least one snapshot with non-empty warnings array")
+	}
+}
+
+func TestHoldingSnapshotFrozenAfterInstrumentRefreshIntegration(t *testing.T) {
+	fetchCount := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: "sh510300", ProviderSymbol: "sh510300",
+						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
+					},
+				},
+			})
+			return
+		case "/v1/instruments/fetch":
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		fetchCount++
+		var req struct {
+			StartDate *string `json:"start_date"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		source := "ak.stock_zh_a_hist_tx"
+		points := []marketdata.HistoricalPoint{
+			{Date: "2023-12-29", Value: 1.0},
+			{Date: "2024-12-31", Value: 1.2},
+			{Date: "2025-12-31", Value: 1.5},
+		}
+		if fetchCount == 1 {
+			source = "test_fixture"
+			points = buildFixturePoints()
+		} else if req.StartDate == nil {
+			source = "short_refresh_source"
+		}
+		resp := marketdata.FetchResponse{
+			Code: 0, Message: "success",
+			Data: marketdata.FetchData{
+				Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
+				AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
+				ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
+				Points: points, SourceName: source, SourceQuality: "full",
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(provider.Close)
+
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	valuationDate := "2025-06-01"
+	instID := importFixtureInstrument(t, client, srv.URL)
+	plan := createPlanWithValuationDate(t, db, valuationDate)
+	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
+	_, _ = addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
+
+	frozen := getPlanHoldingsSnapshotFields(t, client, srv.URL, plan.ID)
+	if frozen.CompleteYearCount < 2 {
+		t.Fatalf("expected multi-year frozen snapshot from fixture, got %+v", frozen)
+	}
+
+	oldFetched := time.Now().Add(-25 * time.Hour).UnixMilli()
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE market_data_points SET fetched_at=? WHERE instrument_id=?`, oldFetched, instID); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{"force": true})
+	resp, err := client.Post(
+		srv.URL+"/api/v1/instruments/"+instID+"/refresh",
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("force refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+
+	detailResp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID + "/detail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailEnv := decodeEnvelope(t, readBody(t, detailResp))
+	detail := detailEnv["data"].(map[string]any)
+	window := detail["simulation_window"].(map[string]any)
+	if got := int(window["complete_year_count"].(float64)); got >= frozen.CompleteYearCount {
+		t.Fatalf("expected library metrics to shrink after refresh, library=%d frozen=%d",
+			got, frozen.CompleteYearCount)
+	}
+
+	afterRefresh := getPlanHoldingsSnapshotFields(t, client, srv.URL, plan.ID)
+	if afterRefresh.CompleteYearCount != frozen.CompleteYearCount {
+		t.Fatalf("complete_year_count changed: before=%d after=%d",
+			frozen.CompleteYearCount, afterRefresh.CompleteYearCount)
+	}
+	if afterRefresh.HistoryDepth != frozen.HistoryDepth {
+		t.Fatalf("history_depth changed: before=%q after=%q", frozen.HistoryDepth, afterRefresh.HistoryDepth)
+	}
+	if afterRefresh.MetricsVersion != frozen.MetricsVersion {
+		t.Fatalf("metrics_version changed: before=%q after=%q", frozen.MetricsVersion, afterRefresh.MetricsVersion)
+	}
+	if len(afterRefresh.Warnings) != len(frozen.Warnings) {
+		t.Fatalf("warnings length changed: before=%v after=%v", frozen.Warnings, afterRefresh.Warnings)
+	}
+	for i := range frozen.Warnings {
+		if afterRefresh.Warnings[i] != frozen.Warnings[i] {
+			t.Fatalf("warnings[%d] changed: before=%q after=%q", i, frozen.Warnings[i], afterRefresh.Warnings[i])
+		}
 	}
 }

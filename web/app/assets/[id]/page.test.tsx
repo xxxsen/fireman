@@ -300,6 +300,39 @@ describe("AssetDetailPage job terminal states", () => {
   });
 });
 
+describe("AssetDetailPage historical snapshots", () => {
+  beforeEach(() => {
+    getInstrumentDetailMock.mockReset();
+    getFetchStatusMock.mockReset();
+    useJobStatusMock.mockReset();
+    getInstrumentDetailMock.mockResolvedValue({
+      ...activeDetail(),
+      historical_snapshots: [
+        {
+          id: "snap_hist_1",
+          plan_id: "plan_1",
+          inclusion_date: "2025-06-01",
+          complete_year_count: 6,
+          monthly_return_count: 72,
+          history_depth: "five_plus_years",
+          metrics_version: "monthly_log_return_v1",
+          warnings: ["完整年度样本较少，估计不稳定"],
+          created_at: Date.parse("2025-06-01T08:00:00.000Z"),
+        },
+      ],
+    });
+    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
+  });
+
+  it("shows historical snapshot metrics and warnings", async () => {
+    renderPage();
+    expect(await screen.findByText("历史计划快照")).toBeInTheDocument();
+    expect(screen.getByText(/72 月收益观测/)).toBeInTheDocument();
+    expect(screen.getByText(/monthly_log_return_v1/)).toBeInTheDocument();
+    expect(screen.getByText("完整年度样本较少，估计不稳定")).toBeInTheDocument();
+  });
+});
+
 describe("AssetDetailPage delete", () => {
   beforeEach(() => {
     deleteInstrumentMock.mockReset();

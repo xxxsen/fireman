@@ -14,7 +14,6 @@ import { usePlanEdit } from "../layout";
 import { getPlan, updatePlan } from "@/lib/api/plans";
 import { getParameters, updateParameters } from "@/lib/api/plans";
 import { getHoldings } from "@/lib/api/holdings";
-import { listInstruments } from "@/lib/api/instruments";
 import { getAllocation, listScenarios, updateAllocation } from "@/lib/api/allocation";
 import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, formatMoney, historyDepthLabel, regionLabel } from "@/lib/format";
@@ -72,14 +71,6 @@ export function ParametersContent({
   const holdingsQ = useQuery({
     queryKey: ["holdings", planId],
     queryFn: () => getHoldings(planId),
-  });
-  const instrumentsQ = useQuery({
-    queryKey: ["instruments", planQ.data?.valuation_date],
-    queryFn: () =>
-      listInstruments(
-        planQ.data?.valuation_date ? { valuationDate: planQ.data.valuation_date } : undefined,
-      ),
-    enabled: !!planQ.data,
   });
   const scenariosQ = useQuery({
     queryKey: ["scenarios"],
@@ -558,27 +549,37 @@ export function ParametersContent({
                 <th className="pr-4 py-1">月度样本</th>
                 <th className="pr-4 py-1">快照生成时间</th>
                 <th className="pr-4 py-1">指标版本</th>
+                <th className="pr-4 py-1">快照提示</th>
               </tr>
             </thead>
             <tbody>
-              {(holdingsQ.data?.holdings ?? []).map((h) => {
-                const inst = instrumentsQ.data?.instruments.find((i) => i.id === h.instrument_id);
-                if (!inst) return null;
-                return (
+              {(holdingsQ.data?.holdings ?? []).map((h) => (
                   <tr key={h.id} className="border-t">
-                    <td className="py-1 pr-4">{inst.name}（{inst.code}）</td>
-                    <td className="py-1 pr-4">{historyDepthLabel(inst.history_depth)}</td>
-                    <td className="py-1 pr-4">{inst.complete_year_count ?? "—"}</td>
-                    <td className="py-1 pr-4">{inst.monthly_return_count ?? "—"}</td>
+                    <td className="py-1 pr-4">
+                      {h.instrument_name ?? h.instrument_id}（{h.instrument_code ?? "—"}）
+                    </td>
+                    <td className="py-1 pr-4">{historyDepthLabel(h.snapshot_history_depth)}</td>
+                    <td className="py-1 pr-4">{h.snapshot_complete_year_count ?? "—"}</td>
+                    <td className="py-1 pr-4">{h.snapshot_monthly_return_count ?? "—"}</td>
                     <td className="py-1 pr-4">
                       {h.simulation_snapshot_created_at
                         ? new Date(h.simulation_snapshot_created_at).toLocaleString("zh-CN")
                         : "—"}
                     </td>
-                    <td className="py-1 pr-4 font-mono text-xs">{inst.metrics_version ?? "—"}</td>
+                    <td className="py-1 pr-4 font-mono text-xs">{h.snapshot_metrics_version ?? "—"}</td>
+                    <td className="py-1 pr-4 text-xs text-amber-800">
+                      {(h.snapshot_warnings ?? []).length > 0 ? (
+                        <ul className="list-disc pl-4">
+                          {h.snapshot_warnings!.map((w) => (
+                            <li key={w}>{w}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                   </tr>
-                );
-              })}
+                ))}
             </tbody>
           </table>
         </div>

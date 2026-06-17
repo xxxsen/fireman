@@ -8,11 +8,28 @@ import (
 func TestTrailingReturnsSharedEndDate(t *testing.T) {
 	points := buildTrailingPoints()
 	tr := ComputeTrailingReturns(points, "2026-06-12", "adjusted_close", "test")
+	if tr.AsOfDate != "2026-06-12" {
+		t.Fatalf("top as_of_date %s", tr.AsOfDate)
+	}
 	for _, key := range trailingPeriodOrder {
 		p := tr.Periods[key]
 		if p.EndDate != "2026-06-12" {
 			t.Fatalf("%s end_date %s", key, p.EndDate)
 		}
+	}
+}
+
+func TestTrailingReturnsWeekendUsesLastTradeDate(t *testing.T) {
+	points := []DataPoint{
+		{TradeDate: "2026-06-10", Value: 100},
+		{TradeDate: "2026-06-12", Value: 105},
+	}
+	tr := ComputeTrailingReturns(points, "2026-06-14", "adjusted_close", "test")
+	if tr.AsOfDate != "2026-06-12" {
+		t.Fatalf("as_of_date %s want 2026-06-12", tr.AsOfDate)
+	}
+	if tr.Periods["1m"].EndDate != "2026-06-12" {
+		t.Fatalf("period end_date %s", tr.Periods["1m"].EndDate)
 	}
 }
 
@@ -76,4 +93,59 @@ func buildTrailingPoints() []DataPoint {
 		points = append(points, DataPoint{TradeDate: d.Format("2006-01-02"), Value: value})
 	}
 	return points
+}
+
+func buildTrailingPointsN(days int) []DataPoint {
+	var points []DataPoint
+	value := 100.0
+	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < days; i++ {
+		d := start.AddDate(0, 0, i)
+		value *= 1.0001
+		points = append(points, DataPoint{TradeDate: d.Format("2006-01-02"), Value: value})
+	}
+	return points
+}
+
+func BenchmarkComputeTrailingReturns(b *testing.B) {
+	points := buildTrailingPointsN(5000)
+	asOf := points[len(points)-1].TradeDate
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ComputeTrailingReturns(points, asOf, "adjusted_close", "bench")
+	}
+}
+
+func BenchmarkComputeTrailingReturns_10k(b *testing.B) {
+	points := buildTrailingPointsN(10000)
+	asOf := points[len(points)-1].TradeDate
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ComputeTrailingReturns(points, asOf, "adjusted_close", "bench")
+	}
+}
+
+func TestTrailingReturnsScalingIsSubQuadratic(t *testing.T) {
+	small := buildTrailingPointsN(2000)
+	large := buildTrailingPointsN(4000)
+	asOfSmall := small[len(small)-1].TradeDate
+	asOfLarge := large[len(large)-1].TradeDate
+
+	start := time.Now()
+	for i := 0; i < 50; i++ {
+		ComputeTrailingReturns(small, asOfSmall, "adjusted_close", "scale")
+	}
+	smallElapsed := time.Since(start)
+
+	start = time.Now()
+	for i := 0; i < 50; i++ {
+		ComputeTrailingReturns(large, asOfLarge, "adjusted_close", "scale")
+	}
+	largeElapsed := time.Since(start)
+
+	ratio := float64(largeElapsed) / float64(smallElapsed)
+	if ratio > 3.5 {
+		t.Fatalf("2x data took %.2fx time (small=%s large=%s), likely worse than O(n log n)",
+			ratio, smallElapsed, largeElapsed)
+	}
 }

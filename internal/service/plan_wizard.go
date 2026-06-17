@@ -36,6 +36,7 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 	if err := validateWizardRequest(req); err != nil {
 		return PlanDetail{}, err
 	}
+	req.RegionTargets = normalizeWizardRegionTargets(req.RegionTargets)
 	if req.BaseCurrency == "" {
 		req.BaseCurrency = "CNY"
 	}

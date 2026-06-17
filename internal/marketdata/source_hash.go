@@ -15,10 +15,10 @@ type hashPoint struct {
 }
 
 type metricsHashInput struct {
-	MetricsVersion string     `json:"metrics_version"`
-	PointType      string     `json:"point_type"`
-	SourceName     string     `json:"source_name"`
-	SelectedYears  []int      `json:"selected_years"`
+	MetricsVersion string      `json:"metrics_version"`
+	PointType      string      `json:"point_type"`
+	SourceName     string      `json:"source_name"`
+	SelectedYears  []int       `json:"selected_years"`
 	Points         []hashPoint `json:"points"`
 }
 

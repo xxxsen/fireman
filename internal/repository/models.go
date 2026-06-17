@@ -109,22 +109,27 @@ type Instrument struct {
 
 // PlanHolding is a plan position.
 type PlanHolding struct {
-	ID                   string  `json:"id"`
-	PlanID               string  `json:"plan_id"`
-	InstrumentID         string  `json:"instrument_id"`
-	Enabled              bool    `json:"enabled"`
-	AssetClass           string  `json:"asset_class"`
-	Region               string  `json:"region"`
-	WeightWithinGroup    float64 `json:"weight_within_group"`
-	CurrentAmountMinor   int64   `json:"current_amount_minor"`
-	SimulationSnapshotID         string  `json:"simulation_snapshot_id"`
-	SimulationSnapshotCreatedAt  int64   `json:"simulation_snapshot_created_at,omitempty"`
-	SortOrder                    int     `json:"sort_order"`
-	CreatedAt            int64   `json:"created_at"`
-	UpdatedAt            int64   `json:"updated_at"`
+	ID                          string  `json:"id"`
+	PlanID                      string  `json:"plan_id"`
+	InstrumentID                string  `json:"instrument_id"`
+	Enabled                     bool    `json:"enabled"`
+	AssetClass                  string  `json:"asset_class"`
+	Region                      string  `json:"region"`
+	WeightWithinGroup           float64 `json:"weight_within_group"`
+	CurrentAmountMinor          int64   `json:"current_amount_minor"`
+	SimulationSnapshotID        string  `json:"simulation_snapshot_id"`
+	SimulationSnapshotCreatedAt int64   `json:"simulation_snapshot_created_at,omitempty"`
+	SortOrder                   int     `json:"sort_order"`
+	CreatedAt                   int64   `json:"created_at"`
+	UpdatedAt                   int64   `json:"updated_at"`
 	// Enriched fields for API responses.
-	InstrumentCode string `json:"instrument_code,omitempty"`
-	InstrumentName string `json:"instrument_name,omitempty"`
+	InstrumentCode             string   `json:"instrument_code,omitempty"`
+	InstrumentName             string   `json:"instrument_name,omitempty"`
+	SnapshotCompleteYearCount  int      `json:"snapshot_complete_year_count,omitempty"`
+	SnapshotMonthlyReturnCount int      `json:"snapshot_monthly_return_count,omitempty"`
+	SnapshotHistoryDepth       string   `json:"snapshot_history_depth,omitempty"`
+	SnapshotMetricsVersion     string   `json:"snapshot_metrics_version,omitempty"`
+	SnapshotWarnings           []string `json:"snapshot_warnings,omitempty"`
 }
 
 // PortfolioSnapshot records a point-in-time portfolio state.

@@ -81,7 +81,9 @@ func (c *ProviderClient) FetchClient() *ProviderClient {
 }
 
 func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*ResolveData, error) {
-	resolveCtx, cancel := context.WithTimeout(ctx, resolveTimeout())
+	start := time.Now()
+	deadline := resolveTimeout()
+	resolveCtx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 
 	body, err := json.Marshal(req)
@@ -98,6 +100,17 @@ func (c *ProviderClient) Resolve(ctx context.Context, req ResolveRequest) (*Reso
 
 	resp, err := c.resolveHTTP.Do(httpReq)
 	if err != nil {
+		elapsedMs := time.Since(start).Milliseconds()
+		remainingMs := max(int64(0), deadline.Milliseconds()-elapsedMs)
+		if errors.Is(err, context.DeadlineExceeded) || resolveCtx.Err() != nil {
+			slog.Warn("market provider resolve timeout",
+				"operation", "resolve",
+				"symbol", req.Code,
+				"elapsed_ms", elapsedMs,
+				"remaining_ms", remainingMs,
+				"layer", "go",
+			)
+		}
 		return nil, fmt.Errorf("market provider resolve request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -129,6 +142,15 @@ func (c *ProviderClient) fetchHTTPRaw(
 	ctx context.Context,
 	req FetchRequest,
 ) ([]byte, error) {
+	start := time.Now()
+	deadlineMs := fetchTimeout().Milliseconds()
+	if d, ok := ctx.Deadline(); ok {
+		if until := time.Until(d); until > 0 {
+			deadlineMs = until.Milliseconds()
+		} else {
+			deadlineMs = 0
+		}
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal fetch request: %w", err)
@@ -147,6 +169,18 @@ func (c *ProviderClient) fetchHTTPRaw(
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		elapsedMs := time.Since(start).Milliseconds()
+		remainingMs := max(int64(0), deadlineMs-elapsedMs)
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			slog.WarnContext(
+				ctx, "market provider fetch timeout",
+				"operation", "fetch",
+				"symbol", req.SourceCode,
+				"elapsed_ms", elapsedMs,
+				"remaining_ms", remainingMs,
+				"layer", "go",
+			)
+		}
 		slog.ErrorContext(
 			ctx, "market provider fetch request failed",
 			"source_code", req.SourceCode,
@@ -162,10 +196,15 @@ func (c *ProviderClient) fetchHTTPRaw(
 		return nil, fmt.Errorf("read fetch response: %w", err)
 	}
 	if resp.StatusCode == http.StatusGatewayTimeout {
-		slog.ErrorContext(
+		elapsedMs := time.Since(start).Milliseconds()
+		remainingMs := max(int64(0), deadlineMs-elapsedMs)
+		slog.WarnContext(
 			ctx, "market provider fetch timeout",
-			"source_code", req.SourceCode,
-			"instrument_type", req.InstrumentType,
+			"operation", "fetch",
+			"symbol", req.SourceCode,
+			"elapsed_ms", elapsedMs,
+			"remaining_ms", remainingMs,
+			"layer", "go",
 		)
 		return nil, fmt.Errorf("market provider timeout: %w", errProviderTimeout)
 	}

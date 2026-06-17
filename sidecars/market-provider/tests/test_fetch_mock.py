@@ -24,6 +24,7 @@ def test_fetch_hk_stock_mocked() -> None:
                 "market": "HK",
                 "instrument_type": "hk_stock",
                 "source_code": "00700",
+                "resolved_name": "腾讯控股",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -48,6 +49,7 @@ def test_fetch_hk_stock_normalizes_code_and_name() -> None:
                 "market": "HK",
                 "instrument_type": "hk_stock",
                 "source_code": "700",
+                "resolved_name": "腾讯控股",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -75,6 +77,7 @@ def test_fetch_hk_stock_none_adjust_maps_to_empty_string() -> None:
                 "market": "HK",
                 "instrument_type": "hk_stock",
                 "source_code": "700",
+                "resolved_name": "腾讯控股",
                 "end_date": "2026-06-09",
                 "adjust_policy": "none",
             },
@@ -94,6 +97,7 @@ def test_fetch_hk_etf_mocked() -> None:
                 "market": "HK",
                 "instrument_type": "hk_etf",
                 "source_code": "02800",
+                "resolved_name": "盈富基金",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -136,15 +140,13 @@ def test_fetch_cn_exchange_fund_mocked() -> None:
 
 def test_fetch_cn_exchange_fund_resolves_display_name() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [1.0, 1.1]})
-    spot = pd.DataFrame({"代码": ["510300"], "名称": ["沪深300ETF华泰柏瑞"]})
-    with patch("akshare.fund_etf_hist_em", return_value=df), patch(
-        "akshare.fund_etf_spot_em", return_value=spot
-    ):
+    with patch("akshare.fund_etf_hist_em", return_value=df):
         client = _client()
         payload = {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
             "source_code": "510300",
+            "resolved_name": "沪深300ETF华泰柏瑞",
             "start_date": None,
             "end_date": "2026-06-09",
             "adjust_policy": "qfq",

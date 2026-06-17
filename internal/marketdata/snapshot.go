@@ -51,6 +51,22 @@ func (s *SnapshotService) BuildSnapshotForHolding(
 	}
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, valuationDate, pointType, sourceName)
+	if err := ValidateSimulationSnapshot(metricsToRepositorySnapshot("", instrumentID, &planID, valuationDate, inst, metrics)); err != nil {
+		if !metrics.SimulationEligible {
+			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
+		}
+		return repository.SimulationSnapshot{}, &SnapshotError{
+			Code:    "instrument_insufficient_history",
+			Message: err.Error(),
+			Details: map[string]any{
+				"complete_year_count":  metrics.CompleteYearCount,
+				"monthly_return_count": metrics.MonthlyReturnCount,
+				"quality_status":       metrics.QualityStatus,
+				"metrics_version":      metrics.MetricsVersion,
+				"volatility_method":    metrics.VolatilityMethod,
+			},
+		}
+	}
 	if !metrics.SimulationEligible {
 		return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
 	}
@@ -72,7 +88,7 @@ func metricsToRepositorySnapshot(
 		InclusionDate: valuationDate, AsOfDate: valuationDate,
 		WindowStart: metrics.WindowStart, WindowEnd: metrics.WindowEnd,
 		CompleteYearStart: metrics.CompleteYearStart, CompleteYearEnd: metrics.CompleteYearEnd,
-		CompleteYearCount: metrics.CompleteYearCount,
+		CompleteYearCount:     metrics.CompleteYearCount,
 		DailyObservationCount: metrics.DailyObservationCount,
 		MonthlyReturnCount:    metrics.MonthlyReturnCount,
 		VolatilityMethod:      metrics.VolatilityMethod,
@@ -82,7 +98,7 @@ func metricsToRepositorySnapshot(
 		ModeledAnnualReturn:   MetricFloat(metrics.ModeledAnnualReturn),
 		AnnualVolatility:      MetricFloat(metrics.AnnualVolatility),
 		MaxDrawdown:           MetricFloat(metrics.MaxDrawdown),
-		ExpenseRatio: inst.ExpenseRatio, ExpenseRatioStatus: inst.ExpenseRatioStatus,
+		ExpenseRatio:          inst.ExpenseRatio, ExpenseRatioStatus: inst.ExpenseRatioStatus,
 		FeeTreatment: inst.FeeTreatment, SourceMode: "akshare_historical",
 		QualityStatus: metrics.QualityStatus,
 		WarningsJSON:  repository.WarningsToJSON(metrics.Warnings),
@@ -160,12 +176,28 @@ func (s *SnapshotService) SyncForHolding(
 	}
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, syncDate, pointType, sourceName)
+	planRef := planID
+	if err := ValidateSimulationSnapshot(metricsToRepositorySnapshot("", instrumentID, &planRef, syncDate, inst, metrics)); err != nil {
+		if !metrics.SimulationEligible {
+			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
+		}
+		return repository.SimulationSnapshot{}, &SnapshotError{
+			Code:    "instrument_insufficient_history",
+			Message: err.Error(),
+			Details: map[string]any{
+				"complete_year_count":  metrics.CompleteYearCount,
+				"monthly_return_count": metrics.MonthlyReturnCount,
+				"quality_status":       metrics.QualityStatus,
+				"metrics_version":      metrics.MetricsVersion,
+				"volatility_method":    metrics.VolatilityMethod,
+			},
+		}
+	}
 	if !metrics.SimulationEligible {
 		return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
 	}
 
 	snapID := "sim_snap_" + uuid.New().String()
-	planRef := planID
 	snap := metricsToRepositorySnapshot(snapID, instrumentID, &planRef, syncDate, inst, metrics)
 	_ = holdingID
 	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {

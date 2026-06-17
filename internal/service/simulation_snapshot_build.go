@@ -83,14 +83,20 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		return simulation.SnapshotAsset{}, newErr("snapshot_not_found", "simulation snapshot missing for holding",
 			map[string]any{"holding_id": line.HoldingID})
 	}
-	if snap.SourceMode != "system_cash" && snap.MonthlyReturnCount < 12 {
-		return simulation.SnapshotAsset{}, newErr("instrument_insufficient_history",
-			"holding snapshot does not meet simulation eligibility",
-			map[string]any{
-				"holding_id": line.HoldingID,
-				"complete_year_count": snap.CompleteYearCount,
-				"monthly_return_count": snap.MonthlyReturnCount,
-			})
+	if snap.SourceMode != "system_cash" {
+		if err := marketdata.ValidateSimulationSnapshot(snap); err != nil {
+			return simulation.SnapshotAsset{}, newErr("instrument_insufficient_history",
+				"holding snapshot does not meet simulation eligibility",
+				map[string]any{
+					"holding_id":           line.HoldingID,
+					"complete_year_count":  snap.CompleteYearCount,
+					"monthly_return_count": snap.MonthlyReturnCount,
+					"quality_status":       snap.QualityStatus,
+					"metrics_version":      snap.MetricsVersion,
+					"volatility_method":    snap.VolatilityMethod,
+					"validation_error":     err.Error(),
+				})
+		}
 	}
 	years := make([]simulation.SnapshotYear, len(snap.Years))
 	for i, y := range snap.Years {
@@ -113,7 +119,7 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		HoldingID: line.HoldingID, InstrumentID: line.InstrumentID,
 		InstrumentName: instrumentName, InstrumentCode: instrumentCode,
 		SnapshotID: line.SimulationSnapshotID,
-		Currency: currency, AssetClass: line.AssetClass, IsCash: isCash,
+		Currency:   currency, AssetClass: line.AssetClass, IsCash: isCash,
 		InitialMinor: line.CurrentAmountMinor, TargetWeight: line.PortfolioTargetWeight,
 		ModeledAnnualReturn: snap.ModeledAnnualReturn, AnnualVolatility: snap.AnnualVolatility,
 		MaxDrawdown: snap.MaxDrawdown, FeeTreatment: snap.FeeTreatment, ExpenseRatio: snap.ExpenseRatio,
@@ -152,7 +158,7 @@ func (s *SimulationService) enrichSnapshotAssetFX(
 				"FX snapshot does not meet simulation eligibility",
 				map[string]any{
 					"holding_id": line.HoldingID, "currency": currency,
-					"complete_year_count": fxMetrics.CompleteYearCount,
+					"complete_year_count":  fxMetrics.CompleteYearCount,
 					"monthly_return_count": fxMetrics.MonthlyReturnCount,
 				},
 			)

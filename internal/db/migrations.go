@@ -98,6 +98,10 @@ func Migrate(ctx context.Context, pool *sql.DB, dbPath string, logger *slog.Logg
 		logger.Info("applied migration", "version", m.version, "filename", m.filename)
 	}
 
+	if err := repairSnapshotSchema(ctx, pool); err != nil {
+		return fmt.Errorf("db: repair snapshot schema: %w", err)
+	}
+
 	return nil
 }
 

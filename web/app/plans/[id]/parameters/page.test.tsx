@@ -71,36 +71,9 @@ vi.mock("@/lib/api/plans", () => ({
   updateParameters: (...args: unknown[]) => updateParameters(...args),
 }));
 
-vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: () =>
-    Promise.resolve({
-      instruments: [
-        {
-          id: "ins_1",
-          code: "T1",
-          name: "测试权益基金",
-          market: "CN",
-          instrument_type: "fund",
-          asset_class: "equity",
-          region: "domestic",
-          currency: "CNY",
-          quality_status: "available",
-          simulation_eligible: true,
-          history_depth: "five_plus_years",
-          complete_year_count: 8,
-          monthly_return_count: 96,
-          metrics_version: "monthly_log_return_v1",
-          status: "active",
-          is_system: false,
-        },
-      ],
-    }),
-}));
-
 const holdingsSumMinor = vi.hoisted(() => ({ value: 1_000_000_00 }));
-
-vi.mock("@/lib/api/holdings", () => ({
-  getHoldings: () =>
+const getHoldingsMock = vi.hoisted(() =>
+  vi.fn(() =>
     Promise.resolve({
       holdings: [
         {
@@ -113,11 +86,23 @@ vi.mock("@/lib/api/holdings", () => ({
           weight_within_group: 1,
           current_amount_minor: holdingsSumMinor.value,
           simulation_snapshot_id: "snap_1",
-          simulation_snapshot_created_at: "2026-06-09T08:00:00.000Z",
+          simulation_snapshot_created_at: Date.parse("2026-06-09T08:00:00.000Z"),
+          snapshot_complete_year_count: 8,
+          snapshot_monthly_return_count: 96,
+          snapshot_history_depth: "five_plus_years",
+          snapshot_metrics_version: "monthly_log_return_v1",
+          snapshot_warnings: ["仅有 1 个完整自然年度，收益与风险估计的不确定性较高"],
+          instrument_code: "T1",
+          instrument_name: "测试权益基金",
           sort_order: 1,
         },
       ],
     }),
+  ),
+);
+
+vi.mock("@/lib/api/holdings", () => ({
+  getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
 }));
 
 vi.mock("@/lib/api/allocation", () => ({
@@ -146,6 +131,33 @@ import { ParametersContent as ParametersPage } from "./page";
 describe("ParametersPage strategy enums", () => {
   beforeEach(() => {
     holdingsSumMinor.value = 1_000_000_00;
+    getHoldingsMock.mockClear();
+    getHoldingsMock.mockImplementation(() =>
+      Promise.resolve({
+        holdings: [
+          {
+            id: "h1",
+            plan_id: "plan_1",
+            instrument_id: "ins_1",
+            enabled: true,
+            asset_class: "equity",
+            region: "domestic",
+            weight_within_group: 1,
+            current_amount_minor: holdingsSumMinor.value,
+            simulation_snapshot_id: "snap_1",
+            simulation_snapshot_created_at: Date.parse("2026-06-09T08:00:00.000Z"),
+            snapshot_complete_year_count: 8,
+            snapshot_monthly_return_count: 96,
+            snapshot_history_depth: "five_plus_years",
+            snapshot_metrics_version: "monthly_log_return_v1",
+            snapshot_warnings: ["仅有 1 个完整自然年度，收益与风险估计的不确定性较高"],
+            instrument_code: "T1",
+            instrument_name: "测试权益基金",
+            sort_order: 1,
+          },
+        ],
+      }),
+    );
     updateParameters.mockReset();
     updateParameters.mockResolvedValue({});
   });
@@ -164,6 +176,51 @@ describe("ParametersPage strategy enums", () => {
     expect(await screen.findByText("8")).toBeInTheDocument();
     expect(await screen.findByText("96")).toBeInTheDocument();
     expect(await screen.findByText("monthly_log_return_v1")).toBeInTheDocument();
+    expect(
+      await screen.findByText("仅有 1 个完整自然年度，收益与风险估计的不确定性较高"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps frozen snapshot fields after instrument library refresh", async () => {
+    getHoldingsMock.mockImplementation(() =>
+      Promise.resolve({
+        holdings: [
+          {
+            id: "h1",
+            plan_id: "plan_1",
+            instrument_id: "ins_1",
+            enabled: true,
+            asset_class: "equity",
+            region: "domestic",
+            weight_within_group: 1,
+            current_amount_minor: holdingsSumMinor.value,
+            simulation_snapshot_id: "snap_frozen",
+            simulation_snapshot_created_at: Date.parse("2026-06-09T08:00:00.000Z"),
+            snapshot_complete_year_count: 8,
+            snapshot_monthly_return_count: 96,
+            snapshot_history_depth: "five_plus_years",
+            snapshot_metrics_version: "monthly_log_return_v1",
+            snapshot_warnings: [],
+            instrument_code: "T1",
+            instrument_name: "测试权益基金",
+            sort_order: 1,
+          },
+        ],
+      }),
+    );
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("持仓模拟数据");
+    expect(await screen.findByText("8")).toBeInTheDocument();
+    expect(await screen.findByText("历史样本充足")).toBeInTheDocument();
+    expect(await screen.findByText("monthly_log_return_v1")).toBeInTheDocument();
+    expect(getHoldingsMock).toHaveBeenCalled();
   });
 
   it("sends fixed_portfolio and random_ar1 on save", async () => {

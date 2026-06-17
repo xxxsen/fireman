@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"math"
+	"sort"
 	"time"
 )
 
@@ -62,6 +63,7 @@ func ComputeTrailingReturns(points []DataPoint, asOfDate, pointType, sourceName 
 		return out
 	}
 	endDate := endPoint.TradeDate
+	out.AsOfDate = endDate
 	for _, key := range trailingPeriodOrder {
 		out.Periods[key] = computeTrailingPeriod(sorted, endIdx, endDate, key)
 	}
@@ -163,10 +165,6 @@ func lastDayOfMonth(year int, month time.Month) int {
 	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
 }
 
-func clipMonthEnd(t time.Time) time.Time {
-	return t
-}
-
 func parseDate(s string) time.Time {
 	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
@@ -191,24 +189,15 @@ func isValidPrice(v float64) bool {
 }
 
 func sortPointsByDate(points []DataPoint) {
-	for i := 0; i < len(points); i++ {
-		for j := i + 1; j < len(points); j++ {
-			if points[j].TradeDate < points[i].TradeDate {
-				points[i], points[j] = points[j], points[i]
-			}
-		}
-	}
+	sort.Slice(points, func(i, j int) bool {
+		return points[i].TradeDate < points[j].TradeDate
+	})
 }
 
 func lastPointOnOrBefore(points []DataPoint, date string) (int, DataPoint, bool) {
-	idx := -1
-	for i := range points {
-		if points[i].TradeDate <= date {
-			idx = i
-		} else {
-			break
-		}
-	}
+	idx := sort.Search(len(points), func(i int) bool {
+		return points[i].TradeDate > date
+	}) - 1
 	if idx < 0 {
 		return -1, DataPoint{}, false
 	}

@@ -89,34 +89,34 @@ func (r *SnapshotRepo) replaceSnapshotYears(ctx context.Context, tx *sql.Tx, sna
 
 // SimulationSnapshot is a row in instrument_simulation_snapshots.
 type SimulationSnapshot struct {
-	ID                  string         `json:"id"`
-	InstrumentID        string         `json:"instrument_id"`
-	PlanID              *string        `json:"plan_id,omitempty"`
-	InclusionDate       string         `json:"inclusion_date"`
-	AsOfDate            string         `json:"as_of_date"`
-	WindowStart         *string        `json:"window_start,omitempty"`
-	WindowEnd           *string        `json:"window_end,omitempty"`
-	CompleteYearStart   *int           `json:"complete_year_start,omitempty"`
-	CompleteYearEnd     *int           `json:"complete_year_end,omitempty"`
-	CompleteYearCount       int            `json:"complete_year_count"`
-	DailyObservationCount   int            `json:"daily_observation_count"`
-	MonthlyReturnCount      int            `json:"monthly_return_count"`
-	VolatilityMethod        string         `json:"volatility_method"`
-	MetricsVersion          string         `json:"metrics_version"`
-	HistoryDepth            string         `json:"history_depth"`
-	HistoricalCAGR      float64        `json:"historical_cagr"`
-	ModeledAnnualReturn float64        `json:"modeled_annual_return"`
-	AnnualVolatility    float64        `json:"annual_volatility"`
-	MaxDrawdown         float64        `json:"max_drawdown"`
-	ExpenseRatio        *float64       `json:"expense_ratio,omitempty"`
-	ExpenseRatioStatus  string         `json:"expense_ratio_status"`
-	FeeTreatment        string         `json:"fee_treatment"`
-	SourceMode          string         `json:"source_mode"`
-	QualityStatus       string         `json:"quality_status"`
-	WarningsJSON        string         `json:"warnings_json"`
-	SourceHash          string         `json:"source_hash"`
-	CreatedAt           int64          `json:"created_at"`
-	Years               []SnapshotYear `json:"years,omitempty"`
+	ID                    string         `json:"id"`
+	InstrumentID          string         `json:"instrument_id"`
+	PlanID                *string        `json:"plan_id,omitempty"`
+	InclusionDate         string         `json:"inclusion_date"`
+	AsOfDate              string         `json:"as_of_date"`
+	WindowStart           *string        `json:"window_start,omitempty"`
+	WindowEnd             *string        `json:"window_end,omitempty"`
+	CompleteYearStart     *int           `json:"complete_year_start,omitempty"`
+	CompleteYearEnd       *int           `json:"complete_year_end,omitempty"`
+	CompleteYearCount     int            `json:"complete_year_count"`
+	DailyObservationCount int            `json:"daily_observation_count"`
+	MonthlyReturnCount    int            `json:"monthly_return_count"`
+	VolatilityMethod      string         `json:"volatility_method"`
+	MetricsVersion        string         `json:"metrics_version"`
+	HistoryDepth          string         `json:"history_depth"`
+	HistoricalCAGR        float64        `json:"historical_cagr"`
+	ModeledAnnualReturn   float64        `json:"modeled_annual_return"`
+	AnnualVolatility      float64        `json:"annual_volatility"`
+	MaxDrawdown           float64        `json:"max_drawdown"`
+	ExpenseRatio          *float64       `json:"expense_ratio,omitempty"`
+	ExpenseRatioStatus    string         `json:"expense_ratio_status"`
+	FeeTreatment          string         `json:"fee_treatment"`
+	SourceMode            string         `json:"source_mode"`
+	QualityStatus         string         `json:"quality_status"`
+	WarningsJSON          string         `json:"warnings_json"`
+	SourceHash            string         `json:"source_hash"`
+	CreatedAt             int64          `json:"created_at"`
+	Years                 []SnapshotYear `json:"years,omitempty"`
 }
 
 // SnapshotYear is one row in instrument_simulation_snapshot_years.
@@ -252,7 +252,7 @@ func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string
 			&snap.ID, &snap.InstrumentID, &planID, &snap.InclusionDate, &snap.AsOfDate,
 			&windowStart, &windowEnd, &yearStart, &yearEnd,
 			&snap.CompleteYearCount, &snap.DailyObservationCount, &snap.MonthlyReturnCount,
-		&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
+			&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
 			&snap.HistoricalCAGR, &snap.ModeledAnnualReturn, &snap.AnnualVolatility, &snap.MaxDrawdown,
 			&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
 			&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,

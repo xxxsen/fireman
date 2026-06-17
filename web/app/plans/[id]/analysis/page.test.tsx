@@ -38,8 +38,8 @@ vi.mock("@/lib/api/plans", () => ({
     }),
 }));
 
-vi.mock("@/lib/api/holdings", () => ({
-  getHoldings: () =>
+const getHoldingsMock = vi.hoisted(() =>
+  vi.fn(() =>
     Promise.resolve({
       holdings: [
         {
@@ -52,38 +52,21 @@ vi.mock("@/lib/api/holdings", () => ({
           weight_within_group: 1,
           current_amount_minor: 1_000_000_00,
           simulation_snapshot_id: "snap_1",
+          snapshot_history_depth: "one_year",
+          snapshot_warnings: [
+            "仅有 1 个完整自然年度，收益与风险估计的不确定性较高",
+          ],
+          instrument_code: "SHORT01",
+          instrument_name: "短历史基金",
           sort_order: 1,
         },
       ],
     }),
-}));
+  ),
+);
 
-vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: () =>
-    Promise.resolve({
-      instruments: [
-        {
-          id: "inst_short",
-          code: "SHORT01",
-          name: "短历史基金",
-          market: "CN",
-          instrument_type: "cn_exchange_fund",
-          asset_class: "equity",
-          region: "domestic",
-          currency: "CNY",
-          provider: "akshare",
-          is_system: false,
-          expense_ratio_status: "unknown",
-          fee_treatment: "deduct",
-          status: "active",
-          simulation_eligible: true,
-          history_depth: "one_year",
-          data_stale: false,
-          created_at: 0,
-          updated_at: 0,
-        },
-      ],
-    }),
+vi.mock("@/lib/api/holdings", () => ({
+  getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
 }));
 
 vi.mock("@/lib/api/simulations", () => ({
@@ -184,6 +167,7 @@ function renderAnalysis() {
 
 describe("AnalysisPage zero success", () => {
   beforeEach(() => {
+    getHoldingsMock.mockClear();
     useJobStatusMock.mockReset();
     createSimulation.mockReset();
     createStressTest.mockReset();
@@ -319,7 +303,41 @@ describe("AnalysisPage zero success", () => {
     expect(
       await screen.findByText(/以下持仓历史样本有限/),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/短历史基金/).length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(/仅有 1 个完整自然年度，收益与风险估计的不确定性较高/),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps frozen snapshot warnings from holdings after library refresh", async () => {
+    getHoldingsMock.mockImplementation(() =>
+      Promise.resolve({
+        holdings: [
+          {
+            id: "hold_1",
+            plan_id: "plan_1",
+            instrument_id: "inst_short",
+            enabled: true,
+            asset_class: "equity",
+            region: "domestic",
+            weight_within_group: 1,
+            current_amount_minor: 1_000_000_00,
+            simulation_snapshot_id: "snap_frozen",
+            snapshot_history_depth: "five_plus_years",
+            snapshot_complete_year_count: 8,
+            snapshot_warnings: ["冻结快照提示：完整年度样本较少，估计不稳定"],
+            instrument_code: "SHORT01",
+            instrument_name: "短历史基金",
+            sort_order: 1,
+          },
+        ],
+      }),
+    );
+
+    renderAnalysis();
+    expect(
+      await screen.findByText(/冻结快照提示：完整年度样本较少，估计不稳定/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/历史样本有限：仅 1 年/)).not.toBeInTheDocument();
   });
 
   it("clears active job after canceled terminal state without cross-panel retry", async () => {

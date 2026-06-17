@@ -13,7 +13,7 @@ import (
 type envelope struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
-	Data      any    `json:"data,omitempty"`
+	Data      any    `json:"data"`
 	RequestID string `json:"request_id"`
 }
 

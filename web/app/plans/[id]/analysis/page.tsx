@@ -13,7 +13,7 @@ import {
   TornadoChart,
 } from "@/components/charts/SensitivityCharts";
 import { useJobStatus } from "@/hooks/useJobStatus";
-import { getParameters, getPlan } from "@/lib/api/plans";
+import { getParameters } from "@/lib/api/plans";
 import {
   createSensitivityTest,
   createStressTest,
@@ -23,7 +23,6 @@ import {
   listStressTests,
 } from "@/lib/api/analysis";
 import { getHoldings } from "@/lib/api/holdings";
-import { listInstruments } from "@/lib/api/instruments";
 import {
   cancelJob,
   createSimulation,
@@ -312,21 +311,9 @@ export function AnalysisContent() {
     queryKey: ["parameters", planId],
     queryFn: () => getParameters(planId),
   });
-  const planQ = useQuery({
-    queryKey: ["plan", planId],
-    queryFn: () => getPlan(planId),
-  });
   const holdingsQ = useQuery({
     queryKey: ["holdings", planId],
     queryFn: () => getHoldings(planId),
-  });
-  const instrumentsQ = useQuery({
-    queryKey: ["instruments", planQ.data?.valuation_date],
-    queryFn: () =>
-      listInstruments(
-        planQ.data?.valuation_date ? { valuationDate: planQ.data.valuation_date } : undefined,
-      ),
-    enabled: !!planQ.data,
   });
 
   const serverRuns = paramsQ.data?.parameters.simulation_runs;
@@ -458,15 +445,22 @@ export function AnalysisContent() {
   const simPanelError =
     jobErrors.sim ?? (activeJobKind === "sim" ? jobState.error : null);
 
-  const shortHistoryLabels = (() => {
-    const instById = new Map(
-      (instrumentsQ.data?.instruments ?? []).map((inst) => [inst.id, inst]),
-    );
+  const snapshotWarningLabels = (() => {
     const labels: string[] = [];
     for (const h of holdingsQ.data?.holdings ?? []) {
-      const inst = instById.get(h.instrument_id);
-      if (inst?.simulation_eligible && inst.history_depth === "one_year") {
-        labels.push(`${inst.name}（${inst.code}）· ${historyDepthLabel(inst.history_depth)}`);
+      if (!h.enabled) {
+        continue;
+      }
+      const name = h.instrument_name ?? h.instrument_id;
+      const code = h.instrument_code ?? "—";
+      for (const w of h.snapshot_warnings ?? []) {
+        labels.push(`${name}（${code}）· ${w}`);
+      }
+      if (
+        h.snapshot_history_depth === "one_year" &&
+        (h.snapshot_warnings ?? []).length === 0
+      ) {
+        labels.push(`${name}（${code}）· ${historyDepthLabel(h.snapshot_history_depth)}`);
       }
     }
     return labels;
@@ -483,9 +477,9 @@ export function AnalysisContent() {
 
       <section className="rounded-lg border p-4">
         <h2 className="font-medium">Monte Carlo 模拟</h2>
-        {shortHistoryLabels.length > 0 && (
+        {snapshotWarningLabels.length > 0 && (
           <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
-            以下持仓历史样本有限，模拟结果长期不确定性较高：{shortHistoryLabels.join("；")}
+            以下持仓历史样本有限，模拟结果长期不确定性较高：{snapshotWarningLabels.join("；")}
           </p>
         )}
         <div className="mt-3 flex flex-wrap items-end gap-4">

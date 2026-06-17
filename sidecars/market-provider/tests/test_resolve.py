@@ -73,7 +73,7 @@ def test_resolve_cn_exchange_fund_unambiguous() -> None:
 
 
 def test_resolve_510300_when_etf_spot_times_out() -> None:
-    """Regression: resolve must not depend solely on slow fund_etf_spot_em."""
+    """Regression: explicit exchange prefix still resolves when spot tables fail."""
     reset_name_caches()
     reset_cn_code_caches()
     empty = pd.DataFrame({"代码": [], "名称": []})
@@ -85,7 +85,7 @@ def test_resolve_510300_when_etf_spot_times_out() -> None:
             json={
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "code": "510300",
+                "code": "sh510300",
             },
         )
     assert response.status_code == 200

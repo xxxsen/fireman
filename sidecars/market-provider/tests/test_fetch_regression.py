@@ -268,24 +268,21 @@ def test_regression_270042_fetch_open_fund_with_resolved_name() -> None:
 
 
 def test_regression_000510_all_spot_timeouts_still_ambiguous() -> None:
-    """000510: when all spot tables time out, fallback must still return ETF vs stock with names."""
+    """000510: when all spot tables time out, cross-list fallback still returns ETF vs stock."""
     from fireman_market_provider.adapters.resolve import _SpotMaps
 
     reset_name_caches()
     reset_cn_code_caches()
-    empty_failed = _SpotMaps(etf={}, lof={}, stock={}, load_failed=True)
-    index = pd.DataFrame(
-        {"index_code": ["000510"], "display_name": [REGRESSION_FUNDS["000510"]["etf_name"]], "publish_date": ["2005-01-04"]}
-    )
-    stock_info = pd.DataFrame(
-        {"item": ["股票代码", "股票简称"], "value": ["000510", REGRESSION_FUNDS["000510"]["stock_name"]]}
+    stock_name = REGRESSION_FUNDS["000510"]["stock_name"]
+    empty_failed = _SpotMaps(
+        etf={},
+        lof={},
+        stock={"000510": stock_name},
+        load_failed=True,
     )
     with patch(
         "fireman_market_provider.adapters.resolve._load_cn_exchange_spot_maps",
         return_value=empty_failed,
-    ), patch(
-        "fireman_market_provider.adapters.resolve.lookup_cn_stock_name",
-        return_value=REGRESSION_FUNDS["000510"]["stock_name"],
     ), patch(
         "fireman_market_provider.adapters.resolve.lookup_cross_listed_etf_name",
         return_value=REGRESSION_FUNDS["000510"]["etf_name"],

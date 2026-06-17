@@ -50,7 +50,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	annualRepo := repository.NewAnnualReturnsRepo(db)
 	snapRepo := repository.NewSnapshotRepo(db)
 	hash := service.NewConfigHashService(plans, params, alloc, holdings)
-	provider := marketdata.NewProviderClient(marketProviderURL)
+	provider := marketdata.NewProviderClient(marketProviderURL).FetchClient()
 	snapSvc := marketdata.NewSnapshotService(snapRepo, instRepo, marketRepo)
 	jobRepo := repository.NewJobRepo(db)
 	simRepo := repository.NewSimulationRepo(db)

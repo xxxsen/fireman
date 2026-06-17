@@ -20,7 +20,37 @@ func validateWizardRequest(req PlanWizardRequest) error {
 	if len(req.Holdings) == 0 {
 		return newErr("validation_failed", "at least one holding is required", nil)
 	}
-	return validateRegionTargets(req.RegionTargets)
+	if err := validateRegionTargets(normalizeWizardRegionTargets(req.RegionTargets)); err != nil {
+		return newErr("validation_failed", err.Error(), nil)
+	}
+	return nil
+}
+
+// normalizeWizardRegionTargets fills missing asset_class rows with domestic=100% defaults.
+func normalizeWizardRegionTargets(targets []repository.RegionTarget) []repository.RegionTarget {
+	if len(targets) == 0 {
+		return defaultRegionTargets()
+	}
+	present := map[string]struct{}{}
+	for _, t := range targets {
+		present[t.AssetClass] = struct{}{}
+	}
+	out := append([]repository.RegionTarget(nil), targets...)
+	for _, ac := range domain.AssetClasses {
+		if _, ok := present[ac]; ok {
+			continue
+		}
+		for _, region := range domain.Regions {
+			w := 0.0
+			if region == domain.RegionDomestic {
+				w = 1.0
+			}
+			out = append(out, repository.RegionTarget{
+				AssetClass: ac, Region: region, WeightWithinClass: w,
+			})
+		}
+	}
+	return out
 }
 
 func wizardHoldingsGap(params repository.PlanParameters, req PlanWizardRequest) (int64, error) {

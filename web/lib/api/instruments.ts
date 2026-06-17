@@ -1,5 +1,5 @@
 import type { Instrument, InstrumentImportRequest } from "@/types/api";
-import { apiDelete, apiGet, apiPost } from "./client";
+import { apiDelete, apiGet, apiPost, INSTRUMENT_REFRESH_TIMEOUT_MS, MARKET_OPERATION_TIMEOUT_MS } from "./client";
 
 export interface ResolveCandidate {
   code: string;
@@ -119,6 +119,10 @@ export function getInstrumentDetail(id: string) {
       plan_id?: string;
       inclusion_date: string;
       complete_year_count: number;
+      monthly_return_count: number;
+      history_depth: string;
+      metrics_version: string;
+      warnings: string[];
       created_at: number;
     }[];
     referencing_plans: {
@@ -144,7 +148,9 @@ export function importInstrument(body: InstrumentImportRequest): Promise<Instrum
 }
 
 export function resolveImport(body: InstrumentImportRequest): Promise<ResolveResult> {
-  return apiPost("/api/v1/instruments/resolve", body);
+  return apiPost("/api/v1/instruments/resolve", body, undefined, {
+    timeoutMs: MARKET_OPERATION_TIMEOUT_MS,
+  });
 }
 
 export function importAsync(body: {
@@ -152,7 +158,9 @@ export function importAsync(body: {
   asset_class: string;
   region: string;
 }): Promise<ImportAsyncResult> {
-  return apiPost("/api/v1/instruments/import-async", body);
+  return apiPost("/api/v1/instruments/import-async", body, undefined, {
+    timeoutMs: MARKET_OPERATION_TIMEOUT_MS,
+  });
 }
 
 export function getFetchStatus(id: string): Promise<FetchStatusResult> {
@@ -164,9 +172,14 @@ export function retryFetch(id: string): Promise<ImportAsyncResult> {
 }
 
 export function refreshInstrument(id: string, options?: { force?: boolean }): Promise<Instrument> {
-  return apiPost(`/api/v1/instruments/${id}/refresh`, {
-    force: options?.force === true,
-  });
+  return apiPost(
+    `/api/v1/instruments/${id}/refresh`,
+    {
+      force: options?.force === true,
+    },
+    undefined,
+    { timeoutMs: INSTRUMENT_REFRESH_TIMEOUT_MS },
+  );
 }
 
 export function deleteInstrument(id: string): Promise<{ deleted: boolean }> {

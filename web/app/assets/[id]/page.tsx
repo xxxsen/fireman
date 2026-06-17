@@ -400,7 +400,9 @@ export default function AssetDetailPage() {
                   disabled={refreshMut.isPending}
                   onClick={handleForceRefresh}
                 >
-                  {refreshMut.isPending && refreshMut.variables ? "强制刷新中…" : "强制刷新"}
+                  {refreshMut.isPending && refreshMut.variables
+                    ? "强制刷新中（可能需要数分钟）…"
+                    : "强制刷新"}
                 </button>
               )}
               {!inst.is_system && (
@@ -477,8 +479,21 @@ export default function AssetDetailPage() {
               <ul className="mt-2 space-y-1 text-sm">
                 {historicalSnapshots.map((s) => (
                   <li key={s.id} className="rounded border px-3 py-2">
-                    {s.inclusion_date} · {s.complete_year_count} 完整年 ·{" "}
-                    {new Date(s.created_at).toLocaleString("zh-CN")}
+                    <div>
+                      {s.inclusion_date} · {historyDepthLabel(s.history_depth)} ·{" "}
+                      {s.complete_year_count} 完整年 · {s.monthly_return_count} 月收益观测
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      指标版本 {s.metrics_version} · 创建于{" "}
+                      {new Date(s.created_at).toLocaleString("zh-CN")}
+                    </div>
+                    {(s.warnings ?? []).length > 0 && (
+                      <ul className="mt-1 list-disc pl-5 text-xs text-amber-800">
+                        {s.warnings.map((w) => (
+                          <li key={w}>{w}</li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 ))}
               </ul>
