@@ -180,6 +180,24 @@ def lof_market_id(bare: str, *, deadline: float | None = None) -> int | None:
     return int(market_id)
 
 
+def lof_market_id_with_status(bare: str, *, deadline: float | None = None) -> tuple[int | None, bool]:
+    """Resolve LOF market id alongside authoritative-map availability.
+
+    Returns ``(market_id, map_available)``. ``map_available`` is ``False`` only when the
+    authoritative ``fund_lof_code_id_map_em`` lookup timed out or failed; callers must
+    surface a retryable timeout in that case instead of guessing the exchange. When the
+    map is available but the bare code is absent, returns ``(None, True)``.
+    """
+    try:
+        mapping = _load_lof_market_id_cache(deadline=deadline)
+    except Exception:  # noqa: BLE001 - timeout or upstream failure means unavailable
+        return None, False
+    market_id = mapping.get(bare)
+    if market_id is None:
+        return None, True
+    return int(market_id), True
+
+
 def build_from_market_id(bare: str, market_id: int) -> CNExchangeCode:
     prefix = _market_id_to_prefix(market_id)
     canonical = f"{prefix}{bare}"

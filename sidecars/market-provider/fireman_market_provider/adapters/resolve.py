@@ -13,6 +13,7 @@ from .cn_code import (
     CNExchangeCode,
     build_from_market_id,
     heuristic_cn_stock_from_bare,
+    lof_market_id_with_status,
     parse_cn_etf_code,
     parse_cn_lof_code,
     parse_cn_stock_code,
@@ -304,7 +305,7 @@ def _fallback_cn_exchange_fund_candidates(
             out.append(_candidate_from_cn(parsed_etf, etf_map[bare], kind))
 
     if bare in lof_map:
-        parsed_lof = _parse_authoritative_lof(code, bare, deadline, in_lof_map=True)
+        parsed_lof, _ = _parse_authoritative_lof(code, bare, deadline)
         if parsed_lof is not None:
             out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
 
@@ -315,7 +316,7 @@ def _fallback_cn_exchange_fund_candidates(
             if parsed_etf is not None:
                 out.append(_candidate_from_cn(parsed_etf, bare, "index_etf"))
         if time.monotonic() < deadline - 2:
-            parsed_lof = _parse_authoritative_lof(code, bare, deadline)
+            parsed_lof, _ = _parse_authoritative_lof(code, bare, deadline)
             if parsed_lof is not None:
                 name = lof_map.get(bare) or bare
                 out.append(_candidate_from_cn(parsed_lof, name, "lof"))
@@ -323,23 +324,26 @@ def _fallback_cn_exchange_fund_candidates(
     return _dedupe_candidates(out)
 
 
-def _parse_authoritative_lof(
-    code: str,
-    bare: str,
-    deadline: float,
-    *,
-    in_lof_map: bool = False,
-) -> CNExchangeCode | None:
+def _parse_authoritative_lof(code: str, bare: str, deadline: float) -> tuple[CNExchangeCode | None, bool]:
+    """LOF exchange must come from the authoritative market-id map; never fabricate.
+
+    Returns ``(candidate, map_available)``:
+
+    - ``map_available`` is ``False`` only when the authoritative
+      ``fund_lof_code_id_map_em`` lookup timed out or failed. Callers must then surface
+      ``market_provider_timeout`` instead of guessing the exchange.
+    - ``candidate`` is ``None`` while ``map_available`` is ``True`` when the bare code is
+      absent from the map or the explicit prefix conflicts with the authoritative
+      exchange. That is a genuine ``instrument_not_found``, not a timeout.
+    """
+    _, available = lof_market_id_with_status(bare, deadline=deadline)
+    if not available:
+        return None, False
     resolve_code = code.strip().lower() if _has_exchange_prefix(code) else bare
     try:
-        parsed = parse_cn_lof_code(resolve_code, deadline=deadline)
-        if parsed is not None:
-            return parsed
-    except Exception:  # noqa: BLE001
-        parsed = None
-    if in_lof_map:
-        return build_from_market_id(bare, 0)
-    return None
+        return parse_cn_lof_code(resolve_code, deadline=deadline), True
+    except Exception:  # noqa: BLE001 - unexpected parse failure is treated as unavailable
+        return None, False
 
 
 def _is_placeholder_fund_name(name: str, bare: str) -> bool:
@@ -373,29 +377,35 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
 
     if _has_exchange_prefix(code):
         out: list[_Candidate] = []
+        lof_authoritative_failed = False
         if bare in etf_map:
             parsed_etf = parse_cn_etf_code(code)
             if parsed_etf:
                 kind = "etf" if bare in lof_map else "index_etf"
                 out.append(_candidate_from_cn(parsed_etf, etf_map[bare], kind))
         if bare in lof_map:
-            parsed_lof = _parse_authoritative_lof(code, bare, deadline, in_lof_map=False)
+            parsed_lof, lof_map_available = _parse_authoritative_lof(code, bare, deadline)
             if parsed_lof:
                 out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
+            elif not lof_map_available:
+                lof_authoritative_failed = True
         result = _dedupe_candidates(_prefer_lof_over_placeholder_etf(out))
         if not result and spots.load_failed:
             result = _fallback_cn_exchange_fund_candidates(
                 code, bare, deadline, etf_map=etf_map, lof_map=lof_map,
             )
-        if not result and spots.load_failed:
+        if not result and (spots.load_failed or lof_authoritative_failed):
             _raise_resolve_timeout(code, deadline)
         return result
 
     out: list[_Candidate] = []
+    lof_authoritative_failed = False
     if bare in lof_map:
-        parsed_lof = _parse_authoritative_lof(code, bare, deadline, in_lof_map=True)
+        parsed_lof, lof_map_available = _parse_authoritative_lof(code, bare, deadline)
         if parsed_lof:
             out.append(_candidate_from_cn(parsed_lof, lof_map[bare], "lof"))
+        elif not lof_map_available:
+            lof_authoritative_failed = True
 
     out = _dedupe_candidates(
         _etf_and_stock_candidates_for_bare(
@@ -417,6 +427,10 @@ def _resolve_cn_exchange_fund(code: str, deadline: float) -> list[_Candidate]:
         if not result:
             result = _fallback_bare_cn_exchange_fund(bare, deadline, stock_map=stock_map)
     if not result:
+        # LOF name hit but authoritative market-id lookup failed/timed out: never
+        # fabricate an exchange; surface a retryable timeout instead.
+        if lof_authoritative_failed:
+            _raise_resolve_timeout(code, deadline)
         _maybe_raise_mutual_fund_mismatch(code, bare, etf_map, lof_map, stock_map, deadline)
         if spots.load_failed:
             _raise_resolve_timeout(code, deadline)

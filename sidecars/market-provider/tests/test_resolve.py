@@ -292,7 +292,8 @@ def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
     inline_upstream_calls,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """LOF market-id map must not start a fresh resolve timeout after spot loading."""
+    """LOF market-id map must use remaining shared deadline; on timeout it must raise
+    market_provider_timeout instead of fabricating an SZ candidate."""
     monkeypatch.setenv("MARKET_PROVIDER_RESOLVE_DEADLINE", "2")
     reset_name_caches()
     reset_cn_code_caches()
@@ -321,13 +322,12 @@ def test_resolve_cn_exchange_fund_shared_deadline_with_slow_spot_and_lof_map(
 
     req = ResolveRequest(market="CN", instrument_type="cn_exchange_fund", code="166009")
     start = time.monotonic()
-    data = resolve_instrument(req)
+    with pytest.raises(TimeoutError):
+        resolve_instrument(req)
     elapsed = time.monotonic() - start
 
-    assert not data.ambiguous
-    assert data.resolved is not None
-    assert data.resolved.name == "测试LOF"
-    assert data.resolved.instrument_kind == "lof"
+    # The market-id lookup must inherit the remaining (post spot-load) deadline,
+    # never a fresh full resolve timeout.
     assert len(lof_timeouts) == 1
     assert lof_timeouts[0] <= 1
     assert lof_timeouts[0] < resolve_timeout_seconds()
