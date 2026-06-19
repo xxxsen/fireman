@@ -144,6 +144,16 @@ describe("RebalancePage (持仓预览)", () => {
     expect(screen.getByTestId("start-rebalance-execution")).toBeInTheDocument();
   });
 
+  it("shows error state (not open refresh) when active execution check fails", async () => {
+    getActiveRebalanceExecution.mockReset();
+    getActiveRebalanceExecution.mockRejectedValue(new Error("boom"));
+
+    renderPage();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByTestId("asset-refresh-primary")).not.toBeInTheDocument();
+  });
+
   it("disables asset refresh and shows continue when execution is active", async () => {
     getActiveRebalanceExecution.mockResolvedValue({
       execution: { id: "rbx_active", cash_pool_minor: 50_000_00, status: "in_progress" },

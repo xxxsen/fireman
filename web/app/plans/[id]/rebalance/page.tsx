@@ -83,18 +83,23 @@ export default function RebalancePage() {
     return buildRebalanceWorkspaceRows(targets.data, rebalance.data.lines);
   }, [targets.data, rebalance.data]);
 
-  if ((targets.isError || rebalance.isError) && (!targets.data || !rebalance.data)) {
+  if (
+    ((targets.isError || rebalance.isError) && (!targets.data || !rebalance.data)) ||
+    (activeExecution.isError && active == null)
+  ) {
     return (
       <ErrorState
         message="无法加载持仓预览。请确认后端服务可用后重试。"
         onRetry={() => {
-          void targets.refetch();
-          void rebalance.refetch();
-          void activeExecution.refetch();
+          if (targets.isError) void targets.refetch();
+          if (rebalance.isError) void rebalance.refetch();
+          if (activeExecution.isError) void activeExecution.refetch();
         }}
         backHref={`/plans/${planId}/overview`}
         backLabel="返回总览"
-        technicalDetail={queryErrorMessage(targets.error ?? rebalance.error)}
+        technicalDetail={queryErrorMessage(
+          targets.error ?? rebalance.error ?? activeExecution.error,
+        )}
       />
     );
   }

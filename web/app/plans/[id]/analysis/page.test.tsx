@@ -365,6 +365,28 @@ describe("AnalysisPage zero success", () => {
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
   });
 
+  it("hides run button until parameters load and uses configured runs", async () => {
+    let resolveParams: (v: unknown) => void = () => {};
+    getParametersMock.mockReset();
+    getParametersMock.mockReturnValue(
+      new Promise((res) => {
+        resolveParams = res;
+      }),
+    );
+
+    renderAnalysis();
+
+    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveParams(defaultParameters);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalled());
+    expect(createSimulation.mock.calls[0]?.[1]).toMatchObject({ runs: 20000 });
+  });
+
   it("shows page-level error state when parameters load fails", async () => {
     getParametersMock.mockReset();
     getParametersMock.mockRejectedValue(new Error("params boom"));

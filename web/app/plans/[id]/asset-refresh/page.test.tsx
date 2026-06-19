@@ -141,6 +141,13 @@ vi.mock("@/lib/api/asset-refresh", () => ({
   submitAssetRefresh: (...args: unknown[]) => submitAssetRefresh(...args),
 }));
 
+const getActiveRebalanceExecutionMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/api/rebalance-executions", () => ({
+  getActiveRebalanceExecution: (...args: unknown[]) =>
+    getActiveRebalanceExecutionMock(...args),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -175,6 +182,32 @@ describe("AssetRefreshPage", () => {
     getTargetsMock.mockResolvedValue(defaultTargets);
     listInstrumentsMock.mockReset();
     listInstrumentsMock.mockResolvedValue(defaultInstruments);
+    getActiveRebalanceExecutionMock.mockReset();
+    getActiveRebalanceExecutionMock.mockResolvedValue(null);
+  });
+
+  it("shows error state when active execution check fails (does not open refresh)", async () => {
+    getActiveRebalanceExecutionMock.mockReset();
+    getActiveRebalanceExecutionMock.mockRejectedValue(new Error("boom"));
+    renderPage();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByText("1. 说明")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交资产变更" })).not.toBeInTheDocument();
+  });
+
+  it("blocks asset refresh when an active execution is in progress", async () => {
+    getActiveRebalanceExecutionMock.mockReset();
+    getActiveRebalanceExecutionMock.mockResolvedValue({
+      execution: { id: "rbx_9", status: "in_progress" },
+    });
+    renderPage();
+
+    expect(await screen.findByTestId("asset-refresh-blocked")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "继续调仓执行" })).toHaveAttribute(
+      "href",
+      "/plans/plan_1/rebalance/executions/rbx_9",
+    );
   });
 
   it("shows error state when targets load fails", async () => {

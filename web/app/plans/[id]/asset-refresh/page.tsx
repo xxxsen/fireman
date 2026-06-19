@@ -301,8 +301,16 @@ export default function AssetRefreshPage() {
   });
 
   if (
-    (plan.isError || holdings.isError || targets.isError || instruments.isError) &&
-    (!plan.data || !holdings.data || !targets.data || !instruments.data)
+    (plan.isError ||
+      holdings.isError ||
+      targets.isError ||
+      instruments.isError ||
+      activeExecution.isError) &&
+    (!plan.data ||
+      !holdings.data ||
+      !targets.data ||
+      !instruments.data ||
+      !activeExecution.data)
   ) {
     return (
       <ErrorState
@@ -317,7 +325,11 @@ export default function AssetRefreshPage() {
         backHref={`/plans/${planId}/overview`}
         backLabel="返回总览"
         technicalDetail={queryErrorMessage(
-          plan.error ?? holdings.error ?? targets.error ?? instruments.error,
+          plan.error ??
+            holdings.error ??
+            targets.error ??
+            instruments.error ??
+            activeExecution.error,
         )}
       />
     );

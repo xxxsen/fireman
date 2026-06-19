@@ -8,6 +8,7 @@ import { StaleBanner } from "@/components/ui/StaleBanner";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingState";
 import { queryErrorMessage } from "@/lib/query-error";
 import { WealthPathChart } from "@/components/charts/WealthPathChart";
 import {
@@ -493,6 +494,10 @@ export function AnalysisContent() {
         technicalDetail={queryErrorMessage(paramsQ.error ?? holdingsQ.error)}
       />
     );
+  }
+
+  if (paramsQ.isLoading || holdingsQ.isLoading || !paramsQ.data || !holdingsQ.data) {
+    return <LoadingState label="加载分析数据…" />;
   }
 
   return (
