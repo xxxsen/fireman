@@ -420,7 +420,7 @@ describe("AssetDetailPage classification editing", () => {
       classification_sync_scope: "future_only",
     });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑分类" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑大类和地区" }));
     expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("资产大类"), { target: { value: "bond" } });
@@ -443,7 +443,7 @@ describe("AssetDetailPage classification editing", () => {
       new ApiError("instrument_version_conflict", "conflict"),
     );
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑分类" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑大类和地区" }));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     expect(await screen.findByText(/请刷新后确认分类再保存/)).toBeInTheDocument();
@@ -459,7 +459,7 @@ describe("AssetDetailPage classification editing", () => {
     });
     renderPage();
     await screen.findByText("基础信息");
-    expect(screen.queryByRole("button", { name: "编辑分类" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑大类和地区" })).not.toBeInTheDocument();
   });
 
   it("hides the edit entry while fetching and shows the hint (td/054 #2)", async () => {
@@ -467,8 +467,26 @@ describe("AssetDetailPage classification editing", () => {
     getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
     renderPage();
     await screen.findByText("基础信息");
-    expect(screen.queryByRole("button", { name: "编辑分类" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑大类和地区" })).not.toBeInTheDocument();
     expect(screen.getByText("抓取完成后可编辑大类和地区。")).toBeInTheDocument();
+  });
+
+  it("opens the editor and focuses the asset-class select from the top entry (td/056 §4.1)", async () => {
+    renderPage();
+    const entry = await screen.findByRole("button", { name: "编辑大类和地区" });
+    fireEvent.click(entry);
+    const select = screen.getByLabelText("资产大类");
+    expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
+    await waitFor(() => expect(select).toHaveFocus());
+  });
+
+  it("allows editing classification for fetch_failed instruments (td/056 §4.1)", async () => {
+    getInstrumentDetailMock.mockResolvedValue(failedDetail());
+    getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
+    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑大类和地区" }));
+    expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
   });
 });
 

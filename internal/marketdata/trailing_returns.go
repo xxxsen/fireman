@@ -39,6 +39,44 @@ var trailingPeriodOffsets = map[string]struct {
 
 var trailingPeriodOrder = []string{"1m", "3m", "6m", "1y", "3y", "5y"}
 
+// ListTrailingReturns is the compact asset-library list view of trailing returns:
+// annualized 1y/3y/5y returns (nil when not computable). AsOfDate is the effective
+// last trade date used as the period end.
+type ListTrailingReturns struct {
+	AsOfDate  string
+	OneYear   *float64
+	ThreeYear *float64
+	FiveYear  *float64
+}
+
+// ComputeListTrailingReturns derives the annualized 1y/3y/5y returns for the
+// asset-library list from the same windows as ComputeTrailingReturns. 3y/5y reuse
+// the detail-page annualized values verbatim; 1y is annualized from its cumulative
+// return over the actual window so the list can show 近1年年化.
+func ComputeListTrailingReturns(points []DataPoint, asOfDate, pointType, sourceName string) ListTrailingReturns {
+	tr := ComputeTrailingReturns(points, asOfDate, pointType, sourceName)
+	return ListTrailingReturns{
+		AsOfDate:  tr.AsOfDate,
+		OneYear:   annualizedFromTrailingPeriod(tr.Periods["1y"]),
+		ThreeYear: annualizedFromTrailingPeriod(tr.Periods["3y"]),
+		FiveYear:  annualizedFromTrailingPeriod(tr.Periods["5y"]),
+	}
+}
+
+func annualizedFromTrailingPeriod(p TrailingReturnPeriod) *float64 {
+	if p.Status != TrailingStatusAvailable {
+		return nil
+	}
+	if p.AnnualizedReturn != nil {
+		return p.AnnualizedReturn
+	}
+	if p.CumulativeReturn != nil && p.ActualDays != nil && *p.ActualDays > 0 {
+		ann := math.Pow(1+*p.CumulativeReturn, 365.2425/float64(*p.ActualDays)) - 1
+		return &ann
+	}
+	return nil
+}
+
 // ComputeTrailingReturns calculates rolling cumulative returns from cleaned daily points.
 func ComputeTrailingReturns(points []DataPoint, asOfDate, pointType, sourceName string) TrailingReturns {
 	out := TrailingReturns{

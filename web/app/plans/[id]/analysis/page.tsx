@@ -33,7 +33,13 @@ import {
   listPaths,
   listSimulations,
 } from "@/lib/api/simulations";
-import { formatMoney, formatPercent, historyDepthLabel } from "@/lib/format";
+import {
+  formatMoney,
+  formatMoneyWan,
+  formatPercent,
+  historyDepthLabel,
+  sortRepresentativePaths,
+} from "@/lib/format";
 import type { SimulationRun } from "@/types/api";
 
 type JobKind = "sim" | "stress" | "sensitivity";
@@ -519,8 +525,9 @@ export function AnalysisContent() {
       ? "当前模拟尚未完成，无法运行附属分析"
       : undefined;
 
-  const repPaths =
-    pathsQ.data?.paths.filter((p) => p.representative_percentile) ?? [];
+  const repPaths = sortRepresentativePaths(
+    pathsQ.data?.paths.filter((p) => p.representative_percentile) ?? [],
+  );
 
   const jobBusy = !!activeJobId;
 
@@ -719,7 +726,7 @@ export function AnalysisContent() {
                       }
                     >
                       {p.representative_percentile?.toUpperCase()} ·{" "}
-                      {formatMoney(p.terminal_wealth_minor)}
+                      {formatMoneyWan(p.terminal_wealth_minor)}
                     </Button>
                   </li>
                 ))}

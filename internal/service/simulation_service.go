@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -313,10 +314,50 @@ func (s *SimulationService) ListPaths(ctx context.Context, runID string) ([]Path
 	for i, r := range rows {
 		out[i] = PathIndexToView(r)
 	}
+	sortPathsByPercentile(out)
 	return out, nil
 }
 
-func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pathNo int) (*simulation.PathDetail,
+var representativePercentileRank = map[string]int{
+	"p00": 0, "p25": 1, "p50": 2, "p75": 3, "p95": 4,
+}
+
+// sortPathsByPercentile orders paths by representative percentile (P00<P25<P50<
+// P75<P95); unknown/empty percentiles sort last, with a stable path_no tiebreak.
+// This is the deterministic ordering contract for the path list API.
+func sortPathsByPercentile(views []PathIndexView) {
+	rank := func(v PathIndexView) int {
+		if r, ok := representativePercentileRank[v.RepresentativePercentile]; ok {
+			return r
+		}
+		return len(representativePercentileRank)
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		ri, rj := rank(views[i]), rank(views[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return views[i].PathNo < views[j].PathNo
+	})
+}
+
+// PathAssetLabel exposes frozen-snapshot identity for a holding so the UI never
+// has to display internal holding IDs in path weight breakdowns.
+type PathAssetLabel struct {
+	InstrumentName string `json:"instrument_name"`
+	InstrumentCode string `json:"instrument_code"`
+	AssetClass     string `json:"asset_class"`
+	IsCash         bool   `json:"is_cash"`
+}
+
+// PathDetailView is the API view of a regenerated path plus per-holding labels
+// derived from the run's input snapshot.
+type PathDetailView struct {
+	*simulation.PathDetail
+	AssetLabels map[string]PathAssetLabel `json:"asset_labels"`
+}
+
+func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pathNo int) (*PathDetailView,
 	error,
 ) {
 	run, err := s.sims.GetByID(ctx, runID)
@@ -336,7 +377,17 @@ func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pat
 	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
 		return nil, err
 	}
-	return simulation.RegeneratePathDetail(&snap, pathNo), nil
+	detail := simulation.RegeneratePathDetail(&snap, pathNo)
+	labels := make(map[string]PathAssetLabel, len(snap.Assets))
+	for _, a := range snap.Assets {
+		labels[a.HoldingID] = PathAssetLabel{
+			InstrumentName: a.InstrumentName,
+			InstrumentCode: a.InstrumentCode,
+			AssetClass:     a.AssetClass,
+			IsCash:         a.IsCash,
+		}
+	}
+	return &PathDetailView{PathDetail: detail, AssetLabels: labels}, nil
 }
 
 // AssetParticipationView summarizes which complete years each asset used in simulation.

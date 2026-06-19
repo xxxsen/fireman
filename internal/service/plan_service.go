@@ -80,7 +80,7 @@ func NewPlanService(
 func defaultParameters(planID string, scenarioID *string) repository.PlanParameters {
 	return repository.PlanParameters{
 		PlanID:                   planID,
-		CurrentAge:               30,
+		CurrentAge:               35,
 		RetirementAge:            55,
 		EndAge:                   90,
 		TotalAssetsMinor:         1_000_000_00,

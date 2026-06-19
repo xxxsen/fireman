@@ -76,7 +76,52 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 			s.enrichMarketMeta(ctx, &items[i])
 		}
 	}
+	s.attachTrailingReturns(ctx, items)
 	return items, nil
+}
+
+// attachTrailingReturns batch-loads market points for the listed active assets in
+// a single grouped query and computes 近1/3/5年年化收益 per instrument. It never
+// issues per-row detail calls; pending/failed/system rows keep nil (rendered "—").
+func (s *InstrumentService) attachTrailingReturns(ctx context.Context, items []repository.InstrumentRecord) {
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		if items[i].IsSystem || items[i].Status != "active" {
+			continue
+		}
+		ids = append(ids, items[i].ID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	now := time.Now()
+	asOf := now.Format("2006-01-02")
+	// Bound the batch to the trailing windows (~6 years) so a large library does
+	// not load full history; this still covers every 5y start point for fresh data.
+	since := now.AddDate(-6, 0, -7).Format("2006-01-02")
+	grouped, err := s.marketRepo.ListPointsByInstruments(ctx, ids, since)
+	if err != nil {
+		return
+	}
+	for i := range items {
+		pts := grouped[items[i].ID]
+		if len(pts) == 0 {
+			continue
+		}
+		dp := repoToDataPoints(pts)
+		pointType, sourceName := "adjusted_close", "library"
+		if len(dp) > 0 {
+			pointType = dp[len(dp)-1].PointType
+			sourceName = dp[len(dp)-1].SourceName
+		}
+		lt := marketdata.ComputeListTrailingReturns(dp, asOf, pointType, sourceName)
+		items[i].TrailingReturns = &repository.InstrumentTrailingReturns{
+			AsOfDate:                  lt.AsOfDate,
+			OneYearAnnualizedReturn:   lt.OneYear,
+			ThreeYearAnnualizedReturn: lt.ThreeYear,
+			FiveYearAnnualizedReturn:  lt.FiveYear,
+		}
+	}
 }
 
 // InstrumentSearchView is a paginated asset-library search response.
@@ -115,6 +160,7 @@ func (s *InstrumentService) Search(
 		}
 		s.enrichMarketMeta(ctx, &res.Instruments[i])
 	}
+	s.attachTrailingReturns(ctx, res.Instruments)
 	view := InstrumentSearchView{Instruments: res.Instruments, Total: res.Total}
 	if view.Instruments == nil {
 		view.Instruments = []repository.InstrumentRecord{}

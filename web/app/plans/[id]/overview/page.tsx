@@ -16,6 +16,31 @@ import { getDashboard } from "@/lib/api/dashboard";
 import { formatMoney, formatMoneyScaled, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 
+/**
+ * Shared header for the two side-by-side allocation cards: a title row plus a
+ * fixed-height (20px) description row so both charts start at the same vertical
+ * offset and the card bottoms align on desktop.
+ */
+function ChartCardHeader({
+  title,
+  termKey,
+  description,
+}: {
+  title: string;
+  termKey: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <h2 className="flex items-center text-lg font-medium text-ink">
+        {title}
+        <MetricHelp termKey={termKey} />
+      </h2>
+      <p className="mt-1 h-5 truncate text-xs leading-5 text-ink-muted">{description}</p>
+    </div>
+  );
+}
+
 export default function OverviewPage() {
   const planId = useParams().id as string;
   const searchParams = useSearchParams();
@@ -164,21 +189,22 @@ export default function OverviewPage() {
         <>
           <section className="grid gap-6 md:grid-cols-2">
             <div className="rounded-lg border border-line bg-surface p-4">
-              <h2 className="flex items-center text-lg font-medium text-ink">
-                大类配置
-                <MetricHelp termKey="asset_class_allocation" />
-              </h2>
+              <ChartCardHeader
+                title="大类配置"
+                termKey="asset_class_allocation"
+                description="全组合资产大类目标与当前占比"
+              />
               <AllocationBarChart
                 bars={data.allocation_bars}
                 currency={data.plan.base_currency}
               />
             </div>
             <div className="rounded-lg border border-line bg-surface p-4">
-              <h2 className="flex items-center text-lg font-medium text-ink">
-                地区配置
-                <MetricHelp termKey="region_allocation" />
-              </h2>
-              <p className="mt-1 text-xs text-ink-muted">全组合地区暴露（按全组合权重折算）</p>
+              <ChartCardHeader
+                title="地区配置"
+                termKey="region_allocation"
+                description="全组合地区暴露（按全组合权重折算）"
+              />
               <RegionAllocationBarChart
                 bars={data.region_bars}
                 currency={data.plan.base_currency}

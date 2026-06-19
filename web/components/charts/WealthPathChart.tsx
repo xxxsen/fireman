@@ -1,7 +1,88 @@
 "use client";
 
 import ReactECharts from "echarts-for-react";
+import { formatMoneyWan } from "@/lib/format";
 import type { QuantilePoint } from "@/types/api";
+
+const BAND_BASE_SERIES = "__p25_base";
+const BAND_SERIES = "P25-P75";
+const MEDIAN_SERIES = "P50";
+
+type AxisTooltipParam = { dataIndex?: number };
+
+/**
+ * Build the ECharts option for the wealth path chart. Kept as a pure function so
+ * the legend, stacking baseline and tooltip formatter can be unit-tested without
+ * rendering ECharts.
+ *
+ * The P25-P75 band is drawn with two stacked series: an invisible baseline at
+ * `p25_minor` and a visible blue area of width `p75_minor - p25_minor`. The
+ * baseline is excluded from both legend and tooltip. P50 is a separate dark line.
+ */
+export function buildWealthPathOption(series: QuantilePoint[]) {
+  const months = series.map((p) => p.month_offset);
+  const base = series.map((p) => p.p25_minor);
+  const band = series.map((p) => p.p75_minor - p.p25_minor);
+  const median = series.map((p) => p.p50_minor);
+
+  return {
+    tooltip: {
+      trigger: "axis" as const,
+      formatter: (params: AxisTooltipParam | AxisTooltipParam[]): string => {
+        const items = Array.isArray(params) ? params : [params];
+        const idx = items[0]?.dataIndex ?? 0;
+        const point = series[idx];
+        if (!point) return "";
+        return [
+          `第 ${months[idx]} 月`,
+          `${BAND_SERIES}：${formatMoneyWan(point.p25_minor)} - ${formatMoneyWan(point.p75_minor)}`,
+          `${MEDIAN_SERIES}：${formatMoneyWan(point.p50_minor)}`,
+        ].join("<br/>");
+      },
+    },
+    legend: { data: [BAND_SERIES, MEDIAN_SERIES], bottom: 0 },
+    grid: { left: 64, right: 16, bottom: 48, top: 16 },
+    xAxis: {
+      type: "category" as const,
+      data: months,
+      name: "月",
+      boundaryGap: false,
+    },
+    yAxis: {
+      type: "value" as const,
+      axisLabel: { formatter: (v: number) => formatMoneyWan(v) },
+    },
+    series: [
+      {
+        name: BAND_BASE_SERIES,
+        type: "line" as const,
+        data: base,
+        stack: "band",
+        symbol: "none",
+        lineStyle: { opacity: 0 },
+        areaStyle: { opacity: 0 },
+        tooltip: { show: false },
+        silent: true,
+      },
+      {
+        name: BAND_SERIES,
+        type: "line" as const,
+        data: band,
+        stack: "band",
+        symbol: "none",
+        lineStyle: { opacity: 0 },
+        areaStyle: { color: "rgba(37,99,235,0.18)" },
+      },
+      {
+        name: MEDIAN_SERIES,
+        type: "line" as const,
+        data: median,
+        symbol: "none",
+        lineStyle: { width: 2, color: "#1f2937" },
+      },
+    ],
+  };
+}
 
 export function WealthPathChart({ series }: { series: QuantilePoint[] }) {
   if (!series?.length) {
@@ -12,47 +93,11 @@ export function WealthPathChart({ series }: { series: QuantilePoint[] }) {
     );
   }
 
-  const months = series.map((p) => p.month_offset);
-  const toMajor = (arr: number[]) => arr.map((v) => v / 100);
-
-  const option = {
-    tooltip: { trigger: "axis" as const },
-    legend: { data: ["P25-P75", "P05-P95", "P50"] },
-    grid: { left: 56, right: 16, bottom: 32, top: 40 },
-    xAxis: { type: "category" as const, data: months, name: "月" },
-    yAxis: {
-      type: "value" as const,
-      axisLabel: { formatter: (v: number) => `${(v / 10000).toFixed(0)}万` },
-    },
-    series: [
-      {
-        name: "P25-P75",
-        type: "line" as const,
-        data: toMajor(series.map((p) => p.p50_minor)),
-        lineStyle: { opacity: 0 },
-        stack: "band-inner",
-        symbol: "none",
-        areaStyle: { color: "rgba(15,23,42,0.15)" },
-      },
-      {
-        name: "_p75",
-        type: "line" as const,
-        data: toMajor(series.map((p) => p.p75_minor - p.p25_minor)),
-        lineStyle: { opacity: 0 },
-        stack: "band-inner",
-        symbol: "none",
-        areaStyle: { color: "rgba(15,23,42,0.15)" },
-        showInLegend: false,
-      },
-      {
-        name: "P50",
-        type: "line" as const,
-        data: toMajor(series.map((p) => p.p50_minor)),
-        symbol: "none",
-        lineStyle: { width: 2, color: "#0f172a" },
-      },
-    ],
-  };
-
-  return <ReactECharts option={option} style={{ height: 320 }} />;
+  return (
+    <ReactECharts
+      option={buildWealthPathOption(series)}
+      style={{ height: 360 }}
+      notMerge
+    />
+  );
 }

@@ -329,8 +329,16 @@ export interface Instrument {
   monthly_return_count?: number;
   metrics_version?: string;
   warnings?: string[];
+  trailing_returns?: InstrumentTrailingReturns;
   created_at: number;
   updated_at: number;
+}
+
+export interface InstrumentTrailingReturns {
+  as_of_date: string;
+  one_year_annualized_return: number | null;
+  three_year_annualized_return: number | null;
+  five_year_annualized_return: number | null;
 }
 
 export interface InstrumentImportRequest {
@@ -450,6 +458,13 @@ export interface PathYearRecord {
   asset_weights?: Record<string, number>;
 }
 
+export interface PathAssetLabel {
+  instrument_name: string;
+  instrument_code: string;
+  asset_class: string;
+  is_cash: boolean;
+}
+
 export interface PathDetail {
   path_no: number;
   path_seed: string;
@@ -458,6 +473,7 @@ export interface PathDetail {
   failure_reason?: string;
   monthly: PathMonthRecord[];
   yearly: PathYearRecord[];
+  asset_labels?: Record<string, PathAssetLabel>;
 }
 
 export interface DashboardAnalysisSummary {

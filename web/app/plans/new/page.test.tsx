@@ -255,7 +255,7 @@ describe("NewPlanWizardPage", () => {
 
     const today = new Date().toISOString().slice(0, 10);
     expect(screen.getByDisplayValue(`我的 FIRE 计划 (${today})`)).toBeInTheDocument();
-    expect(screen.getByLabelText("当前年龄")).toHaveValue(30);
+    expect(screen.getByLabelText("当前年龄")).toHaveValue(35);
     expect(screen.getByLabelText("退休年龄")).toHaveValue(35);
     expect(screen.getByDisplayValue("4000000")).toBeInTheDocument();
     expect(screen.getByDisplayValue("120000")).toBeInTheDocument();

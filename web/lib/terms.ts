@@ -95,6 +95,12 @@ export const TERMS: Record<string, string> = {
     "当前配置已变化，历史模拟结果可能不再反映最新输入",
   simulation_runs: "Monte Carlo 路径数量，默认 10000，范围 1000 至 100000",
   student_t_df: "Student-t 分布自由度，控制尾部厚度，默认 7",
+  metric_cagr:
+    "CAGR：所选完整自然年度收益的几何年化，(Π(1+r))^(1/n)-1。仅基于当前纳入模拟的完整年度与清洗后行情",
+  metric_annual_volatility:
+    "年化波动率：所选完整年度内月度对数收益的样本标准差乘 √12。仅基于当前纳入模拟的完整年度与清洗后行情",
+  metric_max_drawdown:
+    "最大回撤：所选完整年度窗口中，从历史峰值到其后低点的最大跌幅，以正数幅度展示。仅基于当前纳入模拟的完整年度与清洗后行情",
 };
 
 export function helpForTerm(key?: string): string | undefined {

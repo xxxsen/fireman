@@ -283,4 +283,35 @@ describe("AssetsPage", () => {
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
     await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("inst_1"));
   });
+
+  it("shows trailing-return columns with annualized values and — for missing (td/056 §4.2)", () => {
+    mockState.instruments = defaultInstruments.map((i) =>
+      i.id === "inst_1"
+        ? {
+            ...i,
+            trailing_returns: {
+              as_of_date: "2026-06-18",
+              one_year_annualized_return: 0.0812,
+              three_year_annualized_return: 0.0641,
+              five_year_annualized_return: null,
+            },
+          }
+        : { ...i },
+    );
+    renderPage();
+
+    expect(screen.getByText("数据截至")).toBeInTheDocument();
+    expect(screen.getByText("近1年年化")).toBeInTheDocument();
+    expect(screen.getByText("近3年年化")).toBeInTheDocument();
+    expect(screen.getByText("近5年年化")).toBeInTheDocument();
+
+    const rows = screen.getAllByRole("row");
+    const eqRow = rows.find((row) => within(row).queryByRole("link", { name: "510300" }));
+    expect(eqRow).toBeTruthy();
+    expect(within(eqRow!).getByText("2026-06-18")).toBeInTheDocument();
+    expect(within(eqRow!).getByText("8.12%")).toBeInTheDocument();
+    expect(within(eqRow!).getByText("6.41%")).toBeInTheDocument();
+    // 5y not computable -> em dash.
+    expect(within(eqRow!).getAllByText("—").length).toBeGreaterThan(0);
+  });
 });

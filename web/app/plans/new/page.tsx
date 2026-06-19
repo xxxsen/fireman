@@ -85,7 +85,7 @@ export default function NewPlanWizardPage() {
   const [step, setStep] = useState(0);
   const [name, setName] = useState(defaultPlanName);
   const [valuationDate] = useState(new Date().toISOString().slice(0, 10));
-  const [currentAge, setCurrentAge] = useState(30);
+  const [currentAge, setCurrentAge] = useState(35);
   const [retirementAge, setRetirementAge] = useState(35);
   const [fireDurationYears, setFireDurationYears] = useState(30);
   const [totalAssets, setTotalAssets] = useState(4_000_000_00);
@@ -255,92 +255,93 @@ export default function NewPlanWizardPage() {
         className="mt-8 w-full space-y-4 rounded-lg border p-6"
       >
         {step === 0 && (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <label className="block text-sm lg:col-span-2">
+          <div className="max-w-6xl space-y-6">
+            <label className="block text-sm">
               计划名称
               <input
-                className="mt-1 w-full max-w-2xl rounded-md border px-3 py-2"
+                className="mt-1 w-full min-w-0 max-w-3xl rounded-md border px-3 py-2"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <div className="lg:col-span-2">
+            <div>
               <h2 className="flex items-center text-sm font-medium">
                 FIRE 模拟参数
                 <MetricHelp termKey="fire_params_for_simulation" />
               </h2>
-              <div className="mt-2 grid gap-4 sm:grid-cols-3">
-              <label className="text-sm">
-                当前年龄
-                <input
-                  type="number"
-                  className="mt-1 w-full rounded-md border px-3 py-2"
-                  value={currentAge}
-                  onChange={(e) => setCurrentAge(Number(e.target.value))}
-                />
-              </label>
-              <label className="text-sm">
-                退休年龄
-                <input
-                  type="number"
-                  className="mt-1 w-full rounded-md border px-3 py-2"
-                  value={retirementAge}
-                  onChange={(e) => setRetirementAge(Number(e.target.value))}
-                />
-              </label>
-              <label className="text-sm">
-                预计 FIRE 时长
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <select
-                    className="rounded-md border px-3 py-2"
-                    value={
-                      FIRE_DURATION_PRESETS.includes(fireDurationYears as (typeof FIRE_DURATION_PRESETS)[number])
-                        ? String(fireDurationYears)
-                        : "custom"
-                    }
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value !== "custom") setFireDurationYears(Number(value));
-                    }}
-                  >
-                    {FIRE_DURATION_PRESETS.map((years) => (
-                      <option key={years} value={years}>
-                        {years} 年
-                      </option>
-                    ))}
-                    <option value="custom">其他年限</option>
-                  </select>
+              <div className="mt-2 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <label className="text-sm">
+                  当前年龄
                   <input
                     type="number"
-                    min={1}
-                    className="w-24 rounded-md border px-3 py-2"
-                    value={fireDurationYears}
-                    onChange={(e) => setFireDurationYears(Number(e.target.value))}
-                    aria-label="预计 FIRE 时长（年）"
+                    className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                    value={currentAge}
+                    onChange={(e) => setCurrentAge(Number(e.target.value))}
                   />
-                  <span className="text-ink-muted">年</span>
-                </div>
-              </label>
+                </label>
+                <label className="text-sm">
+                  退休年龄
+                  <input
+                    type="number"
+                    className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                    value={retirementAge}
+                    onChange={(e) => setRetirementAge(Number(e.target.value))}
+                  />
+                </label>
+                <label className="text-sm">
+                  预计 FIRE 时长
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    <select
+                      className="w-full min-w-0 rounded-md border px-3 py-2"
+                      value={
+                        FIRE_DURATION_PRESETS.includes(fireDurationYears as (typeof FIRE_DURATION_PRESETS)[number])
+                          ? String(fireDurationYears)
+                          : "custom"
+                      }
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value !== "custom") setFireDurationYears(Number(value));
+                      }}
+                    >
+                      {FIRE_DURATION_PRESETS.map((years) => (
+                        <option key={years} value={years}>
+                          {years} 年
+                        </option>
+                      ))}
+                      <option value="custom">其他年限</option>
+                    </select>
+                    <input
+                      type="number"
+                      min={1}
+                      className="w-full min-w-0 rounded-md border px-3 py-2"
+                      value={fireDurationYears}
+                      onChange={(e) => setFireDurationYears(Number(e.target.value))}
+                      aria-label="预计 FIRE 时长（年）"
+                    />
+                  </div>
+                </label>
               </div>
             </div>
-            <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
-            <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
-            <label className="block text-sm">
-              <span className="mb-1 flex items-center gap-1">
-                年储蓄
-                <MetricHelp termKey="annual_savings_wizard" />
-              </span>
-              <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
-            </label>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
+              <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
+              <label className="block text-sm">
+                <span className="mb-1 flex items-center gap-1">
+                  年储蓄
+                  <MetricHelp termKey="annual_savings_wizard" />
+                </span>
+                <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
+              </label>
+            </div>
           </div>
         )}
 
         {step === 1 && (
-          <>
-            <label className="block text-sm">
+          <div className="max-w-6xl space-y-4">
+            <label className="block max-w-3xl text-sm">
               选择场景
               <select
-                className="mt-1 w-full max-w-2xl rounded-md border px-3 py-2"
+                className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
                 value={scenarioId}
                 onChange={(e) => setScenarioId(e.target.value)}
               >
@@ -353,13 +354,13 @@ export default function NewPlanWizardPage() {
                 ))}
               </select>
             </label>
-            <p className="max-w-2xl text-sm text-ink-muted">
+            <p className="max-w-3xl text-sm text-ink-muted">
               权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
             </p>
             {selectedScenario && regionTargetChecks.length > 0 && (
-              <div className="mt-4 rounded-lg border border-line p-4">
+              <div className="space-y-3">
                 <h3 className="text-sm font-medium">地区组内权重</h3>
-                <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {regionTargetChecks.map((check) => {
                   const ac = check.assetClass as WizardRegionEditableClass;
                   const rt = regionTargets[ac];
@@ -399,18 +400,44 @@ export default function NewPlanWizardPage() {
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
 
         {step === 2 && (
-          <>
-            <p className="text-sm text-ink-muted">
-              按大类分标签页搜索并添加标的；组内占比将自动均分，手动调整后其余标的自动补齐。未配置资金默认计入
-              现金/其他。预期资金 = 总资产 × 大类权重 × 地区权重 × 组内占比。
-            </p>
-            <Link href="/assets/import" className="text-sm underline">
-              需要新标的？从 AKShare 录入
-            </Link>
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
+              <div className="space-y-2">
+                <p className="text-sm text-ink-muted">
+                  按大类分标签页搜索并添加标的；组内占比将自动均分，手动调整后其余标的自动补齐。未配置资金默认计入
+                  现金/其他。预期资金 = 总资产 × 大类权重 × 地区权重 × 组内占比。
+                </p>
+                <Link href="/assets/import" className="inline-block text-sm underline">
+                  需要新标的？从 AKShare 录入
+                </Link>
+                {groupWeightChecks.map((g) => (
+                  <p
+                    key={g.label}
+                    className={`text-sm ${g.passed ? "text-positive" : "text-danger"}`}
+                  >
+                    {g.label} 组内权重：{g.message}
+                  </p>
+                ))}
+              </div>
+              <div className="space-y-1 rounded-md border border-line p-3 text-sm md:text-right">
+                <p className="text-ink-muted">持仓合计</p>
+                <p className="font-medium text-ink">
+                  {(holdingsSum / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
+                </p>
+                <p className="text-xs text-ink-muted">
+                  总资产 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
+                </p>
+                {assetGap > 100 && (
+                  <p className="text-xs text-ink-muted">
+                    未配置 {(assetGap / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元将自动计入现金/其他
+                  </p>
+                )}
+              </div>
+            </div>
             {instrumentTabs.length > 0 && (
               <>
                 <div
@@ -514,20 +541,7 @@ export default function NewPlanWizardPage() {
                   })}
               </>
             )}
-            {groupWeightChecks.map((g) => (
-              <p
-                key={g.label}
-                className={`text-sm ${g.passed ? "text-positive" : "text-danger"}`}
-              >
-                {g.label} 组内权重：{g.message}
-              </p>
-            ))}
-            <p className="text-sm text-ink-muted">
-              持仓合计：{(holdingsSum / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })}{" "}
-              元 / 总资产 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
-              {assetGap > 100 && "（未配置部分将自动计入现金/其他）"}
-            </p>
-          </>
+          </div>
         )}
 
         {step === 3 && (

@@ -83,6 +83,49 @@ func TestTrailingInsufficientHistory(t *testing.T) {
 	}
 }
 
+// td/056 §4.2: the asset-library list view annualizes 1y/3y/5y. 3y/5y must equal
+// the detail-page annualized values; 1y is annualized from its own cumulative
+// return. Insufficient windows surface as nil rather than zero.
+func TestComputeListTrailingReturnsAnnualizes(t *testing.T) {
+	points := buildTrailingPoints() // ~6.5y of ~+0.01%/day compounding
+	detail := ComputeTrailingReturns(points, "2026-06-12", "adjusted_close", "test")
+	list := ComputeListTrailingReturns(points, "2026-06-12", "adjusted_close", "test")
+
+	if list.AsOfDate != detail.AsOfDate {
+		t.Fatalf("as_of_date list=%s detail=%s", list.AsOfDate, detail.AsOfDate)
+	}
+	if list.ThreeYear == nil || detail.Periods["3y"].AnnualizedReturn == nil ||
+		*list.ThreeYear != *detail.Periods["3y"].AnnualizedReturn {
+		t.Fatalf("3y annualized mismatch: list=%v detail=%v", list.ThreeYear, detail.Periods["3y"].AnnualizedReturn)
+	}
+	if list.FiveYear == nil || detail.Periods["5y"].AnnualizedReturn == nil ||
+		*list.FiveYear != *detail.Periods["5y"].AnnualizedReturn {
+		t.Fatalf("5y annualized mismatch: list=%v detail=%v", list.FiveYear, detail.Periods["5y"].AnnualizedReturn)
+	}
+	if list.OneYear == nil {
+		t.Fatalf("1y annualized should be computable")
+	}
+	// ~0.01%/day over a year annualizes to roughly e^(0.0001*365)-1 ≈ 3.7%.
+	if *list.OneYear < 0.02 || *list.OneYear > 0.06 {
+		t.Fatalf("1y annualized out of expected band: %f", *list.OneYear)
+	}
+}
+
+func TestComputeListTrailingReturnsNilWhenInsufficient(t *testing.T) {
+	// Only ~12 months of history: 1y available, 3y/5y insufficient -> nil.
+	points := []DataPoint{
+		{TradeDate: "2025-06-09", Value: 100},
+		{TradeDate: "2026-06-12", Value: 110},
+	}
+	list := ComputeListTrailingReturns(points, "2026-06-12", "adjusted_close", "test")
+	if list.OneYear == nil {
+		t.Fatalf("1y should be available")
+	}
+	if list.ThreeYear != nil || list.FiveYear != nil {
+		t.Fatalf("3y/5y should be nil: 3y=%v 5y=%v", list.ThreeYear, list.FiveYear)
+	}
+}
+
 func buildTrailingPoints() []DataPoint {
 	var points []DataPoint
 	value := 100.0

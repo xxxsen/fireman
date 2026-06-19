@@ -15,6 +15,46 @@ export function formatMoney(minor: number, currency = "CNY"): string {
   })}`;
 }
 
+/**
+ * Money format dedicated to FIRE simulation path pages: always `¥xx.xxw` in 万元
+ * with two decimals and no thousands separators (e.g. `¥578.73w`). Negative keeps
+ * its sign before the symbol (`-¥12.30w`); empty values render as `—`.
+ * Only used on FIRE path-related views; other pages keep their existing formats.
+ */
+export function formatMoneyWan(
+  minor: number | null | undefined,
+  currency = "CNY",
+): string {
+  if (minor == null || Number.isNaN(minor)) return "—";
+  const symbol = CURRENCY_SYMBOL[currency] ?? currency + " ";
+  const wan = minor / 100 / 10000;
+  const sign = wan < 0 ? "-" : "";
+  return `${sign}${symbol}${Math.abs(wan).toFixed(2)}w`;
+}
+
+const REPRESENTATIVE_PERCENTILE_ORDER = ["p00", "p25", "p50", "p75", "p95"];
+
+/** Business rank for representative path percentiles; unknown/empty sort last. */
+export function representativePercentileRank(
+  label: string | null | undefined,
+): number {
+  if (!label) return REPRESENTATIVE_PERCENTILE_ORDER.length;
+  const idx = REPRESENTATIVE_PERCENTILE_ORDER.indexOf(label.toLowerCase());
+  return idx === -1 ? REPRESENTATIVE_PERCENTILE_ORDER.length : idx;
+}
+
+/** Stable ascending sort of representative paths by percentile, then path_no. */
+export function sortRepresentativePaths<
+  T extends { representative_percentile?: string; path_no: number },
+>(paths: T[]): T[] {
+  return [...paths].sort((a, b) => {
+    const ra = representativePercentileRank(a.representative_percentile);
+    const rb = representativePercentileRank(b.representative_percentile);
+    if (ra !== rb) return ra - rb;
+    return a.path_no - b.path_no;
+  });
+}
+
 export function parseMoneyInput(input: string): number | null {
   const cleaned = input.replace(/,/g, "").trim();
   if (cleaned === "") return null;

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { Dialog } from "@/components/ui/Dialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -122,6 +122,9 @@ export default function AssetDetailPage() {
   >(null);
 
   const [seriesRange, setSeriesRange] = useState<ReturnSeriesRange>("3m");
+  const pendingEditFocusRef = useRef(false);
+  const basicInfoRef = useRef<HTMLElement>(null);
+  const assetClassSelectRef = useRef<HTMLSelectElement>(null);
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["instrument-detail", id],
@@ -148,6 +151,24 @@ export default function AssetDetailPage() {
         });
     }
   }, [data, id]);
+
+  useEffect(() => {
+    if (!editingClass || !pendingEditFocusRef.current) return;
+    pendingEditFocusRef.current = false;
+    basicInfoRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    assetClassSelectRef.current?.focus?.();
+  }, [editingClass]);
+
+  const startEditClassification = (focus: boolean) => {
+    if (!data) return;
+    setClassNotice(null);
+    setClassDraft({
+      asset_class: data.instrument.asset_class,
+      region: data.instrument.region,
+    });
+    if (focus) pendingEditFocusRef.current = true;
+    setEditingClass(true);
+  };
 
   const handleJobTerminal = () => {
     setActiveJobId(null);
@@ -273,15 +294,24 @@ export default function AssetDetailPage() {
             {inst.instrument_type}
           </p>
         </div>
-        {isActive && (
+        {!inst.is_system && !isPending && (
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {isActive && (
+              <Button
+                disabled={refreshMut.isPending}
+                onClick={() => refreshMut.mutate()}
+              >
+                {refreshMut.isPending ? "刷新中（可能需要数分钟）…" : "刷新"}
+              </Button>
+            )}
             <Button
-              disabled={refreshMut.isPending || inst.is_system}
-              onClick={() => refreshMut.mutate()}
+              variant="secondary"
+              data-testid="edit-classification-entry"
+              onClick={() => startEditClassification(true)}
             >
-              {refreshMut.isPending ? "刷新中（可能需要数分钟）…" : "刷新"}
+              编辑大类和地区
             </Button>
-            {!inst.is_system && (
+            {isActive && (
               <Button
                 variant="danger"
                 disabled={deleteMut.isPending || referencingPlans.length > 0}
@@ -353,7 +383,7 @@ export default function AssetDetailPage() {
         </Alert>
       )}
 
-      <section className="mt-6 rounded-lg border border-line bg-surface p-4">
+      <section ref={basicInfoRef} className="mt-6 rounded-lg border border-line bg-surface p-4">
       <h2 className="mb-3 font-medium text-ink">基础信息</h2>
       <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm">
         <div>
@@ -368,6 +398,7 @@ export default function AssetDetailPage() {
             <dd className="mt-1 space-y-2" data-testid="classification-editor">
               <div className="flex flex-wrap gap-2">
                 <select
+                  ref={assetClassSelectRef}
                   aria-label="资产大类"
                   className="rounded border border-line bg-surface px-2 py-1 text-sm text-ink"
                   value={classDraft.asset_class}
@@ -431,19 +462,6 @@ export default function AssetDetailPage() {
           ) : (
             <dd className="text-ink">
               {assetClassLabel(inst.asset_class)} / {regionLabel(inst.region)}
-              {!inst.is_system && inst.status !== "pending_fetch" && (
-                <Button
-                  variant="ghost"
-                  className="ml-2 px-2 py-0.5"
-                  onClick={() => {
-                    setClassNotice(null);
-                    setClassDraft({ asset_class: inst.asset_class, region: inst.region });
-                    setEditingClass(true);
-                  }}
-                >
-                  编辑分类
-                </Button>
-              )}
             </dd>
           )}
           {classNotice && (
@@ -530,7 +548,10 @@ export default function AssetDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">CAGR</dt>
+            <dt className="flex items-center text-ink-muted">
+              CAGR
+              <MetricHelp termKey="metric_cagr" />
+            </dt>
             <dd className="text-ink">
               {formatNullablePercent(win.historical_cagr)}
               {win.historical_cagr == null && win.cagr_status && (
@@ -542,7 +563,10 @@ export default function AssetDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">年化波动率</dt>
+            <dt className="flex items-center text-ink-muted">
+              年化波动率
+              <MetricHelp termKey="metric_annual_volatility" />
+            </dt>
             <dd className="text-ink">
               {formatNullablePercent(win.annual_volatility)}
               {win.annual_volatility == null && win.volatility_status && (
@@ -554,7 +578,10 @@ export default function AssetDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">最大回撤</dt>
+            <dt className="flex items-center text-ink-muted">
+              最大回撤
+              <MetricHelp termKey="metric_max_drawdown" />
+            </dt>
             <dd className="text-ink">{formatNullablePercent(win.max_drawdown)}
               {win.max_drawdown == null && win.drawdown_status && (
                 <span className="ml-1 text-xs text-ink-muted">{metricStatusLabel(win.drawdown_status)}</span>

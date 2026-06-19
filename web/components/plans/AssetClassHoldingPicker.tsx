@@ -258,9 +258,12 @@ export function AssetClassHoldingPicker({
     ? `${subTitle}搜索`
     : `${assetClassLabel(assetClass)}${region ? regionLabel(region) : ""}搜索`;
 
+  // Constrain the picker content (search box, selected list and candidate lists)
+  // to a readable width inside the 96rem wizard so the search input is not
+  // stretched edge to edge. All inner elements use w-full and stay box-aligned.
   const sectionClass = nested
-    ? "mt-3 rounded-md border border-line bg-surface p-3"
-    : "rounded-lg border border-line p-4";
+    ? "mt-3 w-full max-w-6xl rounded-md border border-line bg-surface p-3"
+    : "w-full max-w-6xl rounded-lg border border-line p-4";
 
   const sectionAriaLabel = nested ? undefined : (subTitle ?? `${assetClassLabel(assetClass)}选标`);
 

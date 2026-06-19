@@ -71,7 +71,77 @@ describe("PathDetailPage", () => {
     expect(screen.getByText("年末权重")).toBeInTheDocument();
   });
 
-  it("shows localized failure reason", async () => {
+  it("renders first/last monthly rows and all money in ¥xx.xxw format (td/056 §2.2/§3.1)", async () => {
+    mockGetPathDetail.mockResolvedValue({
+      path_no: 0,
+      path_seed: "1",
+      succeeded: true,
+      monthly,
+      yearly,
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <PathDetailPage />
+      </QueryClientProvider>,
+    );
+
+    // Terminal wealth (top) uses the last monthly row: 76,100,000 minor -> ¥76.10w.
+    // Appears at the top summary and in the last monthly row.
+    expect((await screen.findAllByText("¥76.10w")).length).toBeGreaterThanOrEqual(1);
+    // First monthly row asset: 100,000,000 minor -> ¥100.00w (no thousands separators).
+    expect(screen.getAllByText("¥100.00w").length).toBeGreaterThan(0);
+    // No legacy comma-grouped currency anywhere.
+    expect(screen.queryByText(/¥[\d,]{4,}\.\d{2}(?!w)/)).toBeNull();
+  });
+
+  it("renders yearly weights as 名称（代码） / 现金 / 未知资产, never holding IDs (td/056 §3.2)", async () => {
+    mockGetPathDetail.mockResolvedValue({
+      path_no: 0,
+      path_seed: "1",
+      succeeded: true,
+      monthly,
+      yearly: [
+        {
+          ...yearly[0],
+          asset_weights: { hold_eq: 0.7, hold_cash: 0.2, hold_legacy: 0.1 },
+        },
+      ],
+      asset_labels: {
+        hold_eq: {
+          instrument_name: "沪深300ETF",
+          instrument_code: "510300",
+          asset_class: "equity",
+          is_cash: false,
+        },
+        hold_cash: {
+          instrument_name: "现金",
+          instrument_code: "CASH",
+          asset_class: "cash",
+          is_cash: true,
+        },
+      },
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <PathDetailPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText(/月度 \(240\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /年度 \(1\)/ }));
+
+    expect(screen.getByText(/沪深300ETF（510300）: 70\.00%/)).toBeInTheDocument();
+    expect(screen.getByText(/现金\/其他: 20\.00%/)).toBeInTheDocument();
+    // Missing label degrades to 未知资产, never a holding UUID.
+    expect(screen.getByText(/未知资产: 10\.00%/)).toBeInTheDocument();
+    expect(screen.queryByText(/hold_/)).toBeNull();
+  });
+
+  it("shows empty state when monthly/yearly are empty (td/056 §3.1)", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -89,5 +159,8 @@ describe("PathDetailPage", () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByText(/早期序列风险/)).toBeInTheDocument();
+    expect(screen.getByText("暂无月度路径数据")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /年度 \(0\)/ }));
+    expect(screen.getByText("暂无年度路径数据")).toBeInTheDocument();
   });
 });

@@ -351,9 +351,25 @@ func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
 		}
 	}
 
+	// td/056 §3.1: monthly rows must be real (not fake zero spacers). For a path
+	// that runs the full horizon, monthly length equals 12×yearly and the
+	// first/last month_offset are parseable, increasing month indices.
+	mLast := monthly[len(monthly)-1].(map[string]any)
+	firstOffset, ok1 := m0["month_offset"].(float64)
+	lastOffset, ok2 := mLast["month_offset"].(float64)
+	if !ok1 || !ok2 || lastOffset <= firstOffset {
+		t.Fatalf("monthly month_offset not increasing: first=%v last=%v", m0["month_offset"], mLast["month_offset"])
+	}
+	if _, ok := mLast["total_wealth_minor"].(float64); !ok {
+		t.Fatalf("monthly last row total_wealth_minor not numeric: %+v", mLast)
+	}
+
 	yearly, ok := detail["yearly"].([]any)
 	if !ok || len(yearly) == 0 {
 		t.Fatalf("path detail yearly missing or empty: %+v", detail["yearly"])
+	}
+	if len(monthly) != len(yearly)*12 {
+		t.Fatalf("monthly length %d != 12×yearly %d (full-horizon path expected)", len(monthly), len(yearly)*12)
 	}
 	y0 := yearly[0].(map[string]any)
 	for _, key := range []string{"year", "start_wealth_minor", "income_minor", "spending_minor", "tax_minor", "transaction_cost", "investment_gain_loss", "end_wealth_minor", "year_end_drawdown", "max_intra_year_dd", "rebalanced"} {
@@ -365,6 +381,31 @@ func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
 		if _, present := y0[pascal]; present {
 			t.Fatalf("yearly[0] leaked PascalCase field %q: %+v", pascal, y0)
 		}
+	}
+
+	// td/056 §3: path detail must carry frozen-snapshot asset labels so the UI
+	// renders instrument names instead of internal holding IDs in weight rows.
+	labels, ok := detail["asset_labels"].(map[string]any)
+	if !ok || len(labels) == 0 {
+		t.Fatalf("path detail asset_labels missing or empty: %+v", detail["asset_labels"])
+	}
+	var sawNamedLabel bool
+	for _, raw := range labels {
+		label, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("asset_labels entry not an object: %+v", raw)
+		}
+		for _, key := range []string{"instrument_name", "instrument_code", "asset_class", "is_cash"} {
+			if _, present := label[key]; !present {
+				t.Fatalf("asset_labels entry missing field %q: %+v", key, label)
+			}
+		}
+		if name, _ := label["instrument_name"].(string); name != "" {
+			sawNamedLabel = true
+		}
+	}
+	if !sawNamedLabel {
+		t.Fatalf("asset_labels carried no instrument names: %+v", labels)
 	}
 }
 

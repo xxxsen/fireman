@@ -11,38 +11,49 @@ import (
 
 // InstrumentRecord is the full instruments table row.
 type InstrumentRecord struct {
-	ID                   string   `json:"id"`
-	Code                 string   `json:"code"`
-	Name                 string   `json:"name"`
-	Market               string   `json:"market"`
-	InstrumentType       string   `json:"instrument_type"`
-	AssetClass           string   `json:"asset_class"`
-	Region               string   `json:"region"`
-	Currency             string   `json:"currency"`
-	Provider             string   `json:"provider"`
-	ProviderSymbol       string   `json:"provider_symbol"`
-	AdjustPolicy         string   `json:"adjust_policy"`
-	InstrumentKind       string   `json:"instrument_kind,omitempty"`
-	IsSystem             bool     `json:"is_system"`
-	ExpenseRatio         *float64 `json:"expense_ratio,omitempty"`
-	ExpenseRatioStatus   string   `json:"expense_ratio_status"`
-	FeeTreatment         string   `json:"fee_treatment"`
-	Status               string   `json:"status"`
-	QualityStatus        string   `json:"quality_status,omitempty"`
-	DataAsOf             string   `json:"data_as_of,omitempty"`
-	DataSourceName       string   `json:"data_source_name,omitempty"`
-	PointType            string   `json:"point_type,omitempty"`
-	DataStale            bool     `json:"data_stale"`
-	StaleWarning         string   `json:"stale_warning,omitempty"`
-	ReferencingPlanCount int      `json:"referencing_plan_count,omitempty"`
-	SimulationEligible   bool     `json:"simulation_eligible,omitempty"`
-	HistoryDepth         string   `json:"history_depth,omitempty"`
-	CompleteYearCount    int      `json:"complete_year_count,omitempty"`
-	MonthlyReturnCount   int      `json:"monthly_return_count,omitempty"`
-	MetricsVersion       string   `json:"metrics_version,omitempty"`
-	Warnings             []string `json:"warnings,omitempty"`
-	CreatedAt            int64    `json:"created_at"`
-	UpdatedAt            int64    `json:"updated_at"`
+	ID                   string                     `json:"id"`
+	Code                 string                     `json:"code"`
+	Name                 string                     `json:"name"`
+	Market               string                     `json:"market"`
+	InstrumentType       string                     `json:"instrument_type"`
+	AssetClass           string                     `json:"asset_class"`
+	Region               string                     `json:"region"`
+	Currency             string                     `json:"currency"`
+	Provider             string                     `json:"provider"`
+	ProviderSymbol       string                     `json:"provider_symbol"`
+	AdjustPolicy         string                     `json:"adjust_policy"`
+	InstrumentKind       string                     `json:"instrument_kind,omitempty"`
+	IsSystem             bool                       `json:"is_system"`
+	ExpenseRatio         *float64                   `json:"expense_ratio,omitempty"`
+	ExpenseRatioStatus   string                     `json:"expense_ratio_status"`
+	FeeTreatment         string                     `json:"fee_treatment"`
+	Status               string                     `json:"status"`
+	QualityStatus        string                     `json:"quality_status,omitempty"`
+	DataAsOf             string                     `json:"data_as_of,omitempty"`
+	DataSourceName       string                     `json:"data_source_name,omitempty"`
+	PointType            string                     `json:"point_type,omitempty"`
+	DataStale            bool                       `json:"data_stale"`
+	StaleWarning         string                     `json:"stale_warning,omitempty"`
+	ReferencingPlanCount int                        `json:"referencing_plan_count,omitempty"`
+	SimulationEligible   bool                       `json:"simulation_eligible,omitempty"`
+	HistoryDepth         string                     `json:"history_depth,omitempty"`
+	CompleteYearCount    int                        `json:"complete_year_count,omitempty"`
+	MonthlyReturnCount   int                        `json:"monthly_return_count,omitempty"`
+	MetricsVersion       string                     `json:"metrics_version,omitempty"`
+	Warnings             []string                   `json:"warnings,omitempty"`
+	TrailingReturns      *InstrumentTrailingReturns `json:"trailing_returns,omitempty"`
+	CreatedAt            int64                      `json:"created_at"`
+	UpdatedAt            int64                      `json:"updated_at"`
+}
+
+// InstrumentTrailingReturns is the asset-library list view of annualized trailing
+// returns. Each period is nil when not computable (insufficient history, fetching
+// or failed); the frontend renders nil as "—".
+type InstrumentTrailingReturns struct {
+	AsOfDate                  string   `json:"as_of_date"`
+	OneYearAnnualizedReturn   *float64 `json:"one_year_annualized_return"`
+	ThreeYearAnnualizedReturn *float64 `json:"three_year_annualized_return"`
+	FiveYearAnnualizedReturn  *float64 `json:"five_year_annualized_return"`
 }
 
 // InstrumentRepo manages the asset library.

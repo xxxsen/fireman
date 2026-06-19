@@ -8,52 +8,67 @@ import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { getPathDetail } from "@/lib/api/simulations";
-import { failureReasonLabel, formatMoney, formatPercent } from "@/lib/format";
+import { failureReasonLabel, formatMoneyWan, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
-import type { PathMonthRecord, PathYearRecord } from "@/types/api";
+import type { PathAssetLabel, PathMonthRecord, PathYearRecord } from "@/types/api";
 
-const ROW_HEIGHT = 36;
+interface Column<T> {
+  key: string;
+  header: string;
+  render: (row: T) => ReactNode;
+  align?: "left" | "right";
+}
 
-function VirtualTable<T>({
+/**
+ * Plain scrollable table that renders every row. The data sizes here (≤ 420
+ * monthly / ≤ 35 yearly) are small enough to render directly; spacer-based
+ * virtualization left blank cells in some browsers, so it was removed.
+ */
+function ScrollTable<T>({
   rows,
   columns,
-  height = 480,
+  height,
+  emptyLabel,
+  rowKey,
 }: {
   rows: T[];
-  columns: { key: string; header: string; render: (row: T) => ReactNode; align?: "left" | "right" }[];
-  height?: number;
+  columns: Column<T>[];
+  height: number;
+  emptyLabel: string;
+  rowKey: (row: T, index: number) => string | number;
 }) {
-  const [scrollTop, setScrollTop] = useState(0);
-  const visible = Math.ceil(height / ROW_HEIGHT) + 2;
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT));
-  const slice = rows.slice(start, start + visible);
-  const offsetY = start * ROW_HEIGHT;
-
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-line px-3 py-8 text-center text-sm text-ink-muted">
+        {emptyLabel}
+      </div>
+    );
+  }
   return (
-    <div
-      className="overflow-auto rounded-lg border border-line"
-      style={{ height }}
-      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-    >
+    <div className="overflow-auto rounded-lg border border-line" style={{ height }}>
       <table className="min-w-full text-sm">
         <thead className="sticky top-0 z-10 bg-surface-muted">
           <tr>
             {columns.map((c) => (
               <th
                 key={c.key}
-                className={`px-3 py-2 font-medium text-ink-muted ${c.align === "right" ? "text-right" : "text-left"}`}
+                className={`px-3 py-2 font-medium text-ink-muted ${
+                  c.align === "right" ? "text-right" : "text-left"
+                }`}
               >
                 {c.header}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody style={{ height: rows.length * ROW_HEIGHT }}>
-          <tr style={{ height: offsetY }} aria-hidden />
-          {slice.map((row, i) => (
-            <tr key={start + i} className="border-t border-line" style={{ height: ROW_HEIGHT }}>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={rowKey(row, i)} className="border-t border-line">
               {columns.map((c) => (
-                <td key={c.key} className={`px-3 py-2 text-ink ${c.align === "right" ? "text-right" : ""}`}>
+                <td
+                  key={c.key}
+                  className={`px-3 py-2 text-ink ${c.align === "right" ? "text-right" : ""}`}
+                >
                   {c.render(row)}
                 </td>
               ))}
@@ -64,6 +79,25 @@ function VirtualTable<T>({
       <p className="p-2 text-xs text-ink-muted">共 {rows.length} 行</p>
     </div>
   );
+}
+
+/** Render a frozen-snapshot weight entry as `名称（代码）: 70.00%`, never a holding UUID. */
+function assetWeightLabel(
+  holdingId: string,
+  weight: number,
+  labels: Record<string, PathAssetLabel> | undefined,
+): string {
+  const pct = `${(weight * 100).toFixed(2)}%`;
+  const label = labels?.[holdingId];
+  if (!label) {
+    return `未知资产: ${pct}`;
+  }
+  if (label.is_cash) {
+    return `现金/其他: ${pct}`;
+  }
+  const code = label.instrument_code ? `（${label.instrument_code}）` : "";
+  const name = label.instrument_name || "未知资产";
+  return `${name}${code}: ${pct}`;
 }
 
 export default function PathDetailPage() {
@@ -99,39 +133,40 @@ export default function PathDetailPage() {
   }
   if (!data) return null;
 
+  const assetLabels = data.asset_labels;
   const terminalWealth =
     data.monthly.length > 0 ? data.monthly[data.monthly.length - 1].total_wealth_minor : 0;
 
-  const monthCols = [
-    { key: "m", header: "月份", render: (m: PathMonthRecord) => m.month_offset },
-    { key: "w", header: "资产", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.total_wealth_minor) },
-    { key: "i", header: "收入", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.income_minor) },
-    { key: "s", header: "支出", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.spending_minor) },
-    { key: "t", header: "税费", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.tax_minor) },
-    { key: "c", header: "交易成本", align: "right" as const, render: (m: PathMonthRecord) => formatMoney(m.transaction_cost) },
-    { key: "d", header: "回撤", align: "right" as const, render: (m: PathMonthRecord) => formatPercent(m.drawdown) },
-    { key: "r", header: "调仓", render: (m: PathMonthRecord) => (m.rebalanced ? "是" : "否") },
+  const monthCols: Column<PathMonthRecord>[] = [
+    { key: "m", header: "月份", render: (m) => m.month_offset },
+    { key: "w", header: "资产", align: "right", render: (m) => formatMoneyWan(m.total_wealth_minor) },
+    { key: "i", header: "收入", align: "right", render: (m) => formatMoneyWan(m.income_minor) },
+    { key: "s", header: "支出", align: "right", render: (m) => formatMoneyWan(m.spending_minor) },
+    { key: "t", header: "税费", align: "right", render: (m) => formatMoneyWan(m.tax_minor) },
+    { key: "c", header: "交易成本", align: "right", render: (m) => formatMoneyWan(m.transaction_cost) },
+    { key: "d", header: "回撤", align: "right", render: (m) => formatPercent(m.drawdown) },
+    { key: "r", header: "调仓", render: (m) => (m.rebalanced ? "是" : "否") },
   ];
 
-  const yearCols = [
-    { key: "y", header: "年份", render: (y: PathYearRecord) => y.year },
-    { key: "sw", header: "年初资产", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.start_wealth_minor) },
-    { key: "i", header: "收入", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.income_minor) },
-    { key: "s", header: "支出", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.spending_minor) },
-    { key: "t", header: "税费", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.tax_minor) },
-    { key: "c", header: "交易成本", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.transaction_cost) },
-    { key: "g", header: "投资损益", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.investment_gain_loss) },
-    { key: "ew", header: "期末资产", align: "right" as const, render: (y: PathYearRecord) => formatMoney(y.end_wealth_minor) },
-    { key: "ydd", header: "年末回撤", align: "right" as const, render: (y: PathYearRecord) => formatPercent(y.year_end_drawdown) },
-    { key: "idd", header: "年内最大回撤", align: "right" as const, render: (y: PathYearRecord) => formatPercent(y.max_intra_year_dd) },
-    { key: "r", header: "调仓", render: (y: PathYearRecord) => (y.rebalanced ? "是" : "否") },
+  const yearCols: Column<PathYearRecord>[] = [
+    { key: "y", header: "年份", render: (y) => y.year },
+    { key: "sw", header: "年初资产", align: "right", render: (y) => formatMoneyWan(y.start_wealth_minor) },
+    { key: "i", header: "收入", align: "right", render: (y) => formatMoneyWan(y.income_minor) },
+    { key: "s", header: "支出", align: "right", render: (y) => formatMoneyWan(y.spending_minor) },
+    { key: "t", header: "税费", align: "right", render: (y) => formatMoneyWan(y.tax_minor) },
+    { key: "c", header: "交易成本", align: "right", render: (y) => formatMoneyWan(y.transaction_cost) },
+    { key: "g", header: "投资损益", align: "right", render: (y) => formatMoneyWan(y.investment_gain_loss) },
+    { key: "ew", header: "期末资产", align: "right", render: (y) => formatMoneyWan(y.end_wealth_minor) },
+    { key: "ydd", header: "年末回撤", align: "right", render: (y) => formatPercent(y.year_end_drawdown) },
+    { key: "idd", header: "年内最大回撤", align: "right", render: (y) => formatPercent(y.max_intra_year_dd) },
+    { key: "r", header: "调仓", render: (y) => (y.rebalanced ? "是" : "否") },
     {
       key: "wt",
       header: "年末权重",
-      render: (y: PathYearRecord) =>
-        y.asset_weights
+      render: (y) =>
+        y.asset_weights && Object.keys(y.asset_weights).length > 0
           ? Object.entries(y.asset_weights)
-              .map(([k, v]) => `${k}: ${formatPercent(v)}`)
+              .map(([k, v]) => assetWeightLabel(k, v, assetLabels))
               .join(" · ")
           : "—",
     },
@@ -157,7 +192,7 @@ export default function PathDetailPage() {
         </div>
         <div>
           <dt className="text-sm text-ink-muted">期末资产</dt>
-          <dd className="text-ink">{formatMoney(terminalWealth)}</dd>
+          <dd className="text-ink">{formatMoneyWan(terminalWealth)}</dd>
         </div>
         <div>
           <dt className="text-sm text-ink-muted">全路径最大回撤</dt>
@@ -195,9 +230,21 @@ export default function PathDetailPage() {
       </div>
 
       {view === "monthly" ? (
-        <VirtualTable rows={data.monthly} columns={monthCols} />
+        <ScrollTable
+          rows={data.monthly}
+          columns={monthCols}
+          height={480}
+          emptyLabel="暂无月度路径数据"
+          rowKey={(m) => m.month_offset}
+        />
       ) : (
-        <VirtualTable rows={data.yearly} columns={yearCols} height={400} />
+        <ScrollTable
+          rows={data.yearly}
+          columns={yearCols}
+          height={400}
+          emptyLabel="暂无年度路径数据"
+          rowKey={(y) => y.year}
+        />
       )}
     </div>
   );
