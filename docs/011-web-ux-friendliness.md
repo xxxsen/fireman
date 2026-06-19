@@ -78,4 +78,4 @@
 ## 8. 测试与门禁
 
 - 改动页补 / 改 Vitest（沿用 `*.test.tsx` 约定），覆盖：错误态渲染、mutation `onError` 提示、ConfirmDialog 二次确认与 pending、按钮禁用防重复提交。
-- 交付门禁：`make web-lint`、`make web-test`、`make web-build` 全部通过。当前结果：lint 0 警告、test 48 文件 / 206 用例全绿、build 成功。
+- 交付门禁：`make web-lint`、`make web-test`、`make web-build` 全部通过。当前结果：lint 0 警告、test 48 文件 / 208 用例全绿、build 成功。

@@ -12,6 +12,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Dialog } from "@/components/ui/Dialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { LoadingState } from "@/components/ui/LoadingState";
+import { ErrorState } from "@/components/ui/ErrorState";
 import { getHoldings } from "@/lib/api/holdings";
 import {
   cancelRebalanceDraft,
@@ -218,6 +219,21 @@ export default function RebalancePlanPage() {
     setAcceptScaleShrink(false);
     setPreviewOpen(true);
   };
+
+  if ((plan.isError || draft.isError) && (!plan.data || !draft.data)) {
+    return (
+      <ErrorState
+        message="无法加载调仓计划。请确认后端服务可用后重试。"
+        onRetry={() => {
+          if (plan.isError) void plan.refetch();
+          if (draft.isError) void draft.refetch();
+        }}
+        backHref={`/plans/${planId}/rebalance`}
+        backLabel="返回持仓预览"
+        technicalDetail={queryErrorMessage(plan.error ?? draft.error)}
+      />
+    );
+  }
 
   if (plan.isLoading || draft.isLoading || !plan.data || !draft.data) {
     return <LoadingState label="加载调仓计划…" />;

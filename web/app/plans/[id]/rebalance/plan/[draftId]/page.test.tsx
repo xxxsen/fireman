@@ -101,6 +101,23 @@ describe("RebalancePlanPage", () => {
     getRebalanceDraft.mockClear();
   });
 
+  it("shows error state with retry when draft load fails", async () => {
+    getRebalanceDraft.mockRejectedValueOnce(new Error("boom"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RebalancePlanPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByText("加载调仓计划…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("error-state-retry")).toBeInTheDocument();
+    expect(screen.getByTestId("error-state-back")).toBeInTheDocument();
+  });
+
   it("shows reference package bar and package delta column", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

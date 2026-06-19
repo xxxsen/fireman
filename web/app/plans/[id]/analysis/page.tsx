@@ -1,11 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { StaleBanner } from "@/components/ui/StaleBanner";
+import { Button } from "@/components/ui/Button";
+import { Alert } from "@/components/ui/Alert";
 import { WealthPathChart } from "@/components/charts/WealthPathChart";
 import {
   ParameterCurvesChart,
@@ -72,47 +73,39 @@ function AnalysisJobPanel({
   const worstId = report?.worst_scenario_id as string | undefined;
 
   return (
-    <section className="rounded-lg border p-4">
-      <h2 className="flex items-center font-medium">
+    <section className="rounded-lg border border-line bg-surface p-4">
+      <h2 className="flex items-center font-medium text-ink">
         {title}
         <MetricHelp termKey={termKey} />
       </h2>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          className="rounded-md bg-brand px-4 py-2 text-sm text-white disabled:opacity-50"
-          disabled={running || jobBusy}
-          onClick={onRun}
-        >
+        <Button disabled={running || jobBusy} onClick={onRun}>
           运行{title}
-        </button>
+        </Button>
         {activeJobId && (
           <>
             <span className="text-sm text-ink-muted">
               {jobState.job?.status ?? "连接中"}… {Math.round(jobState.progress * 100)}%
             </span>
             {onCancel && (
-              <button type="button" className="text-sm text-danger underline" onClick={onCancel}>
+              <Button variant="ghost" className="px-2 py-1 text-danger" onClick={onCancel}>
                 取消
-              </button>
+              </Button>
             )}
           </>
         )}
       </div>
       {panelError && (
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <p className="text-sm text-danger">{panelError}</p>
-          {onRetry && (
-            <button
-              type="button"
-              className="text-sm underline"
-              disabled={jobBusy}
-              onClick={onRetry}
-            >
-              重试
-            </button>
-          )}
-        </div>
+        <Alert variant="danger" className="mt-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>{panelError}</span>
+            {onRetry && (
+              <Button variant="ghost" className="px-2 py-1" disabled={jobBusy} onClick={onRetry}>
+                重试
+              </Button>
+            )}
+          </div>
+        </Alert>
       )}
       {latest?.result_stale && <StaleBanner />}
       {latest?.status === "succeeded" && report && (
@@ -469,82 +462,82 @@ export function AnalysisContent() {
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">模拟分析中心</h1>
-        <Link href={`/plans/${planId}/overview`} className="text-sm underline">
+        <h1 className="text-xl font-semibold text-ink">模拟分析中心</h1>
+        <Button href={`/plans/${planId}/overview`} variant="secondary">
           返回组合总览
-        </Link>
+        </Button>
       </div>
 
-      <section className="rounded-lg border p-4">
-        <h2 className="font-medium">Monte Carlo 模拟</h2>
+      <section className="rounded-lg border border-line bg-surface p-4">
+        <h2 className="font-medium text-ink">Monte Carlo 模拟</h2>
         {snapshotWarningLabels.length > 0 && (
-          <p className="mt-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning" role="status">
+          <Alert variant="warning" className="mt-2">
             以下持仓历史样本有限，模拟结果长期不确定性较高：{snapshotWarningLabels.join("；")}
-          </p>
+          </Alert>
         )}
         <div className="mt-3 flex flex-wrap items-end gap-4">
-          <label className="text-sm">
+          <label className="text-sm text-ink">
             模拟次数
             <input
               type="number"
               min={1000}
               max={100000}
-              className="ml-2 rounded border px-2 py-1"
+              className="ml-2 rounded border border-line px-2 py-1"
               value={runs}
               onChange={(e) => setRunsOverride(Number(e.target.value))}
             />
           </label>
-          <button
-            type="button"
-            className="rounded-md bg-brand px-4 py-2 text-sm text-white disabled:opacity-50"
+          <Button
             disabled={startMut.isPending || jobBusy}
             onClick={() => startMut.mutate()}
           >
             运行模拟
-          </button>
+          </Button>
           {activeJobId && activeJobKind === "sim" && (
             <>
               <span className="text-sm text-ink-muted">
                 {jobState.job?.status ?? "连接中"}… {Math.round(jobState.progress * 100)}%
               </span>
-              <button
-                type="button"
-                className="text-sm text-danger underline"
+              <Button
+                variant="ghost"
+                className="px-2 py-1 text-danger"
                 onClick={() => void cancelJob(activeJobId)}
               >
                 取消
-              </button>
+              </Button>
             </>
           )}
         </div>
         {simPanelError && (
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <p className="text-sm text-danger">{simPanelError}</p>
-            <button
-              type="button"
-              className="text-sm underline"
-              disabled={jobBusy}
-              onClick={() => {
-                clearJobError("sim");
-                startMut.mutate();
-              }}
-            >
-              重试
-            </button>
-          </div>
+          <Alert variant="danger" className="mt-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span>{simPanelError}</span>
+              <Button
+                variant="ghost"
+                className="px-2 py-1"
+                disabled={jobBusy}
+                onClick={() => {
+                  clearJobError("sim");
+                  startMut.mutate();
+                }}
+              >
+                重试
+              </Button>
+            </div>
+          </Alert>
         )}
       </section>
 
       {latest?.result_stale && <StaleBanner />}
 
       {latest && simCompleted && (
-        <section className="rounded-lg border p-4">
-          <h2 className="flex items-center font-medium">
+        <section className="rounded-lg border border-line bg-surface p-4">
+          <h2 className="flex items-center font-medium text-ink">
             最新结果
             <MetricHelp termKey="fire_success_rate" />
           </h2>
           {latest.summary_json?.success_probability !== undefined && (
-            <p className="mt-2 text-2xl font-semibold">
+            <p className="mt-2 text-2xl font-semibold text-ink">
               成功率 {formatPercent(latest.summary_json.success_probability)}
             </p>
           )}
@@ -564,14 +557,13 @@ export function AnalysisContent() {
             </div>
           )}
           {((latest.summary_json?.model_warnings as string[] | undefined) ?? []).length > 0 && (
-            <div className="mt-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
-              <h3 className="font-medium">模型提示</h3>
-              <ul className="mt-1 list-disc pl-5">
+            <Alert variant="warning" title="模型提示" className="mt-4">
+              <ul className="list-disc pl-5">
                 {(latest.summary_json?.model_warnings as string[]).map((w) => (
                   <li key={w}>{w}</li>
                 ))}
               </ul>
-            </div>
+            </Alert>
           )}
           {repPaths.length > 0 && (
             <div className="mt-4">
@@ -579,9 +571,9 @@ export function AnalysisContent() {
               <ul className="mt-2 flex flex-wrap gap-2">
                 {repPaths.map((p) => (
                   <li key={p.path_no}>
-                    <button
-                      type="button"
-                      className="rounded border px-2 py-1 text-sm hover:bg-surface-muted"
+                    <Button
+                      variant="secondary"
+                      className="px-2 py-1"
                       onClick={() =>
                         router.push(
                           `/plans/${planId}/analysis/${latest.id}/paths/${p.path_no}`,
@@ -590,7 +582,7 @@ export function AnalysisContent() {
                     >
                       {p.representative_percentile?.toUpperCase()} ·{" "}
                       {formatMoney(p.terminal_wealth_minor)}
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>

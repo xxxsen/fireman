@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
 import { LoadingState } from "@/components/ui/LoadingState";
+import { ErrorState } from "@/components/ui/ErrorState";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { getPlan } from "@/lib/api/plans";
 import {
@@ -22,6 +23,7 @@ import {
 } from "@/lib/api/rebalance-executions";
 import { formatMoney, rebalanceActionLabel } from "@/lib/format";
 import { ApiError } from "@/lib/api/client";
+import { queryErrorMessage } from "@/lib/query-error";
 import type { RebalanceExecutionEvent, RebalanceExecutionLine } from "@/types/api";
 
 type ModalKind = "sell" | "buy" | "note" | null;
@@ -209,6 +211,18 @@ export default function RebalanceExecutionWorkspacePage() {
     setError(null);
     setModal(kind);
   };
+
+  if (detail.isError && !detail.data) {
+    return (
+      <ErrorState
+        message="无法加载调仓执行工作区。请确认后端服务可用后重试。"
+        onRetry={() => void detail.refetch()}
+        backHref={`/plans/${planId}/rebalance`}
+        backLabel="返回持仓预览"
+        technicalDetail={queryErrorMessage(detail.error)}
+      />
+    );
+  }
 
   if (detail.isLoading || !detail.data) {
     return <LoadingState label="加载调仓执行工作区…" />;
