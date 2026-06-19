@@ -300,23 +300,40 @@ export default function AssetRefreshPage() {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "提交失败"),
   });
 
-  if ((plan.isError || holdings.isError) && (!plan.data || !holdings.data)) {
+  if (
+    (plan.isError || holdings.isError || targets.isError || instruments.isError) &&
+    (!plan.data || !holdings.data || !targets.data || !instruments.data)
+  ) {
     return (
       <ErrorState
         message="无法加载资产变更数据。请确认后端服务可用后重试。"
         onRetry={() => {
-          void plan.refetch();
-          void holdings.refetch();
-          void activeExecution.refetch();
+          if (plan.isError) void plan.refetch();
+          if (holdings.isError) void holdings.refetch();
+          if (targets.isError) void targets.refetch();
+          if (instruments.isError) void instruments.refetch();
+          if (activeExecution.isError) void activeExecution.refetch();
         }}
         backHref={`/plans/${planId}/overview`}
         backLabel="返回总览"
-        technicalDetail={queryErrorMessage(plan.error ?? holdings.error)}
+        technicalDetail={queryErrorMessage(
+          plan.error ?? holdings.error ?? targets.error ?? instruments.error,
+        )}
       />
     );
   }
 
-  if (plan.isLoading || holdings.isLoading || activeExecution.isLoading || !plan.data || !holdings.data) {
+  if (
+    plan.isLoading ||
+    holdings.isLoading ||
+    activeExecution.isLoading ||
+    targets.isLoading ||
+    instruments.isLoading ||
+    !plan.data ||
+    !holdings.data ||
+    !targets.data ||
+    !instruments.data
+  ) {
     return <LoadingState label="加载资产变更…" />;
   }
 

@@ -7,6 +7,8 @@ import { MetricHelp } from "@/components/ui/MetricHelp";
 import { StaleBanner } from "@/components/ui/StaleBanner";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { queryErrorMessage } from "@/lib/query-error";
 import { WealthPathChart } from "@/components/charts/WealthPathChart";
 import {
   ParameterCurvesChart,
@@ -47,6 +49,8 @@ function AnalysisJobPanel({
   running,
   onCancel,
   latest,
+  listError,
+  onReloadList,
 }: {
   title: string;
   termKey: "stress_test" | "sensitivity_test";
@@ -63,6 +67,8 @@ function AnalysisJobPanel({
     result_stale?: boolean;
     result_json?: Record<string, unknown>;
   } | null;
+  listError?: string | null;
+  onReloadList?: () => void;
 }) {
   const report = latest?.result_json;
   const scenarios = (report?.scenarios as Array<Record<string, unknown>> | undefined) ?? [];
@@ -102,6 +108,18 @@ function AnalysisJobPanel({
             {onRetry && (
               <Button variant="ghost" className="px-2 py-1" disabled={jobBusy} onClick={onRetry}>
                 重试
+              </Button>
+            )}
+          </div>
+        </Alert>
+      )}
+      {listError && (
+        <Alert variant="danger" className="mt-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span>无法加载{title}结果：{listError}</span>
+            {onReloadList && (
+              <Button variant="ghost" className="px-2 py-1" onClick={onReloadList}>
+                重新加载
               </Button>
             )}
           </div>
@@ -282,7 +300,7 @@ function AnalysisJobPanel({
           )}
         </div>
       )}
-      {!latest && !activeJobId && (
+      {!latest && !activeJobId && !listError && (
         <p className="mt-3 text-sm text-ink-muted">尚无结果，点击上方按钮运行。</p>
       )}
     </section>
@@ -459,6 +477,24 @@ export function AnalysisContent() {
     return labels;
   })();
 
+  if (
+    (paramsQ.isError || holdingsQ.isError) &&
+    (!paramsQ.data || !holdingsQ.data)
+  ) {
+    return (
+      <ErrorState
+        message="无法加载分析所需的计划参数或持仓数据。请确认后端服务可用后重试。"
+        onRetry={() => {
+          if (paramsQ.isError) void paramsQ.refetch();
+          if (holdingsQ.isError) void holdingsQ.refetch();
+        }}
+        backHref={`/plans/${planId}/overview`}
+        backLabel="返回组合总览"
+        technicalDetail={queryErrorMessage(paramsQ.error ?? holdingsQ.error)}
+      />
+    );
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -522,6 +558,16 @@ export function AnalysisContent() {
                 }}
               >
                 重试
+              </Button>
+            </div>
+          </Alert>
+        )}
+        {simsQ.isError && !simsQ.data && (
+          <Alert variant="danger" className="mt-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span>无法加载历史模拟结果：{queryErrorMessage(simsQ.error)}</span>
+              <Button variant="ghost" className="px-2 py-1" onClick={() => void simsQ.refetch()}>
+                重新加载
               </Button>
             </div>
           </Alert>
@@ -608,6 +654,8 @@ export function AnalysisContent() {
         running={stressMut.isPending}
         onCancel={activeJobId && activeJobKind === "stress" ? () => void cancelJob(activeJobId) : undefined}
         latest={latestStress}
+        listError={stressQ.isError && !stressQ.data ? queryErrorMessage(stressQ.error) : null}
+        onReloadList={() => void stressQ.refetch()}
       />
 
       <AnalysisJobPanel
@@ -630,6 +678,8 @@ export function AnalysisContent() {
           activeJobId && activeJobKind === "sensitivity" ? () => void cancelJob(activeJobId) : undefined
         }
         latest={latestSens}
+        listError={sensQ.isError && !sensQ.data ? queryErrorMessage(sensQ.error) : null}
+        onReloadList={() => void sensQ.refetch()}
       />
     </div>
   );

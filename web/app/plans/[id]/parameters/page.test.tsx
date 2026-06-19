@@ -105,23 +105,25 @@ vi.mock("@/lib/api/holdings", () => ({
   getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
 }));
 
+const defaultAllocation = {
+  asset_class_targets: [
+    { asset_class: "equity", weight: 1 },
+    { asset_class: "bond", weight: 0 },
+    { asset_class: "cash", weight: 0 },
+  ],
+  region_targets: [
+    { asset_class: "equity", region: "domestic", weight_within_class: 1 },
+    { asset_class: "equity", region: "foreign", weight_within_class: 0 },
+    { asset_class: "bond", region: "domestic", weight_within_class: 1 },
+    { asset_class: "bond", region: "foreign", weight_within_class: 0 },
+    { asset_class: "cash", region: "domestic", weight_within_class: 1 },
+    { asset_class: "cash", region: "foreign", weight_within_class: 0 },
+  ],
+};
+const getAllocationMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/lib/api/allocation", () => ({
-  getAllocation: () =>
-    Promise.resolve({
-      asset_class_targets: [
-        { asset_class: "equity", weight: 1 },
-        { asset_class: "bond", weight: 0 },
-        { asset_class: "cash", weight: 0 },
-      ],
-      region_targets: [
-        { asset_class: "equity", region: "domestic", weight_within_class: 1 },
-        { asset_class: "equity", region: "foreign", weight_within_class: 0 },
-        { asset_class: "bond", region: "domestic", weight_within_class: 1 },
-        { asset_class: "bond", region: "foreign", weight_within_class: 0 },
-        { asset_class: "cash", region: "domestic", weight_within_class: 1 },
-        { asset_class: "cash", region: "foreign", weight_within_class: 0 },
-      ],
-    }),
+  getAllocation: (...args: unknown[]) => getAllocationMock(...args),
   listScenarios: () => Promise.resolve({ scenarios: [] }),
   updateAllocation: vi.fn(),
 }));
@@ -160,6 +162,36 @@ describe("ParametersPage strategy enums", () => {
     );
     updateParameters.mockReset();
     updateParameters.mockResolvedValue({});
+    getAllocationMock.mockReset();
+    getAllocationMock.mockResolvedValue(defaultAllocation);
+  });
+
+  it("shows error state (not a false scale-gap prompt) when holdings load fails", async () => {
+    getHoldingsMock.mockReset();
+    getHoldingsMock.mockRejectedValue(new Error("boom"));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByText(/规模缺口/)).not.toBeInTheDocument();
+    expect(screen.queryByText("资金与现金流")).not.toBeInTheDocument();
+  });
+
+  it("shows error state when allocation load fails", async () => {
+    getAllocationMock.mockReset();
+    getAllocationMock.mockRejectedValue(new Error("boom"));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
   });
 
   it("shows holdings simulation snapshot fields", async () => {

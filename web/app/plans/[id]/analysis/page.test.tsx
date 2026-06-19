@@ -7,6 +7,10 @@ const useJobStatusMock = vi.hoisted(() => vi.fn());
 const createSimulation = vi.hoisted(() => vi.fn());
 const createStressTest = vi.hoisted(() => vi.fn());
 const createSensitivityTest = vi.hoisted(() => vi.fn());
+const getParametersMock = vi.hoisted(() => vi.fn());
+const listSimulationsMock = vi.hoisted(() => vi.fn());
+const listStressTestsMock = vi.hoisted(() => vi.fn());
+const listSensitivityTestsMock = vi.hoisted(() => vi.fn());
 
 let jobStatusCallbacks: {
   onComplete?: () => void;
@@ -19,12 +23,13 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+const defaultParameters = {
+  parameters: { simulation_runs: 20000, plan_id: "plan_1" },
+  cash_flows: [],
+};
+
 vi.mock("@/lib/api/plans", () => ({
-  getParameters: () =>
-    Promise.resolve({
-      parameters: { simulation_runs: 20000, plan_id: "plan_1" },
-      cash_flows: [],
-    }),
+  getParameters: (...args: unknown[]) => getParametersMock(...args),
   getPlan: () =>
     Promise.resolve({
       id: "plan_1",
@@ -38,67 +43,64 @@ vi.mock("@/lib/api/plans", () => ({
     }),
 }));
 
-const getHoldingsMock = vi.hoisted(() =>
-  vi.fn(() =>
-    Promise.resolve({
-      holdings: [
-        {
-          id: "hold_1",
-          plan_id: "plan_1",
-          instrument_id: "inst_short",
-          enabled: true,
-          asset_class: "equity",
-          region: "domestic",
-          weight_within_group: 1,
-          current_amount_minor: 1_000_000_00,
-          simulation_snapshot_id: "snap_1",
-          snapshot_history_depth: "one_year",
-          snapshot_warnings: [
-            "仅有 1 个完整自然年度，收益与风险估计的不确定性较高",
-          ],
-          instrument_code: "SHORT01",
-          instrument_name: "短历史基金",
-          sort_order: 1,
-        },
-      ],
-    }),
-  ),
-);
+const getHoldingsMock = vi.hoisted(() => vi.fn());
+
+const defaultHoldings = {
+  holdings: [
+    {
+      id: "hold_1",
+      plan_id: "plan_1",
+      instrument_id: "inst_short",
+      enabled: true,
+      asset_class: "equity",
+      region: "domestic",
+      weight_within_group: 1,
+      current_amount_minor: 1_000_000_00,
+      simulation_snapshot_id: "snap_1",
+      snapshot_history_depth: "one_year",
+      snapshot_warnings: ["仅有 1 个完整自然年度，收益与风险估计的不确定性较高"],
+      instrument_code: "SHORT01",
+      instrument_name: "短历史基金",
+      sort_order: 1,
+    },
+  ],
+};
 
 vi.mock("@/lib/api/holdings", () => ({
   getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
 }));
 
+const defaultSimulations = {
+  simulations: [
+    {
+      id: "run_1",
+      job_id: "job_1",
+      plan_id: "plan_1",
+      success_count: 0,
+      failure_count: 100,
+      summary_json: {
+        success_probability: 0,
+        terminal_quantiles: { p50: 0 },
+        monthly_wealth_quantiles: [{ month_offset: 0, p50_minor: 100 }],
+        model_warnings: [
+          "短历史基金（SHORT01）仅有 1 个完整自然年度，收益与风险估计的不确定性较高",
+        ],
+      },
+      runs: 100,
+      seed: "42",
+      horizon_months: 120,
+      input_hash: "",
+      current_config_hash: "",
+      result_stale: false,
+      market_snapshot_hash: "",
+      engine_version: "v1",
+      created_at: 0,
+    },
+  ],
+};
+
 vi.mock("@/lib/api/simulations", () => ({
-  listSimulations: () =>
-    Promise.resolve({
-      simulations: [
-        {
-          id: "run_1",
-          job_id: "job_1",
-          plan_id: "plan_1",
-          success_count: 0,
-          failure_count: 100,
-          summary_json: {
-            success_probability: 0,
-            terminal_quantiles: { p50: 0 },
-            monthly_wealth_quantiles: [{ month_offset: 0, p50_minor: 100 }],
-            model_warnings: [
-              "短历史基金（SHORT01）仅有 1 个完整自然年度，收益与风险估计的不确定性较高",
-            ],
-          },
-          runs: 100,
-          seed: "42",
-          horizon_months: 120,
-          input_hash: "",
-          current_config_hash: "",
-          result_stale: false,
-          market_snapshot_hash: "",
-          engine_version: "v1",
-          created_at: 0,
-        },
-      ],
-    }),
+  listSimulations: (...args: unknown[]) => listSimulationsMock(...args),
   getJob: () =>
     Promise.resolve({
       id: "job_1",
@@ -135,8 +137,8 @@ vi.mock("@/lib/api/simulations", () => ({
 }));
 
 vi.mock("@/lib/api/analysis", () => ({
-  listStressTests: () => Promise.resolve({ stress_tests: [] }),
-  listSensitivityTests: () => Promise.resolve({ sensitivity_tests: [] }),
+  listStressTests: (...args: unknown[]) => listStressTestsMock(...args),
+  listSensitivityTests: (...args: unknown[]) => listSensitivityTestsMock(...args),
   createStressTest,
   createSensitivityTest,
   getStressTest: vi.fn(),
@@ -167,11 +169,20 @@ function renderAnalysis() {
 
 describe("AnalysisPage zero success", () => {
   beforeEach(() => {
-    getHoldingsMock.mockClear();
+    getHoldingsMock.mockReset();
+    getHoldingsMock.mockResolvedValue(defaultHoldings);
     useJobStatusMock.mockReset();
     createSimulation.mockReset();
     createStressTest.mockReset();
     createSensitivityTest.mockReset();
+    getParametersMock.mockReset();
+    getParametersMock.mockResolvedValue(defaultParameters);
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue(defaultSimulations);
+    listStressTestsMock.mockReset();
+    listStressTestsMock.mockResolvedValue({ stress_tests: [] });
+    listSensitivityTestsMock.mockReset();
+    listSensitivityTestsMock.mockResolvedValue({ sensitivity_tests: [] });
     useJobStatusMock.mockImplementation((jobId) => {
       if (!jobId) {
         return { job: null, progress: 0, error: null };
@@ -352,5 +363,49 @@ describe("AnalysisPage zero success", () => {
     expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
+
+  it("shows page-level error state when parameters load fails", async () => {
+    getParametersMock.mockReset();
+    getParametersMock.mockRejectedValue(new Error("params boom"));
+    renderAnalysis();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.getByTestId("error-state-retry")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeInTheDocument();
+  });
+
+  it("shows page-level error state when holdings load fails", async () => {
+    getHoldingsMock.mockReset();
+    getHoldingsMock.mockRejectedValue(new Error("holdings boom"));
+    renderAnalysis();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeInTheDocument();
+  });
+
+  it("shows module error (not silent empty) when simulations list fails", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockRejectedValue(new Error("sims boom"));
+    renderAnalysis();
+
+    expect(await screen.findByText(/无法加载历史模拟结果/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行模拟" })).toBeInTheDocument();
+  });
+
+  it("shows module error when stress list fails", async () => {
+    listStressTestsMock.mockReset();
+    listStressTestsMock.mockRejectedValue(new Error("stress boom"));
+    renderAnalysis();
+
+    expect(await screen.findByText(/无法加载压力测试结果/)).toBeInTheDocument();
+  });
+
+  it("shows module error when sensitivity list fails", async () => {
+    listSensitivityTestsMock.mockReset();
+    listSensitivityTestsMock.mockRejectedValue(new Error("sens boom"));
+    renderAnalysis();
+
+    expect(await screen.findByText(/无法加载敏感性测试结果/)).toBeInTheDocument();
   });
 });

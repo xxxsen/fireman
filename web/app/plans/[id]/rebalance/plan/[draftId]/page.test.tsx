@@ -14,8 +14,8 @@ vi.mock("@/lib/api/plans", () => ({
     Promise.resolve({ id: "plan_1", name: "测试", config_version: 1, base_currency: "CNY" }),
 }));
 
-vi.mock("@/lib/api/holdings", () => ({
-  getHoldings: () =>
+const { getHoldings } = vi.hoisted(() => ({
+  getHoldings: vi.fn(() =>
     Promise.resolve({
       holdings: [
         {
@@ -33,6 +33,11 @@ vi.mock("@/lib/api/holdings", () => ({
         },
       ],
     }),
+  ),
+}));
+
+vi.mock("@/lib/api/holdings", () => ({
+  getHoldings: (...args: unknown[]) => getHoldings(...args),
 }));
 
 const { getRebalanceDraft } = vi.hoisted(() => ({
@@ -99,6 +104,7 @@ vi.mock("@/lib/api/rebalance-drafts", () => ({
 describe("RebalancePlanPage", () => {
   beforeEach(() => {
     getRebalanceDraft.mockClear();
+    getHoldings.mockClear();
   });
 
   it("shows error state with retry when draft load fails", async () => {
@@ -116,6 +122,24 @@ describe("RebalancePlanPage", () => {
     expect(screen.queryByText("加载调仓计划…")).not.toBeInTheDocument();
     expect(screen.getByTestId("error-state-retry")).toBeInTheDocument();
     expect(screen.getByTestId("error-state-back")).toBeInTheDocument();
+  });
+
+  it("shows error state (not a no-cash business prompt) when holdings load fails", async () => {
+    getHoldings.mockRejectedValueOnce(new Error("boom"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RebalancePlanPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.getByTestId("error-state-retry")).toBeInTheDocument();
+    expect(screen.queryByText(/参考调仓方案/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/现金/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/组合规模/)).not.toBeInTheDocument();
   });
 
   it("shows reference package bar and package delta column", async () => {

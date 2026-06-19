@@ -67,70 +67,74 @@ vi.mock("@/lib/api/allocation", () => ({
     }),
 }));
 
+const defaultHoldingsResp = {
+  holdings: [
+    {
+      id: "h1",
+      plan_id: "plan_1",
+      instrument_id: "i1",
+      instrument_name: "基金A",
+      instrument_code: "FA",
+      asset_class: "equity",
+      region: "domestic",
+      enabled: true,
+      weight_within_group: 0.6,
+      current_amount_minor: 30_000_00,
+      simulation_snapshot_id: "",
+      sort_order: 0,
+    },
+    {
+      id: "h2",
+      plan_id: "plan_1",
+      instrument_id: "i3",
+      instrument_name: "基金C",
+      instrument_code: "FC",
+      asset_class: "equity",
+      region: "domestic",
+      enabled: true,
+      weight_within_group: 0.4,
+      current_amount_minor: 20_000_00,
+      simulation_snapshot_id: "",
+      sort_order: 1,
+    },
+  ],
+};
+const defaultTargets = {
+  asset_class_targets: [{ asset_class: "equity", weight: 1 }],
+  region_targets: [
+    { asset_class: "equity", region: "domestic", weight_within_class: 0.7 },
+    { asset_class: "equity", region: "foreign", weight_within_class: 0.3 },
+  ],
+  holdings: [],
+};
+const defaultInstruments = {
+  instruments: [
+    {
+      id: "i2",
+      code: "FB",
+      name: "基金B",
+      asset_class: "equity",
+      region: "domestic",
+      status: "active",
+      quality_status: "available",
+      simulation_eligible: true,
+      is_system: false,
+      market: "CN",
+      instrument_type: "fund",
+    },
+  ],
+};
+const getHoldingsMock = vi.hoisted(() => vi.fn());
+const getTargetsMock = vi.hoisted(() => vi.fn());
+const listInstrumentsMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/lib/api/holdings", () => ({
-  getHoldings: () =>
-    Promise.resolve({
-      holdings: [
-        {
-          id: "h1",
-          plan_id: "plan_1",
-          instrument_id: "i1",
-          instrument_name: "基金A",
-          instrument_code: "FA",
-          asset_class: "equity",
-          region: "domestic",
-          enabled: true,
-          weight_within_group: 0.6,
-          current_amount_minor: 30_000_00,
-          simulation_snapshot_id: "",
-          sort_order: 0,
-        },
-        {
-          id: "h2",
-          plan_id: "plan_1",
-          instrument_id: "i3",
-          instrument_name: "基金C",
-          instrument_code: "FC",
-          asset_class: "equity",
-          region: "domestic",
-          enabled: true,
-          weight_within_group: 0.4,
-          current_amount_minor: 20_000_00,
-          simulation_snapshot_id: "",
-          sort_order: 1,
-        },
-      ],
-    }),
-  getTargets: () =>
-    Promise.resolve({
-      asset_class_targets: [{ asset_class: "equity", weight: 1 }],
-      region_targets: [
-        { asset_class: "equity", region: "domestic", weight_within_class: 0.7 },
-        { asset_class: "equity", region: "foreign", weight_within_class: 0.3 },
-      ],
-      holdings: [],
-    }),
+  getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
+  getTargets: (...args: unknown[]) => getTargetsMock(...args),
 }));
 
 vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: () =>
-    Promise.resolve({
-      instruments: [
-        {
-          id: "i2",
-          code: "FB",
-          name: "基金B",
-          asset_class: "equity",
-          region: "domestic",
-          status: "active",
-          quality_status: "available",
-          simulation_eligible: true,
-          is_system: false,
-          market: "CN",
-          instrument_type: "fund",
-        },
-      ],
-    }),
+  listInstruments: (...args: unknown[]) => listInstrumentsMock(...args),
 }));
 
 vi.mock("@/lib/api/asset-refresh", () => ({
@@ -165,6 +169,29 @@ describe("AssetRefreshPage", () => {
       before_total_minor: 50_000_00,
       after_total_minor: 50_000_00,
     });
+    getHoldingsMock.mockReset();
+    getHoldingsMock.mockResolvedValue(defaultHoldingsResp);
+    getTargetsMock.mockReset();
+    getTargetsMock.mockResolvedValue(defaultTargets);
+    listInstrumentsMock.mockReset();
+    listInstrumentsMock.mockResolvedValue(defaultInstruments);
+  });
+
+  it("shows error state when targets load fails", async () => {
+    getTargetsMock.mockReset();
+    getTargetsMock.mockRejectedValue(new Error("boom"));
+    renderPage();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByText("1. 说明")).not.toBeInTheDocument();
+  });
+
+  it("shows error state when instruments load fails", async () => {
+    listInstrumentsMock.mockReset();
+    listInstrumentsMock.mockRejectedValue(new Error("boom"));
+    renderPage();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
   });
 
   it("shows wizard steps and intro copy", async () => {

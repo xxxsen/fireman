@@ -184,23 +184,38 @@ export function ParametersContent({
     setLocalParams({ ...params, [key]: value });
   };
 
-  if ((planQ.isError || paramsQ.isError) && !params) {
+  if (
+    (planQ.isError || paramsQ.isError || allocationQ.isError || holdingsQ.isError) &&
+    (!params || !planQ.data || !allocationQ.data || !holdingsQ.data)
+  ) {
     return (
       <ErrorState
         message="无法加载计划参数。请确认后端服务可用后重试。"
         onRetry={() => {
-          void planQ.refetch();
-          void paramsQ.refetch();
-          void allocationQ.refetch();
+          if (planQ.isError) void planQ.refetch();
+          if (paramsQ.isError) void paramsQ.refetch();
+          if (allocationQ.isError) void allocationQ.refetch();
+          if (holdingsQ.isError) void holdingsQ.refetch();
         }}
         backHref={`/plans/${planId}/overview`}
         backLabel="返回总览"
-        technicalDetail={queryErrorMessage(planQ.error ?? paramsQ.error)}
+        technicalDetail={queryErrorMessage(
+          planQ.error ?? paramsQ.error ?? allocationQ.error ?? holdingsQ.error,
+        )}
       />
     );
   }
 
-  if (!params || planQ.isLoading) return <LoadingState label="加载参数…" />;
+  if (
+    !params ||
+    planQ.isLoading ||
+    allocationQ.isLoading ||
+    holdingsQ.isLoading ||
+    !allocationQ.data ||
+    !holdingsQ.data
+  ) {
+    return <LoadingState label="加载参数…" />;
+  }
 
   const gapBlocking = Math.abs(gap) > 100 && gap < 0;
   const gapNeedsCash = gap > 100 && gapAction !== "cash";

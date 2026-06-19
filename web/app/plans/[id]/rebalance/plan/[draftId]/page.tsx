@@ -220,22 +220,33 @@ export default function RebalancePlanPage() {
     setPreviewOpen(true);
   };
 
-  if ((plan.isError || draft.isError) && (!plan.data || !draft.data)) {
+  if (
+    (plan.isError || draft.isError || holdings.isError) &&
+    (!plan.data || !draft.data || !holdings.data)
+  ) {
     return (
       <ErrorState
         message="无法加载调仓计划。请确认后端服务可用后重试。"
         onRetry={() => {
           if (plan.isError) void plan.refetch();
           if (draft.isError) void draft.refetch();
+          if (holdings.isError) void holdings.refetch();
         }}
         backHref={`/plans/${planId}/rebalance`}
         backLabel="返回持仓预览"
-        technicalDetail={queryErrorMessage(plan.error ?? draft.error)}
+        technicalDetail={queryErrorMessage(plan.error ?? draft.error ?? holdings.error)}
       />
     );
   }
 
-  if (plan.isLoading || draft.isLoading || !plan.data || !draft.data) {
+  if (
+    plan.isLoading ||
+    draft.isLoading ||
+    holdings.isLoading ||
+    !plan.data ||
+    !draft.data ||
+    !holdings.data
+  ) {
     return <LoadingState label="加载调仓计划…" />;
   }
 
