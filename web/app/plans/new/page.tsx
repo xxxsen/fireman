@@ -10,7 +10,6 @@ import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { createPlanWizard } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
-import { listInstruments } from "@/lib/api/instruments";
 import { createSimulation } from "@/lib/api/simulations";
 import { assetClassLabel, formatMoney, formatPercent } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
@@ -100,7 +99,6 @@ export default function NewPlanWizardPage() {
   const [holdingTab, setHoldingTab] = useState<string>("equity");
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
-  const instrumentsQ = useQuery({ queryKey: ["instruments"], queryFn: () => listInstruments() });
 
   const endAge = retirementAge + fireDurationYears;
 
@@ -151,14 +149,6 @@ export default function NewPlanWizardPage() {
       setError(e instanceof Error ? e.message : "创建失败");
     },
   });
-
-  const selectableInstruments = useMemo(
-    () =>
-      instrumentsQ.data?.instruments.filter(
-        (i) => !i.is_system && i.status === "active",
-      ) ?? [],
-    [instrumentsQ.data?.instruments],
-  );
 
   const selectedScenario = useMemo(
     () => scenariosQ.data?.scenarios.find((s) => s.id === scenarioId),
@@ -241,8 +231,12 @@ export default function NewPlanWizardPage() {
     [selectedInstruments],
   );
 
+  // Steps with dense data (建立持仓 / 确认组合) use a wide content area; the
+  // basic form steps stay at a comfortable reading width.
+  const wideStep = step >= 2;
+
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="mx-auto w-full max-w-5xl">
       <Link href="/" className="text-sm underline">
         ← 计划列表
       </Link>
@@ -260,7 +254,10 @@ export default function NewPlanWizardPage() {
         ))}
       </ol>
 
-      <div className="mt-8 space-y-4 rounded-lg border p-6">
+      <div
+        data-testid="wizard-step-card"
+        className={`mt-8 space-y-4 rounded-lg border p-6 ${wideStep ? "w-full" : "max-w-2xl"}`}
+      >
         {step === 0 && (
           <>
             <label className="block text-sm">
@@ -470,7 +467,6 @@ export default function NewPlanWizardPage() {
                             regionWeight={rt.domestic}
                             region="domestic"
                             totalAssetsMinor={totalAssets}
-                            instruments={selectableInstruments}
                             selected={classSelected}
                             onSelectedChange={mergeSelected}
                           />
@@ -485,7 +481,6 @@ export default function NewPlanWizardPage() {
                               regionWeight={rt.domestic}
                               region="domestic"
                               totalAssetsMinor={totalAssets}
-                              instruments={selectableInstruments}
                               selected={classSelected.filter((s) => s.inst.region === "domestic")}
                               onSelectedChange={(domesticNext) => {
                                 const foreign = classSelected.filter(
@@ -502,7 +497,6 @@ export default function NewPlanWizardPage() {
                               regionWeight={rt.foreign}
                               region="foreign"
                               totalAssetsMinor={totalAssets}
-                              instruments={selectableInstruments}
                               selected={classSelected.filter((s) => s.inst.region === "foreign")}
                               onSelectedChange={(foreignNext) => {
                                 const domestic = classSelected.filter(
@@ -674,7 +668,7 @@ export default function NewPlanWizardPage() {
         </p>
       )}
 
-      <div className="mt-6 flex justify-between">
+      <div className={`mt-6 flex justify-between ${wideStep ? "w-full" : "max-w-2xl"}`}>
         <button
           type="button"
           className="rounded-md border px-4 py-2 text-sm"

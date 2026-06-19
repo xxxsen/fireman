@@ -6,6 +6,7 @@ import NewPlanWizardPage from "./page";
 
 const routerPush = vi.fn();
 const listInstruments = vi.hoisted(() => vi.fn());
+const searchInstruments = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPush }),
@@ -59,7 +60,38 @@ vi.mock("@/lib/api/allocation", () => ({
 
 vi.mock("@/lib/api/instruments", () => ({
   listInstruments: (...args: unknown[]) => listInstruments(...args),
+  searchInstruments: (...args: unknown[]) => searchInstruments(...args),
 }));
+
+interface SearchParams {
+  q?: string;
+  assetClass?: string;
+  region?: string;
+  excludeIds?: string[];
+  cursor?: number;
+  limit?: number;
+}
+
+let searchPool: (typeof defaultInstruments)[number][] = [];
+
+function filterSearchPool(params: SearchParams) {
+  const q = (params.q ?? "").toLowerCase();
+  const exclude = new Set(params.excludeIds ?? []);
+  const items = searchPool.filter(
+    (i) =>
+      (!params.assetClass || i.asset_class === params.assetClass) &&
+      (!params.region || i.region === params.region) &&
+      i.status === "active" &&
+      !i.is_system &&
+      !exclude.has(i.id) &&
+      (!q || i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q)),
+  );
+  const cursor = params.cursor ?? 0;
+  const limit = params.limit ?? 10;
+  const page = items.slice(cursor, cursor + limit);
+  const next = cursor + page.length < items.length ? cursor + page.length : null;
+  return Promise.resolve({ instruments: page, next_cursor: next, total: items.length });
+}
 
 const defaultInstruments = [
   {
@@ -160,30 +192,31 @@ describe("NewPlanWizardPage", () => {
     routerPush.mockReset();
     listInstruments.mockReset();
     listInstruments.mockResolvedValue({ instruments: defaultInstruments });
+    searchInstruments.mockReset();
+    searchPool = defaultInstruments;
+    searchInstruments.mockImplementation((params: SearchParams) => filterSearchPool(params));
     createPlanWizard.mockResolvedValue({ id: "plan_new", config_version: 1 });
     createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
   });
 
   it("shows short-history warning on confirm step for one-year instruments", async () => {
-    listInstruments.mockResolvedValueOnce({
-      instruments: [
-        {
-          id: "ins_short",
-          code: "SHORT01",
-          name: "短历史基金",
-          market: "CN",
-          instrument_type: "fund",
-          asset_class: "equity",
-          region: "domestic",
-          currency: "CNY",
-          quality_status: "available",
-          simulation_eligible: true,
-          history_depth: "one_year",
-          status: "active",
-          is_system: false,
-        },
-      ],
-    });
+    searchPool = [
+      {
+        id: "ins_short",
+        code: "SHORT01",
+        name: "短历史基金",
+        market: "CN",
+        instrument_type: "fund",
+        asset_class: "equity",
+        region: "domestic",
+        currency: "CNY",
+        quality_status: "available",
+        simulation_eligible: true,
+        history_depth: "one_year",
+        status: "active",
+        is_system: false,
+      },
+    ] as unknown as typeof defaultInstruments;
 
     renderWizard();
     await goToInstrumentStep("scn_a");
@@ -205,6 +238,14 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByText("全组合目标权重：通过")).toBeInTheDocument();
     expect(screen.getByText(/已选标的：1 个/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "创建计划" })).toBeInTheDocument();
+  });
+
+  it("uses a narrow card on the basics step and a wide card on the confirm step", async () => {
+    renderWizard();
+    expect(screen.getByTestId("wizard-step-card")).toHaveClass("max-w-2xl");
+    await goToConfirmStep();
+    expect(screen.getByTestId("wizard-step-card")).toHaveClass("w-full");
+    expect(screen.getByTestId("wizard-step-card")).not.toHaveClass("max-w-2xl");
   });
 
   it("uses updated default plan name and financial inputs", async () => {
@@ -237,7 +278,7 @@ describe("NewPlanWizardPage", () => {
     const equitySearch = screen.getByLabelText("权益国内搜索");
     fireEvent.change(equitySearch, { target: { value: "B1" } });
     expect(screen.queryByRole("button", { name: /测试债券基金/ })).not.toBeInTheDocument();
-    expect(screen.getByText("未找到匹配的权益标的。")).toBeInTheDocument();
+    expect(await screen.findByText("未找到匹配的权益标的。")).toBeInTheDocument();
   });
 
   it("auto-complements region allocation when editing domestic", async () => {

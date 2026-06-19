@@ -228,7 +228,8 @@ export default function RebalanceExecutionWorkspacePage() {
     return <LoadingState label="加载调仓执行工作区…" />;
   }
 
-  const { execution, events, stats } = detail.data;
+  const { execution, stats } = detail.data;
+  const events = detail.data.events ?? [];
 
   return (
     <div className="space-y-6">

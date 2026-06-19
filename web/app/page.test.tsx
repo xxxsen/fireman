@@ -72,6 +72,19 @@ describe("HomePage", () => {
     expect(screen.queryByText("查看详情 →")).not.toBeInTheDocument();
   });
 
+  it("renders millisecond updated_at as a sensible date (not future year)", () => {
+    mockState.plans[0]!.updated_at = Date.UTC(2026, 5, 19);
+    render(<HomePage />);
+    const expected = new Date(Date.UTC(2026, 5, 19)).toLocaleDateString("zh-CN");
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it("renders dash for zero updated_at", () => {
+    mockState.plans[0]!.updated_at = 0;
+    render(<HomePage />);
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
   it("shows aligned scale status when within tolerance", () => {
     mockState.plans[0]!.holdings_gap_minor = 50;
     render(<HomePage />);

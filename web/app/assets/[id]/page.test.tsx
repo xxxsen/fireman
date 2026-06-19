@@ -109,6 +109,21 @@ vi.mock("@/lib/api/instruments", () => ({
   retryFetch: vi.fn(),
   refreshInstrument: vi.fn(),
   deleteInstrument: (...args: unknown[]) => deleteInstrumentMock(...args),
+  getReturnSeries: vi.fn().mockResolvedValue({
+    as_of_date: "2026-06-12",
+    range: "3m",
+    point_type: "nav",
+    source_name: "akshare",
+    status: "available",
+    points: [
+      { date: "2026-03-12", value: 1.0, cumulative_return: 0 },
+      { date: "2026-06-12", value: 1.08, cumulative_return: 0.08 },
+    ],
+  }),
+}));
+
+vi.mock("@/components/charts/ReturnSeriesChart", () => ({
+  ReturnSeriesChart: () => <div data-testid="return-series-chart" />,
 }));
 
 vi.mock("@/hooks/useJobStatus", () => ({
@@ -330,6 +345,37 @@ describe("AssetDetailPage historical snapshots", () => {
     expect(screen.getByText(/72 月收益观测/)).toBeInTheDocument();
     expect(screen.getByText(/monthly_log_return_v1/)).toBeInTheDocument();
     expect(screen.getByText("完整年度样本较少，估计不稳定")).toBeInTheDocument();
+  });
+});
+
+describe("AssetDetailPage layout and return curve", () => {
+  beforeEach(() => {
+    getInstrumentDetailMock.mockReset();
+    getFetchStatusMock.mockReset();
+    useJobStatusMock.mockReset();
+    getInstrumentDetailMock.mockResolvedValue(activeDetail());
+    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
+  });
+
+  it("shows top-right action buttons and return curve with range tabs", async () => {
+    renderPage();
+    expect(await screen.findByRole("button", { name: "刷新 AKShare 数据" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "强制刷新" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+
+    expect(screen.getByText("收益曲线")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "近3月" })).toBeInTheDocument();
+    expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
+  });
+
+  it("switches return curve range when a tab is clicked", async () => {
+    const { getReturnSeries } = await import("@/lib/api/instruments");
+    renderPage();
+    await screen.findByTestId("return-series-chart");
+    fireEvent.click(screen.getByRole("tab", { name: "近1年" }));
+    await waitFor(() =>
+      expect(getReturnSeries).toHaveBeenCalledWith("ins_test", "1y"),
+    );
   });
 });
 

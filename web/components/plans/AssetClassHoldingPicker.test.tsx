@@ -8,35 +8,65 @@ const resolveImport = vi.fn();
 const importAsync = vi.fn();
 const getFetchStatus = vi.fn();
 const getInstrument = vi.fn();
+const searchInstruments = vi.fn();
 
 vi.mock("@/lib/api/instruments", () => ({
   resolveImport: (...args: unknown[]) => resolveImport(...args),
   importAsync: (...args: unknown[]) => importAsync(...args),
   getFetchStatus: (...args: unknown[]) => getFetchStatus(...args),
   getInstrument: (...args: unknown[]) => getInstrument(...args),
+  searchInstruments: (...args: unknown[]) => searchInstruments(...args),
 }));
 
-const baseInstrument = {
-  id: "ins_1",
-  code: "T1",
-  name: "资料库基金",
-  market: "CN",
-  instrument_type: "cn_mutual_fund",
-  asset_class: "equity",
-  region: "domestic",
-  currency: "CNY",
-  provider: "akshare",
-  is_system: false,
-  status: "active",
-  simulation_eligible: true,
-  expense_ratio_status: "unknown",
-  fee_treatment: "net",
-  data_stale: false,
-  created_at: 0,
-  updated_at: 0,
-};
+interface SearchParams {
+  q?: string;
+  assetClass?: string;
+  region?: string;
+  excludeIds?: string[];
+  cursor?: number;
+  limit?: number;
+}
 
-function renderPicker(instruments = [baseInstrument]) {
+function makeInstrument(i: number) {
+  return {
+    id: `ins_${i}`,
+    code: `EQ${i}`,
+    name: `资料库基金${i}`,
+    market: "CN",
+    instrument_type: "cn_mutual_fund",
+    asset_class: "equity",
+    region: "domestic",
+    currency: "CNY",
+    provider: "akshare",
+    is_system: false,
+    status: "active",
+    simulation_eligible: true,
+    expense_ratio_status: "unknown",
+    fee_treatment: "net",
+    data_stale: false,
+    created_at: 0,
+    updated_at: 0,
+  };
+}
+
+let pool = [makeInstrument(1)];
+
+function filterPool(params: SearchParams) {
+  const q = (params.q ?? "").toLowerCase();
+  const exclude = new Set(params.excludeIds ?? []);
+  const items = pool.filter(
+    (i) =>
+      !exclude.has(i.id) &&
+      (!q || i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q)),
+  );
+  const cursor = params.cursor ?? 0;
+  const limit = params.limit ?? 10;
+  const page = items.slice(cursor, cursor + limit);
+  const next = cursor + page.length < items.length ? cursor + page.length : null;
+  return Promise.resolve({ instruments: page, next_cursor: next, total: items.length });
+}
+
+function renderPicker(selected: unknown[] = []) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onSelectedChange = vi.fn();
   render(
@@ -47,8 +77,7 @@ function renderPicker(instruments = [baseInstrument]) {
         regionWeight={1}
         region="domestic"
         totalAssetsMinor={1_000_000}
-        instruments={instruments}
-        selected={[]}
+        selected={selected as never}
         onSelectedChange={onSelectedChange}
       />
     </QueryClientProvider>,
@@ -62,9 +91,47 @@ describe("AssetClassHoldingPicker", () => {
     importAsync.mockReset();
     getFetchStatus.mockReset();
     getInstrument.mockReset();
+    searchInstruments.mockReset();
+    pool = [makeInstrument(1)];
+    searchInstruments.mockImplementation((params: SearchParams) => filterPool(params));
+  });
+
+  it("loads the first page of recent instruments on focus without typing", async () => {
+    pool = Array.from({ length: 5 }, (_, i) => makeInstrument(i + 1));
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    expect(await screen.findByRole("button", { name: /资料库基金1/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(searchInstruments).toHaveBeenCalledWith(
+        expect.objectContaining({ assetClass: "equity", region: "domestic", cursor: 0 }),
+      ),
+    );
+  });
+
+  it("appends the next page when the sentinel scrolls into view", async () => {
+    pool = Array.from({ length: 12 }, (_, i) => makeInstrument(i + 1));
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    // Page 2 contains the 11th and 12th instruments.
+    expect(await screen.findByRole("button", { name: /资料库基金11/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(searchInstruments).toHaveBeenCalledWith(expect.objectContaining({ cursor: 10 })),
+    );
+  });
+
+  it("excludes already-selected instruments from the query", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+    renderPicker([{ inst: makeInstrument(1), weight: 1, amount: 0 }]);
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    await waitFor(() =>
+      expect(searchInstruments).toHaveBeenCalledWith(
+        expect.objectContaining({ excludeIds: ["ins_1"] }),
+      ),
+    );
   });
 
   it("queries AKShare when library has no exact code match", async () => {
+    pool = [];
     resolveImport.mockResolvedValueOnce({
       ambiguous: false,
       resolved: {
@@ -96,6 +163,7 @@ describe("AssetClassHoldingPicker", () => {
   });
 
   it("imports external candidate and adds instrument to selection", async () => {
+    pool = [];
     resolveImport.mockResolvedValueOnce({
       ambiguous: false,
       resolved: {
@@ -111,7 +179,7 @@ describe("AssetClassHoldingPicker", () => {
     importAsync.mockResolvedValueOnce({ instrument_id: "ins_new", job_id: "job_1", status: "queued" });
     getFetchStatus.mockResolvedValueOnce({ instrument_status: "active", progress_current: 1, progress_total: 1 });
     getInstrument.mockResolvedValueOnce({
-      ...baseInstrument,
+      ...makeInstrument(99),
       id: "ins_new",
       code: "270042",
       name: "广发纳指100ETF联接（QDII）人民币A",

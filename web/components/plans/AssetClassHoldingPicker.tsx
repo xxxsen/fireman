@@ -1,7 +1,7 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
 import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, historyDepthLabel, regionLabel } from "@/lib/format";
@@ -17,9 +17,11 @@ import {
   removeInstrumentFromGroup,
   updateInstrumentWeightInGroup,
 } from "@/lib/wizard-allocation";
-import type { ResolveCandidate } from "@/lib/api/instruments";
+import { searchInstruments, type ResolveCandidate } from "@/lib/api/instruments";
 import type { Instrument } from "@/types/api";
 import type { WizardHoldingSelection } from "@/lib/wizard-allocation";
+
+const PAGE_SIZE = 10;
 
 export interface AssetClassHoldingPickerProps {
   assetClass: string;
@@ -27,7 +29,6 @@ export interface AssetClassHoldingPickerProps {
   regionWeight: number;
   region?: "domestic" | "foreign";
   totalAssetsMinor: number;
-  instruments: Instrument[];
   selected: WizardHoldingSelection[];
   onSelectedChange: (next: WizardHoldingSelection[]) => void;
   /** Sub-container title; omit for top-level single container. */
@@ -36,21 +37,8 @@ export interface AssetClassHoldingPickerProps {
   nested?: boolean;
 }
 
-function matchesLibraryQuery(inst: Instrument, query: string): boolean {
-  const q = query.toLowerCase();
-  return (
-    inst.code.toLowerCase().includes(q) ||
-    inst.name.toLowerCase().includes(q) ||
-    regionLabel(inst.region).toLowerCase().includes(q)
-  );
-}
-
-function isActiveLibraryInstrument(inst: Instrument): boolean {
-  return !inst.is_system && inst.status === "active";
-}
-
 function canAddToPlan(inst: Instrument): boolean {
-  return isActiveLibraryInstrument(inst) && inst.simulation_eligible === true;
+  return inst.simulation_eligible === true;
 }
 
 export function AssetClassHoldingPicker({
@@ -59,7 +47,6 @@ export function AssetClassHoldingPicker({
   regionWeight,
   region,
   totalAssetsMinor,
-  instruments,
   selected,
   onSelectedChange,
   subTitle,
@@ -67,93 +54,130 @@ export function AssetClassHoldingPicker({
 }: AssetClassHoldingPickerProps) {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
+  const [debouncedFilter, setDebouncedFilter] = useState("");
+  const [open, setOpen] = useState(false);
   const [resolveLoading, setResolveLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [externalCandidates, setExternalCandidates] = useState<ResolveCandidate[]>([]);
 
-  const selectedIds = useMemo(() => new Set(selected.map((s) => s.inst.id)), [selected]);
   const selectedCodes = useMemo(
     () => new Set(selected.map((s) => s.inst.code.toLowerCase())),
     [selected],
   );
+  const excludeIds = useMemo(() => selected.map((s) => s.inst.id).sort(), [selected]);
 
   const effectiveRegion = region ?? "domestic";
 
-  const libraryResults = useMemo(() => {
-    const q = filter.trim();
-    if (!q) return [];
-    return instruments
-      .filter((i) => isActiveLibraryInstrument(i))
-      .filter((i) => i.asset_class === assetClass)
-      .filter((i) => i.region === effectiveRegion)
-      .filter((i) => !selectedIds.has(i.id))
-      .filter((i) => matchesLibraryQuery(i, q))
-      .slice(0, 20);
-  }, [filter, instruments, assetClass, effectiveRegion, selectedIds]);
-
+  // Debounce the typed query to avoid one request per keystroke.
   useEffect(() => {
-    const q = filter.trim();
-    let cancelled = false;
+    const timer = window.setTimeout(() => setDebouncedFilter(filter.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [filter]);
 
-    const hasExactLibraryHit = instruments.some(
-      (inst) =>
-        isActiveLibraryInstrument(inst) &&
-        inst.asset_class === assetClass &&
-        inst.region === effectiveRegion &&
-        inst.code.toLowerCase() === q.toLowerCase(),
-    );
-    const shouldResolve = looksLikeFundCode(q) && !hasExactLibraryHit;
+  const listQuery = useInfiniteQuery({
+    queryKey: [
+      "instrument-picker",
+      assetClass,
+      effectiveRegion,
+      debouncedFilter,
+      excludeIds.join(","),
+    ],
+    enabled: open,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      searchInstruments({
+        q: debouncedFilter || undefined,
+        assetClass,
+        region: effectiveRegion,
+        status: "active",
+        excludeIds,
+        limit: PAGE_SIZE,
+        cursor: pageParam as number,
+      }),
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+
+  const libraryResults = useMemo(
+    () => (listQuery.data?.pages ?? []).flatMap((page) => page.instruments),
+    [listQuery.data],
+  );
+
+  const hasExactLibraryHit = useMemo(
+    () =>
+      libraryResults.some((inst) => inst.code.toLowerCase() === debouncedFilter.toLowerCase()),
+    [libraryResults, debouncedFilter],
+  );
+
+  // Resolve via AKShare only when the query looks like a fund code and the
+  // backend library has no exact match for it.
+  useEffect(() => {
+    const q = debouncedFilter;
+    let cancelled = false;
+    const shouldResolve = open && looksLikeFundCode(q) && !hasExactLibraryHit;
 
     // All state updates run inside the timer callback (asynchronously) so the
     // effect body never calls setState synchronously.
-    const timer = window.setTimeout(
-      () => {
-        if (cancelled) return;
-        if (!shouldResolve) {
-          setExternalCandidates([]);
-          setResolveError(null);
-          setResolveLoading(false);
-          return;
-        }
-        setResolveLoading(true);
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      if (!shouldResolve) {
+        setExternalCandidates([]);
         setResolveError(null);
-        void (async () => {
-          try {
-            const result = await resolveCNInstrumentCode(q);
-            if (cancelled) return;
-            const candidates = flattenResolveCandidates(result).filter(
-              (c) => !selectedCodes.has(c.code.toLowerCase()),
-            );
-            setExternalCandidates(candidates);
-            if (candidates.length === 0) {
-              setResolveError("未在 AKShare 找到可录入的标的");
-            }
-          } catch (error) {
-            if (cancelled) return;
-            setExternalCandidates([]);
-            if (error instanceof ApiError && error.code === "market_provider_timeout") {
-              setResolveError("数据源响应超时，请重试");
-            } else if (error instanceof ApiError) {
-              setResolveError(error.message);
-            } else {
-              setResolveError(error instanceof Error ? error.message : "查询失败");
-            }
-          } finally {
-            if (!cancelled) {
-              setResolveLoading(false);
-            }
+        setResolveLoading(false);
+        return;
+      }
+      setResolveLoading(true);
+      setResolveError(null);
+      void (async () => {
+        try {
+          const result = await resolveCNInstrumentCode(q);
+          if (cancelled) return;
+          const candidates = flattenResolveCandidates(result).filter(
+            (c) => !selectedCodes.has(c.code.toLowerCase()),
+          );
+          setExternalCandidates(candidates);
+          if (candidates.length === 0) {
+            setResolveError("未在 AKShare 找到可录入的标的");
           }
-        })();
-      },
-      shouldResolve ? 400 : 0,
-    );
+        } catch (error) {
+          if (cancelled) return;
+          setExternalCandidates([]);
+          if (error instanceof ApiError && error.code === "market_provider_timeout") {
+            setResolveError("数据源响应超时，请重试");
+          } else if (error instanceof ApiError) {
+            setResolveError(error.message);
+          } else {
+            setResolveError(error instanceof Error ? error.message : "查询失败");
+          }
+        } finally {
+          if (!cancelled) setResolveLoading(false);
+        }
+      })();
+    }, 0);
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [filter, instruments, assetClass, effectiveRegion, selectedCodes]);
+  }, [debouncedFilter, hasExactLibraryHit, open, selectedCodes]);
+
+  // Auto-load the next page when the sentinel scrolls into view.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      if (
+        entries[0]?.isIntersecting &&
+        listQuery.hasNextPage &&
+        !listQuery.isFetchingNextPage
+      ) {
+        void listQuery.fetchNextPage();
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [listQuery.hasNextPage, listQuery.isFetchingNextPage, listQuery, libraryResults.length]);
 
   const addInstrument = (inst: Instrument) => {
     onSelectedChange(addInstrumentToGroup(selected, inst));
@@ -167,7 +191,7 @@ export function AssetClassHoldingPicker({
     setResolveError(null);
     try {
       const inst = await importResolvedCandidate(candidate, assetClass, effectiveRegion);
-      await queryClient.invalidateQueries({ queryKey: ["instruments"] });
+      await queryClient.invalidateQueries({ queryKey: ["instrument-picker"] });
       addInstrument(inst);
     } catch (error) {
       if (error instanceof ApiError && error.code === "market_provider_timeout") {
@@ -208,7 +232,8 @@ export function AssetClassHoldingPicker({
   const sectionAriaLabel = nested ? undefined : (subTitle ?? `${assetClassLabel(assetClass)}选标`);
 
   const showEmptyHint =
-    filter.trim().length > 0 &&
+    open &&
+    !listQuery.isLoading &&
     libraryResults.length === 0 &&
     externalCandidates.length === 0 &&
     !resolveLoading &&
@@ -221,44 +246,56 @@ export function AssetClassHoldingPicker({
         className={`${subTitle ? "mt-2" : "mt-3"} w-full rounded-md border px-3 py-2 text-sm`}
         placeholder={`搜索${assetClassLabel(assetClass)}标的（代码或名称）`}
         value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          setOpen(true);
+          setFilter(e.target.value);
+        }}
         aria-label={searchAriaLabel}
         data-testid="wizard-holding-search"
       />
-      {libraryResults.length > 0 && (
-        <ul
-          className="mt-2 max-h-40 overflow-y-auto rounded-md border divide-y text-sm"
+      {open && (libraryResults.length > 0 || listQuery.isLoading) && (
+        <div
+          className="mt-2 max-h-80 overflow-y-auto rounded-md border"
           data-testid="wizard-library-results"
         >
-          {libraryResults.map((inst) => {
-            const addable = canAddToPlan(inst);
-            return (
-              <li key={inst.id}>
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!addable || importLoading}
-                  onClick={() => addInstrument(inst)}
-                >
-                  <span className="font-medium">{inst.name}</span>
-                  <span className="ml-2 text-ink-muted">{inst.code}</span>
-                  {inst.complete_year_count != null && (
-                    <span className="ml-2 text-xs text-ink-muted">{inst.complete_year_count} 完整年</span>
-                  )}
-                  {inst.monthly_return_count != null && (
-                    <span className="ml-2 text-xs text-ink-muted">{inst.monthly_return_count} 月</span>
-                  )}
-                  {inst.history_depth === "one_year" && (
-                    <span className="ml-2 text-xs text-warning">{historyDepthLabel(inst.history_depth)}</span>
-                  )}
-                  {!addable && (
-                    <span className="ml-2 text-xs text-ink-muted">历史不足，暂不可用于模拟</span>
-                  )}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+          <ul className="divide-y text-sm">
+            {libraryResults.map((inst) => {
+              const addable = canAddToPlan(inst);
+              return (
+                <li key={inst.id}>
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!addable || importLoading}
+                    onClick={() => addInstrument(inst)}
+                  >
+                    <span className="font-medium">{inst.name}</span>
+                    <span className="ml-2 text-ink-muted">{inst.code}</span>
+                    {inst.complete_year_count != null && (
+                      <span className="ml-2 text-xs text-ink-muted">{inst.complete_year_count} 完整年</span>
+                    )}
+                    {inst.monthly_return_count != null && (
+                      <span className="ml-2 text-xs text-ink-muted">{inst.monthly_return_count} 月</span>
+                    )}
+                    {inst.history_depth === "one_year" && (
+                      <span className="ml-2 text-xs text-warning">{historyDepthLabel(inst.history_depth)}</span>
+                    )}
+                    {!addable && (
+                      <span className="ml-2 text-xs text-ink-muted">历史不足，暂不可用于模拟</span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {(listQuery.isLoading || listQuery.isFetchingNextPage) && (
+            <p className="px-3 py-2 text-xs text-ink-muted" role="status">
+              加载中…
+            </p>
+          )}
+          <div ref={sentinelRef} aria-hidden="true" />
+        </div>
       )}
       {(resolveLoading || importLoading) && (
         <p className="mt-2 text-sm text-ink-muted" role="status">
@@ -291,10 +328,10 @@ export function AssetClassHoldingPicker({
           {resolveError}
         </p>
       )}
-      {showEmptyHint && !looksLikeFundCode(filter) && (
+      {showEmptyHint && !looksLikeFundCode(debouncedFilter) && (
         <p className="mt-2 text-sm text-ink-muted">未找到匹配的{assetClassLabel(assetClass)}标的。</p>
       )}
-      {showEmptyHint && looksLikeFundCode(filter) && !resolveError && (
+      {showEmptyHint && looksLikeFundCode(debouncedFilter) && !resolveError && (
         <p className="mt-2 text-sm text-ink-muted">
           资料库中暂无该代码；输入完整基金编号后会自动查询 AKShare。
         </p>

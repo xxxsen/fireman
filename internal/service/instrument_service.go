@@ -79,6 +79,51 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 	return items, nil
 }
 
+// InstrumentSearchView is a paginated asset-library search response.
+type InstrumentSearchView struct {
+	Instruments []repository.InstrumentRecord `json:"instruments"`
+	NextCursor  *int                          `json:"next_cursor"`
+	Total       int                           `json:"total"`
+}
+
+// Search returns one filtered, paginated page of instruments with simulation
+// metadata enriched per row.
+func (s *InstrumentService) Search(ctx context.Context, opts repository.InstrumentSearchOptions) (InstrumentSearchView, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 10
+	}
+	res, err := s.instRepo.Search(ctx, opts)
+	if err != nil {
+		return InstrumentSearchView{}, wrapRepo("search instruments", err)
+	}
+	refCounts, err := s.instRepo.ReferenceCounts(ctx)
+	if err != nil {
+		return InstrumentSearchView{}, wrapRepo("list instrument reference counts", err)
+	}
+	for i := range res.Instruments {
+		res.Instruments[i].ReferencingPlanCount = refCounts[res.Instruments[i].ID]
+		if res.Instruments[i].ID == repository.SystemCashInstrumentID {
+			res.Instruments[i].QualityStatus = "available"
+			res.Instruments[i].SimulationEligible = true
+			continue
+		}
+		if res.Instruments[i].IsSystem {
+			res.Instruments[i].QualityStatus = "unavailable"
+			continue
+		}
+		s.enrichMarketMeta(ctx, &res.Instruments[i])
+	}
+	view := InstrumentSearchView{Instruments: res.Instruments, Total: res.Total}
+	if view.Instruments == nil {
+		view.Instruments = []repository.InstrumentRecord{}
+	}
+	if opts.Offset+len(res.Instruments) < res.Total {
+		next := opts.Offset + len(res.Instruments)
+		view.NextCursor = &next
+	}
+	return view, nil
+}
+
 func applySimulationMeta(inst *repository.InstrumentRecord, metrics marketdata.SnapshotMetrics) {
 	inst.SimulationEligible = metrics.SimulationEligible
 	inst.HistoryDepth = metrics.HistoryDepth
@@ -403,6 +448,28 @@ func (s *InstrumentService) GetDetail(ctx context.Context, id string) (Instrumen
 		TrailingReturns:     trailingReturnsToMap(trailing),
 		HistoricalSnapshots: toHistoricalSnapshotViews(snaps), ReferencingPlans: refs,
 	}, nil
+}
+
+// ReturnSeries builds a normalized cumulative-return curve for a fixed range.
+func (s *InstrumentService) ReturnSeries(ctx context.Context, id, rangeKey string) (marketdata.ReturnSeries, error) {
+	if !marketdata.IsValidReturnSeriesRange(rangeKey) {
+		return marketdata.ReturnSeries{}, newErr("invalid_request", "invalid return-series range", nil)
+	}
+	if _, err := s.Get(ctx, id); err != nil {
+		return marketdata.ReturnSeries{}, err
+	}
+	points, err := s.marketRepo.ListByInstrument(ctx, id)
+	if err != nil {
+		return marketdata.ReturnSeries{}, wrapRepo("list market data points", err)
+	}
+	dp := repoToDataPoints(points)
+	pointType, sourceName := "adjusted_close", "library"
+	if len(dp) > 0 {
+		pointType = dp[len(dp)-1].PointType
+		sourceName = dp[len(dp)-1].SourceName
+	}
+	asOf := time.Now().Format("2006-01-02")
+	return marketdata.ComputeReturnSeries(dp, asOf, rangeKey, pointType, sourceName), nil
 }
 
 func buildSimulationWindowMap(

@@ -62,6 +62,30 @@ export function formatMoneyInlineUnit(currency: string, rawValue: string): strin
   return `${currency}(元)`;
 }
 
+/**
+ * Format a minor-unit amount with an automatic magnitude unit (元 / 万元 / 亿元)
+ * so large balances stay readable, e.g. `¥1,234.56 万元`.
+ */
+export function formatMoneyScaled(minor: number, currency = "CNY"): string {
+  const symbol = CURRENCY_SYMBOL[currency] ?? currency + " ";
+  const major = minor / 100;
+  const abs = Math.abs(major);
+  let value = major;
+  let unit = "元";
+  if (abs >= 100_000_000) {
+    value = major / 100_000_000;
+    unit = "亿元";
+  } else if (abs >= 10_000) {
+    value = major / 10_000;
+    unit = "万元";
+  }
+  const formatted = value.toLocaleString("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${symbol}${formatted} ${unit}`;
+}
+
 /** Auxiliary unit hint for plain numeric money input (major units, yuan). */
 export function formatMoneyUnitHint(major: number): string | null {
   if (!Number.isFinite(major) || major === 0) return null;
@@ -91,6 +115,17 @@ export function formatMoneyUnitHint(major: number): string | null {
   }
 
   return null;
+}
+
+/**
+ * Format a millisecond epoch timestamp (matching backend `time.Now().UnixMilli()`)
+ * as a localized date. Returns "—" for empty/invalid values.
+ */
+export function formatDateFromMs(ts?: number | null): string {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("zh-CN");
 }
 
 export { formatPercent };
@@ -247,6 +282,33 @@ export function annualCompletenessLabel(row: {
     if (Number.isFinite(endMonth) && endMonth < 11) return "年内统计";
   }
   return "完整";
+}
+
+/**
+ * Compress a list of years into contiguous ranges, e.g.
+ * `[2006..2025]` -> "2006-2025", `[2006..2012, 2014..2025]` -> "2006-2012、2014-2025".
+ * Returns "—" for an empty list.
+ */
+export function compressYears(years: number[]): string {
+  const sorted = Array.from(new Set(years.filter((y) => Number.isFinite(y)))).sort(
+    (a, b) => a - b,
+  );
+  if (sorted.length === 0) return "—";
+  const ranges: string[] = [];
+  let start = sorted[0]!;
+  let prev = sorted[0]!;
+  for (let i = 1; i < sorted.length; i++) {
+    const y = sorted[i]!;
+    if (y === prev + 1) {
+      prev = y;
+      continue;
+    }
+    ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+    start = y;
+    prev = y;
+  }
+  ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+  return ranges.join("、");
 }
 
 export function formatAnnualPeriod(start?: string, end?: string): string {

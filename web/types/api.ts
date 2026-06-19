@@ -486,6 +486,24 @@ export interface DashboardAnalysisSummary {
   message?: string;
 }
 
+export interface AllocationHolding {
+  instrument_name: string;
+  instrument_code: string;
+  current_amount_minor: number;
+  target_amount_minor: number;
+  current_weight: number;
+  target_weight: number;
+}
+
+export interface AllocationBar {
+  asset_class: string;
+  target_weight: number;
+  current_weight: number;
+  current_amount_minor: number;
+  target_amount_minor: number;
+  holdings: AllocationHolding[];
+}
+
 export interface DashboardView {
   plan: Plan;
   scenario_name?: string;
@@ -497,11 +515,7 @@ export interface DashboardView {
   holdings_gap_minor: number;
   rebalance_summary: RebalanceSummary;
   active_rebalance_execution?: ActiveRebalanceExecution | null;
-  allocation_bars: {
-    asset_class: string;
-    target_weight: number;
-    current_weight: number;
-  }[];
+  allocation_bars: AllocationBar[];
   region_bars: {
     region: string;
     target_weight: number;

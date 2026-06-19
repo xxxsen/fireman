@@ -15,15 +15,19 @@ import {
   deleteInstrument,
   getFetchStatus,
   getInstrumentDetail,
+  getReturnSeries,
   refreshInstrument,
   retryFetch,
+  type ReturnSeriesRange,
 } from "@/lib/api/instruments";
+import { ReturnSeriesChart } from "@/components/charts/ReturnSeriesChart";
 import { ApiError } from "@/lib/api/client";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { queryErrorMessage } from "@/lib/query-error";
 import {
   annualCompletenessLabel,
   assetClassLabel,
+  compressYears,
   dataSourceLabel,
   excludedYearReasonLabel,
   formatAnnualPeriod,
@@ -36,6 +40,18 @@ import {
   qualityStatusLabel,
   regionLabel,
 } from "@/lib/format";
+
+const RETURN_SERIES_RANGES: { key: ReturnSeriesRange; label: string }[] = [
+  { key: "1d", label: "近1天" },
+  { key: "1w", label: "近1周" },
+  { key: "1m", label: "近1月" },
+  { key: "3m", label: "近3月" },
+  { key: "6m", label: "近6月" },
+  { key: "1y", label: "近1年" },
+  { key: "3y", label: "近3年" },
+  { key: "5y", label: "近5年" },
+  { key: "all", label: "全部" },
+];
 
 function refreshFeedbackMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -72,9 +88,17 @@ export default function AssetDetailPage() {
   const [fetchStatusError, setFetchStatusError] = useState<string | null>(null);
   const [fetchErrorCode, setFetchErrorCode] = useState<string | null>(null);
 
+  const [seriesRange, setSeriesRange] = useState<ReturnSeriesRange>("3m");
+
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["instrument-detail", id],
     queryFn: () => getInstrumentDetail(id),
+  });
+
+  const seriesQ = useQuery({
+    queryKey: ["return-series", id, seriesRange],
+    queryFn: () => getReturnSeries(id, seriesRange),
+    enabled: data?.instrument.status === "active",
   });
 
   useEffect(() => {
@@ -169,21 +193,94 @@ export default function AssetDetailPage() {
   const isFailed = inst.status === "fetch_failed";
   const isActive = inst.status === "active";
   const win = data.simulation_window;
-  const annualReturns = data.annual_returns ?? [];
+  const annualReturns = [...(data.annual_returns ?? [])].sort((a, b) => b.year - a.year);
   const historicalSnapshots = data.historical_snapshots ?? [];
   const referencingPlans = data.referencing_plans ?? [];
 
   return (
-    <div className="max-w-4xl">
-      <Link
-        href="/assets"
-        className="text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
-      >
-        ← 资料库
-      </Link>
-      <h1 className="mt-4 text-2xl font-semibold text-ink">
-        {inst.name} <span className="font-mono-numeric text-lg text-ink-muted">({inst.code})</span>
-      </h1>
+    <div className="max-w-6xl">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <Link
+            href="/assets"
+            className="text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
+          >
+            ← 资料库
+          </Link>
+          <h1 className="mt-4 text-2xl font-semibold text-ink">
+            {inst.name}{" "}
+            <span className="font-mono-numeric text-lg text-ink-muted">({inst.code})</span>
+          </h1>
+          <p className="mt-1 text-sm text-ink-muted">
+            {assetClassLabel(inst.asset_class)} / {regionLabel(inst.region)} · {inst.market} /{" "}
+            {inst.instrument_type}
+          </p>
+        </div>
+        {isActive && (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <Button
+              disabled={refreshMut.isPending || inst.is_system}
+              onClick={() => refreshMut.mutate(false)}
+            >
+              {refreshMut.isPending && !refreshMut.variables ? "刷新中…" : "刷新 AKShare 数据"}
+            </Button>
+            {!inst.is_system && (
+              <Button
+                variant="secondary"
+                disabled={refreshMut.isPending}
+                onClick={() => {
+                  setRefreshNotice(null);
+                  setShowForceConfirm(true);
+                }}
+              >
+                {refreshMut.isPending && refreshMut.variables
+                  ? "强制刷新中（可能需要数分钟）…"
+                  : "强制刷新"}
+              </Button>
+            )}
+            {!inst.is_system && (
+              <Button
+                variant="danger"
+                disabled={deleteMut.isPending || referencingPlans.length > 0}
+                title={referencingPlans.length > 0 ? "被计划引用时不可删除" : undefined}
+                onClick={() => {
+                  setDeleteError(null);
+                  setShowDeleteConfirm(true);
+                }}
+              >
+                {deleteMut.isPending ? "删除中…" : "删除"}
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {isActive && !inst.is_system && (
+        <p className="mt-2 text-xs text-ink-muted">
+          常规刷新 24 小时内限一次；强制刷新跳过该限制，适合验证数据源或排查数据问题。
+        </p>
+      )}
+      {refreshNotice && (
+        <p
+          className={`mt-3 text-sm ${refreshNotice.kind === "success" ? "text-positive" : "text-danger"}`}
+          role="status"
+        >
+          {refreshNotice.text}
+          {refreshNotice.kind === "error" && refreshNotice.text.includes("24 小时内") && (
+            <Button
+              variant="ghost"
+              className="ml-2 px-2 py-0.5"
+              disabled={refreshMut.isPending}
+              onClick={() => {
+                setRefreshNotice(null);
+                setShowForceConfirm(true);
+              }}
+            >
+              立即强制刷新
+            </Button>
+          )}
+        </p>
+      )}
 
       {fetchStatusError && (
         <Alert variant="warning" title="抓取状态查询失败" className="mt-4">
@@ -230,7 +327,9 @@ export default function AssetDetailPage() {
         </Alert>
       )}
 
-      <dl className="mt-6 grid gap-3 sm:grid-cols-2 text-sm">
+      <section className="mt-6 rounded-lg border border-line bg-surface p-4">
+      <h2 className="mb-3 font-medium text-ink">基础信息</h2>
+      <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm">
         <div>
           <dt className="text-ink-muted">市场 / 类型</dt>
           <dd className="text-ink">
@@ -281,6 +380,7 @@ export default function AssetDetailPage() {
           </dd>
         </div>
       </dl>
+      </section>
 
       {isActive && (
       <section className="mt-6 rounded-lg border border-line bg-surface p-4 text-sm">
@@ -293,7 +393,7 @@ export default function AssetDetailPage() {
         <dl className="mt-3 grid gap-2 sm:grid-cols-2">
           <div>
             <dt className="text-ink-muted">入选年份</dt>
-            <dd className="text-ink">{(win.selected_years ?? []).join("、") || "—"}</dd>
+            <dd className="text-ink">{compressYears(win.selected_years ?? [])}</dd>
           </div>
           <div>
             <dt className="text-ink-muted">排除年份</dt>
@@ -386,72 +486,51 @@ export default function AssetDetailPage() {
       )}
 
       {isActive && (
-        <>
-          <div className="mt-6 space-y-2">
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                disabled={refreshMut.isPending || inst.is_system}
-                onClick={() => refreshMut.mutate(false)}
-              >
-                {refreshMut.isPending && !refreshMut.variables ? "刷新中…" : "刷新 AKShare 数据"}
-              </Button>
-              {!inst.is_system && (
-                <Button
-                  variant="secondary"
-                  disabled={refreshMut.isPending}
-                  onClick={() => {
-                    setRefreshNotice(null);
-                    setShowForceConfirm(true);
-                  }}
+        <section className="mt-6 rounded-lg border border-line bg-surface p-4 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-medium text-ink">收益曲线</h2>
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="收益曲线区间">
+              {RETURN_SERIES_RANGES.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={seriesRange === key}
+                  className={`rounded-full px-3 py-1 text-xs transition-colors ${
+                    seriesRange === key
+                      ? "bg-brand text-white"
+                      : "bg-surface-muted text-ink-muted hover:text-ink"
+                  }`}
+                  onClick={() => setSeriesRange(key)}
                 >
-                  {refreshMut.isPending && refreshMut.variables
-                    ? "强制刷新中（可能需要数分钟）…"
-                    : "强制刷新"}
-                </Button>
-              )}
-              {!inst.is_system && (
-                <Button
-                  variant="danger"
-                  disabled={deleteMut.isPending || referencingPlans.length > 0}
-                  title={referencingPlans.length > 0 ? "被计划引用时不可删除" : undefined}
-                  onClick={() => {
-                    setDeleteError(null);
-                    setShowDeleteConfirm(true);
-                  }}
-                >
-                  {deleteMut.isPending ? "删除中…" : "删除"}
-                </Button>
-              )}
+                  {label}
+                </button>
+              ))}
             </div>
-            {!inst.is_system && (
-              <p className="text-xs text-ink-muted">
-                常规刷新 24 小时内限一次；强制刷新跳过该限制，适合验证数据源或排查数据问题。
+          </div>
+          <div className="mt-3" data-testid="return-series-panel">
+            {seriesQ.isError ? (
+              <p className="py-8 text-center text-sm text-danger" role="alert">
+                收益曲线加载失败，请稍后重试。
+              </p>
+            ) : seriesQ.isLoading ? (
+              <LoadingState label="加载收益曲线…" />
+            ) : (seriesQ.data?.points.length ?? 0) > 0 ? (
+              <ReturnSeriesChart
+                points={seriesQ.data!.points}
+                pointType={seriesQ.data!.point_type}
+              />
+            ) : (
+              <p className="py-8 text-center text-sm text-ink-muted">
+                该区间历史数据不足，暂无法绘制收益曲线。
               </p>
             )}
           </div>
-          {refreshNotice && (
-            <p
-              className={`mt-3 text-sm ${refreshNotice.kind === "success" ? "text-positive" : "text-danger"}`}
-              role="status"
-            >
-              {refreshNotice.text}
-              {refreshNotice.kind === "error" &&
-                refreshNotice.text.includes("24 小时内") && (
-                  <Button
-                    variant="ghost"
-                    className="ml-2 px-2 py-0.5"
-                    disabled={refreshMut.isPending}
-                    onClick={() => {
-                      setRefreshNotice(null);
-                      setShowForceConfirm(true);
-                    }}
-                  >
-                    立即强制刷新
-                  </Button>
-                )}
-            </p>
-          )}
+        </section>
+      )}
 
+      {isActive && (
+        <>
           <h2 className="mt-8 font-medium text-ink">年度收益</h2>
           <div className="mt-2 max-h-96 overflow-auto rounded-lg border border-line">
             <table className="w-full text-sm">

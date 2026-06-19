@@ -12,9 +12,37 @@ import (
 
 // DashboardAllocationBar is one asset-class bar for charts.
 type DashboardAllocationBar struct {
-	AssetClass    string  `json:"asset_class"`
-	TargetWeight  float64 `json:"target_weight"`
-	CurrentWeight float64 `json:"current_weight"`
+	AssetClass         string                       `json:"asset_class"`
+	TargetWeight       float64                      `json:"target_weight"`
+	CurrentWeight      float64                      `json:"current_weight"`
+	CurrentAmountMinor int64                        `json:"current_amount_minor"`
+	TargetAmountMinor  int64                        `json:"target_amount_minor"`
+	Holdings           []DashboardAllocationHolding `json:"holdings"`
+}
+
+// DashboardAllocationHolding is one instrument detail line under an asset-class bar.
+type DashboardAllocationHolding struct {
+	InstrumentName     string  `json:"instrument_name"`
+	InstrumentCode     string  `json:"instrument_code"`
+	CurrentAmountMinor int64   `json:"current_amount_minor"`
+	TargetAmountMinor  int64   `json:"target_amount_minor"`
+	CurrentWeight      float64 `json:"current_weight"`
+	TargetWeight       float64 `json:"target_weight"`
+}
+
+// assetClassDisplayOrder is the fixed business ordering for allocation charts:
+// equity, bond, cash, then any unknown class last.
+var assetClassDisplayOrder = map[string]int{
+	string(domain.AssetClassEquity): 0,
+	string(domain.AssetClassBond):   1,
+	string(domain.AssetClassCash):   2,
+}
+
+func assetClassOrderIndex(ac string) int {
+	if idx, ok := assetClassDisplayOrder[ac]; ok {
+		return idx
+	}
+	return len(assetClassDisplayOrder)
 }
 
 // DashboardRegionBar is one domestic/foreign allocation bar.
@@ -307,14 +335,51 @@ func aggregateWeights(targets TargetView, keyFn func(domain.HoldingTargetLine) s
 }
 
 func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
-	byClass := aggregateWeights(targets, func(line domain.HoldingTargetLine) string { return line.AssetClass })
-	out := make([]DashboardAllocationBar, 0, len(byClass))
-	for ac, a := range byClass {
-		out = append(out, DashboardAllocationBar{
-			AssetClass: ac, TargetWeight: a.target, CurrentWeight: a.current,
+	type barAgg struct {
+		bar      DashboardAllocationBar
+		holdings []DashboardAllocationHolding
+	}
+	byClass := map[string]*barAgg{}
+	order := []string{}
+	for _, line := range targets.Holdings {
+		if !line.Enabled {
+			continue
+		}
+		agg := byClass[line.AssetClass]
+		if agg == nil {
+			agg = &barAgg{bar: DashboardAllocationBar{AssetClass: line.AssetClass}}
+			byClass[line.AssetClass] = agg
+			order = append(order, line.AssetClass)
+		}
+		agg.bar.TargetWeight += line.PortfolioTargetWeight
+		agg.bar.CurrentWeight += line.StructuralCurrentWeight
+		agg.bar.CurrentAmountMinor += line.CurrentAmountMinor
+		agg.bar.TargetAmountMinor += line.TargetAmountMinor
+		agg.holdings = append(agg.holdings, DashboardAllocationHolding{
+			InstrumentName:     line.InstrumentName,
+			InstrumentCode:     line.InstrumentCode,
+			CurrentAmountMinor: line.CurrentAmountMinor,
+			TargetAmountMinor:  line.TargetAmountMinor,
+			CurrentWeight:      line.StructuralCurrentWeight,
+			TargetWeight:       line.PortfolioTargetWeight,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].AssetClass < out[j].AssetClass })
+
+	out := make([]DashboardAllocationBar, 0, len(order))
+	for _, ac := range order {
+		agg := byClass[ac]
+		// Largest holdings first so the front-end "top N" truncation stays meaningful.
+		sort.SliceStable(agg.holdings, func(i, j int) bool {
+			ai := agg.holdings[i].TargetAmountMinor + agg.holdings[i].CurrentAmountMinor
+			aj := agg.holdings[j].TargetAmountMinor + agg.holdings[j].CurrentAmountMinor
+			return ai > aj
+		})
+		agg.bar.Holdings = agg.holdings
+		out = append(out, agg.bar)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return assetClassOrderIndex(out[i].AssetClass) < assetClassOrderIndex(out[j].AssetClass)
+	})
 	return out
 }
 

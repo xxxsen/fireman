@@ -64,6 +64,36 @@ export function listInstruments(options?: { valuationDate?: string }): Promise<{
   return apiGet(`/api/v1/instruments${query}`);
 }
 
+export interface InstrumentSearchParams {
+  q?: string;
+  assetClass?: string;
+  region?: string;
+  status?: string;
+  excludeIds?: string[];
+  limit?: number;
+  cursor?: number;
+}
+
+export interface InstrumentSearchResult {
+  instruments: Instrument[];
+  next_cursor: number | null;
+  total: number;
+}
+
+export function searchInstruments(params: InstrumentSearchParams): Promise<InstrumentSearchResult> {
+  const qs = new URLSearchParams();
+  qs.set("limit", String(params.limit ?? 10));
+  qs.set("cursor", String(params.cursor ?? 0));
+  if (params.q) qs.set("q", params.q);
+  if (params.assetClass) qs.set("asset_class", params.assetClass);
+  if (params.region) qs.set("region", params.region);
+  if (params.status) qs.set("status", params.status);
+  if (params.excludeIds && params.excludeIds.length > 0) {
+    qs.set("exclude_ids", params.excludeIds.join(","));
+  }
+  return apiGet(`/api/v1/instruments?${qs.toString()}`);
+}
+
 export function getInstrumentDetail(id: string) {
   return apiGet<{
     instrument: Instrument;
@@ -188,4 +218,34 @@ export function deleteInstrument(id: string): Promise<{ deleted: boolean }> {
 
 export function getAnnualReturns(id: string) {
   return apiGet<{ annual_returns: unknown[] }>(`/api/v1/instruments/${id}/annual-returns`);
+}
+
+export type ReturnSeriesRange =
+  | "1d"
+  | "1w"
+  | "1m"
+  | "3m"
+  | "6m"
+  | "1y"
+  | "3y"
+  | "5y"
+  | "all";
+
+export interface ReturnSeriesPoint {
+  date: string;
+  value: number;
+  cumulative_return: number;
+}
+
+export interface ReturnSeries {
+  as_of_date: string;
+  range: ReturnSeriesRange;
+  point_type: string;
+  source_name: string;
+  status: string;
+  points: ReturnSeriesPoint[];
+}
+
+export function getReturnSeries(id: string, range: ReturnSeriesRange): Promise<ReturnSeries> {
+  return apiGet(`/api/v1/instruments/${id}/return-series?range=${encodeURIComponent(range)}`);
 }

@@ -36,6 +36,65 @@ func TestBuildRegionBars(t *testing.T) {
 	}
 }
 
+func TestBuildAllocationBarsOrdersByBusinessClassAndAggregatesHoldings(t *testing.T) {
+	targets := TargetView{
+		Holdings: []domain.HoldingTargetLine{
+			{
+				Enabled: true, AssetClass: domain.AssetClassCash,
+				InstrumentName: "现金", InstrumentCode: "CASH",
+				PortfolioTargetWeight: 0.10, StructuralCurrentWeight: 0.05,
+				TargetAmountMinor: 1_000, CurrentAmountMinor: 500,
+			},
+			{
+				Enabled: true, AssetClass: domain.AssetClassEquity,
+				InstrumentName: "小权益", InstrumentCode: "EQ-S",
+				PortfolioTargetWeight: 0.10, StructuralCurrentWeight: 0.10,
+				TargetAmountMinor: 1_000, CurrentAmountMinor: 1_000,
+			},
+			{
+				Enabled: true, AssetClass: domain.AssetClassEquity,
+				InstrumentName: "大权益", InstrumentCode: "EQ-L",
+				PortfolioTargetWeight: 0.50, StructuralCurrentWeight: 0.45,
+				TargetAmountMinor: 5_000, CurrentAmountMinor: 4_500,
+			},
+			{
+				Enabled: true, AssetClass: domain.AssetClassBond,
+				InstrumentName: "债券", InstrumentCode: "BD",
+				PortfolioTargetWeight: 0.30, StructuralCurrentWeight: 0.40,
+				TargetAmountMinor: 3_000, CurrentAmountMinor: 4_000,
+			},
+			{
+				Enabled: false, AssetClass: domain.AssetClassEquity,
+				InstrumentName: "停用", InstrumentCode: "OFF",
+				PortfolioTargetWeight: 0.99, TargetAmountMinor: 9_999,
+			},
+		},
+	}
+
+	got := buildAllocationBars(targets)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	if got[0].AssetClass != domain.AssetClassEquity ||
+		got[1].AssetClass != domain.AssetClassBond ||
+		got[2].AssetClass != domain.AssetClassCash {
+		t.Fatalf("order = %s,%s,%s want equity,bond,cash", got[0].AssetClass, got[1].AssetClass, got[2].AssetClass)
+	}
+	equity := got[0]
+	if equity.TargetWeight != 0.60 || equity.CurrentWeight != 0.55 {
+		t.Fatalf("equity weights = %+v", equity)
+	}
+	if equity.TargetAmountMinor != 6_000 || equity.CurrentAmountMinor != 5_500 {
+		t.Fatalf("equity amounts = %+v", equity)
+	}
+	if len(equity.Holdings) != 2 {
+		t.Fatalf("equity holdings = %d, want 2 (disabled excluded)", len(equity.Holdings))
+	}
+	if equity.Holdings[0].InstrumentCode != "EQ-L" {
+		t.Fatalf("first equity holding = %s, want EQ-L (largest first)", equity.Holdings[0].InstrumentCode)
+	}
+}
+
 func TestTopDeviationsSortsByAbsoluteAmount(t *testing.T) {
 	lines := []domain.HoldingTargetLine{
 		{

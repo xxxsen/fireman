@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { listPlans } from "@/lib/api/plans";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatDateFromMs } from "@/lib/format";
 import { isSignificantScaleGap } from "@/lib/scale-gap";
 import { queryErrorMessage } from "@/lib/query-error";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -11,11 +11,6 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PlanCardSkeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/cn";
-
-function formatPlanDate(ts: number): string {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleDateString("zh-CN");
-}
 
 export default function HomePage() {
   const { data: plans, isLoading, isError, error, refetch, isFetching } = useQuery({
@@ -125,7 +120,7 @@ export default function HomePage() {
                     </div>
                     <div className="flex justify-between gap-2">
                       <dt>更新于</dt>
-                      <dd className="font-mono-numeric text-ink">{formatPlanDate(plan.updated_at)}</dd>
+                      <dd className="font-mono-numeric text-ink">{formatDateFromMs(plan.updated_at)}</dd>
                     </div>
                   </dl>
                 </Link>

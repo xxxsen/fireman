@@ -26,7 +26,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-canvas">
       <aside
-        className="hidden w-60 shrink-0 border-r border-line bg-surface/80 p-5 md:block"
+        data-testid="app-sidebar"
+        className="hidden w-60 shrink-0 self-start border-r border-line bg-surface/80 p-5 md:sticky md:top-0 md:block md:h-screen md:overflow-y-auto"
         style={{
           backgroundImage:
             "radial-gradient(ellipse at top left, color-mix(in srgb, var(--brand) 6%, transparent), transparent 55%)",

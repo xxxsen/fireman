@@ -5,9 +5,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 )
 
@@ -24,18 +27,58 @@ func (s Services) registerInstrumentRoutes(rg *gin.RouterGroup) {
 	rg.POST("/instruments/:instrument_id/refresh", s.refreshInstrument)
 	rg.DELETE("/instruments/:instrument_id", s.deleteInstrument)
 	rg.GET("/instruments/:instrument_id/annual-returns", s.getInstrumentAnnualReturns)
+	rg.GET("/instruments/:instrument_id/return-series", s.getInstrumentReturnSeries)
 
 	rg.GET("/plans/:plan_id/holdings/:holding_id/simulation-snapshot", s.getHoldingSimulationSnapshot)
 	rg.POST("/plans/:plan_id/holdings/:holding_id/sync-simulation-snapshot", s.syncHoldingSimulationSnapshot)
 }
 
 func (s Services) listInstruments(c *gin.Context) {
-	out, err := s.Instruments.List(c.Request.Context(), c.Query("valuation_date"))
+	// Backward compatible: without pagination/search params, return the full list.
+	if c.Query("limit") == "" && c.Query("q") == "" && c.Query("cursor") == "" &&
+		c.Query("offset") == "" {
+		out, err := s.Instruments.List(c.Request.Context(), c.Query("valuation_date"))
+		if err != nil {
+			FailErr(c, err)
+			return
+		}
+		OK(c, gin.H{"instruments": out})
+		return
+	}
+
+	opts := repository.InstrumentSearchOptions{
+		Query:         c.Query("q"),
+		AssetClass:    c.Query("asset_class"),
+		Region:        c.Query("region"),
+		Status:        c.Query("status"),
+		ExcludeSystem: true,
+		Limit:         atoiDefault(c.Query("limit"), 10),
+		Offset:        atoiDefault(c.Query("cursor"), atoiDefault(c.Query("offset"), 0)),
+	}
+	if v := strings.TrimSpace(c.Query("exclude_ids")); v != "" {
+		for _, id := range strings.Split(v, ",") {
+			if trimmed := strings.TrimSpace(id); trimmed != "" {
+				opts.ExcludeIDs = append(opts.ExcludeIDs, trimmed)
+			}
+		}
+	}
+	out, err := s.Instruments.Search(c.Request.Context(), opts)
 	if err != nil {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"instruments": out})
+	OK(c, out)
+}
+
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func decodeInstrumentImportBody[T any](
@@ -183,6 +226,19 @@ func (s Services) getInstrumentAnnualReturns(c *gin.Context) {
 		return
 	}
 	OK(c, gin.H{"annual_returns": out})
+}
+
+func (s Services) getInstrumentReturnSeries(c *gin.Context) {
+	rangeKey := c.Query("range")
+	if rangeKey == "" {
+		rangeKey = "3m"
+	}
+	out, err := s.Instruments.ReturnSeries(c.Request.Context(), c.Param("instrument_id"), rangeKey)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 func (s Services) getHoldingSimulationSnapshot(c *gin.Context) {

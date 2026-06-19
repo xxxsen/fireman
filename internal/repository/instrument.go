@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -67,6 +68,100 @@ func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 	}
 	defer func() { _ = rows.Close() }()
 	return scanInstrumentRecords(rows)
+}
+
+// InstrumentSearchOptions filters and paginates the asset library.
+type InstrumentSearchOptions struct {
+	Query         string
+	AssetClass    string
+	Region        string
+	Status        string
+	ExcludeIDs    []string
+	ExcludeSystem bool
+	Limit         int
+	Offset        int
+}
+
+// InstrumentSearchResult is one page of search results plus the total count.
+type InstrumentSearchResult struct {
+	Instruments []InstrumentRecord
+	Total       int
+}
+
+// Search returns a filtered, paginated page of instruments ordered by
+// created_at DESC, id DESC (most recent first).
+func (r *InstrumentRepo) Search(ctx context.Context, opts InstrumentSearchOptions) (InstrumentSearchResult, error) {
+	where := []string{}
+	args := []any{}
+
+	if opts.ExcludeSystem {
+		where = append(where, "is_system=0 AND provider='akshare'")
+	} else {
+		where = append(where, "(provider='akshare' OR is_system=1)")
+	}
+	if opts.Status != "" {
+		where = append(where, "status=?")
+		args = append(args, opts.Status)
+	}
+	if opts.AssetClass != "" {
+		where = append(where, "asset_class=?")
+		args = append(args, opts.AssetClass)
+	}
+	if opts.Region != "" {
+		where = append(where, "region=?")
+		args = append(args, opts.Region)
+	}
+	if q := strings.TrimSpace(opts.Query); q != "" {
+		where = append(where, "(LOWER(code) LIKE ? OR LOWER(name) LIKE ?)")
+		like := "%" + strings.ToLower(q) + "%"
+		args = append(args, like, like)
+	}
+	if len(opts.ExcludeIDs) > 0 {
+		placeholders := make([]string, len(opts.ExcludeIDs))
+		for i, id := range opts.ExcludeIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		where = append(where, "id NOT IN ("+strings.Join(placeholders, ",")+")")
+	}
+
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = "WHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int
+	if err := r.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM instruments "+whereSQL, args...).Scan(&total); err != nil {
+		return InstrumentSearchResult{}, fmt.Errorf("count instruments: %w", err)
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	pagedArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
+			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
+			expense_ratio, expense_ratio_status, fee_treatment, status,
+			created_at, updated_at
+		FROM instruments `+whereSQL+`
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`, pagedArgs...)
+	if err != nil {
+		return InstrumentSearchResult{}, fmt.Errorf("query instruments search: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	recs, err := scanInstrumentRecords(rows)
+	if err != nil {
+		return InstrumentSearchResult{}, err
+	}
+	return InstrumentSearchResult{Instruments: recs, Total: total}, nil
 }
 
 func (r *InstrumentRepo) GetByID(ctx context.Context, id string) (InstrumentRecord, error) {

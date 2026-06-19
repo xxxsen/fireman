@@ -111,4 +111,11 @@ describe("RebalanceExecutionWorkspacePage", () => {
     expect(screen.getByTestId("skip-line-line_1")).toBeInTheDocument();
     expect(screen.getByTestId("skip-line-line_2")).toBeInTheDocument();
   });
+
+  it("renders timeline without crashing when events is null", async () => {
+    getRebalanceExecutionMock.mockResolvedValue({ ...successDetail, events: null });
+    renderPage();
+
+    expect(await screen.findByText("尚无执行记录。")).toBeInTheDocument();
+  });
 });

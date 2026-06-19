@@ -28,6 +28,34 @@ import type { AllocationScenario, RegionTarget } from "@/types/api";
 
 const EDITABLE_REGION_CLASSES = ["equity", "bond", "cash"] as const;
 
+function CopyIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6" />
+    </svg>
+  );
+}
+
 function defaultScenarioRegionTargets(): RegionTarget[] {
   return buildRegionTargetsPayload(defaultWizardRegionTargets());
 }
@@ -203,14 +231,75 @@ export function ScenariosPageContent() {
               <article key={scn.id} className="rounded-lg border border-line bg-surface p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <h3 className="font-medium text-ink">{scn.name}</h3>
-                    <p className="text-sm text-ink-muted">{scn.description}</p>
+                    <h3 className="flex flex-wrap items-center gap-2 font-medium text-ink">
+                      <span className="truncate">{scn.name}</span>
+                      {scn.is_builtin && (
+                        <span className="shrink-0 rounded bg-surface-muted px-2 py-0.5 text-xs font-normal text-ink-muted">
+                          内置
+                        </span>
+                      )}
+                    </h3>
+                    {scn.description && (
+                      <p className="text-sm text-ink-muted">{scn.description}</p>
+                    )}
                   </div>
-                  {scn.is_builtin && (
-                    <span className="shrink-0 rounded bg-surface-muted px-2 py-0.5 text-xs text-ink-muted">
-                      内置
-                    </span>
-                  )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1"
+                      aria-label="复制场景"
+                      title="复制场景"
+                      onClick={() => {
+                        setFormError(null);
+                        setEditing({
+                          ...scn,
+                          id: "new_" + Date.now(),
+                          name: scn.name + " 副本",
+                          is_builtin: false,
+                          weights: [...scn.weights],
+                          region_targets: ensureRegionTargets(scn.region_targets).map((target) => ({
+                            ...target,
+                          })),
+                        });
+                      }}
+                    >
+                      <CopyIcon />
+                    </Button>
+                    {!scn.is_builtin && (
+                      <Button
+                        variant="ghost"
+                        className="px-2 py-1"
+                        aria-label="编辑场景"
+                        title="编辑场景"
+                        onClick={() => {
+                          setFormError(null);
+                          setEditing({
+                            ...scn,
+                            weights: [...scn.weights],
+                            region_targets: ensureRegionTargets(scn.region_targets).map(
+                              (target) => ({ ...target }),
+                            ),
+                          });
+                        }}
+                      >
+                        <EditIcon />
+                      </Button>
+                    )}
+                    {!scn.is_builtin && scn.plan_count === 0 && (
+                      <Button
+                        variant="danger"
+                        className="px-2 py-1"
+                        aria-label="删除场景"
+                        title="删除场景"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setDeleteTarget(scn);
+                        }}
+                      >
+                        <TrashIcon />
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 <table className="mt-3 w-full text-sm">
                   <tbody>
@@ -224,59 +313,14 @@ export function ScenariosPageContent() {
                     ))}
                   </tbody>
                 </table>
-                <p className={`mt-2 text-xs ${ok ? "text-positive" : "text-danger"}`}>
-                  合计 {formatPercent(total)} {ok ? "，通过" : "，未通过"}
-                </p>
-                <p className="text-xs text-ink-muted">{scn.plan_count} 个计划使用</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    variant="ghost"
-                    className="px-2 py-1"
-                    onClick={() => {
-                      setFormError(null);
-                      setEditing({
-                        ...scn,
-                        weights: [...scn.weights],
-                        region_targets: ensureRegionTargets(scn.region_targets).map((target) => ({
-                          ...target,
-                        })),
-                      });
-                    }}
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    className="px-2 py-1"
-                    onClick={() => {
-                      setFormError(null);
-                      setEditing({
-                        ...scn,
-                        id: "new_" + Date.now(),
-                        name: scn.name + " 副本",
-                        is_builtin: false,
-                        weights: [...scn.weights],
-                        region_targets: ensureRegionTargets(scn.region_targets).map((target) => ({
-                          ...target,
-                        })),
-                      });
-                    }}
-                  >
-                    复制
-                  </Button>
-                  {!scn.is_builtin && scn.plan_count === 0 && (
-                    <Button
-                      variant="danger"
-                      className="px-2 py-1"
-                      onClick={() => {
-                        setDeleteError(null);
-                        setDeleteTarget(scn);
-                      }}
-                    >
-                      删除
-                    </Button>
-                  )}
-                </div>
+                {!ok && (
+                  <p className="mt-2 text-xs text-danger" role="alert">
+                    权重合计 {formatPercent(total)}，请调整到 100%
+                  </p>
+                )}
+                {scn.plan_count > 0 && (
+                  <p className="mt-2 text-xs text-ink-muted">{scn.plan_count} 个计划使用</p>
+                )}
               </article>
             );
           })}

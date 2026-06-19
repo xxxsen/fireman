@@ -41,6 +41,20 @@ describe("AppShell", () => {
     expect(screen.getAllByRole("link", { name: "场景配置" }).length).toBeGreaterThan(0);
   });
 
+  it("keeps the desktop sidebar sticky with its own scroll", () => {
+    mockPathname.mockReturnValue("/");
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>,
+    );
+    const aside = screen.getByTestId("app-sidebar");
+    expect(aside).toHaveClass("md:sticky");
+    expect(aside).toHaveClass("md:top-0");
+    expect(aside).toHaveClass("md:h-screen");
+    expect(aside).toHaveClass("md:overflow-y-auto");
+  });
+
   it("does not highlight 计划 on assets or settings", () => {
     for (const pathname of ["/assets", "/settings"]) {
       mockPathname.mockReturnValue(pathname);

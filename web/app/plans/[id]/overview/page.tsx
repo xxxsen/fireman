@@ -12,7 +12,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { getDashboard } from "@/lib/api/dashboard";
-import { formatMoney, formatPercent } from "@/lib/format";
+import { formatMoney, formatMoneyScaled, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 
 export default function OverviewPage() {
@@ -110,7 +110,7 @@ export default function OverviewPage() {
               <MetricHelp termKey="configured_total_assets" />
             </dt>
             <dd className="mt-1 text-lg font-semibold text-ink">
-              {formatMoney(data.parameters.total_assets_minor, data.plan.base_currency)}
+              {formatMoneyScaled(data.parameters.total_assets_minor, data.plan.base_currency)}
             </dd>
           </div>
           <div>
@@ -119,7 +119,7 @@ export default function OverviewPage() {
               <MetricHelp termKey="invested_minor" />
             </dt>
             <dd className="mt-1 text-lg font-semibold text-ink">
-              {formatMoney(data.invested_minor ?? 0, data.plan.base_currency)}
+              {formatMoneyScaled(data.invested_minor ?? 0, data.plan.base_currency)}
             </dd>
           </div>
           <div>
@@ -167,7 +167,10 @@ export default function OverviewPage() {
                 大类配置
                 <MetricHelp termKey="asset_class_allocation" />
               </h2>
-              <AllocationBarChart bars={data.allocation_bars} />
+              <AllocationBarChart
+                bars={data.allocation_bars}
+                currency={data.plan.base_currency}
+              />
             </div>
             <div className="rounded-lg border border-line bg-surface p-4">
               <h2 className="flex items-center text-lg font-medium text-ink">
