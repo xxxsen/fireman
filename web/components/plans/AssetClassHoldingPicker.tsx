@@ -1,7 +1,7 @@
 "use client";
 
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
 import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, historyDepthLabel, regionLabel } from "@/lib/format";
@@ -77,6 +77,16 @@ export function AssetClassHoldingPicker({
     return () => window.clearTimeout(timer);
   }, [filter]);
 
+  // Collapse the whole candidate layer (local + external + states) but keep the
+  // typed query so refocusing can re-show candidates. Used by outside-click and
+  // Escape; selecting an asset clears the query separately in addInstrument.
+  const closeDropdown = useCallback(() => {
+    setOpen(false);
+    setExternalCandidates([]);
+    setResolveError(null);
+    setResolveLoading(false);
+  }, []);
+
   // Close the candidate dropdown when clicking outside the whole picker. We use
   // a capture-phase pointerdown (not blur) so clicking a candidate inside the
   // picker still registers as a selection before any close logic runs.
@@ -84,12 +94,12 @@ export function AssetClassHoldingPicker({
     if (!open) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setOpen(false);
+        closeDropdown();
       }
     };
     document.addEventListener("pointerdown", handlePointerDown, true);
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
-  }, [open]);
+  }, [open, closeDropdown]);
 
   const listQuery = useInfiniteQuery({
     queryKey: [
@@ -303,7 +313,7 @@ export function AssetClassHoldingPicker({
         }}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
-            setOpen(false);
+            closeDropdown();
           }
         }}
         aria-label={searchAriaLabel}
@@ -313,7 +323,9 @@ export function AssetClassHoldingPicker({
         <div
           id={listboxId}
           role="listbox"
-          className="mt-2 max-h-80 overflow-y-auto rounded-md border"
+          // Fixed viewport of exactly 10 standard rows (10 × 3rem); content scrolls
+          // inside so paging never resizes the dropdown or shifts surrounding UI.
+          className="mt-2 h-[30rem] overflow-y-auto rounded-md border"
           data-testid="wizard-library-results"
         >
           <ul className="divide-y text-sm">
@@ -323,23 +335,23 @@ export function AssetClassHoldingPicker({
                 <li key={inst.id} role="option" aria-selected={false}>
                   <button
                     type="button"
-                    className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+                    className="flex h-12 w-full items-center gap-2 overflow-hidden whitespace-nowrap px-3 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={!addable || importLoading}
                     onClick={() => addInstrument(inst)}
                   >
-                    <span className="font-medium">{inst.name}</span>
-                    <span className="ml-2 text-ink-muted">{inst.code}</span>
+                    <span className="truncate font-medium">{inst.name}</span>
+                    <span className="shrink-0 text-ink-muted">{inst.code}</span>
                     {inst.complete_year_count != null && (
-                      <span className="ml-2 text-xs text-ink-muted">{inst.complete_year_count} 完整年</span>
+                      <span className="shrink-0 text-xs text-ink-muted">{inst.complete_year_count} 完整年</span>
                     )}
                     {inst.monthly_return_count != null && (
-                      <span className="ml-2 text-xs text-ink-muted">{inst.monthly_return_count} 月</span>
+                      <span className="shrink-0 text-xs text-ink-muted">{inst.monthly_return_count} 月</span>
                     )}
                     {inst.history_depth === "one_year" && (
-                      <span className="ml-2 text-xs text-warning">{historyDepthLabel(inst.history_depth)}</span>
+                      <span className="shrink-0 text-xs text-warning">{historyDepthLabel(inst.history_depth)}</span>
                     )}
                     {!addable && (
-                      <span className="ml-2 text-xs text-ink-muted">历史不足，暂不可用于模拟</span>
+                      <span className="shrink-0 text-xs text-ink-muted">历史不足，暂不可用于模拟</span>
                     )}
                   </button>
                 </li>
@@ -354,12 +366,12 @@ export function AssetClassHoldingPicker({
           <div ref={sentinelRef} aria-hidden="true" />
         </div>
       )}
-      {(resolveLoading || importLoading) && (
+      {open && (resolveLoading || importLoading) && (
         <p className="mt-2 text-sm text-ink-muted" role="status">
           {importLoading ? "正在录入并抓取历史数据…" : "正在查询 AKShare…"}
         </p>
       )}
-      {externalCandidates.length > 0 && (
+      {open && externalCandidates.length > 0 && (
         <ul
           role="listbox"
           className="mt-2 max-h-40 overflow-y-auto rounded-md border border-dashed border-line divide-y text-sm"
@@ -381,7 +393,7 @@ export function AssetClassHoldingPicker({
           ))}
         </ul>
       )}
-      {resolveError && (
+      {open && resolveError && (
         <p className="mt-2 text-sm text-danger" role="alert">
           {resolveError}
         </p>

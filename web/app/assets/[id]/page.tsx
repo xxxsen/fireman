@@ -88,6 +88,8 @@ function classificationFeedbackMessage(err: unknown): string {
     switch (err.code) {
       case "instrument_version_conflict":
         return "资产资料已被更新，请刷新后确认分类再保存。";
+      case "instrument_fetch_in_progress":
+        return "历史数据抓取中，抓取完成后可编辑大类和地区。";
       case "instrument_not_editable":
         return "系统资产不可编辑分类。";
       case "instrument_classification_unsupported":
@@ -314,6 +316,7 @@ export default function AssetDetailPage() {
       {isPending && (
         <Alert variant="info" title="历史数据抓取中" className="mt-4">
           <p>后台任务正在拉取全量历史，完成后将自动刷新本页。</p>
+          <p className="mt-1 text-sm text-ink-muted">抓取完成后可编辑大类和地区。</p>
           <Button
             variant="ghost"
             className="mt-2 px-2 py-1"
@@ -428,7 +431,7 @@ export default function AssetDetailPage() {
           ) : (
             <dd className="text-ink">
               {assetClassLabel(inst.asset_class)} / {regionLabel(inst.region)}
-              {!inst.is_system && (
+              {!inst.is_system && inst.status !== "pending_fetch" && (
                 <Button
                   variant="ghost"
                   className="ml-2 px-2 py-0.5"

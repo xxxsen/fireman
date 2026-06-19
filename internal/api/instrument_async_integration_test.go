@@ -240,6 +240,59 @@ func TestInstrumentRetryFetchIntegration(t *testing.T) {
 	}
 }
 
+// TestInstrumentClassificationEditAfterFailedFetchPreservedOnRetry covers td/054
+// finding #2: a fetch_failed asset stays editable, and a subsequent retry rebuilds
+// the payload from the current instrument so the user's edited classification is
+// preserved (not reverted to the import-time value).
+func TestInstrumentClassificationEditAfterFailedFetchPreservedOnRetry(t *testing.T) {
+	provider := mockRetryFetchProvider(t)
+	t.Cleanup(provider.Close)
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	waitForInstrumentStatus(t, client, srv.URL, instID, "fetch_failed")
+
+	// fetch_failed must remain editable.
+	resp := patchClassification(t, client, srv.URL, instID, map[string]any{
+		"asset_class": "bond", "region": "foreign",
+		"expected_updated_at": instrumentUpdatedAt(t, db, instID),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit on fetch_failed status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	_ = readBody(t, resp)
+
+	// Retry rebuilds the payload from the (now edited) instrument row.
+	retry, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/retry-fetch", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("retry-fetch status=%d body=%s", retry.StatusCode, readBody(t, retry))
+	}
+	_ = readBody(t, retry)
+	waitForInstrumentActive(t, client, srv.URL, instID)
+
+	assetClass, region := holdingClassificationFromInstruments(t, db, instID)
+	if assetClass != "bond" || region != "foreign" {
+		t.Fatalf("retry must preserve edited classification, got %s/%s want bond/foreign", assetClass, region)
+	}
+}
+
+func holdingClassificationFromInstruments(t *testing.T, db *sql.DB, instrumentID string) (string, string) {
+	t.Helper()
+	var assetClass, region string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT asset_class, region FROM instruments WHERE id=?`, instrumentID).Scan(&assetClass, &region); err != nil {
+		t.Fatal(err)
+	}
+	return assetClass, region
+}
+
 func mock510ProviderServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

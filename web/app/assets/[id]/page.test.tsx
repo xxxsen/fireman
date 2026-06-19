@@ -461,6 +461,15 @@ describe("AssetDetailPage classification editing", () => {
     await screen.findByText("基础信息");
     expect(screen.queryByRole("button", { name: "编辑分类" })).not.toBeInTheDocument();
   });
+
+  it("hides the edit entry while fetching and shows the hint (td/054 #2)", async () => {
+    getInstrumentDetailMock.mockResolvedValue(pendingDetail());
+    getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
+    renderPage();
+    await screen.findByText("基础信息");
+    expect(screen.queryByRole("button", { name: "编辑分类" })).not.toBeInTheDocument();
+    expect(screen.getByText("抓取完成后可编辑大类和地区。")).toBeInTheDocument();
+  });
 });
 
 describe("AssetDetailPage delete", () => {

@@ -284,4 +284,59 @@ describe("AssetClassHoldingPicker", () => {
       selectedRows.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
+
+  const externalResolved = {
+    ambiguous: false,
+    resolved: {
+      code: "270042",
+      provider_symbol: "270042",
+      name: "广发纳指100ETF联接（QDII）人民币A",
+      exchange: "",
+      instrument_kind: "mutual_fund",
+      ticket_id: "ticket_1",
+      is_importable: true,
+    },
+  };
+
+  it("closes external AKShare candidates on outside click (td/054 #3)", async () => {
+    pool = [];
+    resolveImport.mockResolvedValueOnce(externalResolved);
+    renderPicker();
+    fireEvent.change(screen.getByTestId("wizard-holding-search"), { target: { value: "270042" } });
+    expect(await screen.findByTestId("wizard-external-results")).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+    await waitFor(() =>
+      expect(screen.queryByTestId("wizard-external-results")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("closes external AKShare candidates on Escape (td/054 #3)", async () => {
+    pool = [];
+    resolveImport.mockResolvedValueOnce(externalResolved);
+    renderPicker();
+    const search = screen.getByTestId("wizard-holding-search");
+    fireEvent.change(search, { target: { value: "270042" } });
+    expect(await screen.findByTestId("wizard-external-results")).toBeInTheDocument();
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByTestId("wizard-external-results")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("renders the local dropdown at a fixed 10-row height with single-line rows (td/054 #4)", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    const option = await screen.findByRole("button", { name: /资料库基金1/ });
+
+    const list = screen.getByTestId("wizard-library-results");
+    expect(list).toHaveClass("h-[30rem]");
+    expect(list).not.toHaveClass("max-h-80");
+
+    expect(option).toHaveClass("h-12");
+    expect(option).toHaveClass("whitespace-nowrap");
+    expect(screen.getByText("资料库基金1")).toHaveClass("truncate");
+  });
 });

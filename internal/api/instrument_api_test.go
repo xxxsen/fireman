@@ -387,3 +387,43 @@ func TestUpdateInstrumentClassificationAPI(t *testing.T) {
 	}
 	assertErrorCode(t, readBody(t, resp), "instrument_not_editable")
 }
+
+// TestUpdateInstrumentClassificationRejectedDuringFetch covers td/054 finding #2:
+// a pending_fetch asset cannot have its classification edited, since the in-flight
+// fetch would later overwrite it with the import-time payload.
+func TestUpdateInstrumentClassificationRejectedDuringFetch(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	defer srv.Close()
+	client := srv.Client()
+
+	id := "ins_pending_fetch"
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO instruments (
+			id, code, name, market, instrument_type, asset_class, region, currency,
+			provider, provider_symbol, adjust_policy, is_system, expense_ratio, expense_ratio_status,
+			fee_treatment, status, created_at, updated_at
+		) VALUES (?, '510500', '抓取中ETF', 'CN', 'cn_exchange_fund', 'equity', 'domestic', 'CNY',
+			'akshare', '510500', 'none', 0, NULL, 'unavailable', 'embedded', 'pending_fetch', ?, ?)`,
+		id, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := patchClassification(t, client, srv.URL, id, map[string]any{
+		"asset_class": "bond", "region": "foreign", "expected_updated_at": now,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("pending fetch patch status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	assertErrorCode(t, readBody(t, resp), "instrument_fetch_in_progress")
+
+	var assetClass, region string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT asset_class, region FROM instruments WHERE id=?`, id).Scan(&assetClass, &region); err != nil {
+		t.Fatal(err)
+	}
+	if assetClass != "equity" || region != "domestic" {
+		t.Fatalf("pending fetch classification must be unchanged, got %s/%s", assetClass, region)
+	}
+}

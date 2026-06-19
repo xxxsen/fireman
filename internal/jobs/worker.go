@@ -288,14 +288,59 @@ func (w *Worker) executeAnalysisJob(
 	cancelCheck := w.cancelCheck(ctx, job.ID)
 	progress := w.jobProgress(ctx, job.ID)
 	progress(0, total, phase)
-	if err := run(ctx, job.ID, cancelCheck, progress); err != nil {
-		if w.handleRunError(ctx, job.ID, "", cancelCheck, err) {
+	err := run(ctx, job.ID, cancelCheck, progress)
+	if err != nil {
+		// Worker shutdown without a user/supersede cancel: leave the job running so
+		// the reconciler can requeue it.
+		if ctx.Err() != nil && !cancelCheck() {
 			return
 		}
-		w.fail(ctx, job.ID, failCode, err.Error())
+		// A genuine computation failure (no cancel pending) fails the job.
+		if !cancelCheck() && !errors.Is(err, context.Canceled) {
+			w.fail(ctx, job.ID, failCode, err.Error())
+			return
+		}
+		// Otherwise it was canceled mid-run; converge to canceled below.
+	}
+	w.finishAnalysis(ctx, job.ID, err == nil)
+}
+
+// finishAnalysis converges a stress/sensitivity job to its terminal state with
+// cancel priority. A concurrent supersede may set cancel_requested after the
+// runner's last cancelCheck has already passed, so a successful run must not
+// blindly overwrite that with "succeeded": it only succeeds while no cancel is
+// pending, otherwise it finishes as canceled, preserving the supersede error
+// code. This conditional convergence is used only for analysis jobs.
+func (w *Worker) finishAnalysis(ctx context.Context, jobID string, computeSucceeded bool) {
+	writeCtx, cancel := jobWriteCtx(ctx)
+	defer cancel()
+	if computeSucceeded {
+		updated, err := w.jobs.FinishRunningIfNotCanceled(writeCtx, jobID)
+		if err != nil {
+			w.logger.Error("finish analysis job failed", "job_id", jobID, "error", err)
+			return
+		}
+		if updated {
+			w.events.Publish(Event{JobID: jobID, Status: repository.JobStatusSucceeded})
+			return
+		}
+	}
+	canceled, err := w.jobs.FinishCanceledIfRequested(writeCtx, jobID)
+	if err != nil {
+		w.logger.Error("finish canceled analysis job failed", "job_id", jobID, "error", err)
 		return
 	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
+	if !canceled {
+		// Job is no longer running (already terminal or requeued); nothing to do.
+		return
+	}
+	var code, msg string
+	if job, getErr := w.jobs.GetByID(writeCtx, jobID); getErr == nil {
+		code, msg = job.ErrorCode, job.ErrorMessage
+	}
+	w.events.Publish(Event{
+		JobID: jobID, Status: repository.JobStatusCanceled, ErrorCode: code, ErrorMessage: msg,
+	})
 }
 
 func (w *Worker) executeStress(ctx context.Context, job repository.Job) {

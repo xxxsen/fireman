@@ -10,7 +10,9 @@
 
 ## 3. 附属分析绑定 run + 冻结快照 + 仅保留最新
 - stress / sensitivity `Create`：`ResolveAnalysisRun(planID, simulation_run_id)` 解析目标 run（空则取最近一次），读取该 run 的 `InputSnapshot` 作为冻结快照参与计算，不再实时重算组合。
-- 写入前 `DeleteBySimulationRunAndType(runID, type)`，保证每个 run 每类附属分析只保留最新一条。
+- 写入前在同一事务内处理同一 `simulation_run_id + type` 的旧任务，再删除旧 `analysis_results`：queued job 立即标记 `canceled`；running job 写入 `cancel_requested=1` 和 `superseded_by_newer_analysis`。这样旧 worker 不会因记录被删除而失败或继续无意义计算。
+- worker 对 stress / sensitivity 使用取消优先的条件终态更新：只有 `status=running AND cancel_requested=0` 才能写入 `succeeded`；存在取消请求时收敛为 `canceled` 并保留 supersede 错误码。即使取消发生在 runner 最后一次检查与成功收尾之间，旧任务也不会回写成功。
+- 旧任务取消/删除完成后再创建新 pending record，保证每个 run 每类附属分析只保留最新一条。
 - `AnalysisResult` 持久化 `simulation_run_id`，并在视图（`StressTestView` / `SensitivityTestView`）回传。
 - 过期判断（`result_stale`）：以该附属分析所属 run 快照中的 `config_hash` 与当前计划 `config_hash` 比较（`analysisResultStale` + `SimulationService.RunConfigHash`）；不再用 run 的 `input_hash` 与 config hash 跨体系比较。`simulation_run_id` 为空的 legacy 行按"不可判定"处理，不标记过期。
 

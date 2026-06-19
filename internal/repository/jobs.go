@@ -20,6 +20,11 @@ const (
 	JobStatusCanceled      = "canceled"
 )
 
+// JobErrSupersededByNewerAnalysis marks an attached-analysis job canceled because
+// the same analysis type was re-run against the same Monte Carlo run. Shared by
+// the service supersede path and the worker's cancel-aware terminal convergence.
+const JobErrSupersededByNewerAnalysis = "superseded_by_newer_analysis"
+
 // Job is a queued background task.
 type Job struct {
 	ID              string `json:"id"`
@@ -146,6 +151,58 @@ func (r *JobRepo) RequestCancelTx(ctx context.Context, tx *sql.Tx, id string) er
 	exec := r.exec(tx)
 	_, err := exec.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1 WHERE id=?`, id)
 	return wrapSQL("request job cancel", err)
+}
+
+// RequestCancelRunningWithErrorTx flags a still-running job for cancellation and
+// records the cancel reason, only when status='running'. Returns whether the row
+// was updated. Used to supersede an in-flight analysis job so its terminal
+// convergence becomes canceled (carrying the supersede error code) rather than
+// succeeded. No-op for queued/terminal jobs (callers handle queued separately).
+func (r *JobRepo) RequestCancelRunningWithErrorTx(
+	ctx context.Context, tx *sql.Tx, id, errCode, errMsg string,
+) (bool, error) {
+	exec := r.exec(tx)
+	res, err := exec.ExecContext(ctx, `
+		UPDATE jobs SET cancel_requested=1, error_code=?, error_message=?
+		WHERE id=? AND status=?`,
+		errCode, errMsg, id, JobStatusRunning)
+	if err != nil {
+		return false, wrapSQL("request cancel running job", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// FinishRunningIfNotCanceled marks a running job succeeded only when no cancel was
+// requested. Returns true when the row was actually updated, letting the worker
+// fall back to a canceled convergence on a concurrent supersede.
+func (r *JobRepo) FinishRunningIfNotCanceled(ctx context.Context, id string) (bool, error) {
+	now := time.Now().UnixMilli()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status=?, finished_at=?, phase=''
+		WHERE id=? AND status=? AND cancel_requested=0`,
+		JobStatusSucceeded, now, id, JobStatusRunning)
+	if err != nil {
+		return false, wrapSQL("finish running job", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// FinishCanceledIfRequested marks a running job canceled only when a cancel was
+// requested, preserving any error_code/error_message already recorded (e.g. the
+// supersede reason). Returns true when the row was actually updated.
+func (r *JobRepo) FinishCanceledIfRequested(ctx context.Context, id string) (bool, error) {
+	now := time.Now().UnixMilli()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status=?, finished_at=?, phase=''
+		WHERE id=? AND status=? AND cancel_requested=1`,
+		JobStatusCanceled, now, id, JobStatusRunning)
+	if err != nil {
+		return false, wrapSQL("finish canceled job", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // CancelQueued marks a queued job as canceled immediately.

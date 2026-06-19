@@ -290,6 +290,9 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 	if !prior.CancelRequested {
 		t.Fatalf("prior running job should have cancel_requested set, got %+v", prior)
 	}
+	if prior.ErrorCode != "superseded_by_newer_analysis" {
+		t.Fatalf("prior running job error_code = %q want superseded_by_newer_analysis", prior.ErrorCode)
+	}
 
 	recs, err := analysisRepo.ListBySimulationRun(ctx, runID, repository.AnalysisTypeSensitivity, 10)
 	if err != nil {
