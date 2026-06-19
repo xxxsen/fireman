@@ -39,20 +39,52 @@ export function ParameterCurvesChart({
   if (curves.length === 0) return null;
   return (
     <div className="space-y-4">
-      {curves.map((c) => (
-        <div key={c.parameter_name}>
-          <p className="mb-1 text-xs font-medium text-ink-muted">{c.parameter_name}</p>
-          <ReactECharts
-            style={{ height: 180 }}
-            option={{
-              tooltip: { trigger: "axis" },
-              xAxis: { type: "category", data: c.points.map((p) => p.label) },
-              yAxis: { type: "value", axisLabel: { formatter: (v: number) => formatPercent(v) } },
-              series: [{ type: "line", data: c.points.map((p) => p.success_probability), smooth: true }],
-            }}
-          />
-        </div>
-      ))}
+      {curves.map((c) => {
+        // Baseline = the unperturbed point ("基准") if present, else the middle
+        // point of a symmetric perturbation sweep, used for relative deltas.
+        const baseline =
+          c.points.find((p) => p.label.includes("基准")) ??
+          c.points[Math.floor(c.points.length / 2)];
+        const baseVal = baseline?.success_probability ?? 0;
+        return (
+          <div key={c.parameter_name}>
+            <p className="mb-1 text-xs font-medium text-ink-muted">{c.parameter_name}</p>
+            <ReactECharts
+              style={{ height: 280 }}
+              option={{
+                tooltip: {
+                  trigger: "axis",
+                  formatter: (params: Array<{ axisValue?: string; name?: string; value: number }>) => {
+                    const item = params[0];
+                    if (!item) return "";
+                    const label = item.axisValue ?? item.name ?? "";
+                    const v = typeof item.value === "number" ? item.value : 0;
+                    const delta = v - baseVal;
+                    const sign = delta >= 0 ? "+" : "";
+                    return `${c.parameter_name}<br/>扰动 ${label}<br/>成功率 ${formatPercent(v)}<br/>相对基准 ${sign}${formatPercent(delta)}`;
+                  },
+                },
+                grid: { top: 30, bottom: 52, left: 60, right: 16 },
+                xAxis: {
+                  type: "category",
+                  name: "参数扰动",
+                  nameLocation: "middle",
+                  nameGap: 30,
+                  data: c.points.map((p) => p.label),
+                },
+                yAxis: {
+                  type: "value",
+                  name: "成功率",
+                  min: 0,
+                  max: 1,
+                  axisLabel: { formatter: (v: number) => formatPercent(v) },
+                },
+                series: [{ type: "line", data: c.points.map((p) => p.success_probability), smooth: true }],
+              }}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -82,9 +114,23 @@ export function SensitivityHeatmap({
             return `${returnLabels[y]} / ${spendingLabels[x]}<br/>${formatPercent(v)}`;
           },
         },
-        grid: { height: "70%", top: "10%" },
-        xAxis: { type: "category", data: spendingLabels, splitArea: { show: true } },
-        yAxis: { type: "category", data: returnLabels, splitArea: { show: true } },
+        grid: { height: "62%", top: "8%", left: 80, right: 24 },
+        xAxis: {
+          type: "category",
+          name: "支出扰动",
+          nameLocation: "middle",
+          nameGap: 32,
+          data: spendingLabels,
+          splitArea: { show: true },
+        },
+        yAxis: {
+          type: "category",
+          name: "收益扰动",
+          nameLocation: "middle",
+          nameGap: 56,
+          data: returnLabels,
+          splitArea: { show: true },
+        },
         visualMap: {
           min: 0,
           max: 1,

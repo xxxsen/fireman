@@ -30,7 +30,6 @@ import { getHoldings } from "@/lib/api/holdings";
 import {
   cancelJob,
   createSimulation,
-  getJob,
   listPaths,
   listSimulations,
 } from "@/lib/api/simulations";
@@ -378,16 +377,11 @@ export function AnalysisContent() {
   const latestStress = stressQ.data?.stress_tests[0];
   const latestSens = sensQ.data?.sensitivity_tests[0];
 
-  const simJobQ = useQuery({
-    queryKey: ["job", latest?.job_id],
-    queryFn: () => getJob(latest!.job_id),
-    enabled: !!latest?.job_id,
-  });
-
+  // A run is displayable once its summary is persisted: summary_json carries a
+  // numeric success_probability only on success. Job status drives the
+  // pending/running indicator but never gates results already stored on the run.
   const simCompleted =
-    !!latest &&
-    !!latest.summary_json &&
-    simJobQ.data?.status === "succeeded";
+    !!latest && typeof latest.summary_json?.success_probability === "number";
 
   const pathsQ = useQuery({
     queryKey: ["paths", latest?.id],
@@ -443,11 +437,39 @@ export function AnalysisContent() {
       clearJobError("sim");
       setActiveJobKind("sim");
       setActiveJobId(res.job_id);
-      // Select the freshly created run; it is surfaced in the dropdown once the
-      // simulations list is refetched when the job reaches a terminal state. We
-      // intentionally do not refetch here: showing the pending run early would
-      // make simJobQ cache a non-terminal status that never refreshes.
-      if (res.run_id) setSelectedRunId(res.run_id);
+      // Surface the new run immediately as a pending entry and select it, so the
+      // page tracks this run from the start. The list is refetched on terminal
+      // (handleJobTerminal -> invalidateAll), replacing it with the stored run.
+      if (res.run_id) {
+        const pendingRun: SimulationRun = {
+          id: res.run_id,
+          job_id: res.job_id,
+          plan_id: planId,
+          input_hash: "",
+          current_config_hash: "",
+          result_stale: false,
+          market_snapshot_hash: "",
+          engine_version: "",
+          runs,
+          seed: "",
+          horizon_months: 0,
+          success_count: 0,
+          failure_count: 0,
+          summary_json: {},
+          created_at: Date.now(),
+        };
+        qc.setQueryData<{ simulations: SimulationRun[] }>(
+          ["simulations", planId],
+          (old) => {
+            const list = old?.simulations ?? [];
+            if (list.some((run) => run.id === pendingRun.id)) {
+              return { simulations: list };
+            }
+            return { simulations: [pendingRun, ...list] };
+          },
+        );
+        setSelectedRunId(res.run_id);
+      }
     },
     onError: (e) =>
       setJobErrors((prev) => ({

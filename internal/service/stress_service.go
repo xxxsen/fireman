@@ -148,6 +148,9 @@ func (s *StressService) ListByRun(ctx context.Context, planID, runID string) ([]
 		}
 		return nil, wrapRepo("get plan for stress list", err)
 	}
+	if err := s.sims.EnsureRunInPlan(ctx, planID, runID); err != nil {
+		return nil, err
+	}
 	recs, err := s.analysis.ListBySimulationRun(ctx, runID, repository.AnalysisTypeStress, 1)
 	if err != nil {
 		return nil, wrapRepo("list stress tests by run", err)
@@ -177,7 +180,7 @@ func (s *StressService) GetByJobID(ctx context.Context, jobID string) (StressTes
 
 func (s *StressService) toView(ctx context.Context, rec repository.AnalysisResult, currentHash string) StressTestView {
 	job, _ := s.jobs.GetByID(ctx, rec.JobID)
-	stale := currentHash != "" && rec.InputHash != currentHash
+	stale := analysisResultStale(ctx, s.sims, rec.SimulationRunID, currentHash)
 	view := StressTestView{
 		JobID: rec.JobID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
 		CurrentConfigHash: currentHash, ResultStale: stale, CreatedAt: rec.CreatedAt,

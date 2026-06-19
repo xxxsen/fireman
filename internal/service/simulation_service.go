@@ -102,6 +102,47 @@ func (s *SimulationService) ResolveAnalysisRun(
 	return AnalysisRunContext{RunID: run.ID, Snapshot: &snap, InputHash: run.InputHash}, nil
 }
 
+// EnsureRunInPlan verifies a Monte Carlo run exists and belongs to the plan.
+// Used by attached-analysis listing to keep results scoped to the right plan.
+func (s *SimulationService) EnsureRunInPlan(ctx context.Context, planID, runID string) error {
+	_, err := s.loadAnalysisRun(ctx, planID, runID)
+	return err
+}
+
+// RunConfigHash returns the plan config hash captured in a run's input snapshot.
+// ok is false when the run is missing or its snapshot cannot be decoded; callers
+// treat that as "cannot determine staleness".
+func (s *SimulationService) RunConfigHash(ctx context.Context, runID string) (string, bool) {
+	if runID == "" {
+		return "", false
+	}
+	run, err := s.sims.GetByID(ctx, runID)
+	if err != nil {
+		return "", false
+	}
+	var snap simulation.InputSnapshot
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
+		return "", false
+	}
+	return snap.ConfigHash, true
+}
+
+// analysisResultStale reports whether an attached analysis (stress/sensitivity)
+// is stale relative to the current plan config. It compares the config hash
+// frozen in the owning Monte Carlo run's snapshot against the current plan hash;
+// the run's input_hash is a different hash space and must not be compared with
+// the config hash. Legacy rows without a run id are treated as not stale.
+func analysisResultStale(ctx context.Context, sims *SimulationService, runID, currentHash string) bool {
+	if currentHash == "" || runID == "" {
+		return false
+	}
+	runHash, ok := sims.RunConfigHash(ctx, runID)
+	if !ok || runHash == "" {
+		return false
+	}
+	return runHash != currentHash
+}
+
 func (s *SimulationService) loadAnalysisRun(
 	ctx context.Context, planID, runID string,
 ) (repository.SimulationRun, error) {

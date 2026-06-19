@@ -22,4 +22,23 @@ describe("Tooltip", () => {
     expect(tooltip.style.left).not.toBe("");
     expect(tooltip.style.top).not.toBe("");
   });
+
+  it("places a followCursor tooltip near the cursor and tracks movement (td/051 §5)", () => {
+    render(
+      <Tooltip content="提示" followCursor contentTestId="follow-content" triggerTestId="follow-trigger">
+        <button type="button">触发</button>
+      </Tooltip>,
+    );
+
+    const trigger = screen.getByTestId("follow-trigger");
+    fireEvent.mouseEnter(trigger, { clientX: 100, clientY: 200 });
+    const tooltip = screen.getByTestId("follow-content");
+    // cursor + TOOLTIP_CURSOR_OFFSET (12); tooltip has zero size under jsdom.
+    expect(tooltip.style.left).toBe("112px");
+    expect(tooltip.style.top).toBe("212px");
+
+    fireEvent.mouseMove(trigger, { clientX: 300, clientY: 250 });
+    expect(tooltip.style.left).toBe("312px");
+    expect(tooltip.style.top).toBe("262px");
+  });
 });

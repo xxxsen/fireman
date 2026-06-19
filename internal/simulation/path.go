@@ -38,29 +38,29 @@ type PathSummary struct {
 
 // MonthRecord captures one month of path detail.
 type MonthRecord struct {
-	MonthOffset      int
-	TotalWealthMinor int64
-	SpendingMinor    int64
-	IncomeMinor      int64
-	TaxMinor         int64
-	TransactionCost  int64
-	Drawdown         float64
-	Rebalanced       bool
+	MonthOffset      int     `json:"month_offset"`
+	TotalWealthMinor int64   `json:"total_wealth_minor"`
+	SpendingMinor    int64   `json:"spending_minor"`
+	IncomeMinor      int64   `json:"income_minor"`
+	TaxMinor         int64   `json:"tax_minor"`
+	TransactionCost  int64   `json:"transaction_cost"`
+	Drawdown         float64 `json:"drawdown"`
+	Rebalanced       bool    `json:"rebalanced"`
 }
 
 // YearRecord captures annual aggregates for path detail.
 type YearRecord struct {
-	Year               int
-	StartWealthMinor   int64
-	IncomeMinor        int64
-	SpendingMinor      int64
-	TaxMinor           int64
-	TransactionCost    int64
-	InvestmentGainLoss int64
-	EndWealthMinor     int64
-	YearEndDrawdown    float64
-	MaxIntraYearDD     float64
-	Rebalanced         bool
+	Year               int                `json:"year"`
+	StartWealthMinor   int64              `json:"start_wealth_minor"`
+	IncomeMinor        int64              `json:"income_minor"`
+	SpendingMinor      int64              `json:"spending_minor"`
+	TaxMinor           int64              `json:"tax_minor"`
+	TransactionCost    int64              `json:"transaction_cost"`
+	InvestmentGainLoss int64              `json:"investment_gain_loss"`
+	EndWealthMinor     int64              `json:"end_wealth_minor"`
+	YearEndDrawdown    float64            `json:"year_end_drawdown"`
+	MaxIntraYearDD     float64            `json:"max_intra_year_dd"`
+	Rebalanced         bool               `json:"rebalanced"`
 	AssetWeights       map[string]float64 `json:"asset_weights"`
 }
 

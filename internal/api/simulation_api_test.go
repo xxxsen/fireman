@@ -323,6 +323,49 @@ func TestSimulationJobFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("path detail status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
 	}
+	detailBody := mustRead(t, resp)
+	assertPathDetailSnakeCaseContract(t, detailBody)
+}
+
+// assertPathDetailSnakeCaseContract guards the path detail API contract: the
+// frontend reads snake_case fields, so MonthRecord/YearRecord must serialize
+// with snake_case JSON tags (regression for td/051 finding #1).
+func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
+	t.Helper()
+	env := decodeEnvelope(t, body)
+	detail := env["data"].(map[string]any)
+
+	monthly, ok := detail["monthly"].([]any)
+	if !ok || len(monthly) == 0 {
+		t.Fatalf("path detail monthly missing or empty: %+v", detail["monthly"])
+	}
+	m0 := monthly[0].(map[string]any)
+	for _, key := range []string{"month_offset", "total_wealth_minor", "spending_minor", "income_minor", "tax_minor", "transaction_cost", "drawdown", "rebalanced"} {
+		if _, present := m0[key]; !present {
+			t.Fatalf("monthly[0] missing snake_case field %q: %+v", key, m0)
+		}
+	}
+	for _, pascal := range []string{"MonthOffset", "TotalWealthMinor", "StartWealthMinor"} {
+		if _, present := m0[pascal]; present {
+			t.Fatalf("monthly[0] leaked PascalCase field %q: %+v", pascal, m0)
+		}
+	}
+
+	yearly, ok := detail["yearly"].([]any)
+	if !ok || len(yearly) == 0 {
+		t.Fatalf("path detail yearly missing or empty: %+v", detail["yearly"])
+	}
+	y0 := yearly[0].(map[string]any)
+	for _, key := range []string{"year", "start_wealth_minor", "income_minor", "spending_minor", "tax_minor", "transaction_cost", "investment_gain_loss", "end_wealth_minor", "year_end_drawdown", "max_intra_year_dd", "rebalanced"} {
+		if _, present := y0[key]; !present {
+			t.Fatalf("yearly[0] missing snake_case field %q: %+v", key, y0)
+		}
+	}
+	for _, pascal := range []string{"Year", "StartWealthMinor", "EndWealthMinor"} {
+		if _, present := y0[pascal]; present {
+			t.Fatalf("yearly[0] leaked PascalCase field %q: %+v", pascal, y0)
+		}
+	}
 }
 
 func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {

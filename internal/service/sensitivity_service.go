@@ -150,6 +150,9 @@ func (s *SensitivityService) ListByRun(ctx context.Context, planID, runID string
 		}
 		return nil, wrapRepo("get plan for sensitivity list", err)
 	}
+	if err := s.sims.EnsureRunInPlan(ctx, planID, runID); err != nil {
+		return nil, err
+	}
 	recs, err := s.analysis.ListBySimulationRun(ctx, runID, repository.AnalysisTypeSensitivity, 1)
 	if err != nil {
 		return nil, wrapRepo("list sensitivity tests by run", err)
@@ -181,7 +184,7 @@ func (s *SensitivityService) toView(ctx context.Context, rec repository.Analysis
 	currentHash string,
 ) SensitivityTestView {
 	job, _ := s.jobs.GetByID(ctx, rec.JobID)
-	stale := currentHash != "" && rec.InputHash != currentHash
+	stale := analysisResultStale(ctx, s.sims, rec.SimulationRunID, currentHash)
 	view := SensitivityTestView{
 		JobID: rec.JobID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
 		CurrentConfigHash: currentHash, ResultStale: stale, CreatedAt: rec.CreatedAt,

@@ -14,6 +14,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import {
   computeCursorTooltipPosition,
@@ -50,10 +51,10 @@ export function Tooltip({
 }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<CSSProperties | null>(null);
+  const [cursor, setCursor] = useState<TooltipPoint | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
-  const cursorRef = useRef<TooltipPoint | null>(null);
   const openedByPointerRef = useRef(false);
   const tooltipId = useId();
 
@@ -83,31 +84,33 @@ export function Tooltip({
     }
 
     const tooltipRect = tooltipRef.current.getBoundingClientRect();
-    const usePointer = followCursor && openedByPointerRef.current && cursorRef.current !== null;
-    const next = usePointer
-      ? computeCursorTooltipPosition(
-          cursorRef.current as TooltipPoint,
-          tooltipRect,
-          window.innerWidth,
-          window.innerHeight,
-          TOOLTIP_VIEWPORT_PADDING,
-        )
-      : computeTooltipPosition(
-          triggerRef.current.getBoundingClientRect(),
-          tooltipRect,
-          window.innerWidth,
-          align,
-          TOOLTIP_VIEWPORT_PADDING,
-          window.innerHeight,
-        );
+    let next: { top: number; left: number };
+    if (followCursor && openedByPointerRef.current && cursor) {
+      next = computeCursorTooltipPosition(
+        cursor,
+        tooltipRect,
+        window.innerWidth,
+        window.innerHeight,
+        TOOLTIP_VIEWPORT_PADDING,
+      );
+    } else {
+      next = computeTooltipPosition(
+        triggerRef.current.getBoundingClientRect(),
+        tooltipRect,
+        window.innerWidth,
+        align,
+        TOOLTIP_VIEWPORT_PADDING,
+        window.innerHeight,
+      );
+    }
 
     setPosition({
       position: "fixed",
       top: next.top,
       left: next.left,
-      zIndex: 30,
+      zIndex: 50,
     });
-  }, [open, align, content, followCursor]);
+  }, [open, align, content, followCursor, cursor]);
 
   if (!isValidElement(children)) {
     throw new Error("Tooltip requires a single React element child");
@@ -134,14 +137,38 @@ export function Tooltip({
 
   const trigger = cloneElement(child, triggerProps);
 
-  // The wrapper's pointer handlers capture the latest cursor before any click,
-  // so the click toggle itself never needs to touch refs during render.
+  // In followCursor mode, hover position is tracked in state so the tooltip
+  // re-positions as the mouse moves. Keyboard focus resets to trigger-anchored.
   const handlePointer = (event: React.MouseEvent<HTMLElement>) => {
     if (followCursor) {
-      cursorRef.current = { x: event.clientX, y: event.clientY };
       openedByPointerRef.current = true;
+      setCursor({ x: event.clientX, y: event.clientY });
     }
   };
+
+  const overlay = open ? (
+    <span
+      ref={tooltipRef}
+      role="tooltip"
+      id={tooltipId}
+      data-testid={contentTestId}
+      style={{
+        position: "fixed",
+        top: position?.top ?? 0,
+        left: position?.left ?? 0,
+        visibility: position ? "visible" : "hidden",
+        zIndex: 50,
+      }}
+      onMouseEnter={cancelClose}
+      onMouseLeave={scheduleClose}
+      className={cn(
+        "rounded-lg border border-line bg-surface p-2 text-xs leading-relaxed text-ink shadow-lg",
+        contentClassName,
+      )}
+    >
+      {content}
+    </span>
+  ) : null;
 
   return (
     <span
@@ -155,34 +182,17 @@ export function Tooltip({
       onMouseLeave={scheduleClose}
       onFocus={() => {
         openedByPointerRef.current = false;
+        setCursor(null);
         show();
       }}
       onBlur={scheduleClose}
     >
       {trigger}
-      {open ? (
-        <span
-          ref={tooltipRef}
-          role="tooltip"
-          id={tooltipId}
-          data-testid={contentTestId}
-          style={{
-            position: "fixed",
-            top: position?.top ?? 0,
-            left: position?.left ?? 0,
-            visibility: position ? "visible" : "hidden",
-            zIndex: 30,
-          }}
-          onMouseEnter={cancelClose}
-          onMouseLeave={scheduleClose}
-          className={cn(
-            "rounded-lg border border-line bg-surface p-2 text-xs leading-relaxed text-ink shadow-lg",
-            contentClassName,
-          )}
-        >
-          {content}
-        </span>
-      ) : null}
+      {/* Render the overlay in a body portal so transformed/overflow-clipped
+          ancestors cannot distort its fixed-position coordinates. */}
+      {overlay && typeof document !== "undefined"
+        ? createPortal(overlay, document.body)
+        : overlay}
     </span>
   );
 }

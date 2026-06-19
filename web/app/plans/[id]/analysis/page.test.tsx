@@ -199,7 +199,7 @@ describe("AnalysisPage zero success", () => {
 
   it("shows 0% success and representative paths", async () => {
     renderAnalysis();
-    expect(await screen.findByText(/成功率 0%/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/成功率 0%/)).length).toBeGreaterThanOrEqual(1);
     expect(await screen.findByText(/P00/)).toBeInTheDocument();
     expect(screen.getByTestId("wealth-chart")).toBeInTheDocument();
   });
@@ -318,8 +318,8 @@ describe("AnalysisPage zero success", () => {
       await screen.findByText(/以下持仓历史样本有限/),
     ).toBeInTheDocument();
     expect(
-      await screen.findByText(/仅有 1 个完整自然年度，收益与风险估计的不确定性较高/),
-    ).toBeInTheDocument();
+      (await screen.findAllByText(/仅有 1 个完整自然年度，收益与风险估计的不确定性较高/)).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("keeps frozen snapshot warnings from holdings after library refresh", async () => {
@@ -436,7 +436,7 @@ describe("AnalysisPage zero success", () => {
 
   it("defaults to the latest run and queries attached analysis by run id (td/050 §5,§6)", async () => {
     renderAnalysis();
-    await screen.findByText(/成功率 0%/);
+    await screen.findAllByText(/成功率 0%/);
     await waitFor(() =>
       expect(listStressTestsMock).toHaveBeenCalledWith("plan_1", "run_1"),
     );
@@ -487,5 +487,39 @@ describe("AnalysisPage zero success", () => {
     renderAnalysis();
     expect(await screen.findByRole("button", { name: "运行压力测试" })).toBeDisabled();
     expect(screen.getAllByText(/当前模拟尚未完成/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("first run shows results after the job completes without manual refresh (td/051 §3)", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({ simulations: [] });
+    createSimulation.mockReset();
+    createSimulation.mockResolvedValue({ job_id: "job_new", run_id: "run_new", status: "queued" });
+
+    renderAnalysis();
+
+    fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalled());
+
+    // Pending run selected, but results are not shown until the summary lands.
+    expect(screen.queryByText("模拟结果")).not.toBeInTheDocument();
+
+    // Backend now reports the completed run for the next refetch.
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        {
+          ...defaultSimulations.simulations[0],
+          id: "run_new",
+          job_id: "job_new",
+          summary_json: { success_probability: 0.9, terminal_quantiles: { p50: 100 } },
+        },
+      ],
+    });
+
+    await act(async () => {
+      jobStatusCallbacks.onComplete?.();
+    });
+
+    expect(await screen.findByText("模拟结果")).toBeInTheDocument();
+    expect(screen.getAllByText(/成功率 90%/).length).toBeGreaterThanOrEqual(1);
   });
 });
