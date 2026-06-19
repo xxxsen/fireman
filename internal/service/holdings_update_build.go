@@ -10,11 +10,20 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
+// frozenClassification carries the asset_class/region already recorded on a
+// plan's holding so structural updates keep the plan-level frozen copy instead of
+// silently adopting the library's current classification (td/053 §2.2).
+type frozenClassification struct {
+	assetClass string
+	region     string
+}
+
 func (s *HoldingsService) buildOnePreparedHolding(
 	ctx context.Context,
 	plan repository.Plan,
 	item HoldingWriteItem,
 	existingSnap map[string]string,
+	existingClass map[string]frozenClassification,
 ) (repository.PlanHolding, *pendingHoldingSnap, error) {
 	if item.AssetClass != nil || item.Region != nil || item.SimulationSnapshotID != nil {
 		return repository.PlanHolding{}, nil, newErr(
@@ -51,10 +60,17 @@ func (s *HoldingsService) buildOnePreparedHolding(
 			skip: snap.ID == repository.SystemCashSnapshotID,
 		}
 	}
+	// Freeze rule: an asset already in this plan keeps its plan-level
+	// classification; only assets joining the plan for the first time copy the
+	// library's current asset_class/region.
+	assetClass, region := inst.AssetClass, inst.Region
+	if prev, ok := existingClass[item.InstrumentID]; ok {
+		assetClass, region = prev.assetClass, prev.region
+	}
 	holding := repository.PlanHolding{
 		ID: "hold_" + uuid.New().String(), PlanID: plan.ID,
 		InstrumentID: item.InstrumentID, Enabled: item.Enabled,
-		AssetClass: inst.AssetClass, Region: inst.Region,
+		AssetClass: assetClass, Region: region,
 		WeightWithinGroup: item.WeightWithinGroup, CurrentAmountMinor: item.CurrentAmountMinor,
 		SimulationSnapshotID: snapID, SortOrder: item.SortOrder,
 	}

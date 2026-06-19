@@ -7,6 +7,8 @@ const useJobStatusMock = vi.hoisted(() => vi.fn());
 const getInstrumentDetailMock = vi.hoisted(() => vi.fn());
 const getFetchStatusMock = vi.hoisted(() => vi.fn());
 const deleteInstrumentMock = vi.hoisted(() => vi.fn());
+const refreshInstrumentMock = vi.hoisted(() => vi.fn());
+const updateClassificationMock = vi.hoisted(() => vi.fn());
 const routerPushMock = vi.hoisted(() => vi.fn());
 
 let jobStatusCallbacks: {
@@ -29,6 +31,7 @@ const baseInstrument = {
   data_source_name: "akshare",
   point_type: "close",
   is_system: false,
+  updated_at: 1750000000000,
 };
 
 function pendingDetail() {
@@ -107,7 +110,8 @@ vi.mock("@/lib/api/instruments", () => ({
   getInstrumentDetail: (...args: unknown[]) => getInstrumentDetailMock(...args),
   getFetchStatus: (...args: unknown[]) => getFetchStatusMock(...args),
   retryFetch: vi.fn(),
-  refreshInstrument: vi.fn(),
+  refreshInstrument: (...args: unknown[]) => refreshInstrumentMock(...args),
+  updateInstrumentClassification: (...args: unknown[]) => updateClassificationMock(...args),
   deleteInstrument: (...args: unknown[]) => deleteInstrumentMock(...args),
   getReturnSeries: vi.fn().mockResolvedValue({
     as_of_date: "2026-06-12",
@@ -255,7 +259,7 @@ describe("AssetDetailPage job terminal states", () => {
     expect(await screen.findByText("年度收益")).toBeInTheDocument();
     expect(screen.getByText("模拟窗口预览（完整自然年度）")).toBeInTheDocument();
     expect(screen.getByText("2023-01-03 ~ 2023-12-29")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "刷新 AKShare 数据" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
     expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();
   });
 
@@ -353,21 +357,39 @@ describe("AssetDetailPage layout and return curve", () => {
     getInstrumentDetailMock.mockReset();
     getFetchStatusMock.mockReset();
     useJobStatusMock.mockReset();
+    refreshInstrumentMock.mockReset();
     getInstrumentDetailMock.mockResolvedValue(activeDetail());
     useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
   });
 
-  it("shows top-right action buttons and return curve with range tabs", async () => {
+  it("shows only refresh/delete actions without force-refresh (td/053 §3)", async () => {
     renderPage();
-    expect(await screen.findByRole("button", { name: "刷新 AKShare 数据" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "强制刷新" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "强制刷新" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/刷新 AKShare 数据/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/24 小时/)).not.toBeInTheDocument();
 
     expect(screen.getByText("收益曲线")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "近3天" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "近1天" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "近3月" })).toBeInTheDocument();
     expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
+  });
+
+  it("refreshes immediately and shows success without force wording (td/053 §3)", async () => {
+    refreshInstrumentMock.mockResolvedValue({
+      ...baseInstrument,
+      status: "active",
+      data_as_of: "2026-06-18",
+      data_source_name: "ak.fund_open_fund_info_em:累计净值走势",
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(refreshInstrumentMock).toHaveBeenCalledWith("ins_test"));
+    const notice = await screen.findByText(/数据已刷新/);
+    expect(notice.textContent).toContain("东方财富 · 公募基金 · 累计净值走势");
+    expect(notice.textContent).not.toContain("强制");
   });
 
   it("switches return curve range when a tab is clicked", async () => {
@@ -378,6 +400,66 @@ describe("AssetDetailPage layout and return curve", () => {
     await waitFor(() =>
       expect(getReturnSeries).toHaveBeenCalledWith("ins_test", "1y"),
     );
+  });
+});
+
+describe("AssetDetailPage classification editing", () => {
+  beforeEach(() => {
+    getInstrumentDetailMock.mockReset();
+    getFetchStatusMock.mockReset();
+    useJobStatusMock.mockReset();
+    updateClassificationMock.mockReset();
+    getInstrumentDetailMock.mockResolvedValue(activeDetail());
+    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
+  });
+
+  it("edits classification and shows the frozen-plan notice (td/053 §2.3)", async () => {
+    updateClassificationMock.mockResolvedValue({
+      instrument: { ...baseInstrument, status: "active", asset_class: "bond", region: "foreign" },
+      referencing_plan_count: 2,
+      classification_sync_scope: "future_only",
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑分类" }));
+    expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("资产大类"), { target: { value: "bond" } });
+    fireEvent.change(screen.getByLabelText("资产地区"), { target: { value: "foreign" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(updateClassificationMock).toHaveBeenCalledWith("ins_test", {
+        asset_class: "bond",
+        region: "foreign",
+        expected_updated_at: 1750000000000,
+      }),
+    );
+    expect(await screen.findByText(/已关联 2 个计划保持原配置/)).toBeInTheDocument();
+  });
+
+  it("keeps input and offers reload on version conflict (td/053 §2.3)", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    updateClassificationMock.mockRejectedValue(
+      new ApiError("instrument_version_conflict", "conflict"),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑分类" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText(/请刷新后确认分类再保存/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新加载" })).toBeInTheDocument();
+    // Editor stays open so the user keeps their selections.
+    expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
+  });
+
+  it("hides the edit entry for system instruments", async () => {
+    getInstrumentDetailMock.mockResolvedValue({
+      ...activeDetail(),
+      instrument: { ...baseInstrument, status: "active", is_system: true },
+    });
+    renderPage();
+    await screen.findByText("基础信息");
+    expect(screen.queryByRole("button", { name: "编辑分类" })).not.toBeInTheDocument();
   });
 });
 

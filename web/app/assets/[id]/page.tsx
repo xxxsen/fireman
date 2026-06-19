@@ -18,6 +18,7 @@ import {
   getReturnSeries,
   refreshInstrument,
   retryFetch,
+  updateInstrumentClassification,
   type ReturnSeriesRange,
 } from "@/lib/api/instruments";
 import { ReturnSeriesChart } from "@/components/charts/ReturnSeriesChart";
@@ -56,8 +57,6 @@ const RETURN_SERIES_RANGES: { key: ReturnSeriesRange; label: string }[] = [
 function refreshFeedbackMessage(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {
-      case "instrument_refresh_throttled":
-        return "24 小时内已刷新过。如需立即验证数据，请使用「强制刷新」。";
       case "market_provider_unavailable":
         return `数据源暂时不可用：${err.message}`;
       case "market_provider_timeout":
@@ -73,6 +72,33 @@ function refreshFeedbackMessage(err: unknown): string {
   return err instanceof Error ? err.message : "刷新失败，请稍后重试。";
 }
 
+const ASSET_CLASS_OPTIONS = [
+  { value: "equity", label: "权益" },
+  { value: "bond", label: "债券" },
+  { value: "cash", label: "现金/其他" },
+];
+
+const REGION_OPTIONS = [
+  { value: "domestic", label: "国内" },
+  { value: "foreign", label: "国外" },
+];
+
+function classificationFeedbackMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case "instrument_version_conflict":
+        return "资产资料已被更新，请刷新后确认分类再保存。";
+      case "instrument_not_editable":
+        return "系统资产不可编辑分类。";
+      case "instrument_classification_unsupported":
+        return "分类取值不合法。";
+      default:
+        return err.message;
+    }
+  }
+  return err instanceof Error ? err.message : "保存失败，请稍后重试。";
+}
+
 export default function AssetDetailPage() {
   const id = useParams().id as string;
   const router = useRouter();
@@ -81,12 +107,17 @@ export default function AssetDetailPage() {
     null,
   );
   const [showFetchDialog, setShowFetchDialog] = useState(false);
-  const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [fetchStatusError, setFetchStatusError] = useState<string | null>(null);
   const [fetchErrorCode, setFetchErrorCode] = useState<string | null>(null);
+
+  const [editingClass, setEditingClass] = useState(false);
+  const [classDraft, setClassDraft] = useState<{ asset_class: string; region: string } | null>(null);
+  const [classNotice, setClassNotice] = useState<
+    { kind: "success" | "error" | "conflict"; text: string } | null
+  >(null);
 
   const [seriesRange, setSeriesRange] = useState<ReturnSeriesRange>("3m");
 
@@ -132,22 +163,46 @@ export default function AssetDetailPage() {
   });
 
   const refreshMut = useMutation({
-    mutationFn: (force: boolean) => refreshInstrument(id, { force }),
+    mutationFn: () => refreshInstrument(id),
     onMutate: () => {
       setRefreshNotice(null);
     },
-    onSuccess: (inst, force) => {
+    onSuccess: (inst) => {
       void qc.invalidateQueries({ queryKey: ["instrument-detail", id] });
       void qc.invalidateQueries({ queryKey: ["instruments"] });
-      const asOf = inst.data_as_of ? `，数据截至 ${inst.data_as_of}` : "";
+      const asOf = inst.data_as_of ? `，截至 ${inst.data_as_of}` : "";
       const src = inst.data_source_name
         ? `，来源 ${dataSourceLabel(inst.data_source_name)}`
         : "";
-      const prefix = force ? "已强制刷新 AKShare 数据" : "AKShare 数据已刷新";
-      setRefreshNotice({ kind: "success", text: `${prefix}${asOf}${src}。` });
+      setRefreshNotice({ kind: "success", text: `数据已刷新${asOf}${src}。` });
     },
     onError: (err) => {
       setRefreshNotice({ kind: "error", text: refreshFeedbackMessage(err) });
+    },
+  });
+
+  const classMut = useMutation({
+    mutationFn: (body: { asset_class: string; region: string; expected_updated_at: number }) =>
+      updateInstrumentClassification(id, body),
+    onSuccess: (result) => {
+      setEditingClass(false);
+      setClassDraft(null);
+      const refs = result.referencing_plan_count;
+      const suffix = refs > 0 ? `已关联 ${refs} 个计划保持原配置，` : "";
+      setClassNotice({
+        kind: "success",
+        text: `分类已更新；${suffix}后续新建或新增资产将使用新分类。`,
+      });
+      void qc.invalidateQueries({ queryKey: ["instrument-detail", id] });
+      void qc.invalidateQueries({ queryKey: ["instruments"] });
+      void qc.invalidateQueries({ queryKey: ["instrument-picker"] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.code === "instrument_version_conflict") {
+        setClassNotice({ kind: "conflict", text: classificationFeedbackMessage(err) });
+        return;
+      }
+      setClassNotice({ kind: "error", text: classificationFeedbackMessage(err) });
     },
   });
 
@@ -220,24 +275,10 @@ export default function AssetDetailPage() {
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             <Button
               disabled={refreshMut.isPending || inst.is_system}
-              onClick={() => refreshMut.mutate(false)}
+              onClick={() => refreshMut.mutate()}
             >
-              {refreshMut.isPending && !refreshMut.variables ? "刷新中…" : "刷新 AKShare 数据"}
+              {refreshMut.isPending ? "刷新中（可能需要数分钟）…" : "刷新"}
             </Button>
-            {!inst.is_system && (
-              <Button
-                variant="secondary"
-                disabled={refreshMut.isPending}
-                onClick={() => {
-                  setRefreshNotice(null);
-                  setShowForceConfirm(true);
-                }}
-              >
-                {refreshMut.isPending && refreshMut.variables
-                  ? "强制刷新中（可能需要数分钟）…"
-                  : "强制刷新"}
-              </Button>
-            )}
             {!inst.is_system && (
               <Button
                 variant="danger"
@@ -255,30 +296,12 @@ export default function AssetDetailPage() {
         )}
       </div>
 
-      {isActive && !inst.is_system && (
-        <p className="mt-2 text-xs text-ink-muted">
-          常规刷新 24 小时内限一次；强制刷新跳过该限制，适合验证数据源或排查数据问题。
-        </p>
-      )}
       {refreshNotice && (
         <p
           className={`mt-3 text-sm ${refreshNotice.kind === "success" ? "text-positive" : "text-danger"}`}
           role="status"
         >
           {refreshNotice.text}
-          {refreshNotice.kind === "error" && refreshNotice.text.includes("24 小时内") && (
-            <Button
-              variant="ghost"
-              className="ml-2 px-2 py-0.5"
-              disabled={refreshMut.isPending}
-              onClick={() => {
-                setRefreshNotice(null);
-                setShowForceConfirm(true);
-              }}
-            >
-              立即强制刷新
-            </Button>
-          )}
         </p>
       )}
 
@@ -338,9 +361,112 @@ export default function AssetDetailPage() {
         </div>
         <div>
           <dt className="text-ink-muted">大类 / 地区</dt>
-          <dd className="text-ink">
-            {assetClassLabel(inst.asset_class)} / {regionLabel(inst.region)}
-          </dd>
+          {editingClass && classDraft ? (
+            <dd className="mt-1 space-y-2" data-testid="classification-editor">
+              <div className="flex flex-wrap gap-2">
+                <select
+                  aria-label="资产大类"
+                  className="rounded border border-line bg-surface px-2 py-1 text-sm text-ink"
+                  value={classDraft.asset_class}
+                  onChange={(e) =>
+                    setClassDraft({ ...classDraft, asset_class: e.target.value })
+                  }
+                >
+                  {ASSET_CLASS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="资产地区"
+                  className="rounded border border-line bg-surface px-2 py-1 text-sm text-ink"
+                  value={classDraft.region}
+                  onChange={(e) => setClassDraft({ ...classDraft, region: e.target.value })}
+                >
+                  {REGION_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-ink-muted">
+                仅影响资料库和后续新建/新增资产；已关联计划保持原配置。
+                {referencingPlans.length > 0 && (
+                  <span className="ml-1 text-warning">当前被 {referencingPlans.length} 个计划引用。</span>
+                )}
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  className="px-2 py-1"
+                  disabled={classMut.isPending}
+                  onClick={() =>
+                    classMut.mutate({
+                      asset_class: classDraft.asset_class,
+                      region: classDraft.region,
+                      expected_updated_at: inst.updated_at,
+                    })
+                  }
+                >
+                  {classMut.isPending ? "保存中…" : "保存"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="px-2 py-1"
+                  disabled={classMut.isPending}
+                  onClick={() => {
+                    setEditingClass(false);
+                    setClassDraft(null);
+                    setClassNotice(null);
+                  }}
+                >
+                  取消
+                </Button>
+              </div>
+            </dd>
+          ) : (
+            <dd className="text-ink">
+              {assetClassLabel(inst.asset_class)} / {regionLabel(inst.region)}
+              {!inst.is_system && (
+                <Button
+                  variant="ghost"
+                  className="ml-2 px-2 py-0.5"
+                  onClick={() => {
+                    setClassNotice(null);
+                    setClassDraft({ asset_class: inst.asset_class, region: inst.region });
+                    setEditingClass(true);
+                  }}
+                >
+                  编辑分类
+                </Button>
+              )}
+            </dd>
+          )}
+          {classNotice && (
+            <p
+              className={`mt-1 text-xs ${
+                classNotice.kind === "success" ? "text-positive" : "text-danger"
+              }`}
+              role="status"
+            >
+              {classNotice.text}
+              {classNotice.kind === "conflict" && (
+                <Button
+                  variant="ghost"
+                  className="ml-2 px-2 py-0.5"
+                  onClick={() => {
+                    setClassNotice(null);
+                    setEditingClass(false);
+                    setClassDraft(null);
+                    void refetch();
+                  }}
+                >
+                  重新加载
+                </Button>
+              )}
+            </p>
+          )}
         </div>
         <div>
           <dt className="text-ink-muted">数据状态</dt>
@@ -356,14 +482,7 @@ export default function AssetDetailPage() {
         </div>
         <div>
           <dt className="text-ink-muted">抓取数据源</dt>
-          <dd className="text-ink">
-            {dataSourceLabel(inst.data_source_name)}
-            {inst.data_source_name && (
-              <span className="ml-1 font-mono-numeric text-xs text-ink-muted">
-                ({inst.data_source_name})
-              </span>
-            )}
-          </dd>
+          <dd className="text-ink">{dataSourceLabel(inst.data_source_name)}</dd>
         </div>
         <div>
           <dt className="text-ink-muted">价格类型</dt>
@@ -638,18 +757,6 @@ export default function AssetDetailPage() {
           )}
         </dl>
       </Dialog>
-
-      <ConfirmDialog
-        open={showForceConfirm}
-        title="强制刷新"
-        description="强制刷新将立即重新抓取远端数据，跳过 24 小时限制，可能增加被数据源限流的风险。确定继续？"
-        confirmLabel="强制刷新"
-        onConfirm={() => {
-          setShowForceConfirm(false);
-          refreshMut.mutate(true);
-        }}
-        onClose={() => setShowForceConfirm(false)}
-      />
 
       <ConfirmDialog
         open={showDeleteConfirm}

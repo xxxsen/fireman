@@ -231,10 +231,6 @@ export default function NewPlanWizardPage() {
     [selectedInstruments],
   );
 
-  // Steps with dense data (建立持仓 / 确认组合) use a wide content area; the
-  // basic form steps stay at a comfortable reading width.
-  const wideStep = step >= 2;
-
   return (
     <div className="mx-auto w-full max-w-[96rem]">
       <Link href="/" className="text-sm underline">
@@ -256,23 +252,24 @@ export default function NewPlanWizardPage() {
 
       <div
         data-testid="wizard-step-card"
-        className={`mt-8 space-y-4 rounded-lg border p-6 ${wideStep ? "w-full" : "max-w-2xl"}`}
+        className="mt-8 w-full space-y-4 rounded-lg border p-6"
       >
         {step === 0 && (
-          <>
-            <label className="block text-sm">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="block text-sm lg:col-span-2">
               计划名称
               <input
-                className="mt-1 w-full rounded-md border px-3 py-2"
+                className="mt-1 w-full max-w-2xl rounded-md border px-3 py-2"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <h2 className="flex items-center text-sm font-medium">
-              FIRE 模拟参数
-              <MetricHelp termKey="fire_params_for_simulation" />
-            </h2>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="lg:col-span-2">
+              <h2 className="flex items-center text-sm font-medium">
+                FIRE 模拟参数
+                <MetricHelp termKey="fire_params_for_simulation" />
+              </h2>
+              <div className="mt-2 grid gap-4 sm:grid-cols-3">
               <label className="text-sm">
                 当前年龄
                 <input
@@ -324,6 +321,7 @@ export default function NewPlanWizardPage() {
                   <span className="text-ink-muted">年</span>
                 </div>
               </label>
+              </div>
             </div>
             <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
             <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
@@ -334,7 +332,7 @@ export default function NewPlanWizardPage() {
               </span>
               <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
             </label>
-          </>
+          </div>
         )}
 
         {step === 1 && (
@@ -342,7 +340,7 @@ export default function NewPlanWizardPage() {
             <label className="block text-sm">
               选择场景
               <select
-                className="mt-1 w-full rounded-md border px-3 py-2"
+                className="mt-1 w-full max-w-2xl rounded-md border px-3 py-2"
                 value={scenarioId}
                 onChange={(e) => setScenarioId(e.target.value)}
               >
@@ -355,17 +353,18 @@ export default function NewPlanWizardPage() {
                 ))}
               </select>
             </label>
-            <p className="text-sm text-ink-muted">
+            <p className="max-w-2xl text-sm text-ink-muted">
               权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
             </p>
             {selectedScenario && regionTargetChecks.length > 0 && (
-              <div className="mt-4 space-y-4 rounded-lg border border-line p-4">
+              <div className="mt-4 rounded-lg border border-line p-4">
                 <h3 className="text-sm font-medium">地区组内权重</h3>
+                <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {regionTargetChecks.map((check) => {
                   const ac = check.assetClass as WizardRegionEditableClass;
                   const rt = regionTargets[ac];
                   return (
-                    <div key={ac} className="space-y-2">
+                    <div key={ac} className="space-y-2 rounded-md border border-line p-3">
                       <p className="text-sm font-medium">{check.label}</p>
                       <div className="flex flex-wrap items-end gap-4">
                         <PercentInput
@@ -397,6 +396,7 @@ export default function NewPlanWizardPage() {
                     </div>
                   );
                 })}
+                </div>
               </div>
             )}
           </>
@@ -668,7 +668,7 @@ export default function NewPlanWizardPage() {
         </p>
       )}
 
-      <div className={`mt-6 flex justify-between ${wideStep ? "w-full" : "max-w-2xl"}`}>
+      <div className="mt-6 flex w-full justify-between">
         <button
           type="button"
           className="rounded-md border px-4 py-2 text-sm"

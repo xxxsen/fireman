@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	ErrHoldingNotFound    = errors.New("holding not found")
-	ErrInstrumentNotFound = errors.New("instrument not found")
+	ErrHoldingNotFound           = errors.New("holding not found")
+	ErrInstrumentNotFound        = errors.New("instrument not found")
+	ErrInstrumentVersionConflict = errors.New("instrument version conflict")
 )
 
 // HoldingsRepo manages plan holdings.

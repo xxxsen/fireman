@@ -25,6 +25,7 @@ func (s Services) registerInstrumentRoutes(rg *gin.RouterGroup) {
 	rg.GET("/instruments/:instrument_id", s.getInstrument)
 	rg.GET("/instruments/:instrument_id/detail", s.getInstrumentDetail)
 	rg.POST("/instruments/:instrument_id/refresh", s.refreshInstrument)
+	rg.PATCH("/instruments/:instrument_id/classification", s.updateInstrumentClassification)
 	rg.DELETE("/instruments/:instrument_id", s.deleteInstrument)
 	rg.GET("/instruments/:instrument_id/annual-returns", s.getInstrumentAnnualReturns)
 	rg.GET("/instruments/:instrument_id/return-series", s.getInstrumentReturnSeries)
@@ -199,10 +200,25 @@ func (s Services) refreshInstrument(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	if c.Query("force") == "true" || c.Query("force") == "1" {
-		req.Force = true
-	}
+	// Manual library refresh is always an immediate full refresh (td/053 §3); the
+	// legacy `force` field is accepted for compatibility but no longer changes the
+	// user-visible behavior or the 24h throttle.
+	req.Force = true
 	out, err := s.Instruments.Refresh(c.Request.Context(), c.Param("instrument_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) updateInstrumentClassification(c *gin.Context) {
+	var req service.ClassificationUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Instruments.UpdateClassification(c.Request.Context(), c.Param("instrument_id"), req)
 	if err != nil {
 		FailErr(c, err)
 		return

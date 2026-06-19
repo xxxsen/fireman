@@ -138,14 +138,16 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 		return nil, fmt.Errorf("list existing holdings: %w", err)
 	}
 	existingSnap := make(map[string]string)
+	existingClass := make(map[string]frozenClassification)
 	for _, h := range existing {
 		existingSnap[h.InstrumentID] = h.SimulationSnapshotID
+		existingClass[h.InstrumentID] = frozenClassification{assetClass: h.AssetClass, region: h.Region}
 	}
 
 	pendingSnaps := make([]pendingHoldingSnap, 0)
 	built := make([]repository.PlanHolding, 0, len(req.Holdings))
 	for _, item := range req.Holdings {
-		holding, pending, err := s.buildOnePreparedHolding(ctx, plan, item, existingSnap)
+		holding, pending, err := s.buildOnePreparedHolding(ctx, plan, item, existingSnap, existingClass)
 		if err != nil {
 			return nil, err
 		}

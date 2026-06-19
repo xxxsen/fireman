@@ -241,4 +241,47 @@ describe("AssetClassHoldingPicker", () => {
       expect(onSelectedChange).toHaveBeenCalled();
     });
   });
+
+  it("exposes combobox semantics on the search input", async () => {
+    renderPicker();
+    const search = screen.getByTestId("wizard-holding-search");
+    expect(search).toHaveAttribute("role", "combobox");
+    expect(search).toHaveAttribute("aria-expanded", "false");
+    fireEvent.focus(search);
+    await waitFor(() => expect(search).toHaveAttribute("aria-expanded", "true"));
+  });
+
+  it("closes the candidate dropdown when clicking outside", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    expect(await screen.findByTestId("wizard-library-results")).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+    await waitFor(() =>
+      expect(screen.queryByTestId("wizard-library-results")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("closes the candidate dropdown on Escape", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+    renderPicker();
+    const search = screen.getByTestId("wizard-holding-search");
+    fireEvent.focus(search);
+    expect(await screen.findByTestId("wizard-library-results")).toBeInTheDocument();
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByTestId("wizard-library-results")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("renders selected holdings above the search input", () => {
+    renderPicker([{ inst: makeInstrument(1), weight: 1, amount: 0 }]);
+    const selectedRows = screen.getByTestId("wizard-selected-rows");
+    const search = screen.getByTestId("wizard-holding-search");
+    expect(
+      selectedRows.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

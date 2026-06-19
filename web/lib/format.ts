@@ -237,24 +237,37 @@ export function instrumentStatusLabel(status: string): string {
   return map[status] ?? status;
 }
 
-/** Human-readable label for AKShare adapter source ids. */
+const DATA_SOURCE_MAP: Record<string, string> = {
+  "ak.fund_etf_hist_em": "东方财富 · ETF 日线",
+  "ak.stock_zh_a_hist_tx": "腾讯财经 · 前复权",
+  "ak.fund_etf_hist_sina": "新浪财经 · ETF",
+  "ak.stock_zh_a_hist": "东方财富 · A 股日线",
+  "ak.stock_zh_a_daily": "新浪财经 · A 股",
+  "ak.fund_lof_hist_em": "东方财富 · LOF",
+  "ak.fund_etf_fund_info_em": "东方财富 · ETF 净值",
+  "ak.fund_open_fund_info_em": "东方财富 · 公募基金",
+  "ak.fund_money_fund_info_em": "东方财富 · 货币基金",
+  "ak.stock_us_daily": "美股 · 日线",
+  "ak.currency_boc_sina": "新浪 · 外汇",
+  test_fixture: "测试数据",
+};
+
+/**
+ * Human-readable label for AKShare adapter source ids. The backend may append a
+ * data-type suffix after a colon (e.g. `ak.fund_open_fund_info_em:累计净值走势`);
+ * we map the id segment and keep the readable suffix. Unknown ids are never shown
+ * raw to the user — they collapse to a generic "行情数据" label.
+ */
 export function dataSourceLabel(sourceName: string | undefined | null): string {
   if (!sourceName) return "—";
-  const map: Record<string, string> = {
-    "ak.fund_etf_hist_em": "东方财富 · ETF 日线",
-    "ak.stock_zh_a_hist_tx": "腾讯财经 · 前复权",
-    "ak.fund_etf_hist_sina": "新浪财经 · ETF",
-    "ak.stock_zh_a_hist": "东方财富 · A 股日线",
-    "ak.stock_zh_a_daily": "新浪财经 · A 股",
-    "ak.fund_lof_hist_em": "东方财富 · LOF",
-    "ak.fund_etf_fund_info_em": "东方财富 · ETF 净值",
-    "ak.fund_open_fund_info_em": "东方财富 · 公募基金",
-    "ak.fund_money_fund_info_em": "东方财富 · 货币基金",
-    "ak.stock_us_daily": "美股 · 日线",
-    "ak.currency_boc_sina": "新浪 · 外汇",
-    test_fixture: "测试数据",
-  };
-  return map[sourceName] ?? sourceName;
+  const colon = sourceName.indexOf(":");
+  const id = colon >= 0 ? sourceName.slice(0, colon).trim() : sourceName.trim();
+  const suffix = colon >= 0 ? sourceName.slice(colon + 1).trim() : "";
+  const base = DATA_SOURCE_MAP[id];
+  if (base) {
+    return suffix ? `${base} · ${suffix}` : base;
+  }
+  return suffix ? `行情数据 · ${suffix}` : "行情数据";
 }
 
 export function pointTypeLabel(pointType: string | undefined | null): string {

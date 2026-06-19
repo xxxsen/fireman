@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/fireman/fireman/internal/marketdata"
+	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
@@ -302,4 +304,86 @@ func readBody(t *testing.T, resp *http.Response) []byte {
 	t.Helper()
 	defer resp.Body.Close()
 	return mustRead(t, resp)
+}
+
+func insertLibraryInstrument(t *testing.T, db *sql.DB, assetClass, region string) (string, int64) {
+	t.Helper()
+	id := "ins_classification_test"
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO instruments (
+			id, code, name, market, instrument_type, asset_class, region, currency,
+			provider, provider_symbol, adjust_policy, is_system, expense_ratio, expense_ratio_status,
+			fee_treatment, status, created_at, updated_at
+		) VALUES (?, '510300', '测试ETF', 'CN', 'cn_exchange_fund', ?, ?, 'CNY',
+			'akshare', '510300', 'none', 0, NULL, 'unavailable', 'embedded', 'active', ?, ?)`,
+		id, assetClass, region, now, now); err != nil {
+		t.Fatal(err)
+	}
+	return id, now
+}
+
+func patchClassification(
+	t *testing.T, client *http.Client, baseURL, instID string, body map[string]any,
+) *http.Response {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPatch,
+		baseURL+"/api/v1/instruments/"+instID+"/classification", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// TestUpdateInstrumentClassificationAPI covers td/053 §2.1: valid edit, optimistic
+// lock conflict, enum rejection and system-asset protection.
+func TestUpdateInstrumentClassificationAPI(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	defer srv.Close()
+	client := srv.Client()
+
+	instID, updatedAt := insertLibraryInstrument(t, db, "equity", "domestic")
+
+	resp := patchClassification(t, client, srv.URL, instID, map[string]any{
+		"asset_class": "bond", "region": "foreign", "expected_updated_at": updatedAt,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("classification patch status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	data := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	inst := data["instrument"].(map[string]any)
+	if inst["asset_class"] != "bond" || inst["region"] != "foreign" {
+		t.Fatalf("instrument classification=%v/%v", inst["asset_class"], inst["region"])
+	}
+	if data["classification_sync_scope"] != "future_only" {
+		t.Fatalf("sync scope=%v", data["classification_sync_scope"])
+	}
+
+	resp = patchClassification(t, client, srv.URL, instID, map[string]any{
+		"asset_class": "cash", "region": "domestic", "expected_updated_at": updatedAt,
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("conflict status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	assertErrorCode(t, readBody(t, resp), "instrument_version_conflict")
+
+	resp = patchClassification(t, client, srv.URL, instID, map[string]any{
+		"asset_class": "crypto", "region": "domestic", "expected_updated_at": 0,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid enum status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	assertErrorCode(t, readBody(t, resp), "instrument_classification_unsupported")
+
+	resp = patchClassification(t, client, srv.URL, repository.SystemCashInstrumentID, map[string]any{
+		"asset_class": "cash", "region": "domestic", "expected_updated_at": 0,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("system asset status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	assertErrorCode(t, readBody(t, resp), "instrument_not_editable")
 }

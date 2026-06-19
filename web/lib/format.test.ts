@@ -87,8 +87,28 @@ describe("dataSourceLabel", () => {
     expect(dataSourceLabel("ak.fund_etf_hist_sina")).toBe("新浪财经 · ETF");
   });
 
-  it("falls back to raw id", () => {
-    expect(dataSourceLabel("ak.custom_source")).toBe("ak.custom_source");
+  it("maps known id with a data-type suffix", () => {
+    expect(dataSourceLabel("ak.fund_open_fund_info_em:累计净值走势")).toBe(
+      "东方财富 · 公募基金 · 累计净值走势",
+    );
+    expect(dataSourceLabel("ak.fund_open_fund_info_em:单位净值走势")).toBe(
+      "东方财富 · 公募基金 · 单位净值走势",
+    );
+  });
+
+  it("maps known id without a suffix", () => {
+    expect(dataSourceLabel("ak.fund_open_fund_info_em")).toBe("东方财富 · 公募基金");
+  });
+
+  it("never exposes raw adapter ids for unknown sources", () => {
+    expect(dataSourceLabel("ak.custom_source")).toBe("行情数据");
+    expect(dataSourceLabel("ak.custom_source:某字段")).toBe("行情数据 · 某字段");
+    expect(dataSourceLabel("ak.custom_source")).not.toContain("ak.");
+  });
+
+  it("renders a placeholder for empty input", () => {
     expect(dataSourceLabel(undefined)).toBe("—");
+    expect(dataSourceLabel(null)).toBe("—");
+    expect(dataSourceLabel("")).toBe("—");
   });
 });

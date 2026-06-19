@@ -92,11 +92,12 @@ func (s *SensitivityService) Create(ctx context.Context,
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		// Each Monte Carlo run keeps only the latest sensitivity result.
-		if err := s.analysis.DeleteBySimulationRunAndType(
-			ctx, tx, runCtx.RunID, repository.AnalysisTypeSensitivity,
+		// Each Monte Carlo run keeps only the latest sensitivity result; cancel
+		// any in-flight prior sensitivity job before dropping its record.
+		if err := supersedePriorAnalysis(
+			ctx, tx, s.jobs, s.analysis, runCtx.RunID, repository.AnalysisTypeSensitivity,
 		); err != nil {
-			return wrapRepo("delete prior sensitivity analysis", err)
+			return err
 		}
 		if err := s.jobs.Create(ctx, tx, repository.Job{
 			ID: jobID, PlanID: req.PlanID, Type: repository.JobTypeSensitivity,

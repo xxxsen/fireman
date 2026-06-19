@@ -1,5 +1,12 @@
 import type { Instrument, InstrumentImportRequest } from "@/types/api";
-import { apiDelete, apiGet, apiPost, INSTRUMENT_REFRESH_TIMEOUT_MS, MARKET_OPERATION_TIMEOUT_MS } from "./client";
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  INSTRUMENT_REFRESH_TIMEOUT_MS,
+  MARKET_OPERATION_TIMEOUT_MS,
+} from "./client";
 
 export interface ResolveCandidate {
   code: string;
@@ -201,15 +208,28 @@ export function retryFetch(id: string): Promise<ImportAsyncResult> {
   return apiPost(`/api/v1/instruments/${id}/retry-fetch`, {});
 }
 
-export function refreshInstrument(id: string, options?: { force?: boolean }): Promise<Instrument> {
+export function refreshInstrument(id: string): Promise<Instrument> {
+  // Manual library refresh is always an immediate full refresh (td/053 §3). The
+  // legacy `force` field is still sent for backend compatibility.
   return apiPost(
     `/api/v1/instruments/${id}/refresh`,
-    {
-      force: options?.force === true,
-    },
+    { force: true },
     undefined,
     { timeoutMs: INSTRUMENT_REFRESH_TIMEOUT_MS },
   );
+}
+
+export interface ClassificationUpdateResult {
+  instrument: Instrument;
+  referencing_plan_count: number;
+  classification_sync_scope: string;
+}
+
+export function updateInstrumentClassification(
+  id: string,
+  body: { asset_class: string; region: string; expected_updated_at: number },
+): Promise<ClassificationUpdateResult> {
+  return apiPatch(`/api/v1/instruments/${id}/classification`, body);
 }
 
 export function deleteInstrument(id: string): Promise<{ deleted: boolean }> {

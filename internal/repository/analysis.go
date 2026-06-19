@@ -111,6 +111,32 @@ func (r *AnalysisRepo) ListBySimulationRun(
 	return scanAnalysisRows(rows)
 }
 
+// JobIDsBySimulationRunAndType returns job ids of existing analysis results of a
+// type bound to one run, used to cancel superseded jobs before deleting records.
+func (r *AnalysisRepo) JobIDsBySimulationRunAndType(
+	ctx context.Context, tx *sql.Tx, runID, typ string,
+) ([]string, error) {
+	exec := r.execQuery(tx)
+	rows, err := exec.QueryContext(ctx,
+		`SELECT job_id FROM analysis_results WHERE simulation_run_id=? AND type=?`, runID, typ)
+	if err != nil {
+		return nil, fmt.Errorf("query analysis job ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan analysis job id: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate analysis job ids: %w", err)
+	}
+	return out, nil
+}
+
 // DeleteBySimulationRunAndType removes existing analysis of one type for a run,
 // enforcing "keep only the latest stress/sensitivity per Monte Carlo run".
 func (r *AnalysisRepo) DeleteBySimulationRunAndType(ctx context.Context, tx *sql.Tx, runID, typ string) error {
@@ -165,6 +191,13 @@ func scanAnalysisRows(rows *sql.Rows) ([]AnalysisResult, error) {
 }
 
 func (r *AnalysisRepo) exec(tx *sql.Tx) dbExec {
+	if tx != nil {
+		return tx
+	}
+	return r.db
+}
+
+func (r *AnalysisRepo) execQuery(tx *sql.Tx) dbExecQuery {
 	if tx != nil {
 		return tx
 	}

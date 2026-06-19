@@ -91,11 +91,12 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		// Each Monte Carlo run keeps only the latest stress result.
-		if err := s.analysis.DeleteBySimulationRunAndType(
-			ctx, tx, runCtx.RunID, repository.AnalysisTypeStress,
+		// Each Monte Carlo run keeps only the latest stress result; cancel any
+		// in-flight prior stress job before dropping its record.
+		if err := supersedePriorAnalysis(
+			ctx, tx, s.jobs, s.analysis, runCtx.RunID, repository.AnalysisTypeStress,
 		); err != nil {
-			return wrapRepo("delete prior stress analysis", err)
+			return err
 		}
 		if err := s.jobs.Create(ctx, tx, repository.Job{
 			ID: jobID, PlanID: req.PlanID, Type: repository.JobTypeStress,

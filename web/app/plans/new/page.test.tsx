@@ -240,9 +240,11 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByRole("button", { name: "创建计划" })).toBeInTheDocument();
   });
 
-  it("uses a narrow card on the basics step and a wide card on the confirm step", async () => {
+  it("uses one full-width step card across all steps (td/053 §4)", async () => {
     renderWizard();
-    expect(screen.getByTestId("wizard-step-card")).toHaveClass("max-w-2xl");
+    const card = screen.getByTestId("wizard-step-card");
+    expect(card).toHaveClass("w-full");
+    expect(card).not.toHaveClass("max-w-2xl");
     await goToConfirmStep();
     expect(screen.getByTestId("wizard-step-card")).toHaveClass("w-full");
     expect(screen.getByTestId("wizard-step-card")).not.toHaveClass("max-w-2xl");

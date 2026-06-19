@@ -216,7 +216,10 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	srv, db, client, _ := setupFullStackIntegration(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "11"})
+	// Stress / sensitivity attach to an existing Monte Carlo run (td/050+).
+	runID := createSimulationAndWait(t, srv, planID, "11")
+
+	stressBody, _ := json.Marshal(map[string]any{"simulation_run_id": runID})
 	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests",
 		bytes.NewReader(stressBody))
 	stressReq.Header.Set("Content-Type", "application/json")
@@ -231,7 +234,7 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	stressJobID := stressEnv["data"].(map[string]any)["job_id"].(string)
 	waitJobSucceeded(t, srv, stressJobID)
 
-	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "12"})
+	sensBody, _ := json.Marshal(map[string]any{"simulation_run_id": runID})
 	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests",
 		bytes.NewReader(sensBody))
 	sensReq.Header.Set("Content-Type", "application/json")

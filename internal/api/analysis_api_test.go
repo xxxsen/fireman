@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
+	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
@@ -168,6 +170,134 @@ func underscoreKey(kind string) string {
 		return "stress_tests"
 	}
 	return "sensitivity_tests"
+}
+
+// seedSimulationRun inserts a completed Monte Carlo run (and its job) directly so
+// supersede tests can attach prior analysis jobs without running a worker.
+func seedSimulationRun(t *testing.T, db *sql.DB, planID string) string {
+	t.Helper()
+	ctx := context.Background()
+	jobsRepo := repository.NewJobRepo(db)
+	simsRepo := repository.NewSimulationRepo(db)
+	runJobID := "job_run_" + planID
+	if err := jobsRepo.Create(ctx, nil, repository.Job{
+		ID: runJobID, PlanID: planID, Type: repository.JobTypeSimulation,
+		Status: repository.JobStatusSucceeded, InputHash: "run_ih",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runID := "simrun_" + planID
+	if err := simsRepo.CreatePending(ctx, nil, repository.SimulationRun{
+		ID: runID, JobID: runJobID, PlanID: planID, InputHash: "run_ih",
+		InputSnapshotJSON: "{}", MarketSnapshotHash: "msh", EngineVersion: "v1",
+		Runs: 1000, Seed: 1, HorizonMonths: 12, SuccessCount: 1, FailureCount: 0,
+		SummaryJSON: json.RawMessage(`{"success_probability":1}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return runID
+}
+
+// TestStressRerunCancelsPriorQueuedJob guards td/052 finding #1: re-running stress
+// on the same run cancels a still-queued prior job instead of orphaning it.
+func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+	runID := seedSimulationRun(t, db, planID)
+	services := buildServices(db, "")
+	ctx := context.Background()
+
+	jobsRepo := repository.NewJobRepo(db)
+	analysisRepo := repository.NewAnalysisRepo(db)
+	priorJobID := "job_prior_stress"
+	if err := jobsRepo.Create(ctx, nil, repository.Job{
+		ID: priorJobID, PlanID: planID, Type: repository.JobTypeStress,
+		Status: repository.JobStatusQueued, InputHash: "run_ih", ProgressTotal: 8,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := analysisRepo.CreatePending(ctx, nil, repository.AnalysisResult{
+		JobID: priorJobID, PlanID: planID, Type: repository.AnalysisTypeStress,
+		InputHash: "run_ih", SimulationRunID: runID, ResultJSON: `{"pending":true}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := services.Stress.Create(ctx, service.CreateStressTestRequest{PlanID: planID, SimulationRunID: runID})
+	if err != nil {
+		t.Fatalf("create stress: %v", err)
+	}
+	if resp.JobID == priorJobID {
+		t.Fatalf("expected a new job id, got the prior one")
+	}
+
+	prior, err := jobsRepo.GetByID(ctx, priorJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prior.Status != repository.JobStatusCanceled {
+		t.Fatalf("prior queued job should be canceled, got %s", prior.Status)
+	}
+	if prior.ErrorCode != "superseded_by_newer_analysis" {
+		t.Fatalf("prior job error_code = %q", prior.ErrorCode)
+	}
+
+	recs, err := analysisRepo.ListBySimulationRun(ctx, runID, repository.AnalysisTypeStress, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].JobID != resp.JobID {
+		t.Fatalf("expected only the new analysis record, got %+v", recs)
+	}
+}
+
+// TestSensitivityRerunRequestsCancelOfRunningJob guards td/052 finding #1 for a
+// prior job that is already running: it receives a cancel request, and its stale
+// analysis record is removed in favor of the new job.
+func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+	runID := seedSimulationRun(t, db, planID)
+	services := buildServices(db, "")
+	ctx := context.Background()
+
+	jobsRepo := repository.NewJobRepo(db)
+	analysisRepo := repository.NewAnalysisRepo(db)
+	priorJobID := "job_prior_sens"
+	if err := jobsRepo.Create(ctx, nil, repository.Job{
+		ID: priorJobID, PlanID: planID, Type: repository.JobTypeSensitivity,
+		Status: repository.JobStatusRunning, InputHash: "run_ih", ProgressTotal: 50,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := analysisRepo.CreatePending(ctx, nil, repository.AnalysisResult{
+		JobID: priorJobID, PlanID: planID, Type: repository.AnalysisTypeSensitivity,
+		InputHash: "run_ih", SimulationRunID: runID, ResultJSON: `{"pending":true}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := services.Sensitivity.Create(ctx,
+		service.CreateSensitivityTestRequest{PlanID: planID, SimulationRunID: runID})
+	if err != nil {
+		t.Fatalf("create sensitivity: %v", err)
+	}
+
+	prior, err := jobsRepo.GetByID(ctx, priorJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prior.CancelRequested {
+		t.Fatalf("prior running job should have cancel_requested set, got %+v", prior)
+	}
+
+	recs, err := analysisRepo.ListBySimulationRun(ctx, runID, repository.AnalysisTypeSensitivity, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].JobID != resp.JobID {
+		t.Fatalf("expected only the new analysis record, got %+v", recs)
+	}
 }
 
 func TestStressTestRequiresSimulationRun(t *testing.T) {

@@ -136,7 +136,15 @@ func (r *JobRepo) Heartbeat(ctx context.Context, id string) error {
 }
 
 func (r *JobRepo) RequestCancel(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1 WHERE id=?`, id)
+	return r.RequestCancelTx(ctx, nil, id)
+}
+
+// RequestCancelTx sets cancel_requested on a job, optionally within a tx. Safe to
+// call on terminal jobs (no-op effect); the worker's cancelCheck honors the flag
+// for running jobs.
+func (r *JobRepo) RequestCancelTx(ctx context.Context, tx *sql.Tx, id string) error {
+	exec := r.exec(tx)
+	_, err := exec.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1 WHERE id=?`, id)
 	return wrapSQL("request job cancel", err)
 }
 

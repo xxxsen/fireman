@@ -218,7 +218,10 @@ func TestInstrumentDeleteIntegration(t *testing.T) {
 	assertErrorCode(t, readBody(t, resp), "instrument_in_use")
 }
 
-func TestInstrumentRefreshThrottleIntegration(t *testing.T) {
+// TestInstrumentRefreshNotThrottledIntegration guards td/053 §3: manual library
+// refresh is always immediate, so two consecutive refreshes both succeed and the
+// throttle error never surfaces.
+func TestInstrumentRefreshNotThrottledIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
 	instID := importFixtureInstrument(t, client, srv.URL)
@@ -240,19 +243,99 @@ func TestInstrumentRefreshThrottleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("throttled refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second consecutive refresh should not be throttled, status=%d body=%s",
+			resp.StatusCode, readBody(t, resp))
 	}
-	assertErrorCode(t, readBody(t, resp), "instrument_refresh_throttled")
+}
 
-	body, _ := json.Marshal(map[string]any{"force": true})
-	resp, err = client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
+// TestInstrumentClassificationFreezeIntegration guards td/053 §2.2: editing the
+// library classification does not retro-actively change an existing plan's frozen
+// holding classification, even when that plan saves a structural holdings update.
+func TestInstrumentClassificationFreezeIntegration(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+	instID := importFixtureInstrument(t, client, srv.URL)
+
+	plan := createPlanWithValuationDate(t, db, "2026-06-09")
+	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
+	_, version = addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
+
+	if ac, rg := holdingClassification(t, db, plan.ID, instID); ac != "equity" || rg != "domestic" {
+		t.Fatalf("seed holding classification=%s/%s", ac, rg)
+	}
+	updatedAt := instrumentUpdatedAt(t, db, instID)
+
+	resp := patchClassification(t, client, srv.URL, instID, map[string]any{
+		"asset_class": "bond", "region": "foreign", "expected_updated_at": updatedAt,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("classification patch status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	data := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	if cnt, _ := data["referencing_plan_count"].(float64); cnt < 1 {
+		t.Fatalf("referencing_plan_count=%v want >=1", data["referencing_plan_count"])
+	}
+
+	// Library now bond/foreign, but the plan holding stays equity/domestic.
+	if ac, rg := holdingClassification(t, db, plan.ID, instID); ac != "equity" || rg != "domestic" {
+		t.Fatalf("plan holding wrongly adopted library classification: %s/%s", ac, rg)
+	}
+
+	// A structural holdings save (rebuild) must keep the frozen classification; a
+	// broken freeze would flip it to bond/foreign and fail equity-only validation.
+	saveEquityHoldingAmount(t, db, client, srv.URL, plan.ID, instID, version, 9_000_000_00)
+	if ac, rg := holdingClassification(t, db, plan.ID, instID); ac != "equity" || rg != "domestic" {
+		t.Fatalf("structural save overwrote frozen classification: %s/%s", ac, rg)
+	}
+}
+
+func holdingClassification(t *testing.T, db *sql.DB, planID, instrumentID string) (string, string) {
+	t.Helper()
+	var assetClass, region string
+	err := db.QueryRowContext(context.Background(),
+		`SELECT asset_class, region FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
+		planID, instrumentID).Scan(&assetClass, &region)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return assetClass, region
+}
+
+func instrumentUpdatedAt(t *testing.T, db *sql.DB, instrumentID string) int64 {
+	t.Helper()
+	var updatedAt int64
+	err := db.QueryRowContext(context.Background(),
+		`SELECT updated_at FROM instruments WHERE id=?`, instrumentID).Scan(&updatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return updatedAt
+}
+
+func saveEquityHoldingAmount(
+	t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, instrumentID string,
+	version int, amountMinor int64,
+) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"config_version": version,
+		"holdings": []map[string]any{
+			{
+				"instrument_id": instrumentID, "enabled": true,
+				"weight_within_group": 1.0, "current_amount_minor": amountMinor, "sort_order": 1,
+			},
+		},
+	})
+	req, _ := http.NewRequest(http.MethodPut, baseURL+"/api/v1/plans/"+planID+"/holdings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("force refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
+		t.Fatalf("structural holdings save status=%d body=%s", resp.StatusCode, readBody(t, resp))
 	}
+	_ = readBody(t, resp)
 }
 
 func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {

@@ -246,6 +246,36 @@ func (r *InstrumentRepo) TouchUpdated(ctx context.Context, tx *sql.Tx, id string
 	return nil
 }
 
+// UpdateClassification updates only asset_class/region with optimistic locking on
+// updated_at. It returns ErrInstrumentVersionConflict when expectedUpdatedAt no
+// longer matches (a concurrent edit landed first) and ErrInstrumentNotFound when
+// the row is gone, so callers can give precise feedback.
+func (r *InstrumentRepo) UpdateClassification(
+	ctx context.Context, id, assetClass, region string, expectedUpdatedAt int64,
+) (InstrumentRecord, error) {
+	// Force updated_at to strictly increase so the optimistic version always
+	// advances, even when two updates land in the same millisecond.
+	newUpdatedAt := time.Now().UnixMilli()
+	if newUpdatedAt <= expectedUpdatedAt {
+		newUpdatedAt = expectedUpdatedAt + 1
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE instruments SET asset_class=?, region=?, updated_at=?
+		WHERE id=? AND updated_at=?`,
+		assetClass, region, newUpdatedAt, id, expectedUpdatedAt)
+	if err != nil {
+		return InstrumentRecord{}, fmt.Errorf("update instrument classification: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		if _, getErr := r.GetByID(ctx, id); errors.Is(getErr, ErrInstrumentNotFound) {
+			return InstrumentRecord{}, ErrInstrumentNotFound
+		}
+		return InstrumentRecord{}, ErrInstrumentVersionConflict
+	}
+	return r.GetByID(ctx, id)
+}
+
 func (r *InstrumentRepo) UpdateInstrumentKindTx(ctx context.Context, tx *sql.Tx, id, kind string) error {
 	now := time.Now().UnixMilli()
 	_, err := r.exec(tx).ExecContext(ctx,
