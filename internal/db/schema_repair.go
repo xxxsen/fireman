@@ -45,11 +45,13 @@ func repairSnapshotSchema(ctx context.Context, exec schemaExec) error {
 		},
 		{
 			name: "volatility_method",
-			ddl:  `ALTER TABLE instrument_simulation_snapshots ADD COLUMN volatility_method TEXT NOT NULL DEFAULT 'monthly_log_return'`,
+			ddl: `ALTER TABLE instrument_simulation_snapshots ` +
+				`ADD COLUMN volatility_method TEXT NOT NULL DEFAULT 'monthly_log_return'`,
 		},
 		{
 			name: "metrics_version",
-			ddl:  `ALTER TABLE instrument_simulation_snapshots ADD COLUMN metrics_version TEXT NOT NULL DEFAULT 'monthly_log_return_v1'`,
+			ddl: `ALTER TABLE instrument_simulation_snapshots ` +
+				`ADD COLUMN metrics_version TEXT NOT NULL DEFAULT 'monthly_log_return_v1'`,
 		},
 		{
 			name: "history_depth",

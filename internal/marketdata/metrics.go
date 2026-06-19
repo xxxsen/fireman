@@ -56,7 +56,7 @@ func ComputeMetrics(points []DataPoint, years []SimulationYear, pointType, sourc
 	return m
 }
 
-func computeCAGRMetrics(years []SimulationYear) (status string, cagr, modeled *float64) {
+func computeCAGRMetrics(years []SimulationYear) (string, *float64, *float64) {
 	if len(years) < 1 {
 		return MetricStatusInsufficientCompleteYears, nil, nil
 	}
@@ -74,7 +74,7 @@ func computeCAGRMetrics(years []SimulationYear) (status string, cagr, modeled *f
 	return MetricStatusAvailable, &val, &val
 }
 
-func computeVolatilityMetrics(monthly []MonthlyReturn) (status string, annualVol *float64) {
+func computeVolatilityMetrics(monthly []MonthlyReturn) (string, *float64) {
 	if len(monthly) < 12 {
 		if len(monthly) == 0 {
 			return MetricStatusInsufficientCompleteYears, nil
@@ -95,7 +95,7 @@ func computeDrawdownMetrics(
 	points, pointSet []DataPoint,
 	years []SimulationYear,
 	pointType, sourceName string,
-) (status string, maxDD *float64) {
+) (string, *float64) {
 	if len(years) < 1 || len(pointSet) == 0 {
 		return MetricStatusInsufficientCompleteYears, nil
 	}

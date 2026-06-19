@@ -162,6 +162,44 @@ describe("AssetClassHoldingPicker", () => {
     expect(screen.getByText(/资料库未收录/)).toBeInTheDocument();
   });
 
+  it("never queries AKShare when the library search (still pending) ends up holding the code", async () => {
+    const libInst = {
+      ...makeInstrument(1),
+      id: "ins_270042",
+      code: "270042",
+      name: "资料库已收录基金",
+    };
+    let settleCodeSearch: () => void = () => {};
+    searchInstruments.mockImplementation((params: SearchParams) => {
+      if (params.q === "270042") {
+        return new Promise((res) => {
+          settleCodeSearch = () =>
+            res({ instruments: [libInst], next_cursor: null, total: 1 });
+        });
+      }
+      return Promise.resolve({ instruments: [], next_cursor: null, total: 0 });
+    });
+
+    renderPicker();
+    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
+      target: { value: "270042" },
+    });
+
+    // Wait until the local code search is actually in flight.
+    await waitFor(() =>
+      expect(searchInstruments).toHaveBeenCalledWith(expect.objectContaining({ q: "270042" })),
+    );
+    // While the local paginated search is pending, AKShare must not be queried.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(resolveImport).not.toHaveBeenCalled();
+
+    // Settle the local search with an exact library hit.
+    settleCodeSearch();
+    expect(await screen.findByRole("button", { name: /资料库已收录基金/ })).toBeInTheDocument();
+    // The library holds the code → external resolution must never run.
+    expect(resolveImport).not.toHaveBeenCalled();
+  });
+
   it("imports external candidate and adds instrument to selection", async () => {
     pool = [];
     resolveImport.mockResolvedValueOnce({

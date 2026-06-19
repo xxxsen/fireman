@@ -88,7 +88,9 @@ type InstrumentSearchView struct {
 
 // Search returns one filtered, paginated page of instruments with simulation
 // metadata enriched per row.
-func (s *InstrumentService) Search(ctx context.Context, opts repository.InstrumentSearchOptions) (InstrumentSearchView, error) {
+func (s *InstrumentService) Search(
+	ctx context.Context, opts repository.InstrumentSearchOptions,
+) (InstrumentSearchView, error) {
 	if opts.Limit <= 0 {
 		opts.Limit = 10
 	}

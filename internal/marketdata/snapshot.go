@@ -51,7 +51,8 @@ func (s *SnapshotService) BuildSnapshotForHolding(
 	}
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, valuationDate, pointType, sourceName)
-	if err := ValidateSimulationSnapshot(metricsToRepositorySnapshot("", instrumentID, &planID, valuationDate, inst, metrics)); err != nil {
+	snap := metricsToRepositorySnapshot("", instrumentID, &planID, valuationDate, inst, metrics)
+	if err := ValidateSimulationSnapshot(snap); err != nil {
 		if !metrics.SimulationEligible {
 			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
 		}
@@ -177,7 +178,8 @@ func (s *SnapshotService) SyncForHolding(
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, syncDate, pointType, sourceName)
 	planRef := planID
-	if err := ValidateSimulationSnapshot(metricsToRepositorySnapshot("", instrumentID, &planRef, syncDate, inst, metrics)); err != nil {
+	snap := metricsToRepositorySnapshot("", instrumentID, &planRef, syncDate, inst, metrics)
+	if err := ValidateSimulationSnapshot(snap); err != nil {
 		if !metrics.SimulationEligible {
 			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
 		}
@@ -198,7 +200,7 @@ func (s *SnapshotService) SyncForHolding(
 	}
 
 	snapID := "sim_snap_" + uuid.New().String()
-	snap := metricsToRepositorySnapshot(snapID, instrumentID, &planRef, syncDate, inst, metrics)
+	snap = metricsToRepositorySnapshot(snapID, instrumentID, &planRef, syncDate, inst, metrics)
 	_ = holdingID
 	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {
 		return repository.SimulationSnapshot{}, fmt.Errorf("persist synced snapshot: %w", err)

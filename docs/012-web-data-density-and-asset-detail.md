@@ -14,7 +14,7 @@
 - 后端 `GET /api/v1/instruments` 在带 `limit`/`q`/`cursor`/`offset` 任一参数时进入分页搜索分支，返回 `{ instruments, next_cursor, total }`；不带这些参数时保持旧的全量列表行为（资产资料库页、资产刷新页等沿用旧契约不受影响）。
 - 仓储 `InstrumentRepo.Search` 支持按 `q`（代码/名称）、`asset_class`、`region`、`status`、`exclude_ids`、`exclude_system` 过滤，统一按 `created_at DESC, id DESC` 排序并 `LIMIT/OFFSET` 分页；服务层逐行补全引用计数与行情元数据，并在 `offset + 本页数量 < total` 时给出 `next_cursor`（offset 语义）。
 - 前端 `AssetClassHoldingPicker` 改用 `useInfiniteQuery`：聚焦即加载首页（默认 10 条最近标的），输入经 250ms 去抖后作为搜索词并重置游标，已选标的通过 `exclude_ids` 从候选中剔除；底部哨兵元素经 `IntersectionObserver` 触底加载下一页。
-- AKShare 兜底解析仅在「输入形似基金代码」且「当前已加载结果中无精确命中」时触发，避免无谓的三方查询。
+- AKShare 兜底解析仅在「输入形似基金代码」且「本地分页搜索已完成（非加载/刷新中）后仍无精确命中」时触发，避免在本地查询返回前发起无谓的三方请求或闪现无关错误。
 
 ## 3. 金额单位与大类配置 tooltip
 

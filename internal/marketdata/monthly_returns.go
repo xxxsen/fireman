@@ -1,9 +1,6 @@
 package marketdata
 
-import (
-	"math"
-	"strconv"
-)
+import "math"
 
 // MonthlyReturn is one monthly simple and log return in a complete year window.
 type MonthlyReturn struct {
@@ -76,15 +73,4 @@ func monthEndPoint(points []DataPoint, year, month int) (DataPoint, bool) {
 		return DataPoint{}, false
 	}
 	return *last, true
-}
-
-func formatYearMonth(year, month int) string {
-	return strconv.Itoa(year) + "-" + padMonth(month) + "-"
-}
-
-func padMonth(month int) string {
-	if month < 10 {
-		return "0" + strconv.Itoa(month)
-	}
-	return strconv.Itoa(month)
 }

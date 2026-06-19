@@ -54,9 +54,8 @@ func exclusionReason(points []DataPoint, row AnnualReturnRow, year, incYear int,
 		return "incomplete_year"
 	}
 	if !IsCompleteYear(points, year, inclusionDate) {
-		if year == incYear-1 {
-			// might still be incomplete for month coverage
-		}
+		// The year before the inclusion year may still be incomplete for month
+		// coverage; the checks below decide the precise reason.
 		if _, ok := anchorBefore(points, year); !ok {
 			return "missing_opening_anchor"
 		}

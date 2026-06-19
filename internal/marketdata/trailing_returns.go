@@ -129,7 +129,8 @@ func computeTrailingPeriod(points []DataPoint, endIdx int, endDate, key string) 
 func subtractTrailingOffset(end time.Time, cfg struct {
 	months int
 	years  int
-}) time.Time {
+},
+) time.Time {
 	if cfg.years > 0 {
 		return subtractNaturalYears(end, cfg.years)
 	}

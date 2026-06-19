@@ -337,8 +337,10 @@ func collectDataWarnings(in *InputSnapshot) []string {
 			if w == "" {
 				continue
 			}
-			msg := w
-			if instName != "" {
+			var msg string
+			if instName == "" {
+				msg = w
+			} else {
 				msg = instName + "（" + code + "）" + w
 			}
 			if _, ok := seen[msg]; ok {

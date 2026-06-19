@@ -109,12 +109,18 @@ export function AssetClassHoldingPicker({
     [libraryResults, debouncedFilter],
   );
 
-  // Resolve via AKShare only when the query looks like a fund code and the
-  // backend library has no exact match for it.
+  // The local paginated search must finish before we can conclude the library
+  // has no hit. While it is loading/refetching, libraryResults is stale/empty
+  // and hasExactLibraryHit cannot be trusted.
+  const listSettled = !listQuery.isLoading && !listQuery.isFetching;
+
+  // Resolve via AKShare only when the query looks like a fund code AND the
+  // local library search has settled with no exact match for it.
   useEffect(() => {
     const q = debouncedFilter;
     let cancelled = false;
-    const shouldResolve = open && looksLikeFundCode(q) && !hasExactLibraryHit;
+    const shouldResolve =
+      open && looksLikeFundCode(q) && listSettled && !hasExactLibraryHit;
 
     // All state updates run inside the timer callback (asynchronously) so the
     // effect body never calls setState synchronously.
@@ -159,7 +165,7 @@ export function AssetClassHoldingPicker({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [debouncedFilter, hasExactLibraryHit, open, selectedCodes]);
+  }, [debouncedFilter, hasExactLibraryHit, listSettled, open, selectedCodes]);
 
   // Auto-load the next page when the sentinel scrolls into view.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
