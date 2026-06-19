@@ -280,6 +280,7 @@ describe("AssetsPage", () => {
   it("calls deleteInstrument after confirm", async () => {
     renderPage();
     fireEvent.click(screen.getAllByTestId("instrument-delete-inst_1")[0]!);
+    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
     await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("inst_1"));
   });
 });

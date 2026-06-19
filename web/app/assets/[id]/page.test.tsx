@@ -348,11 +348,11 @@ describe("AssetDetailPage delete", () => {
   it("invalidates instruments cache and navigates home after delete", async () => {
     const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     const removeSpy = vi.spyOn(QueryClient.prototype, "removeQueries");
-    window.confirm = vi.fn(() => true);
 
     renderPage();
     expect(await screen.findByRole("button", { name: "删除" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
 
     await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("ins_test"));
     await waitFor(() =>

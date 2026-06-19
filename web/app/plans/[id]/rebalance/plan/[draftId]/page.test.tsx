@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import RebalancePlanPage from "./page";
@@ -113,8 +113,9 @@ describe("RebalancePlanPage", () => {
     expect(await screen.findByText(/参考调仓方案/)).toBeInTheDocument();
     expect(screen.getByText(/A −30w/)).toBeInTheDocument();
     expect(screen.getByText(/B \+10w/)).toBeInTheDocument();
-    expect(screen.getByText("方案变动")).toBeInTheDocument();
-    expect(screen.getAllByText("应用推荐金额")).toHaveLength(2);
+    const table = within(screen.getByTestId("rebalance-line-table"));
+    expect(table.getByText("方案变动")).toBeInTheDocument();
+    expect(table.getAllByText("应用推荐金额")).toHaveLength(2);
     expect(screen.queryByText("全部应用")).not.toBeInTheDocument();
     expect(screen.getByText(/行内「不动」表示未超调仓阈值/)).toBeInTheDocument();
   });

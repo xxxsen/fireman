@@ -33,6 +33,9 @@ import {
   type AssetRefreshHolding,
 } from "@/lib/asset-refresh";
 import { ApiError } from "@/lib/api/client";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingState";
+import { queryErrorMessage } from "@/lib/query-error";
 import type { Instrument } from "@/types/api";
 
 const STEPS = ["说明", "配置确认", "录入当前资产", "确认提交"] as const;
@@ -297,8 +300,24 @@ export default function AssetRefreshPage() {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "提交失败"),
   });
 
+  if ((plan.isError || holdings.isError) && (!plan.data || !holdings.data)) {
+    return (
+      <ErrorState
+        message="无法加载资产变更数据。请确认后端服务可用后重试。"
+        onRetry={() => {
+          void plan.refetch();
+          void holdings.refetch();
+          void activeExecution.refetch();
+        }}
+        backHref={`/plans/${planId}/overview`}
+        backLabel="返回总览"
+        technicalDetail={queryErrorMessage(plan.error ?? holdings.error)}
+      />
+    );
+  }
+
   if (plan.isLoading || holdings.isLoading || activeExecution.isLoading || !plan.data || !holdings.data) {
-    return <p className="text-slate-600">加载资产变更…</p>;
+    return <LoadingState label="加载资产变更…" />;
   }
 
   if (activeExecution.data?.execution) {
@@ -307,7 +326,7 @@ export default function AssetRefreshPage() {
       <div className="space-y-4">
         <h1 className="text-xl font-semibold">资产变更</h1>
         <div
-          className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+          className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning"
           data-testid="asset-refresh-blocked"
         >
           调仓执行进行中，完成或放弃后才可使用资产变更。
@@ -338,7 +357,7 @@ export default function AssetRefreshPage() {
     <div className="mx-auto max-w-3xl space-y-6 pb-16">
       <div>
         <h1 className="text-xl font-semibold">资产变更</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-1 text-sm text-ink-muted">
           录入当前计划下的真实持仓结构与金额，提交后更新持仓事实并同步计划总资产。
         </p>
       </div>
@@ -348,7 +367,7 @@ export default function AssetRefreshPage() {
           <li
             key={label}
             className={`rounded-full px-3 py-1 ${
-              index === step ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+              index === step ? "bg-brand text-white" : "bg-surface-muted text-ink-muted"
             }`}
           >
             {index + 1}. {label}
@@ -357,14 +376,14 @@ export default function AssetRefreshPage() {
       </ol>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <div className="rounded-md border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
           {error}
         </div>
       )}
 
       {step === 0 && (
-        <section className="space-y-4 rounded-lg border border-slate-200 p-4">
-          <div className="space-y-2 text-sm text-slate-700">
+        <section className="space-y-4 rounded-lg border border-line p-4">
+          <div className="space-y-2 text-sm text-ink">
             <p>此流程用于维护当前计划下的真实持仓结构，包括：</p>
             <ul className="list-disc space-y-1 pl-5">
               <li>新增或移除资产标的</li>
@@ -383,14 +402,14 @@ export default function AssetRefreshPage() {
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white"
+              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white"
               onClick={() => setStep(1)}
             >
               下一步
             </button>
             <Link
               href={`/plans/${planId}/rebalance`}
-              className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm"
+              className="inline-flex min-h-11 items-center rounded-md border border-line px-4 text-sm"
             >
               返回持仓预览
             </Link>
@@ -399,9 +418,9 @@ export default function AssetRefreshPage() {
       )}
 
       {step === 1 && targets.data && (
-        <section className="space-y-4 rounded-lg border border-slate-200 p-4">
+        <section className="space-y-4 rounded-lg border border-line p-4">
           <h2 className="font-medium">配置确认</h2>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-muted">
             当前计划：<strong>{plan.data.name}</strong>
           </p>
           <label className="block text-sm">
@@ -420,12 +439,12 @@ export default function AssetRefreshPage() {
               ))}
             </select>
           </label>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-muted">
             当前选择的 FIRE 方案 / 场景模板：<strong>{scenarioName}</strong>
           </p>
           <div>
             <h3 className="text-sm font-medium">大类目标（只读）</h3>
-            <ul className="mt-2 text-sm text-slate-700">
+            <ul className="mt-2 text-sm text-ink">
               {previewAssetTargets.map((target) => (
                 <li key={target.asset_class}>
                   {assetClassLabel(target.asset_class)} {formatPercent(target.weight)}
@@ -443,7 +462,7 @@ export default function AssetRefreshPage() {
                 <h3 className="text-sm font-medium">
                   {assetClassLabel(assetClass)} · 地区组内目标（只读）
                 </h3>
-                <ul className="mt-2 text-sm text-slate-700">
+                <ul className="mt-2 text-sm text-ink">
                   {regions.map((target) => (
                     <li key={`${target.asset_class}:${target.region}`}>
                       {regionLabel(target.region)} {formatPercent(target.weight_within_class)}
@@ -453,20 +472,20 @@ export default function AssetRefreshPage() {
               </div>
             );
           })}
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-muted">
             当前标的 {draftHoldings.length} 个
           </p>
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              className="min-h-11 rounded-md border border-slate-300 px-4 text-sm"
+              className="min-h-11 rounded-md border border-line px-4 text-sm"
               onClick={() => setStep(0)}
             >
               上一步
             </button>
             <button
               type="button"
-              className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white"
+              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white"
               onClick={() => setStep(2)}
             >
               下一步
@@ -476,12 +495,12 @@ export default function AssetRefreshPage() {
       )}
 
       {step === 2 && (
-        <section className="space-y-4 rounded-lg border border-slate-200 p-4">
+        <section className="space-y-4 rounded-lg border border-line p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-medium">录入当前资产</h2>
             <button
               type="button"
-              className="min-h-11 rounded-md border border-slate-300 px-4 text-sm"
+              className="min-h-11 rounded-md border border-line px-4 text-sm"
               data-testid="asset-refresh-add-instrument"
               onClick={() => setDialogOpen(true)}
             >
@@ -489,19 +508,19 @@ export default function AssetRefreshPage() {
             </button>
           </div>
           {groupedHoldings.map(({ assetClass, regions }) => (
-            <div key={assetClass} className="rounded-md border border-slate-200">
-              <h3 className="border-b bg-slate-50 px-3 py-2 text-sm font-medium">
+            <div key={assetClass} className="rounded-md border border-line">
+              <h3 className="border-b bg-surface-muted px-3 py-2 text-sm font-medium">
                 {assetClassLabel(assetClass)}
               </h3>
               {regions.map(({ region, rows: regionRows }) => (
                 <div key={`${assetClass}:${region}`} className="border-t">
-                  <h4 className="bg-slate-50/80 px-3 py-1.5 text-xs font-medium text-slate-600">
+                  <h4 className="bg-surface-muted/80 px-3 py-1.5 text-xs font-medium text-ink-muted">
                     {regionLabel(region)}
                   </h4>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead>
-                        <tr className="text-left text-slate-500">
+                        <tr className="text-left text-ink-muted">
                           <th className="px-3 py-2">标的</th>
                           <th className="px-3 py-2">分类</th>
                           <th className="px-3 py-2">国别</th>
@@ -515,7 +534,7 @@ export default function AssetRefreshPage() {
                           <tr key={row.instrument_id} className="border-t">
                             <td className="px-3 py-2">
                               <span className="font-medium">{row.label}</span>
-                              <span className="block text-xs text-slate-500">{row.code}</span>
+                              <span className="block text-xs text-ink-muted">{row.code}</span>
                             </td>
                             <td className="px-3 py-2">{assetClassLabel(row.asset_class)}</td>
                             <td className="px-3 py-2">{regionLabel(row.region)}</td>
@@ -540,13 +559,13 @@ export default function AssetRefreshPage() {
                               {!row.is_system ? (
                                 <button
                                   type="button"
-                                  className="text-xs text-red-700 underline"
+                                  className="text-xs text-danger underline"
                                   onClick={() => removeHolding(row)}
                                 >
                                   移除
                                 </button>
                               ) : (
-                                <span className="text-xs text-slate-400">—</span>
+                                <span className="text-xs text-ink-muted">—</span>
                               )}
                             </td>
                           </tr>
@@ -569,7 +588,7 @@ export default function AssetRefreshPage() {
               />
               <button
                 type="button"
-                className="min-h-11 shrink-0 rounded-md border border-slate-300 px-4 text-sm text-slate-700"
+                className="min-h-11 shrink-0 rounded-md border border-line px-4 text-sm text-ink"
                 onClick={() => setTotalOverride(sumMinor)}
               >
                 使用分项合计 {formatMoney(sumMinor, plan.data.base_currency)}
@@ -577,27 +596,27 @@ export default function AssetRefreshPage() {
             </div>
           </div>
           {sumMinor === totalAssets && (
-            <p className="text-sm text-slate-600">分项合计与资产总值一致。</p>
+            <p className="text-sm text-ink-muted">分项合计与资产总值一致。</p>
           )}
           {!validation.ok && (
-            <p className="text-sm text-red-700">{validation.message}</p>
+            <p className="text-sm text-danger">{validation.message}</p>
           )}
           {!groupWeightValidation.ok && (
-            <p className="text-sm text-red-700" data-testid="asset-refresh-group-weight-error">
+            <p className="text-sm text-danger" data-testid="asset-refresh-group-weight-error">
               {groupWeightValidation.message}
             </p>
           )}
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              className="min-h-11 rounded-md border border-slate-300 px-4 text-sm"
+              className="min-h-11 rounded-md border border-line px-4 text-sm"
               onClick={() => setStep(1)}
             >
               上一步
             </button>
             <button
               type="button"
-              className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
+              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white disabled:opacity-50"
               disabled={!canProceedFromEntry}
               onClick={() => setStep(3)}
             >
@@ -608,39 +627,39 @@ export default function AssetRefreshPage() {
       )}
 
       {step === 3 && (
-        <section className="space-y-4 rounded-lg border border-slate-200 p-4">
+        <section className="space-y-4 rounded-lg border border-line p-4">
           <h2 className="font-medium">确认提交</h2>
-          <dl className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+          <dl className="grid gap-2 text-sm text-ink sm:grid-cols-2">
             <div>
-              <dt className="text-slate-500">影响计划</dt>
+              <dt className="text-ink-muted">影响计划</dt>
               <dd className="font-medium">{plan.data.name}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">影响资产数量</dt>
+              <dt className="text-ink-muted">影响资产数量</dt>
               <dd className="font-medium" data-testid="asset-refresh-change-count">
                 {changeCount === 0 ? "0" : `${changeCount} 项`}
               </dd>
             </div>
           </dl>
           {changeCount === 0 && !hasChanges && (
-            <p className="text-sm text-amber-800" data-testid="asset-refresh-no-changes">
+            <p className="text-sm text-warning" data-testid="asset-refresh-no-changes">
               本次未修改任何资产，无需提交。
             </p>
           )}
           {structureOnly ? (
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink">
               变更前合计 {formatMoney(beforeTotal, plan.data.base_currency)}，变更后合计{" "}
               {formatMoney(totalAssets, plan.data.base_currency)}。
               本次变更未改变资产总值，仅更新了持仓结构或资产分配。
             </p>
           ) : (
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-ink">
               变更前合计 {formatMoney(beforeTotal, plan.data.base_currency)} → 变更后合计{" "}
               {formatMoney(totalAssets, plan.data.base_currency)}
             </p>
           )}
           {structureChanged && (
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-ink-muted">
               本次提交包含持仓配置变更（新增、移除或组内配比调整）。
             </p>
           )}
@@ -651,24 +670,24 @@ export default function AssetRefreshPage() {
               inst.history_depth === "one_year",
             )
             .map((inst) => (
-              <p key={inst.id} className="text-sm text-amber-800" data-testid="asset-refresh-short-history">
+              <p key={inst.id} className="text-sm text-warning" data-testid="asset-refresh-short-history">
                 {inst.name}（{inst.code}）历史样本有限，模拟长期估计不确定性较高。
               </p>
             ))}
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-muted">
             提交后，当前计划总资产将同步更新为最新持仓合计。
           </p>
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              className="min-h-11 rounded-md border border-slate-300 px-4 text-sm"
+              className="min-h-11 rounded-md border border-line px-4 text-sm"
               onClick={() => setStep(2)}
             >
               上一步
             </button>
             <button
               type="button"
-              className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
+              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white disabled:opacity-50"
               disabled={submit.isPending || !hasChanges}
               onClick={() => submit.mutate()}
             >
@@ -699,11 +718,11 @@ export default function AssetRefreshPage() {
             <li key={instrument.id}>
               <button
                 type="button"
-                className="w-full px-1 py-3 text-left hover:bg-slate-50"
+                className="w-full px-1 py-3 text-left hover:bg-surface-muted"
                 onClick={() => addInstrument(instrument)}
               >
                 <div className="font-medium">{instrument.name}</div>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-ink-muted">
                   {instrument.code} · {assetClassLabel(instrument.asset_class)} ·{" "}
                   {regionLabel(instrument.region)}
                 </div>

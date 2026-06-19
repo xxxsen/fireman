@@ -41,7 +41,7 @@ export function ParameterCurvesChart({
     <div className="space-y-4">
       {curves.map((c) => (
         <div key={c.parameter_name}>
-          <p className="mb-1 text-xs font-medium text-slate-600">{c.parameter_name}</p>
+          <p className="mb-1 text-xs font-medium text-ink-muted">{c.parameter_name}</p>
           <ReactECharts
             style={{ height: 180 }}
             option={{

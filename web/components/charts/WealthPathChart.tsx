@@ -6,7 +6,7 @@ import type { QuantilePoint } from "@/types/api";
 export function WealthPathChart({ series }: { series: QuantilePoint[] }) {
   if (!series?.length) {
     return (
-      <div className="flex h-64 items-center justify-center text-sm text-slate-500">
+      <div className="flex h-64 items-center justify-center text-sm text-ink-muted">
         暂无财富路径数据
       </div>
     );

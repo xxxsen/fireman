@@ -142,7 +142,7 @@ export function Tooltip({
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
           className={cn(
-            "rounded-lg border border-slate-200 bg-white p-2 text-xs leading-relaxed text-slate-700 shadow-lg",
+            "rounded-lg border border-line bg-surface p-2 text-xs leading-relaxed text-ink shadow-lg",
             contentClassName,
           )}
         >

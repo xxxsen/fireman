@@ -7,6 +7,11 @@ import { useMemo, useState } from "react";
 import { RebalanceFundPoolBar } from "@/components/plans/RebalanceFundPoolBar";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { Button } from "@/components/ui/Button";
+import { Alert } from "@/components/ui/Alert";
+import { Dialog } from "@/components/ui/Dialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { LoadingState } from "@/components/ui/LoadingState";
 import { getHoldings } from "@/lib/api/holdings";
 import {
   cancelRebalanceDraft,
@@ -33,7 +38,8 @@ import {
   recommendedPlannedMinor,
 } from "@/lib/rebalance-plan";
 import { ApiError } from "@/lib/api/client";
-import type { RebalanceDraftEvent } from "@/types/api";
+import { queryErrorMessage } from "@/lib/query-error";
+import type { RebalanceDraftEvent, RebalanceDraftLine } from "@/types/api";
 
 function parseEventSummary(event: RebalanceDraftEvent): string {
   try {
@@ -43,6 +49,12 @@ function parseEventSummary(event: RebalanceDraftEvent): string {
     /* ignore */
   }
   return event.event_type === "undo" ? "撤销上一步" : event.event_type;
+}
+
+function packageDeltaClass(deltaMinor: number): string {
+  if (deltaMinor > 0) return "text-positive";
+  if (deltaMinor < 0) return "text-danger";
+  return "text-ink-muted";
 }
 
 export default function RebalancePlanPage() {
@@ -57,6 +69,9 @@ export default function RebalancePlanPage() {
   const [acceptScaleShrink, setAcceptScaleShrink] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [applyTarget, setApplyTarget] = useState<RebalanceDraftLine | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [overshootOpen, setOvershootOpen] = useState(false);
 
   const plan = useQuery({ queryKey: ["plan", planId], queryFn: () => getPlan(planId) });
   const holdings = useQuery({
@@ -123,15 +138,6 @@ export default function RebalancePlanPage() {
       if (!line || line.recommended_package_delta_minor === 0) {
         throw new Error("本行无推荐变动");
       }
-      const target = recommendedPlannedMinor(
-        line.baseline_current_minor,
-        line.recommended_package_delta_minor,
-      );
-      const label = line.instrument_name ?? line.instrument_code ?? "标的";
-      const ok = window.confirm(
-        `将 ${label} 计划金额 ${formatMoney(line.planned_current_minor)} → ${formatMoney(target)}（推荐 ${formatPackageDeltaLabel(line.recommended_package_delta_minor)}）？`,
-      );
-      if (!ok) throw new Error("已取消");
       return patchRebalanceDraftLines(planId, draftId, {
         stage: true,
         lines: [applyRecommendedOneLine(line)],
@@ -146,7 +152,6 @@ export default function RebalancePlanPage() {
       invalidate();
     },
     onError: (err) => {
-      if (err instanceof Error && err.message === "已取消") return;
       setError(err instanceof ApiError ? err.message : "应用推荐金额失败");
     },
   });
@@ -171,11 +176,6 @@ export default function RebalancePlanPage() {
         } else if (!acceptScaleShrink) {
           throw new Error("请选择未分配资金处理方式");
         }
-      } else if (imbalanced && fundPool.netMinor < 0) {
-        const ok = window.confirm(
-          "增配超出减配释放，仍要提交并更新持仓吗？",
-        );
-        if (!ok) throw new Error("已取消");
       }
       for (const line of lines) {
         const planned = edits[line.id] ?? line.planned_current_minor;
@@ -195,24 +195,44 @@ export default function RebalancePlanPage() {
       }
       router.push(`/plans/${planId}/rebalance`);
     },
-    onError: (err) =>
-      setError(err instanceof Error && err.message !== "已取消" ? err.message : null),
+    onError: (err) => setError(queryErrorMessage(err, "提交失败")),
   });
 
   const cancel = useMutation({
     mutationFn: () => cancelRebalanceDraft(planId, draftId),
     onSuccess: () => router.push(`/plans/${planId}/rebalance`),
+    onError: (err) => setError(queryErrorMessage(err, "放弃调仓计划失败")),
   });
 
+  const submitCommit = () => {
+    const imbalanced = !isFundPoolBalanced(fundPool.netMinor);
+    if (imbalanced && fundPool.netMinor < 0) {
+      setOvershootOpen(true);
+      return;
+    }
+    commit.mutate();
+  };
+
+  const openPreview = () => {
+    setSweepToCash(Boolean(cashHolding));
+    setAcceptScaleShrink(false);
+    setPreviewOpen(true);
+  };
+
   if (plan.isLoading || draft.isLoading || !plan.data || !draft.data) {
-    return <p className="text-slate-600">加载调仓计划…</p>;
+    return <LoadingState label="加载调仓计划…" />;
   }
 
   if (draft.data.draft.status !== "draft") {
     return (
       <div className="space-y-4">
-        <p className="text-slate-600">此调仓计划已{draft.data.draft.status === "committed" ? "提交" : "放弃"}。</p>
-        <Link href={`/plans/${planId}/rebalance`} className="underline">
+        <p className="text-ink-muted">
+          此调仓计划已{draft.data.draft.status === "committed" ? "提交" : "放弃"}。
+        </p>
+        <Link
+          href={`/plans/${planId}/rebalance`}
+          className="text-brand underline-offset-2 hover:underline"
+        >
           返回持仓预览
         </Link>
       </div>
@@ -222,53 +242,38 @@ export default function RebalancePlanPage() {
   const actionableLines = lines.filter(
     (line) => line.frozen_action === "increase" || line.frozen_action === "decrease",
   );
+  const planTarget = plan.data;
 
   return (
-    <div className="space-y-6 pb-24">
+    <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">
-            {plan.data.name} · 调仓计划
+          <h1 className="text-xl font-semibold text-ink">
+            {planTarget.name} · 调仓计划
           </h1>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-sm text-ink-muted">
             状态：进行中 · 基准持仓合计{" "}
-            {formatMoney(draft.data.draft.baseline_holdings_total_minor, plan.data.base_currency)}
+            {formatMoney(draft.data.draft.baseline_holdings_total_minor, planTarget.base_currency)}
             · {actionableLines.length} 个标的待调整
             <MetricHelp termKey="rebalance_plan_draft" />
           </p>
         </div>
-        <button
-          type="button"
-          className="text-sm text-red-700 underline"
-          onClick={() => {
-            if (window.confirm("确定放弃此调仓计划？正式持仓不会变更。")) {
-              cancel.mutate();
-            }
-          }}
-        >
+        <Button variant="danger" className="px-3 py-1.5" onClick={() => setCancelOpen(true)}>
           放弃计划
-        </button>
+        </Button>
       </div>
 
-      {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {error}
-        </div>
-      )}
-      {toast && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          {toast}
-        </div>
-      )}
+      {error && <Alert variant="danger">{error}</Alert>}
+      {toast && <Alert variant="success">{toast}</Alert>}
 
       {hasReferencePackage(lines) && (
-        <section className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-          <p className="font-medium text-slate-800">
+        <section className="rounded-lg border border-line bg-surface-muted px-4 py-3 text-sm">
+          <p className="font-medium text-ink">
             参考调仓方案（结构对齐，含未达阈值的微调）
             <MetricHelp termKey="rebalance_reference_package" />
           </p>
-          <p className="mt-1 text-slate-700">{packageItems.join("   ")}</p>
-          <p className="mt-2 text-xs text-slate-600">
+          <p className="mt-1 text-ink">{packageItems.join("   ")}</p>
+          <p className="mt-2 text-xs text-ink-muted">
             行内「不动」表示未超调仓阈值；方案为完整对齐参考，请逐行应用或手工调整。
           </p>
         </section>
@@ -278,29 +283,33 @@ export default function RebalancePlanPage() {
         releasedMinor={fundPool.releasedMinor}
         usedMinor={fundPool.usedMinor}
         netMinor={fundPool.netMinor}
-        currency={plan.data.base_currency}
+        currency={planTarget.base_currency}
       />
 
-      <section className="overflow-x-auto rounded-lg border border-slate-200">
+      {/* Desktop table */}
+      <section
+        className="hidden overflow-x-auto rounded-lg border border-line md:block"
+        data-testid="rebalance-line-table"
+      >
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
+          <thead className="bg-surface-muted text-left text-ink-muted">
             <tr>
-              <th className="px-3 py-2">标的</th>
-              <th className="px-3 py-2 text-right">基准当前</th>
-              <th className="px-3 py-2 text-right">
+              <th className="px-3 py-2 font-medium">标的</th>
+              <th className="px-3 py-2 text-right font-medium">基准当前</th>
+              <th className="px-3 py-2 text-right font-medium">
                 冻结结构目标
                 <MetricHelp termKey="frozen_structural_gap" />
               </th>
-              <th className="px-3 py-2 text-right">冻结结构还差</th>
-              <th className="px-3 py-2">参考建议</th>
-              <th className="px-3 py-2 text-right">
+              <th className="px-3 py-2 text-right font-medium">冻结结构还差</th>
+              <th className="px-3 py-2 font-medium">参考建议</th>
+              <th className="px-3 py-2 text-right font-medium">
                 方案变动
                 <MetricHelp termKey="rebalance_reference_package" />
               </th>
-              <th className="px-3 py-2 text-right">计划当前金额</th>
-              <th className="px-3 py-2 text-right">相对基准变动</th>
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2">操作</th>
+              <th className="px-3 py-2 text-right font-medium">计划当前金额</th>
+              <th className="px-3 py-2 text-right font-medium">相对基准变动</th>
+              <th className="px-3 py-2 font-medium">状态</th>
+              <th className="px-3 py-2 font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -315,42 +324,34 @@ export default function RebalancePlanPage() {
                     : "编辑中";
               const hasPackageDelta = line.recommended_package_delta_minor !== 0;
               return (
-                <tr key={line.id} className="border-t">
+                <tr key={line.id} className="border-t border-line">
                   <td className="px-3 py-2">
-                    <span className="font-medium">
+                    <span className="font-medium text-ink">
                       {line.instrument_name ?? line.instrument_code}
                     </span>
-                    <span className="block text-xs text-slate-500">{line.instrument_code}</span>
+                    <span className="block text-xs text-ink-muted">{line.instrument_code}</span>
                   </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatMoney(line.baseline_current_minor, plan.data.base_currency)}
+                  <td className="px-3 py-2 text-right text-ink">
+                    {formatMoney(line.baseline_current_minor, planTarget.base_currency)}
                   </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatMoney(line.frozen_target_minor, plan.data.base_currency)}
+                  <td className="px-3 py-2 text-right text-ink">
+                    {formatMoney(line.frozen_target_minor, planTarget.base_currency)}
                   </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatMoney(line.frozen_gap_minor, plan.data.base_currency)}
-                    <span className="block text-xs text-slate-500">
+                  <td className="px-3 py-2 text-right text-ink">
+                    {formatMoney(line.frozen_gap_minor, planTarget.base_currency)}
+                    <span className="block text-xs text-ink-muted">
                       {formatPercent(line.frozen_gap_weight)}
                     </span>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 text-ink">
                     {rebalanceActionLabel(line.frozen_action)}
                     {line.frozen_suggested_trade_minor !== 0 && (
-                      <span className="block text-xs text-slate-500">
-                        {formatMoney(Math.abs(line.frozen_suggested_trade_minor), plan.data.base_currency)}
+                      <span className="block text-xs text-ink-muted">
+                        {formatMoney(Math.abs(line.frozen_suggested_trade_minor), planTarget.base_currency)}
                       </span>
                     )}
                   </td>
-                  <td
-                    className={`px-3 py-2 text-right font-medium ${
-                      line.recommended_package_delta_minor > 0
-                        ? "text-emerald-700"
-                        : line.recommended_package_delta_minor < 0
-                          ? "text-red-700"
-                          : "text-slate-500"
-                    }`}
-                  >
+                  <td className={`px-3 py-2 text-right font-medium ${packageDeltaClass(line.recommended_package_delta_minor)}`}>
                     {formatPackageDeltaLabel(line.recommended_package_delta_minor)}
                   </td>
                   <td className="px-3 py-2 text-right">
@@ -361,31 +362,27 @@ export default function RebalancePlanPage() {
                       }
                     />
                   </td>
-                  <td
-                    className={`px-3 py-2 text-right font-medium ${
-                      delta >= 0 ? "text-emerald-700" : "text-red-700"
-                    }`}
-                  >
+                  <td className={`px-3 py-2 text-right font-medium ${delta >= 0 ? "text-positive" : "text-danger"}`}>
                     {delta >= 0 ? "+" : ""}
-                    {formatMoney(delta, plan.data.base_currency)}
+                    {formatMoney(delta, planTarget.base_currency)}
                   </td>
-                  <td className="px-3 py-2 text-xs text-slate-600">{status}</td>
+                  <td className="px-3 py-2 text-xs text-ink-muted">{status}</td>
                   <td className="px-3 py-2">
                     {hasPackageDelta ? (
                       <span className="inline-flex items-center gap-1">
-                        <button
-                          type="button"
-                          className="text-xs underline disabled:opacity-50"
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1 text-xs"
                           disabled={applyRecommended.isPending || Object.keys(edits).length > 0}
                           title={Object.keys(edits).length > 0 ? "请先暂存或放弃未保存编辑" : undefined}
-                          onClick={() => applyRecommended.mutate(line.id)}
+                          onClick={() => setApplyTarget(line)}
                         >
                           应用推荐金额
-                        </button>
+                        </Button>
                         <MetricHelp termKey="apply_recommended_one_line" />
                       </span>
                     ) : (
-                      <span className="text-xs text-slate-400">—</span>
+                      <span className="text-xs text-ink-muted">—</span>
                     )}
                   </td>
                 </tr>
@@ -395,12 +392,81 @@ export default function RebalancePlanPage() {
         </table>
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
-        <h2 className="font-medium">变更时间线</h2>
+      {/* Mobile cards */}
+      <section className="space-y-3 md:hidden" data-testid="rebalance-line-cards">
+        {lines.map((line) => {
+          const planned = edits[line.id] ?? line.planned_current_minor;
+          const delta = planned - line.baseline_current_minor;
+          const status =
+            planned === line.baseline_current_minor
+              ? "未改"
+              : line.last_saved_at && planned === line.planned_current_minor
+                ? "已暂存"
+                : "编辑中";
+          const hasPackageDelta = line.recommended_package_delta_minor !== 0;
+          return (
+            <article key={line.id} className="rounded-lg border border-line bg-surface p-4 text-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium text-ink">{line.instrument_name ?? line.instrument_code}</p>
+                  <p className="text-xs text-ink-muted">{line.instrument_code}</p>
+                </div>
+                <span className="shrink-0 text-xs text-ink-muted">{status}</span>
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <dt className="text-ink-muted">基准当前</dt>
+                <dd className="text-right text-ink">
+                  {formatMoney(line.baseline_current_minor, planTarget.base_currency)}
+                </dd>
+                <dt className="text-ink-muted">冻结结构还差</dt>
+                <dd className="text-right text-ink">
+                  {formatMoney(line.frozen_gap_minor, planTarget.base_currency)}
+                </dd>
+                <dt className="text-ink-muted">参考建议</dt>
+                <dd className="text-right text-ink">{rebalanceActionLabel(line.frozen_action)}</dd>
+                <dt className="text-ink-muted">方案变动</dt>
+                <dd className={`text-right font-medium ${packageDeltaClass(line.recommended_package_delta_minor)}`}>
+                  {formatPackageDeltaLabel(line.recommended_package_delta_minor)}
+                </dd>
+              </dl>
+              <div className="mt-3">
+                <label className="block text-xs text-ink-muted">计划当前金额</label>
+                <div className="mt-1">
+                  <MoneyInput
+                    valueMinor={planned}
+                    onChange={(value) => setEdits((prev) => ({ ...prev, [line.id]: value }))}
+                  />
+                </div>
+                <p className={`mt-1 text-xs font-medium ${delta >= 0 ? "text-positive" : "text-danger"}`}>
+                  相对基准变动 {delta >= 0 ? "+" : ""}
+                  {formatMoney(delta, planTarget.base_currency)}
+                </p>
+              </div>
+              {hasPackageDelta && (
+                <div className="mt-3 flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    className="px-2 py-1 text-xs"
+                    disabled={applyRecommended.isPending || Object.keys(edits).length > 0}
+                    title={Object.keys(edits).length > 0 ? "请先暂存或放弃未保存编辑" : undefined}
+                    onClick={() => setApplyTarget(line)}
+                  >
+                    应用推荐金额
+                  </Button>
+                  <MetricHelp termKey="apply_recommended_one_line" />
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </section>
+
+      <section className="rounded-lg border border-line bg-surface p-4">
+        <h2 className="font-medium text-ink">变更时间线</h2>
         {events.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-600">暂无暂存记录。</p>
+          <p className="mt-2 text-sm text-ink-muted">暂无暂存记录。</p>
         ) : (
-          <ol className="mt-2 space-y-2 text-sm">
+          <ol className="mt-2 space-y-2 text-sm text-ink">
             {events
               .filter((e) => e.event_type === "stage" || e.event_type === "undo")
               .map((event) => (
@@ -413,170 +479,195 @@ export default function RebalancePlanPage() {
               ))}
           </ol>
         )}
-        <button
-          type="button"
-          className="mt-3 text-sm underline disabled:opacity-50"
+        <Button
+          variant="ghost"
+          className="mt-3 px-2 py-1"
           disabled={undo.isPending || !events.some((e) => e.event_type === "stage")}
           onClick={() => undo.mutate()}
         >
           撤销上一步
-        </button>
+        </Button>
       </section>
 
-      <div className="fixed inset-x-0 bottom-0 border-t bg-white/95 px-4 py-3">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3">
-          <button
-            type="button"
-            className="min-h-11 rounded-md border px-4 text-sm disabled:opacity-50"
+      <div
+        className="sticky bottom-0 z-10 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur"
+        style={{ paddingBottom: "calc(0.75rem + var(--safe-area-bottom))" }}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="secondary"
             disabled={stage.isPending || Object.keys(edits).length === 0}
             onClick={() => stage.mutate(Object.keys(edits))}
           >
             暂存本步变更
-          </button>
-          <button
-            type="button"
-            className="min-h-11 rounded-md border px-4 text-sm"
-            onClick={() => {
-              setSweepToCash(Boolean(cashHolding));
-              setAcceptScaleShrink(false);
-              setPreviewOpen(true);
-            }}
-          >
+          </Button>
+          <Button variant="secondary" onClick={openPreview}>
             预览最终持仓
-          </button>
-          <button
-            type="button"
-            className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
+          </Button>
+          <Button
             disabled={commit.isPending || stagedCount === 0}
             onClick={() => {
               if (Object.keys(edits).length > 0) {
                 setError("请先暂存未保存的编辑");
                 return;
               }
-              setSweepToCash(Boolean(cashHolding));
-              setAcceptScaleShrink(false);
-              setPreviewOpen(true);
+              openPreview();
             }}
           >
             完成并更新持仓
-          </button>
+          </Button>
           {stagedCount > 0 && (
-            <span className="text-xs text-slate-500">{stagedCount} 项待提交变更</span>
+            <span className="text-xs text-ink-muted">{stagedCount} 项待提交变更</span>
           )}
         </div>
       </div>
 
-      {previewOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-4 sm:items-center">
-          <div className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-4 shadow-xl">
-            <h3 className="font-medium">预览最终持仓</h3>
-            <ul className="mt-3 divide-y text-sm">
-              {lines.map((line) => {
-                const planned = edits[line.id] ?? line.planned_current_minor;
-                const delta = planned - line.baseline_current_minor;
-                if (delta === 0) return null;
-                return (
-                  <li key={line.id} className="flex justify-between py-2">
-                    <span>{line.instrument_name ?? line.instrument_code}</span>
-                    <span>
-                      {formatMoney(line.baseline_current_minor)} → {formatMoney(planned)}
-                    </span>
-                  </li>
-                );
-              })}
-              {cashHolding && sweepToCash && !acceptScaleShrink && fundPool.netMinor > 0 && (
-                <li key="cash-sweep" className="flex justify-between py-2">
-                  <span>{cashHolding.instrument_name ?? "现金"}</span>
-                  <span>
-                    {formatMoney(cashHolding.current_amount_minor)} →{" "}
-                    {formatMoney(cashHolding.current_amount_minor + fundPool.netMinor)}
-                  </span>
-                </li>
-              )}
-            </ul>
-
-            {needsSweepChoice && (
-              <div className="mt-4 space-y-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm">
-                <p>
-                  尚有 {formatMoney(fundPool.netMinor, plan.data.base_currency)} 未在标的间分配。
-                </p>
-                {cashHolding ? (
-                  <label className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      name="sweep_choice"
-                      checked={sweepToCash && !acceptScaleShrink}
-                      onChange={() => {
-                        setSweepToCash(true);
-                        setAcceptScaleShrink(false);
-                      }}
-                    />
-                    <span>
-                      未分配资金将计入「{cashHolding.instrument_name ?? "现金"}」持仓（
-                      {formatMoney(cashHolding.current_amount_minor)} →{" "}
-                      {formatMoney(cashHolding.current_amount_minor + fundPool.netMinor)}）
-                      <MetricHelp termKey="unallocated_sweep_to_cash" />
-                    </span>
-                  </label>
-                ) : (
-                  <p className="text-amber-800">
-                    计划中尚无现金持仓。请先到{" "}
-                    <Link href={`/plans/${planId}/rebalance`} className="underline">
-                      持仓预览
-                    </Link>{" "}
-                    通过资产变更添加 CNY 现金，或选择接受组合规模下降。
-                  </p>
-                )}
-                <label className="flex items-start gap-2">
-                  <input
-                    type="radio"
-                    name="sweep_choice"
-                    checked={acceptScaleShrink}
-                    onChange={() => {
-                      setSweepToCash(false);
-                      setAcceptScaleShrink(true);
-                    }}
-                  />
-                  <span>
-                    接受组合规模下降（不增加现金，总市值减少{" "}
-                    {formatMoney(fundPool.netMinor, plan.data.base_currency)}）
-                  </span>
-                </label>
-              </div>
-            )}
-
-            <label className="mt-4 flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={recordSnapshot}
-                onChange={(e) => setRecordSnapshot(e.target.checked)}
-              />
-              记录调仓后快照
-            </label>
-            <div className="mt-4 flex gap-3">
-              <button
-                type="button"
-                className="min-h-11 rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
-                disabled={
-                  commit.isPending ||
-                  (needsSweepChoice && !cashHolding && !acceptScaleShrink) ||
-                  (needsSweepChoice && Boolean(cashHolding) && !sweepToCash && !acceptScaleShrink)
-                }
-                onClick={() => commit.mutate()}
-              >
-                确认提交
-              </button>
-              <button
-                type="button"
-                className="min-h-11 rounded-md border px-4 text-sm"
-                onClick={() => setPreviewOpen(false)}
-              >
-                返回分配
-              </button>
-            </div>
+      <Dialog
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        title="预览最终持仓"
+        footer={
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button variant="secondary" onClick={() => setPreviewOpen(false)}>
+              返回分配
+            </Button>
+            <Button
+              pending={commit.isPending}
+              disabled={
+                (needsSweepChoice && !cashHolding && !acceptScaleShrink) ||
+                (needsSweepChoice && Boolean(cashHolding) && !sweepToCash && !acceptScaleShrink)
+              }
+              onClick={submitCommit}
+            >
+              确认提交
+            </Button>
           </div>
-        </div>
-      )}
+        }
+      >
+        <ul className="divide-y divide-line text-sm">
+          {lines.map((line) => {
+            const planned = edits[line.id] ?? line.planned_current_minor;
+            const delta = planned - line.baseline_current_minor;
+            if (delta === 0) return null;
+            return (
+              <li key={line.id} className="flex justify-between py-2 text-ink">
+                <span>{line.instrument_name ?? line.instrument_code}</span>
+                <span>
+                  {formatMoney(line.baseline_current_minor)} → {formatMoney(planned)}
+                </span>
+              </li>
+            );
+          })}
+          {cashHolding && sweepToCash && !acceptScaleShrink && fundPool.netMinor > 0 && (
+            <li key="cash-sweep" className="flex justify-between py-2 text-ink">
+              <span>{cashHolding.instrument_name ?? "现金"}</span>
+              <span>
+                {formatMoney(cashHolding.current_amount_minor)} →{" "}
+                {formatMoney(cashHolding.current_amount_minor + fundPool.netMinor)}
+              </span>
+            </li>
+          )}
+        </ul>
+
+        {needsSweepChoice && (
+          <div className="mt-4 space-y-3 rounded-md border border-info/25 bg-info/5 p-3 text-sm text-ink">
+            <p>
+              尚有 {formatMoney(fundPool.netMinor, planTarget.base_currency)} 未在标的间分配。
+            </p>
+            {cashHolding ? (
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="sweep_choice"
+                  checked={sweepToCash && !acceptScaleShrink}
+                  onChange={() => {
+                    setSweepToCash(true);
+                    setAcceptScaleShrink(false);
+                  }}
+                />
+                <span>
+                  未分配资金将计入「{cashHolding.instrument_name ?? "现金"}」持仓（
+                  {formatMoney(cashHolding.current_amount_minor)} →{" "}
+                  {formatMoney(cashHolding.current_amount_minor + fundPool.netMinor)}）
+                  <MetricHelp termKey="unallocated_sweep_to_cash" />
+                </span>
+              </label>
+            ) : (
+              <p className="text-warning">
+                计划中尚无现金持仓。请先到{" "}
+                <Link href={`/plans/${planId}/rebalance`} className="underline">
+                  持仓预览
+                </Link>{" "}
+                通过资产变更添加 CNY 现金，或选择接受组合规模下降。
+              </p>
+            )}
+            <label className="flex items-start gap-2">
+              <input
+                type="radio"
+                name="sweep_choice"
+                checked={acceptScaleShrink}
+                onChange={() => {
+                  setSweepToCash(false);
+                  setAcceptScaleShrink(true);
+                }}
+              />
+              <span>
+                接受组合规模下降（不增加现金，总市值减少{" "}
+                {formatMoney(fundPool.netMinor, planTarget.base_currency)}）
+              </span>
+            </label>
+          </div>
+        )}
+
+        <label className="mt-4 flex items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={recordSnapshot}
+            onChange={(e) => setRecordSnapshot(e.target.checked)}
+          />
+          记录调仓后快照
+        </label>
+      </Dialog>
+
+      <ConfirmDialog
+        open={applyTarget !== null}
+        title="应用推荐金额"
+        description={
+          applyTarget
+            ? `将「${applyTarget.instrument_name ?? applyTarget.instrument_code}」计划金额 ${formatMoney(applyTarget.planned_current_minor)} → ${formatMoney(recommendedPlannedMinor(applyTarget.baseline_current_minor, applyTarget.recommended_package_delta_minor))}（推荐 ${formatPackageDeltaLabel(applyTarget.recommended_package_delta_minor)}）？`
+            : undefined
+        }
+        confirmLabel="应用推荐金额"
+        pending={applyRecommended.isPending}
+        onConfirm={() => {
+          if (applyTarget) applyRecommended.mutate(applyTarget.id);
+          setApplyTarget(null);
+        }}
+        onClose={() => setApplyTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={overshootOpen}
+        title="增配超出减配释放"
+        description="本次增配金额超过减配释放的资金，提交后将更新持仓并可能动用额外资金。仍要提交吗？"
+        confirmLabel="仍要提交"
+        onConfirm={() => {
+          setOvershootOpen(false);
+          commit.mutate();
+        }}
+        onClose={() => setOvershootOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={cancelOpen}
+        title="放弃调仓计划"
+        description="确定放弃此调仓计划？正式持仓不会变更，已暂存的编辑将一并丢弃。"
+        confirmLabel="放弃计划"
+        variant="danger"
+        pending={cancel.isPending}
+        onConfirm={() => cancel.mutate()}
+        onClose={() => setCancelOpen(false)}
+      />
     </div>
   );
 }

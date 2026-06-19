@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/Button";
+import { Alert } from "@/components/ui/Alert";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingState";
 import {
   createRebalanceExecution,
   listRebalanceExecutions,
 } from "@/lib/api/rebalance-executions";
 import { formatMoney } from "@/lib/format";
-import { ApiError } from "@/lib/api/client";
+import { queryErrorMessage } from "@/lib/query-error";
 
 function statusLabel(status: string): string {
   switch (status) {
@@ -49,12 +53,16 @@ export default function RebalanceExecutionsListPage() {
     },
   });
 
-  if (list.isLoading) return <p className="text-slate-600">加载调仓执行列表…</p>;
-  if (list.error) {
+  if (list.isLoading && !list.data) return <LoadingState label="加载调仓执行列表…" />;
+  if (list.isError && !list.data) {
     return (
-      <p className="text-red-600">
-        加载失败：{list.error instanceof Error ? list.error.message : "未知错误"}
-      </p>
+      <ErrorState
+        message="无法加载调仓执行列表。请确认后端服务可用后重试。"
+        onRetry={() => void list.refetch()}
+        backHref={`/plans/${planId}/rebalance`}
+        backLabel="返回持仓预览"
+        technicalDetail={queryErrorMessage(list.error)}
+      />
     );
   }
 
@@ -65,38 +73,31 @@ export default function RebalanceExecutionsListPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">调仓执行</h1>
-          <p className="mt-1 text-sm text-slate-600">查看历史任务或继续未完成的调仓执行。</p>
+          <h1 className="text-xl font-semibold text-ink">调仓执行</h1>
+          <p className="mt-1 text-sm text-ink-muted">查看历史任务或继续未完成的调仓执行。</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link
-            href={`/plans/${planId}/rebalance`}
-            className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm"
-          >
+          <Button href={`/plans/${planId}/rebalance`} variant="secondary">
             返回持仓预览
-          </Link>
+          </Button>
           {!active && (
-            <button
-              type="button"
-              className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm text-white disabled:opacity-50"
+            <Button
               disabled={create.isPending}
               data-testid="create-rebalance-execution"
               onClick={() => create.mutate()}
             >
               新建调仓执行
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       {create.error && (
-        <p className="text-sm text-red-600" role="alert">
-          {create.error instanceof ApiError ? create.error.message : "创建失败"}
-        </p>
+        <Alert variant="danger">{queryErrorMessage(create.error, "创建失败")}</Alert>
       )}
 
       {active && (
-        <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+        <Alert variant="info">
           当前有进行中的调仓执行。
           <Link
             href={`/plans/${planId}/rebalance/executions/${active.id}`}
@@ -104,12 +105,12 @@ export default function RebalanceExecutionsListPage() {
           >
             继续调仓执行
           </Link>
-        </div>
+        </Alert>
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
+      <div className="overflow-x-auto rounded-lg border border-line">
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-left">
+          <thead className="bg-surface-muted text-left text-ink-muted">
             <tr>
               <th className="px-3 py-2 font-medium">创建时间</th>
               <th className="px-3 py-2 font-medium">状态</th>
@@ -123,25 +124,25 @@ export default function RebalanceExecutionsListPage() {
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={7} className="px-3 py-8 text-center text-ink-muted">
                   尚无调仓执行记录。
                 </td>
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <td className="px-3 py-2">{formatDate(row.created_at)}</td>
-                  <td className="px-3 py-2">{statusLabel(row.status)}</td>
-                  <td className="px-3 py-2 text-right">{row.line_count}</td>
-                  <td className="px-3 py-2 text-right">{row.done_line_count}</td>
-                  <td className="px-3 py-2 text-right">{formatMoney(row.cash_pool_minor)}</td>
-                  <td className="px-3 py-2">
+                <tr key={row.id} className="border-t border-line">
+                  <td className="px-3 py-2 text-ink">{formatDate(row.created_at)}</td>
+                  <td className="px-3 py-2 text-ink">{statusLabel(row.status)}</td>
+                  <td className="px-3 py-2 text-right text-ink">{row.line_count}</td>
+                  <td className="px-3 py-2 text-right text-ink">{row.done_line_count}</td>
+                  <td className="px-3 py-2 text-right text-ink">{formatMoney(row.cash_pool_minor)}</td>
+                  <td className="px-3 py-2 text-ink">
                     {formatDate(row.last_event_at || row.updated_at)}
                   </td>
                   <td className="px-3 py-2">
                     <Link
                       href={`/plans/${planId}/rebalance/executions/${row.id}`}
-                      className="font-medium underline"
+                      className="font-medium text-brand underline-offset-2 hover:underline"
                     >
                       {row.status === "draft" || row.status === "in_progress" ? "继续" : "查看详情"}
                     </Link>

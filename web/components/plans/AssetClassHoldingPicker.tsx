@@ -202,8 +202,8 @@ export function AssetClassHoldingPicker({
     : `${assetClassLabel(assetClass)}${region ? regionLabel(region) : ""}搜索`;
 
   const sectionClass = nested
-    ? "mt-3 rounded-md border border-slate-100 bg-white p-3"
-    : "rounded-lg border border-slate-200 p-4";
+    ? "mt-3 rounded-md border border-line bg-surface p-3"
+    : "rounded-lg border border-line p-4";
 
   const sectionAriaLabel = nested ? undefined : (subTitle ?? `${assetClassLabel(assetClass)}选标`);
 
@@ -216,7 +216,7 @@ export function AssetClassHoldingPicker({
 
   return (
     <section className={sectionClass} aria-label={sectionAriaLabel}>
-      {subTitle && <h4 className="text-sm font-medium text-slate-800">{subTitle}</h4>}
+      {subTitle && <h4 className="text-sm font-medium text-ink">{subTitle}</h4>}
       <input
         className={`${subTitle ? "mt-2" : "mt-3"} w-full rounded-md border px-3 py-2 text-sm`}
         placeholder={`搜索${assetClassLabel(assetClass)}标的（代码或名称）`}
@@ -236,23 +236,23 @@ export function AssetClassHoldingPicker({
               <li key={inst.id}>
                 <button
                   type="button"
-                  className="w-full px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={!addable || importLoading}
                   onClick={() => addInstrument(inst)}
                 >
                   <span className="font-medium">{inst.name}</span>
-                  <span className="ml-2 text-slate-500">{inst.code}</span>
+                  <span className="ml-2 text-ink-muted">{inst.code}</span>
                   {inst.complete_year_count != null && (
-                    <span className="ml-2 text-xs text-slate-500">{inst.complete_year_count} 完整年</span>
+                    <span className="ml-2 text-xs text-ink-muted">{inst.complete_year_count} 完整年</span>
                   )}
                   {inst.monthly_return_count != null && (
-                    <span className="ml-2 text-xs text-slate-500">{inst.monthly_return_count} 月</span>
+                    <span className="ml-2 text-xs text-ink-muted">{inst.monthly_return_count} 月</span>
                   )}
                   {inst.history_depth === "one_year" && (
-                    <span className="ml-2 text-xs text-amber-700">{historyDepthLabel(inst.history_depth)}</span>
+                    <span className="ml-2 text-xs text-warning">{historyDepthLabel(inst.history_depth)}</span>
                   )}
                   {!addable && (
-                    <span className="ml-2 text-xs text-slate-500">历史不足，暂不可用于模拟</span>
+                    <span className="ml-2 text-xs text-ink-muted">历史不足，暂不可用于模拟</span>
                   )}
                 </button>
               </li>
@@ -261,41 +261,41 @@ export function AssetClassHoldingPicker({
         </ul>
       )}
       {(resolveLoading || importLoading) && (
-        <p className="mt-2 text-sm text-slate-500" role="status">
+        <p className="mt-2 text-sm text-ink-muted" role="status">
           {importLoading ? "正在录入并抓取历史数据…" : "正在查询 AKShare…"}
         </p>
       )}
       {externalCandidates.length > 0 && (
         <ul
-          className="mt-2 max-h-40 overflow-y-auto rounded-md border border-dashed border-slate-300 divide-y text-sm"
+          className="mt-2 max-h-40 overflow-y-auto rounded-md border border-dashed border-line divide-y text-sm"
           data-testid="wizard-external-results"
         >
           {externalCandidates.map((candidate) => (
             <li key={`${candidate.code}-${candidate.provider_symbol}`}>
               <button
                 type="button"
-                className="w-full px-3 py-2 text-left hover:bg-slate-50 disabled:opacity-50"
+                className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:opacity-50"
                 disabled={importLoading}
                 onClick={() => void importAndAdd(candidate)}
               >
                 <span className="font-medium">{candidate.name}</span>
-                <span className="ml-2 text-slate-500">{candidate.code}</span>
-                <span className="ml-2 text-xs text-slate-500">资料库未收录 · 点击录入并添加</span>
+                <span className="ml-2 text-ink-muted">{candidate.code}</span>
+                <span className="ml-2 text-xs text-ink-muted">资料库未收录 · 点击录入并添加</span>
               </button>
             </li>
           ))}
         </ul>
       )}
       {resolveError && (
-        <p className="mt-2 text-sm text-red-600" role="alert">
+        <p className="mt-2 text-sm text-danger" role="alert">
           {resolveError}
         </p>
       )}
       {showEmptyHint && !looksLikeFundCode(filter) && (
-        <p className="mt-2 text-sm text-slate-500">未找到匹配的{assetClassLabel(assetClass)}标的。</p>
+        <p className="mt-2 text-sm text-ink-muted">未找到匹配的{assetClassLabel(assetClass)}标的。</p>
       )}
       {showEmptyHint && looksLikeFundCode(filter) && !resolveError && (
-        <p className="mt-2 text-sm text-slate-500">
+        <p className="mt-2 text-sm text-ink-muted">
           资料库中暂无该代码；输入完整基金编号后会自动查询 AKShare。
         </p>
       )}

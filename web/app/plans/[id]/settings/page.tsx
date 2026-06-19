@@ -56,7 +56,7 @@ export default function PlanSettingsPage() {
   return (
     <div className="space-y-6">
       <div
-        className="inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-1"
+        className="inline-flex max-w-full overflow-x-auto rounded-lg border border-line bg-surface-muted p-1"
         role="tablist"
         aria-label="计划设置分区"
       >
@@ -66,10 +66,10 @@ export default function PlanSettingsPage() {
             type="button"
             role="tab"
             aria-selected={section === item.key}
-            className={`min-h-11 whitespace-nowrap rounded-md px-4 text-sm font-medium ${
+            className={`min-h-11 whitespace-nowrap rounded-md px-4 text-sm font-medium transition-colors ${
               section === item.key
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-600"
+                ? "bg-surface text-ink shadow-sm"
+                : "text-ink-muted hover:text-ink"
             }`}
             onClick={() => switchSection(item.key)}
           >

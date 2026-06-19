@@ -25,16 +25,16 @@ export function WizardHoldingRow({
   const { inst } = selection;
   return (
     <li
-      className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 rounded border border-slate-100 bg-slate-50 px-2 py-1.5 text-sm"
+      className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 rounded border border-line bg-surface-muted px-2 py-1.5 text-sm"
       aria-label={ariaLabel}
     >
       <div className="min-w-0 truncate">
         <span className="font-medium">{inst.name}</span>
-        <span className="ml-2 text-xs text-slate-500">{inst.code}</span>
+        <span className="ml-2 text-xs text-ink-muted">{inst.code}</span>
       </div>
       <button
         type="button"
-        className="shrink-0 px-1 text-lg leading-none text-red-700"
+        className="shrink-0 px-1 text-lg leading-none text-danger"
         aria-label={`移除 ${inst.name}`}
         onClick={onRemove}
       >
@@ -49,9 +49,9 @@ export function WizardHoldingRow({
           <span className="sr-only">已分配金额</span>
           <MoneyInput valueMinor={selection.amount} onChange={onAmountChange} />
         </div>
-        <div className="flex flex-col justify-center text-xs text-slate-600">
+        <div className="flex flex-col justify-center text-xs text-ink-muted">
           <span className="sr-only">预期资金</span>
-          <span className="font-medium text-slate-900">{formatMoney(expectedMinor)}</span>
+          <span className="font-medium text-ink">{formatMoney(expectedMinor)}</span>
         </div>
       </div>
     </li>

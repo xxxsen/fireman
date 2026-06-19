@@ -4,8 +4,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/Button";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingState";
 import { getPathDetail } from "@/lib/api/simulations";
 import { failureReasonLabel, formatMoney, formatPercent } from "@/lib/format";
+import { queryErrorMessage } from "@/lib/query-error";
 import type { PathMonthRecord, PathYearRecord } from "@/types/api";
 
 const ROW_HEIGHT = 36;
@@ -27,15 +31,18 @@ function VirtualTable<T>({
 
   return (
     <div
-      className="overflow-auto rounded-lg border"
+      className="overflow-auto rounded-lg border border-line"
       style={{ height }}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
     >
       <table className="min-w-full text-sm">
-        <thead className="sticky top-0 z-10 bg-slate-50">
+        <thead className="sticky top-0 z-10 bg-surface-muted">
           <tr>
             {columns.map((c) => (
-              <th key={c.key} className={`px-3 py-2 ${c.align === "right" ? "text-right" : "text-left"}`}>
+              <th
+                key={c.key}
+                className={`px-3 py-2 font-medium text-ink-muted ${c.align === "right" ? "text-right" : "text-left"}`}
+              >
                 {c.header}
               </th>
             ))}
@@ -44,9 +51,9 @@ function VirtualTable<T>({
         <tbody style={{ height: rows.length * ROW_HEIGHT }}>
           <tr style={{ height: offsetY }} aria-hidden />
           {slice.map((row, i) => (
-            <tr key={start + i} className="border-t" style={{ height: ROW_HEIGHT }}>
+            <tr key={start + i} className="border-t border-line" style={{ height: ROW_HEIGHT }}>
               {columns.map((c) => (
-                <td key={c.key} className={`px-3 py-2 ${c.align === "right" ? "text-right" : ""}`}>
+                <td key={c.key} className={`px-3 py-2 text-ink ${c.align === "right" ? "text-right" : ""}`}>
                   {c.render(row)}
                 </td>
               ))}
@@ -54,7 +61,7 @@ function VirtualTable<T>({
           ))}
         </tbody>
       </table>
-      <p className="p-2 text-xs text-slate-500">共 {rows.length} 行</p>
+      <p className="p-2 text-xs text-ink-muted">共 {rows.length} 行</p>
     </div>
   );
 }
@@ -66,7 +73,7 @@ export default function PathDetailPage() {
   const pathNo = Number(params.path_no);
   const [view, setView] = useState<"monthly" | "yearly">("monthly");
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["path", runId, pathNo],
     queryFn: () => getPathDetail(runId, pathNo),
   });
@@ -76,10 +83,21 @@ export default function PathDetailPage() {
     [data],
   );
 
-  if (isLoading) return <p>加载路径详情…</p>;
-  if (error || !data) {
-    return <p className="text-red-600">加载失败</p>;
+  const settingsHref = `/plans/${planId}/settings?section=simulation`;
+
+  if (isLoading && !data) return <LoadingState label="加载路径详情…" />;
+  if (isError && !data) {
+    return (
+      <ErrorState
+        message="无法加载路径详情。请确认后端服务可用后重试。"
+        onRetry={() => void refetch()}
+        backHref={settingsHref}
+        backLabel="返回分析中心"
+        technicalDetail={queryErrorMessage(error)}
+      />
+    );
   }
+  if (!data) return null;
 
   const terminalWealth =
     data.monthly.length > 0 ? data.monthly[data.monthly.length - 1].total_wealth_minor : 0;
@@ -122,58 +140,58 @@ export default function PathDetailPage() {
   return (
     <div className="space-y-4">
       <Link
-        href={`/plans/${planId}/settings?section=simulation`}
-        className="text-sm underline"
+        href={settingsHref}
+        className="inline-flex text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
       >
         ← 返回分析中心
       </Link>
-      <h1 className="text-xl font-semibold">路径 #{data.path_no}</h1>
+      <h1 className="text-xl font-semibold text-ink">路径 #{data.path_no}</h1>
       <dl className="grid gap-3 sm:grid-cols-2">
         <div>
-          <dt className="text-sm text-slate-500">路径种子</dt>
-          <dd className="font-mono text-sm">{data.path_seed}</dd>
+          <dt className="text-sm text-ink-muted">路径种子</dt>
+          <dd className="font-mono-numeric text-sm text-ink">{data.path_seed}</dd>
         </div>
         <div>
-          <dt className="text-sm text-slate-500">是否成功</dt>
-          <dd>{data.succeeded ? "是" : "否"}</dd>
+          <dt className="text-sm text-ink-muted">是否成功</dt>
+          <dd className="text-ink">{data.succeeded ? "是" : "否"}</dd>
         </div>
         <div>
-          <dt className="text-sm text-slate-500">期末资产</dt>
-          <dd>{formatMoney(terminalWealth)}</dd>
+          <dt className="text-sm text-ink-muted">期末资产</dt>
+          <dd className="text-ink">{formatMoney(terminalWealth)}</dd>
         </div>
         <div>
-          <dt className="text-sm text-slate-500">全路径最大回撤</dt>
-          <dd>{formatPercent(maxDrawdown)}</dd>
+          <dt className="text-sm text-ink-muted">全路径最大回撤</dt>
+          <dd className="text-ink">{formatPercent(maxDrawdown)}</dd>
         </div>
         {data.failure_month != null && (
           <div>
-            <dt className="text-sm text-slate-500">失败月份</dt>
-            <dd>{data.failure_month}</dd>
+            <dt className="text-sm text-ink-muted">失败月份</dt>
+            <dd className="text-ink">{data.failure_month}</dd>
           </div>
         )}
         {data.failure_reason && (
           <div className="sm:col-span-2">
-            <dt className="text-sm text-slate-500">失败原因</dt>
-            <dd>{failureReasonLabel(data.failure_reason)}</dd>
+            <dt className="text-sm text-ink-muted">失败原因</dt>
+            <dd className="text-ink">{failureReasonLabel(data.failure_reason)}</dd>
           </div>
         )}
       </dl>
 
       <div className="flex gap-2">
-        <button
-          type="button"
-          className={`rounded px-3 py-1 text-sm ${view === "monthly" ? "bg-slate-900 text-white" : "border"}`}
+        <Button
+          variant={view === "monthly" ? "primary" : "secondary"}
+          className="px-3 py-1"
           onClick={() => setView("monthly")}
         >
           月度 ({data.monthly.length})
-        </button>
-        <button
-          type="button"
-          className={`rounded px-3 py-1 text-sm ${view === "yearly" ? "bg-slate-900 text-white" : "border"}`}
+        </Button>
+        <Button
+          variant={view === "yearly" ? "primary" : "secondary"}
+          className="px-3 py-1"
           onClick={() => setView("yearly")}
         >
           年度 ({data.yearly.length})
-        </button>
+        </Button>
       </div>
 
       {view === "monthly" ? (

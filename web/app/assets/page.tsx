@@ -21,6 +21,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Badge, instrumentStatusBadgeVariant } from "@/components/ui/Badge";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 type StatusFilter = "all" | "pending_fetch" | "fetch_failed" | "available" | "other";
 
@@ -65,7 +66,7 @@ function InstrumentStatusBadge({ inst }: { inst: Instrument }) {
   return (
     <div className="flex flex-col items-end gap-0.5">
       <Badge variant={instrumentStatusBadgeVariant(statusKey)}>{displayStatusLabel(inst)}</Badge>
-      {simLabel && <span className="text-[11px] text-amber-800">{simLabel}</span>}
+      {simLabel && <span className="text-[11px] text-warning">{simLabel}</span>}
     </div>
   );
 }
@@ -97,12 +98,14 @@ function InstrumentContextAction({ inst }: { inst: Instrument }) {
 function InstrumentDeleteAction({ inst }: { inst: Instrument }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const referenced = (inst.referencing_plan_count ?? 0) > 0;
 
   const deleteMut = useMutation({
     mutationFn: () => deleteInstrument(inst.id),
     onSuccess: () => {
       setError(null);
+      setConfirmOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["instruments"] });
     },
     onError: (err) =>
@@ -115,14 +118,13 @@ function InstrumentDeleteAction({ inst }: { inst: Instrument }) {
     <span className="inline-flex flex-col items-start gap-0.5">
       <button
         type="button"
-        className="text-xs text-danger underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-ink-muted disabled:no-underline"
+        className="text-xs text-danger underline-offset-2 transition-colors hover:underline disabled:cursor-not-allowed disabled:text-ink-muted disabled:no-underline"
         disabled={referenced || deleteMut.isPending}
         title={referenced ? "已被计划引用，无法删除" : undefined}
         data-testid={`instrument-delete-${inst.id}`}
         onClick={() => {
-          if (window.confirm(`确定删除 ${inst.name}？`)) {
-            deleteMut.mutate();
-          }
+          setError(null);
+          setConfirmOpen(true);
         }}
       >
         {deleteMut.isPending ? "删除中…" : "删除"}
@@ -130,7 +132,21 @@ function InstrumentDeleteAction({ inst }: { inst: Instrument }) {
       {referenced && (
         <span className="text-[11px] text-ink-muted">已被计划引用，无法删除</span>
       )}
-      {error && <span className="text-[11px] text-danger">{error}</span>}
+      {error && !confirmOpen && <span className="text-[11px] text-danger">{error}</span>}
+      <ConfirmDialog
+        open={confirmOpen}
+        title="删除标的"
+        description={`确定删除标的「${inst.name}」？此操作不可撤销。`}
+        confirmLabel="删除标的"
+        variant="danger"
+        pending={deleteMut.isPending}
+        error={error}
+        onConfirm={() => deleteMut.mutate()}
+        onClose={() => {
+          setConfirmOpen(false);
+          setError(null);
+        }}
+      />
     </span>
   );
 }

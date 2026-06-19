@@ -22,7 +22,7 @@ export function InlineTooltip({ content, children, className }: InlineTooltipPro
       <span
         role="button"
         tabIndex={0}
-        className="cursor-help underline decoration-dotted decoration-slate-300 underline-offset-2"
+        className="cursor-help underline decoration-dotted decoration-line underline-offset-2"
       >
         {children}
       </span>

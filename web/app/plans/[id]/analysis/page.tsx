@@ -80,7 +80,7 @@ function AnalysisJobPanel({
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+          className="rounded-md bg-brand px-4 py-2 text-sm text-white disabled:opacity-50"
           disabled={running || jobBusy}
           onClick={onRun}
         >
@@ -88,11 +88,11 @@ function AnalysisJobPanel({
         </button>
         {activeJobId && (
           <>
-            <span className="text-sm text-slate-600">
+            <span className="text-sm text-ink-muted">
               {jobState.job?.status ?? "连接中"}… {Math.round(jobState.progress * 100)}%
             </span>
             {onCancel && (
-              <button type="button" className="text-sm text-red-600 underline" onClick={onCancel}>
+              <button type="button" className="text-sm text-danger underline" onClick={onCancel}>
                 取消
               </button>
             )}
@@ -101,7 +101,7 @@ function AnalysisJobPanel({
       </div>
       {panelError && (
         <div className="mt-2 flex flex-wrap items-center gap-3">
-          <p className="text-sm text-red-600">{panelError}</p>
+          <p className="text-sm text-danger">{panelError}</p>
           {onRetry && (
             <button
               type="button"
@@ -129,7 +129,7 @@ function AnalysisJobPanel({
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-xs">
                 <thead>
-                  <tr className="text-slate-500">
+                  <tr className="text-ink-muted">
                     <th className="pr-3 py-1">场景</th>
                     <th className="pr-3 py-1">成功率</th>
                     <th className="pr-3 py-1">相对基准</th>
@@ -147,11 +147,11 @@ function AnalysisJobPanel({
                     return (
                       <tr
                         key={String(s.scenario_id)}
-                        className={`border-t ${isWorst ? "bg-red-50" : ""}`}
+                        className={`border-t ${isWorst ? "bg-danger/5" : ""}`}
                       >
                         <td className="py-1 pr-3 font-medium">
                           {String(s.scenario_name ?? s.scenario_id)}
-                          {isWorst && <span className="ml-1 text-red-600">（最差）</span>}
+                          {isWorst && <span className="ml-1 text-danger">（最差）</span>}
                         </td>
                         <td className="py-1 pr-3">{formatPercent((s.success_probability as number) ?? 0)}</td>
                         <td className="py-1 pr-3">{formatPercent((s.baseline_delta as number) ?? 0)}</td>
@@ -172,7 +172,7 @@ function AnalysisJobPanel({
                               : "—"}
                         </td>
                         <td className="py-1 pr-3 max-w-xs">{String(s.description ?? "")}</td>
-                        <td className="py-1 pr-3 max-w-xs text-amber-800">{String(s.risk_hint ?? "")}</td>
+                        <td className="py-1 pr-3 max-w-xs text-warning">{String(s.risk_hint ?? "")}</td>
                       </tr>
                     );
                   })}
@@ -218,7 +218,7 @@ function AnalysisJobPanel({
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-xs">
                 <thead>
-                  <tr className="text-slate-500">
+                  <tr className="text-ink-muted">
                     <th className="pr-4 py-1">场景</th>
                     <th className="pr-4 py-1">成功率</th>
                     <th className="pr-4 py-1">相对基准</th>
@@ -252,7 +252,7 @@ function AnalysisJobPanel({
           )}
           {termKey !== "sensitivity_test" && heatmap.length > 0 && (
             <div className="overflow-x-auto">
-              <p className="mb-1 text-xs text-slate-500">支出 × 收益敏感性热力图（成功率）</p>
+              <p className="mb-1 text-xs text-ink-muted">支出 × 收益敏感性热力图（成功率）</p>
               <table className="min-w-full text-xs">
                 <tbody>
                   {heatmap.map((row, ri) => (
@@ -273,7 +273,7 @@ function AnalysisJobPanel({
             </div>
           )}
           {termKey !== "sensitivity_test" && curves.length > 0 && (
-            <ul className="space-y-1 text-xs text-slate-600">
+            <ul className="space-y-1 text-xs text-ink-muted">
               {curves.slice(0, 3).map((c) => (
                 <li key={String(c.parameter_id)}>
                   {String(c.parameter_name)}：已计算 {((c.points as unknown[]) ?? []).length} 个扰动点
@@ -282,7 +282,7 @@ function AnalysisJobPanel({
             </ul>
           )}
           {typeof report.monte_carlo_std_error === "number" && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-ink-muted">
               MC 标准误 ±{formatPercent(report.monte_carlo_std_error as number)}
               {report.std_error_hint ? ` · ${String(report.std_error_hint)}` : ""}
             </p>
@@ -290,7 +290,7 @@ function AnalysisJobPanel({
         </div>
       )}
       {!latest && !activeJobId && (
-        <p className="mt-3 text-sm text-slate-600">尚无结果，点击上方按钮运行。</p>
+        <p className="mt-3 text-sm text-ink-muted">尚无结果，点击上方按钮运行。</p>
       )}
     </section>
   );
@@ -478,7 +478,7 @@ export function AnalysisContent() {
       <section className="rounded-lg border p-4">
         <h2 className="font-medium">Monte Carlo 模拟</h2>
         {snapshotWarningLabels.length > 0 && (
-          <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+          <p className="mt-2 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning" role="status">
             以下持仓历史样本有限，模拟结果长期不确定性较高：{snapshotWarningLabels.join("；")}
           </p>
         )}
@@ -496,7 +496,7 @@ export function AnalysisContent() {
           </label>
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+            className="rounded-md bg-brand px-4 py-2 text-sm text-white disabled:opacity-50"
             disabled={startMut.isPending || jobBusy}
             onClick={() => startMut.mutate()}
           >
@@ -504,12 +504,12 @@ export function AnalysisContent() {
           </button>
           {activeJobId && activeJobKind === "sim" && (
             <>
-              <span className="text-sm text-slate-600">
+              <span className="text-sm text-ink-muted">
                 {jobState.job?.status ?? "连接中"}… {Math.round(jobState.progress * 100)}%
               </span>
               <button
                 type="button"
-                className="text-sm text-red-600 underline"
+                className="text-sm text-danger underline"
                 onClick={() => void cancelJob(activeJobId)}
               >
                 取消
@@ -519,7 +519,7 @@ export function AnalysisContent() {
         </div>
         {simPanelError && (
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <p className="text-sm text-red-600">{simPanelError}</p>
+            <p className="text-sm text-danger">{simPanelError}</p>
             <button
               type="button"
               className="text-sm underline"
@@ -552,7 +552,7 @@ export function AnalysisContent() {
             <dl className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
               {Object.entries(latest.summary_json.terminal_quantiles).map(([k, v]) => (
                 <div key={k}>
-                  <dt className="text-slate-500">{k.toUpperCase()}</dt>
+                  <dt className="text-ink-muted">{k.toUpperCase()}</dt>
                   <dd>{formatMoney(v)}</dd>
                 </div>
               ))}
@@ -564,7 +564,7 @@ export function AnalysisContent() {
             </div>
           )}
           {((latest.summary_json?.model_warnings as string[] | undefined) ?? []).length > 0 && (
-            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <div className="mt-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
               <h3 className="font-medium">模型提示</h3>
               <ul className="mt-1 list-disc pl-5">
                 {(latest.summary_json?.model_warnings as string[]).map((w) => (
@@ -575,13 +575,13 @@ export function AnalysisContent() {
           )}
           {repPaths.length > 0 && (
             <div className="mt-4">
-              <h3 className="text-sm font-medium text-slate-600">代表路径</h3>
+              <h3 className="text-sm font-medium text-ink-muted">代表路径</h3>
               <ul className="mt-2 flex flex-wrap gap-2">
                 {repPaths.map((p) => (
                   <li key={p.path_no}>
                     <button
                       type="button"
-                      className="rounded border px-2 py-1 text-sm hover:bg-slate-50"
+                      className="rounded border px-2 py-1 text-sm hover:bg-surface-muted"
                       onClick={() =>
                         router.push(
                           `/plans/${planId}/analysis/${latest.id}/paths/${p.path_no}`,
@@ -649,5 +649,5 @@ export default function AnalysisPage() {
   useEffect(() => {
     router.replace(`/plans/${planId}/settings?section=simulation`);
   }, [planId, router]);
-  return <p className="text-slate-600">正在前往计划设置…</p>;
+  return <p className="text-ink-muted">正在前往计划设置…</p>;
 }

@@ -14,7 +14,11 @@ import {
   getActiveRebalanceExecution,
 } from "@/lib/api/rebalance-executions";
 import { assetClassLabel, formatMoney, regionLabel } from "@/lib/format";
-import { ApiError } from "@/lib/api/client";
+import { Button } from "@/components/ui/Button";
+import { Alert } from "@/components/ui/Alert";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingState";
+import { queryErrorMessage } from "@/lib/query-error";
 
 function lineStatusHint(status: string, remainingMinor: number): string | null {
   switch (status) {
@@ -79,6 +83,22 @@ export default function RebalancePage() {
     return buildRebalanceWorkspaceRows(targets.data, rebalance.data.lines);
   }, [targets.data, rebalance.data]);
 
+  if ((targets.isError || rebalance.isError) && (!targets.data || !rebalance.data)) {
+    return (
+      <ErrorState
+        message="无法加载持仓预览。请确认后端服务可用后重试。"
+        onRetry={() => {
+          void targets.refetch();
+          void rebalance.refetch();
+          void activeExecution.refetch();
+        }}
+        backHref={`/plans/${planId}/overview`}
+        backLabel="返回总览"
+        technicalDetail={queryErrorMessage(targets.error ?? rebalance.error)}
+      />
+    );
+  }
+
   if (
     targets.isLoading ||
     rebalance.isLoading ||
@@ -86,7 +106,7 @@ export default function RebalancePage() {
     !targets.data ||
     !rebalance.data
   ) {
-    return <p className="text-slate-600">加载持仓预览…</p>;
+    return <LoadingState label="加载持仓预览…" />;
   }
 
   const dimensionLabel = (row: RebalanceWorkspaceRow) => {
@@ -96,9 +116,9 @@ export default function RebalancePage() {
   };
 
   const dimensionClass = (row: RebalanceWorkspaceRow) => {
-    if (row.level === "asset_class") return "font-medium text-slate-900";
-    if (row.level === "region") return "pl-8 text-slate-700";
-    return "pl-14 text-slate-800";
+    if (row.level === "asset_class") return "font-medium text-ink";
+    if (row.level === "region") return "pl-8 text-ink-muted";
+    return "pl-14 text-ink";
   };
 
   const summaryAmountPlaceholder = (
@@ -110,14 +130,14 @@ export default function RebalancePage() {
     const label = kind === "target" ? "合计目标金额" : "合计当前金额";
     return (
       <InlineTooltip content={`${label}：${formatMoney(amount)}`}>
-        <span className="text-slate-400">—</span>
+        <span className="text-ink-muted">—</span>
       </InlineTooltip>
     );
   };
 
   const gapAmountCell = (row: RebalanceWorkspaceRow) => {
     if (row.gap_amount_minor === 0) {
-      return <span className="text-slate-400">—</span>;
+      return <span className="text-ink-muted">—</span>;
     }
 
     const formatted =
@@ -127,7 +147,7 @@ export default function RebalancePage() {
     const content = (
       <span
         className={`font-medium ${
-          row.gap_amount_minor >= 0 ? "text-emerald-700" : "text-red-700"
+          row.gap_amount_minor >= 0 ? "text-positive" : "text-danger"
         }`}
       >
         {formatted}
@@ -138,7 +158,7 @@ export default function RebalancePage() {
 
     return (
       <InlineTooltip content={formatted}>
-        <span className="text-slate-400" aria-label={formatted}>
+        <span className="text-ink-muted" aria-label={formatted}>
           —
         </span>
       </InlineTooltip>
@@ -152,24 +172,14 @@ export default function RebalancePage() {
   return (
     <div className="space-y-6">
       {assetRefreshed && (
-        <div
-          role="status"
-          className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
-        >
-          资产变更已提交，持仓预览已更新。
-        </div>
+        <Alert variant="success">资产变更已提交，持仓预览已更新。</Alert>
       )}
       {executionCompleted && (
-        <div
-          role="status"
-          className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
-        >
-          调仓执行已完成，持仓已同步更新。
-        </div>
+        <Alert variant="success">调仓执行已完成，持仓已同步更新。</Alert>
       )}
 
       {!targets.data.weight_checks.passed && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <Alert variant="danger">
           {targets.data.weight_checks.checks
             .filter((check) => !check.passed)
             .map((check) => check.message)
@@ -180,22 +190,22 @@ export default function RebalancePage() {
           >
             检查计划目标配置
           </Link>
-        </div>
+        </Alert>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">持仓预览</h1>
-          <p className="mt-1 text-sm text-slate-600">
+          <h1 className="text-xl font-semibold text-ink">持仓预览</h1>
+          <p className="mt-1 text-sm text-ink-muted">
             对比当前持仓与目标结构；本页仅展示差异，不直接编辑持仓。
           </p>
           {executionInProgress && (
-            <p className="mt-2 text-sm text-amber-800" data-testid="execution-blocking-hint">
+            <p className="mt-2 text-sm text-warning" data-testid="execution-blocking-hint">
               当前有进行中的调仓执行。请先完成或放弃调仓，再进行资产变更。
             </p>
           )}
           {executionInProgress && active && (
-            <p className="mt-1 text-sm text-slate-600">
+            <p className="mt-1 text-sm text-ink-muted">
               进行中 · 已完成 {active.stats.done_line_count}/{active.stats.line_count} 个资产
               {active.stats.skipped_line_count ? ` · 跳过 ${active.stats.skipped_line_count} 个` : ""} · 现金池{" "}
               {formatMoney(active.execution.cash_pool_minor)}
@@ -206,77 +216,70 @@ export default function RebalancePage() {
           <div className="flex flex-wrap gap-2">
             {executionInProgress ? (
               <span
-                className="inline-flex min-h-11 cursor-not-allowed items-center rounded-md border border-slate-200 bg-slate-100 px-4 text-sm font-medium text-slate-400"
+                className="inline-flex min-h-11 cursor-not-allowed items-center rounded-md border border-line bg-surface-muted px-4 text-sm font-medium text-ink-muted"
                 data-testid="asset-refresh-primary-disabled"
                 aria-disabled="true"
               >
                 资产变更
               </span>
             ) : (
-              <Link
+              <Button
                 href={`/plans/${planId}/asset-refresh`}
-                className="inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
+                variant="secondary"
                 data-testid="asset-refresh-primary"
               >
                 资产变更
-              </Link>
+              </Button>
             )}
             {executionInProgress ? (
-              <Link
+              <Button
                 href={executionHref}
-                className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white"
                 data-testid="continue-rebalance-execution"
               >
                 继续调仓执行
-              </Link>
+              </Button>
             ) : (
-              <button
-                type="button"
-                className="inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white disabled:opacity-50"
+              <Button
                 data-testid="start-rebalance-execution"
                 disabled={createExecution.isPending}
                 onClick={() => createExecution.mutate()}
               >
                 调仓执行
-              </button>
+              </Button>
             )}
           </div>
         )}
       </div>
 
       {createExecution.error && (
-        <p className="text-sm text-red-600" role="alert">
-          {createExecution.error instanceof ApiError
-            ? createExecution.error.message
-            : "创建调仓执行失败"}
-        </p>
+        <Alert variant="danger">{queryErrorMessage(createExecution.error, "创建调仓执行失败")}</Alert>
       )}
 
       {!hasEnabledHoldings ? (
-        <section className="rounded-lg border border-dashed border-slate-300 p-8 text-center">
-          <h2 className="font-medium">尚未录入持仓</h2>
-          <p className="mt-2 text-sm text-slate-600">请先通过资产变更录入当前真实持仓。</p>
-          <Link
+        <section className="rounded-lg border border-dashed border-line p-8 text-center">
+          <h2 className="font-medium text-ink">尚未录入持仓</h2>
+          <p className="mt-2 text-sm text-ink-muted">请先通过资产变更录入当前真实持仓。</p>
+          <Button
             href={`/plans/${planId}/asset-refresh`}
-            className="mt-4 inline-flex min-h-11 items-center rounded-md bg-slate-900 px-4 text-sm text-white"
+            className="mt-4"
             data-testid="asset-refresh-primary"
           >
             资产变更
-          </Link>
+          </Button>
         </section>
       ) : (
         <section>
-          <h2 className="font-medium">结构偏差汇总</h2>
-          <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+          <h2 className="font-medium text-ink">结构偏差汇总</h2>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-line">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
+              <thead className="bg-surface-muted text-ink-muted">
                 <tr>
-                  <th className="px-3 py-2 text-left">维度</th>
-                  <th className="px-3 py-2 text-right">目标占比</th>
-                  <th className="px-3 py-2 text-right">现状占比</th>
-                  <th className="px-3 py-2 text-right">目标金额</th>
-                  <th className="px-3 py-2 text-right">当前金额</th>
-                  <th className="px-3 py-2 text-right">待投入 / 偏差</th>
+                  <th className="px-3 py-2 text-left font-medium">维度</th>
+                  <th className="px-3 py-2 text-right font-medium">目标占比</th>
+                  <th className="px-3 py-2 text-right font-medium">现状占比</th>
+                  <th className="px-3 py-2 text-right font-medium">目标金额</th>
+                  <th className="px-3 py-2 text-right font-medium">当前金额</th>
+                  <th className="px-3 py-2 text-right font-medium">待投入 / 偏差</th>
                 </tr>
               </thead>
               <tbody>
@@ -291,15 +294,15 @@ export default function RebalancePage() {
                   return (
                     <tr
                       key={row.key}
-                      className={`border-t ${
-                        row.level === "holding" ? "bg-white hover:bg-slate-50" : "bg-slate-50/60"
+                      className={`border-t border-line ${
+                        row.level === "holding" ? "bg-surface hover:bg-surface-muted" : "bg-surface-muted/60"
                       }`}
                     >
                       <td className={`px-3 py-2 ${dimensionClass(row)}`}>
                         {row.level === "holding" && row.instrument_id ? (
                           <Link
                             href={`/assets/${row.instrument_id}`}
-                            className="font-medium underline-offset-2 hover:underline"
+                            className="font-medium text-brand underline-offset-2 hover:underline"
                           >
                             {dimensionLabel(row)}
                           </Link>
@@ -307,13 +310,13 @@ export default function RebalancePage() {
                           dimensionLabel(row)
                         )}
                         {row.level === "holding" && row.instrument_code && (
-                          <span className="block text-xs font-normal text-slate-500">
+                          <span className="block text-xs font-normal text-ink-muted">
                             {row.instrument_code}
                           </span>
                         )}
                         {execHint && (
                           <span
-                            className="mt-1 block text-xs text-sky-700"
+                            className="mt-1 block text-xs text-info"
                             data-testid="execution-line-hint"
                           >
                             {execHint}

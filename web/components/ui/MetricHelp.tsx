@@ -30,7 +30,7 @@ export function MetricHelp({ termKey, text, label, className }: MetricHelpProps)
         aria-label="查看说明"
         className={
           className ??
-          "ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] text-slate-600 hover:bg-slate-50"
+          "ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-line bg-surface text-[10px] text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink"
         }
       >
         {label ?? "?"}

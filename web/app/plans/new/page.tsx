@@ -252,7 +252,7 @@ export default function NewPlanWizardPage() {
           <li
             key={label}
             className={`rounded-full px-3 py-1 ${
-              i === step ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+              i === step ? "bg-brand text-white" : "bg-surface-muted text-ink-muted"
             }`}
           >
             {i + 1}. {label}
@@ -324,7 +324,7 @@ export default function NewPlanWizardPage() {
                     onChange={(e) => setFireDurationYears(Number(e.target.value))}
                     aria-label="预计 FIRE 时长（年）"
                   />
-                  <span className="text-slate-500">年</span>
+                  <span className="text-ink-muted">年</span>
                 </div>
               </label>
             </div>
@@ -358,11 +358,11 @@ export default function NewPlanWizardPage() {
                 ))}
               </select>
             </label>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-ink-muted">
               权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
             </p>
             {selectedScenario && regionTargetChecks.length > 0 && (
-              <div className="mt-4 space-y-4 rounded-lg border border-slate-200 p-4">
+              <div className="mt-4 space-y-4 rounded-lg border border-line p-4">
                 <h3 className="text-sm font-medium">地区组内权重</h3>
                 {regionTargetChecks.map((check) => {
                   const ac = check.assetClass as WizardRegionEditableClass;
@@ -393,7 +393,7 @@ export default function NewPlanWizardPage() {
                         />
                       </div>
                       <p
-                        className={`text-xs ${check.passed ? "text-emerald-700" : "text-red-700"}`}
+                        className={`text-xs ${check.passed ? "text-positive" : "text-danger"}`}
                       >
                         {check.label} 地区配比：{check.message}
                       </p>
@@ -407,7 +407,7 @@ export default function NewPlanWizardPage() {
 
         {step === 2 && (
           <>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-ink-muted">
               按大类分标签页搜索并添加标的；组内占比将自动均分，手动调整后其余标的自动补齐。未配置资金默认计入
               现金/其他。预期资金 = 总资产 × 大类权重 × 地区权重 × 组内占比。
             </p>
@@ -417,7 +417,7 @@ export default function NewPlanWizardPage() {
             {instrumentTabs.length > 0 && (
               <>
                 <div
-                  className="mt-4 flex gap-1 border-b border-slate-200"
+                  className="mt-4 flex gap-1 border-b border-line"
                   role="tablist"
                   aria-label="资产大类"
                 >
@@ -429,8 +429,8 @@ export default function NewPlanWizardPage() {
                       aria-selected={effectiveHoldingTab === assetClass}
                       className={`px-4 py-2 text-sm font-medium ${
                         effectiveHoldingTab === assetClass
-                          ? "border-b-2 border-slate-900 text-slate-900"
-                          : "text-slate-500 hover:text-slate-700"
+                          ? "border-b-2 border-brand text-ink"
+                          : "text-ink-muted hover:text-ink"
                       }`}
                       onClick={() => setHoldingTab(assetClass)}
                     >
@@ -459,7 +459,7 @@ export default function NewPlanWizardPage() {
                     return (
                       <section
                         key={assetClass}
-                        className="mt-4 rounded-lg border border-slate-200 p-4"
+                        className="mt-4 rounded-lg border border-line p-4"
                         role="tabpanel"
                         aria-label={`${assetClassLabel(assetClass)}选标`}
                       >
@@ -476,7 +476,7 @@ export default function NewPlanWizardPage() {
                           />
                         ) : (
                           <>
-                            <p className="mb-3 text-sm text-slate-600">
+                            <p className="mb-3 text-sm text-ink-muted">
                               国内 {formatPercent(rt.domestic)} / 国外 {formatPercent(rt.foreign)}
                             </p>
                             <AssetClassHoldingPicker
@@ -523,12 +523,12 @@ export default function NewPlanWizardPage() {
             {groupWeightChecks.map((g) => (
               <p
                 key={g.label}
-                className={`text-sm ${g.passed ? "text-emerald-700" : "text-red-700"}`}
+                className={`text-sm ${g.passed ? "text-positive" : "text-danger"}`}
               >
                 {g.label} 组内权重：{g.message}
               </p>
             ))}
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-ink-muted">
               持仓合计：{(holdingsSum / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })}{" "}
               元 / 总资产 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
               {assetGap > 100 && "（未配置部分将自动计入现金/其他）"}
@@ -538,7 +538,7 @@ export default function NewPlanWizardPage() {
 
         {step === 3 && (
           <>
-            <ul className="list-disc pl-5 text-sm text-slate-700">
+            <ul className="list-disc pl-5 text-sm text-ink">
               <li>组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}</li>
               <li>全组合目标权重：{portfolioReview?.passed ? "通过" : "未通过"}</li>
               <li>已选标的：{selectedInstruments.length} 个</li>
@@ -546,17 +546,17 @@ export default function NewPlanWizardPage() {
 
             {selectedScenario && (
               <>
-                <p className="mt-3 text-sm text-slate-600">
+                <p className="mt-3 text-sm text-ink-muted">
                   场景「{selectedScenario.name}」目标：
                   {selectedScenario.weights
                     .map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`)
                     .join(" / ")}
                 </p>
-                <p className="text-sm text-slate-600">
+                <p className="text-sm text-ink-muted">
                   地区目标：{formatRegionTargetsSummary(selectedScenario.weights, regionTargets)}
                 </p>
                 {selectedInstruments.length > 0 && (
-                  <p className="text-sm text-slate-600">
+                  <p className="text-sm text-ink-muted">
                     已选持仓：国内 {formatMoney(holdingsByRegion.domesticMinor)}（
                     {formatPercent(holdingsByRegion.domesticPct)}）· 国外{" "}
                     {formatMoney(holdingsByRegion.foreignMinor)}（
@@ -569,14 +569,14 @@ export default function NewPlanWizardPage() {
             {portfolioReview && (
               <div className="mt-4 space-y-3">
                 <p
-                  className={`text-sm ${portfolioReview.passed ? "text-emerald-700" : "text-amber-800"}`}
+                  className={`text-sm ${portfolioReview.passed ? "text-positive" : "text-warning"}`}
                   role="status"
                 >
                   {portfolioReview.message}
                 </p>
                 <div className="overflow-x-auto rounded-lg border">
                   <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 text-left">
+                    <thead className="bg-surface-muted text-left">
                       <tr>
                         <th className="px-3 py-2 font-medium">方向</th>
                         <th className="px-3 py-2 font-medium">资产名称</th>
@@ -608,7 +608,7 @@ export default function NewPlanWizardPage() {
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot className="border-t bg-slate-50">
+                    <tfoot className="border-t bg-surface-muted">
                       <tr>
                         <td className="px-3 py-2 font-medium" colSpan={4}>
                           合计
@@ -622,7 +622,7 @@ export default function NewPlanWizardPage() {
                   </table>
                 </div>
                 {!portfolioReview.passed && portfolioReview.missingClasses.length > 0 && (
-                  <p className="text-sm text-amber-800">
+                  <p className="text-sm text-warning">
                     建议：返回「选择标的」补充
                     {portfolioReview.missingClasses.map((m) => m.label).join("、")}
                     类资产；若暂时无法配置，可先调整场景或稍后在计划内完善持仓。
@@ -632,7 +632,7 @@ export default function NewPlanWizardPage() {
             )}
 
             {assetGap > 100 && (
-              <p className="mt-4 text-sm text-slate-600">
+              <p className="mt-4 text-sm text-ink-muted">
                 未配置差额{" "}
                 {(assetGap / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元将自动计入
                 「现金/其他」。
@@ -645,14 +645,14 @@ export default function NewPlanWizardPage() {
               .map((s) => (
                 <p
                   key={s.inst.id}
-                  className="mt-2 text-sm text-amber-800"
+                  className="mt-2 text-sm text-warning"
                   data-testid="wizard-short-history"
                 >
                   {s.inst.name}（{s.inst.code}）历史样本有限，模拟长期估计不确定性较高。
                 </p>
               ))}
             {assetGap < -100 && (
-              <p className="text-sm text-red-600">持仓合计超过总资产，请返回上一步调整。</p>
+              <p className="text-sm text-danger">持仓合计超过总资产，请返回上一步调整。</p>
             )}
             <label className="mt-4 flex items-center gap-2 text-sm">
               <input
@@ -663,13 +663,13 @@ export default function NewPlanWizardPage() {
               创建后运行 FIRE 模拟（{DEFAULT_RUNS.toLocaleString()} 次）
               <MetricHelp termKey="fire_simulation_optional" />
             </label>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-danger">{error}</p>}
           </>
         )}
       </div>
 
       {error && step < 3 && (
-        <p className="mt-4 text-sm text-red-600" role="alert">
+        <p className="mt-4 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
@@ -686,7 +686,7 @@ export default function NewPlanWizardPage() {
         {step < 3 ? (
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white"
+            className="rounded-md bg-brand px-4 py-2 text-sm text-white"
             onClick={() => {
               setError(null);
               if (step === 1 && !scenarioId) {
@@ -739,7 +739,7 @@ export default function NewPlanWizardPage() {
         ) : (
           <button
             type="button"
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+            className="rounded-md bg-brand px-4 py-2 text-sm text-white disabled:opacity-50"
             disabled={
               !groupWeightChecks.every((g) => g.passed) ||
               !portfolioReview?.passed ||

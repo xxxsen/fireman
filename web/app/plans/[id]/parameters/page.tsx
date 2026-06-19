@@ -16,6 +16,9 @@ import { getParameters, updateParameters } from "@/lib/api/plans";
 import { getHoldings } from "@/lib/api/holdings";
 import { getAllocation, listScenarios, updateAllocation } from "@/lib/api/allocation";
 import { ApiError } from "@/lib/api/client";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingState";
+import { queryErrorMessage } from "@/lib/query-error";
 import { assetClassLabel, formatMoney, historyDepthLabel, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
 import {
@@ -181,7 +184,23 @@ export function ParametersContent({
     setLocalParams({ ...params, [key]: value });
   };
 
-  if (!params || planQ.isLoading) return <p className="text-slate-600">加载参数…</p>;
+  if ((planQ.isError || paramsQ.isError) && !params) {
+    return (
+      <ErrorState
+        message="无法加载计划参数。请确认后端服务可用后重试。"
+        onRetry={() => {
+          void planQ.refetch();
+          void paramsQ.refetch();
+          void allocationQ.refetch();
+        }}
+        backHref={`/plans/${planId}/overview`}
+        backLabel="返回总览"
+        technicalDetail={queryErrorMessage(planQ.error ?? paramsQ.error)}
+      />
+    );
+  }
+
+  if (!params || planQ.isLoading) return <LoadingState label="加载参数…" />;
 
   const gapBlocking = Math.abs(gap) > 100 && gap < 0;
   const gapNeedsCash = gap > 100 && gapAction !== "cash";
@@ -198,7 +217,7 @@ export function ParametersContent({
   return (
     <div className="space-y-6 pb-20">
       {showStale && stale && <StaleBanner />}
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">计划信息</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
@@ -244,7 +263,7 @@ export function ParametersContent({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">资金与现金流</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
@@ -254,16 +273,16 @@ export function ParametersContent({
               currency={planQ.data?.base_currency}
               onChange={(v) => update("total_assets_minor", v)}
             />
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-ink-muted">
               <MetricHelp termKey="configured_total_assets" />
             </p>
             {holdingsSum > params.total_assets_minor + 100 && (
-              <p className="mt-1 text-xs text-amber-700">
+              <p className="mt-1 text-xs text-warning">
                 低于当前持仓 {formatMoney(holdingsSum - params.total_assets_minor, planQ.data?.base_currency)}
               </p>
             )}
             {params.total_assets_minor > holdingsSum + 100 && (
-              <p className="mt-1 text-xs text-amber-700">
+              <p className="mt-1 text-xs text-warning">
                 高于当前持仓 {formatMoney(params.total_assets_minor - holdingsSum, planQ.data?.base_currency)}（规模缺口）
               </p>
             )}
@@ -290,7 +309,7 @@ export function ParametersContent({
           />
         </div>
         {Math.abs(gap) > 100 && (
-          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+          <div className="mt-4 rounded-md border border-warning/30 bg-warning/5 p-3 text-sm">
             <p>
               {gap > 0 ? (
                 <>
@@ -314,13 +333,13 @@ export function ParametersContent({
                 计入现金/其他（保存前请补充持仓或下调计划基准规模）
               </label>
             ) : (
-              <p className="mt-1 text-red-700">持仓合计超过计划基准规模，无法保存。</p>
+              <p className="mt-1 text-danger">持仓合计超过计划基准规模，无法保存。</p>
             )}
           </div>
         )}
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">额外现金流事件</h2>
         <div className="mt-4">
           <CashFlowEditor
@@ -333,7 +352,7 @@ export function ParametersContent({
         </div>
       </section>
 
-      {showAllocation && <section className="rounded-lg border border-slate-200 p-4">
+      {showAllocation && <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">资产配置</h2>
         <label className="mt-4 block text-sm">
           场景选择
@@ -369,7 +388,7 @@ export function ParametersContent({
               ))}
             </div>
             {!acCheck.passed && (
-              <p className="mt-1 text-sm text-red-600">{acCheck.message}</p>
+              <p className="mt-1 text-sm text-danger">{acCheck.message}</p>
             )}
           </div>
           {ASSET_CLASSES.map((ac) => (
@@ -396,7 +415,7 @@ export function ParametersContent({
                   })}
               </div>
               {regionChecks.find((c) => c.ac === ac && !c.passed) && (
-                <p className="mt-1 text-sm text-red-600">
+                <p className="mt-1 text-sm text-danger">
                   {regionChecks.find((c) => c.ac === ac)?.message}
                 </p>
               )}
@@ -405,7 +424,7 @@ export function ParametersContent({
         </div>
       </section>}
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">提取与通胀</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
@@ -507,7 +526,7 @@ export function ParametersContent({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">调仓</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <label className="block text-sm">
@@ -523,7 +542,7 @@ export function ParametersContent({
             </select>
           </label>
           <div>
-            <div className="mb-1 flex items-center text-sm text-slate-600">
+            <div className="mb-1 flex items-center text-sm text-ink-muted">
               调仓阈值
               <MetricHelp termKey="rebalance_threshold" />
             </div>
@@ -537,11 +556,11 @@ export function ParametersContent({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">持仓模拟数据</h2>
         <div className="mt-3 overflow-x-auto text-sm">
           <table className="min-w-full text-left">
-            <thead className="text-slate-500">
+            <thead className="text-ink-muted">
               <tr>
                 <th className="pr-4 py-1">标的</th>
                 <th className="pr-4 py-1">历史深度</th>
@@ -567,7 +586,7 @@ export function ParametersContent({
                         : "—"}
                     </td>
                     <td className="py-1 pr-4 font-mono text-xs">{h.snapshot_metrics_version ?? "—"}</td>
-                    <td className="py-1 pr-4 text-xs text-amber-800">
+                    <td className="py-1 pr-4 text-xs text-warning">
                       {(h.snapshot_warnings ?? []).length > 0 ? (
                         <ul className="list-disc pl-4">
                           {h.snapshot_warnings!.map((w) => (
@@ -585,7 +604,7 @@ export function ParametersContent({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 p-4">
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">模拟设置</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
@@ -630,7 +649,7 @@ export function ParametersContent({
                 update("seed", next);
               }}
             />
-            <span className="text-xs text-slate-500">0–{MAX_SEED}</span>
+            <span className="text-xs text-ink-muted">0–{MAX_SEED}</span>
           </label>
         </div>
       </section>
@@ -672,5 +691,5 @@ export default function ParametersPage() {
   useEffect(() => {
     router.replace(`/plans/${planId}/settings?section=fire-params`);
   }, [planId, router]);
-  return <p className="text-slate-600">正在前往计划设置…</p>;
+  return <p className="text-ink-muted">正在前往计划设置…</p>;
 }

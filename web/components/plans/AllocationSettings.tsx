@@ -77,14 +77,14 @@ export function PlanTargetsContent() {
   });
 
   if (!allocation.data || !parameters.data) {
-    return <p className="text-slate-600">加载目标配置…</p>;
+    return <p className="text-ink-muted">加载目标配置…</p>;
   }
 
   return (
-    <section className="space-y-5 rounded-lg border border-slate-200 p-4 pb-20">
+    <section className="space-y-5 rounded-lg border border-line p-4 pb-20">
       <div>
         <h2 className="text-lg font-medium">当前计划目标配置</h2>
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-1 text-sm text-ink-muted">
           切换当前计划使用的场景模板；模板内的大类与地区权重仅可查看。
         </p>
         <label className="mt-3 block text-sm">
@@ -104,16 +104,16 @@ export function PlanTargetsContent() {
           </select>
         </label>
         {dirty && (
-          <p className="mt-2 text-sm text-amber-800" data-testid="plan-targets-preview-note">
+          <p className="mt-2 text-sm text-warning" data-testid="plan-targets-preview-note">
             大类与地区组内权重均随所选场景预览；保存后将应用完整模板配置。
           </p>
         )}
-        <p className="mt-3 text-sm text-slate-600">
+        <p className="mt-3 text-sm text-ink-muted">
           要修改场景结构，请前往「场景配置」
         </p>
         <Link
           href="/scenarios"
-          className="mt-2 inline-flex min-h-11 items-center rounded-md border border-slate-300 px-4 text-sm font-medium"
+          className="mt-2 inline-flex min-h-11 items-center rounded-md border border-line px-4 text-sm font-medium"
         >
           前往场景配置
         </Link>
@@ -123,8 +123,8 @@ export function PlanTargetsContent() {
         <h3 className="text-sm font-medium">大类目标权重（只读）</h3>
         <dl className="mt-2 grid gap-2 sm:grid-cols-3">
           {assetTargets.map((target) => (
-            <div key={target.asset_class} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
-              <dt className="text-slate-500">{assetClassLabel(target.asset_class)}</dt>
+            <div key={target.asset_class} className="rounded-md bg-surface-muted px-3 py-2 text-sm">
+              <dt className="text-ink-muted">{assetClassLabel(target.asset_class)}</dt>
               <dd className="font-medium tabular-nums">{formatPercent(target.weight)}</dd>
             </div>
           ))}
@@ -143,9 +143,9 @@ export function PlanTargetsContent() {
               {regions.map((target) => (
                 <div
                   key={`${target.asset_class}:${target.region}`}
-                  className="rounded-md bg-slate-50 px-3 py-2 text-sm"
+                  className="rounded-md bg-surface-muted px-3 py-2 text-sm"
                 >
-                  <dt className="text-slate-500">{regionLabel(target.region)}</dt>
+                  <dt className="text-ink-muted">{regionLabel(target.region)}</dt>
                   <dd className="font-medium tabular-nums">
                     {formatPercent(target.weight_within_class)}
                   </dd>

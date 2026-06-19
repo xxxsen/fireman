@@ -46,10 +46,10 @@ export function CashFlowEditor({
   return (
     <div className="space-y-3">
       {flows.length === 0 && (
-        <p className="text-sm text-slate-500">暂无额外现金流事件。可添加一次性或年度收入/支出。</p>
+        <p className="text-sm text-ink-muted">暂无额外现金流事件。可添加一次性或年度收入/支出。</p>
       )}
       {flows.map((f, i) => (
-        <div key={f.id} className="rounded-md border border-slate-200 p-3">
+        <div key={f.id} className="rounded-md border border-line p-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm">
               名称
@@ -133,7 +133,7 @@ export function CashFlowEditor({
           </div>
           <button
             type="button"
-            className="mt-2 text-sm text-red-600 underline"
+            className="mt-2 text-sm text-danger underline"
             onClick={() => remove(i)}
           >
             删除

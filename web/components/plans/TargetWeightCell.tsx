@@ -46,7 +46,7 @@ function RegionWeightCell({
     return (
       <InlineTooltip content={regionWeightTooltip(row, kind)}>
         {formatPercent(portfolioWeight)}
-        <span className="text-slate-500">
+        <span className="text-ink-muted">
           {" "}
           ({formatPercent(withinParent)})
         </span>
