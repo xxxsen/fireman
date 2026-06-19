@@ -13,12 +13,13 @@ import (
 	"github.com/fireman/fireman/internal/simulation"
 )
 
-// CreateStressTestRequest starts a stress analysis job.
+// CreateStressTestRequest starts a stress analysis job against a Monte Carlo run.
 type CreateStressTestRequest struct {
-	PlanID         string  `json:"-"`
-	IdempotencyKey string  `json:"-"`
-	Runs           *int    `json:"runs,omitempty"`
-	Seed           *string `json:"seed,omitempty"`
+	PlanID          string  `json:"-"`
+	IdempotencyKey  string  `json:"-"`
+	SimulationRunID string  `json:"simulation_run_id,omitempty"`
+	Runs            *int    `json:"runs,omitempty"`
+	Seed            *string `json:"seed,omitempty"`
 }
 
 // CreateStressTestResponse returns the enqueued job.
@@ -31,6 +32,7 @@ type CreateStressTestResponse struct {
 type StressTestView struct {
 	JobID             string          `json:"job_id"`
 	PlanID            string          `json:"plan_id"`
+	SimulationRunID   string          `json:"simulation_run_id"`
 	Status            string          `json:"status"`
 	InputHash         string          `json:"input_hash"`
 	CurrentConfigHash string          `json:"current_config_hash"`
@@ -63,10 +65,11 @@ func NewStressService(
 }
 
 func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest) (CreateStressTestResponse, error) {
-	snap, inputHash, err := s.sims.BuildInputSnapshot(ctx, req.PlanID, req.Runs, req.Seed)
+	runCtx, err := s.sims.ResolveAnalysisRun(ctx, req.PlanID, req.SimulationRunID)
 	if err != nil {
 		return CreateStressTestResponse{}, err
 	}
+	inputHash := runCtx.InputHash
 
 	if req.IdempotencyKey != "" {
 		existing, found, err := findExistingIdempotentJob(
@@ -82,12 +85,18 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 	}
 
 	jobID := "job_" + uuid.New().String()
-	pending, err := marshalPendingSnapshot(snap)
+	pending, err := marshalPendingSnapshot(runCtx.Snapshot)
 	if err != nil {
 		return CreateStressTestResponse{}, err
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		// Each Monte Carlo run keeps only the latest stress result.
+		if err := s.analysis.DeleteBySimulationRunAndType(
+			ctx, tx, runCtx.RunID, repository.AnalysisTypeStress,
+		); err != nil {
+			return wrapRepo("delete prior stress analysis", err)
+		}
 		if err := s.jobs.Create(ctx, tx, repository.Job{
 			ID: jobID, PlanID: req.PlanID, Type: repository.JobTypeStress,
 			Status: repository.JobStatusQueued, InputHash: inputHash,
@@ -97,7 +106,7 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 		}
 		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
 			JobID: jobID, PlanID: req.PlanID, Type: repository.AnalysisTypeStress,
-			InputHash: inputHash, ResultJSON: pending,
+			InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
 		}); err != nil {
 			return wrapRepo("create stress analysis pending", err)
 		}
@@ -131,6 +140,26 @@ func (s *StressService) ListByPlan(ctx context.Context, planID string) ([]Stress
 	return out, nil
 }
 
+// ListByRun returns the latest stress test attached to a Monte Carlo run.
+func (s *StressService) ListByRun(ctx context.Context, planID, runID string) ([]StressTestView, error) {
+	if _, err := s.plans.GetByID(ctx, planID); err != nil {
+		if errors.Is(err, repository.ErrPlanNotFound) {
+			return nil, newErr("plan_not_found", "plan not found", nil)
+		}
+		return nil, wrapRepo("get plan for stress list", err)
+	}
+	recs, err := s.analysis.ListBySimulationRun(ctx, runID, repository.AnalysisTypeStress, 1)
+	if err != nil {
+		return nil, wrapRepo("list stress tests by run", err)
+	}
+	currentHash, _ := s.hash.Compute(ctx, planID)
+	out := make([]StressTestView, len(recs))
+	for i, rec := range recs {
+		out[i] = s.toView(ctx, rec, currentHash)
+	}
+	return out, nil
+}
+
 func (s *StressService) GetByJobID(ctx context.Context, jobID string) (StressTestView, error) {
 	rec, err := s.analysis.GetByJobID(ctx, jobID)
 	if err != nil {
@@ -150,7 +179,7 @@ func (s *StressService) toView(ctx context.Context, rec repository.AnalysisResul
 	job, _ := s.jobs.GetByID(ctx, rec.JobID)
 	stale := currentHash != "" && rec.InputHash != currentHash
 	view := StressTestView{
-		JobID: rec.JobID, PlanID: rec.PlanID, InputHash: rec.InputHash,
+		JobID: rec.JobID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
 		CurrentConfigHash: currentHash, ResultStale: stale, CreatedAt: rec.CreatedAt,
 		Status: job.Status,
 	}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   formatMoneyInlineUnit,
   formatMoneyInput,
@@ -12,7 +12,7 @@ interface MoneyInputProps {
   valueMinor: number;
   onChange: (minor: number) => void;
   currency?: string;
-  label?: string;
+  label?: ReactNode;
   disabled?: boolean;
   /** Plain numeric display without thousand separators. */
   plain?: boolean;

@@ -18,7 +18,6 @@ vi.mock("@/lib/api/plans", () => ({
   getParameters: () =>
     Promise.resolve({
       parameters: { selected_scenario_id: "scn_1" },
-      cash_flows: [],
     }),
 }));
 
@@ -75,9 +74,13 @@ vi.mock("@/lib/api/allocation", () => ({
   getAllocation: () =>
     Promise.resolve({
       asset_class_targets: [{ asset_class: "equity", weight: 0.7 }],
-      region_targets: [{ asset_class: "equity", region: "domestic", weight_within_class: 1 }],
+      region_targets: [
+        { asset_class: "equity", region: "domestic", weight_within_class: 0.7 },
+        { asset_class: "equity", region: "foreign", weight_within_class: 0.3 },
+      ],
     }),
   applyScenario: vi.fn(),
+  updateAllocation: vi.fn(),
 }));
 
 function renderContent() {
@@ -92,15 +95,13 @@ function renderContent() {
 }
 
 describe("PlanTargetsContent", () => {
-  it("shows read-only weights and scenario switch without percent inputs", async () => {
+  it("shows read-only asset weights and an inline scenarios link", async () => {
     renderContent();
     expect(await screen.findByText("当前计划目标配置")).toBeInTheDocument();
     expect(screen.getByText("大类目标权重（只读）")).toBeInTheDocument();
-    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "前往场景配置" })).toHaveAttribute(
-      "href",
-      "/scenarios",
-    );
+    expect(screen.getByText("本计划国内/国外配比")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "前往场景配置" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "场景配置" })).toHaveAttribute("href", "/scenarios");
   });
 
   it("shows save bar only after scenario selection changes", async () => {
@@ -112,7 +113,22 @@ describe("PlanTargetsContent", () => {
       target: { value: "scn_2" },
     });
     expect(screen.getByText("有未保存的修改")).toBeInTheDocument();
-    expect(screen.getByTestId("plan-targets-preview-note")).toHaveTextContent(/大类与地区组内权重均随所选场景预览/);
+    expect(screen.getByTestId("plan-targets-preview-note")).toHaveTextContent(
+      /大类目标权重随所选场景预览/,
+    );
+  });
+
+  it("keeps plan region targets when switching scenario (does not preview scenario regions)", async () => {
+    renderContent();
+    await screen.findByTestId("plan-targets-scenario-select");
+    // Plan equity domestic stays 70% even though scn_2 template carries 60%.
+    const domesticInput = screen.getAllByTestId("percent-input")[0]!;
+    expect(domesticInput).toHaveValue("70");
+
+    fireEvent.change(screen.getByTestId("plan-targets-scenario-select"), {
+      target: { value: "scn_2" },
+    });
+    expect(screen.getAllByTestId("percent-input")[0]!).toHaveValue("70");
   });
 
   it("calls applyScenario when saving scenario switch", async () => {

@@ -34,10 +34,6 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 	if err != nil {
 		return "", fmt.Errorf("load parameters: %w", err)
 	}
-	flows, err := s.params.ListCashFlows(ctx, planID)
-	if err != nil {
-		return "", fmt.Errorf("list cash flows: %w", err)
-	}
 	alloc, err := s.alloc.Get(ctx, planID)
 	if err != nil {
 		return "", fmt.Errorf("load allocation: %w", err)
@@ -53,7 +49,6 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 		BaseCurrency:  plan.BaseCurrency,
 		ValuationDate: plan.ValuationDate,
 		Parameters:    parametersToMap(params),
-		CashFlows:     cashFlowsToMaps(flows),
 		AssetClass:    assetClassToMaps(alloc.AssetClassTargets),
 		RegionTargets: regionToMaps(alloc.RegionTargets),
 		Holdings:      holdingsToMaps(holds),
@@ -99,20 +94,6 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		m["seed"] = *p.Seed
 	}
 	return m
-}
-
-func cashFlowsToMaps(flows []repository.PlanCashFlow) []map[string]any {
-	out := make([]map[string]any, 0, len(flows))
-	for _, f := range flows {
-		out = append(out, map[string]any{
-			"id": f.ID, "name": f.Name, "kind": f.Kind,
-			"amount_minor": f.AmountMinor, "start_month_offset": f.StartMonthOffset,
-			"end_month_offset": f.EndMonthOffset, "recurrence": f.Recurrence,
-			"inflation_linked": f.InflationLinked, "annual_growth_rate": f.AnnualGrowthRate,
-			"enabled": f.Enabled, "note": f.Note,
-		})
-	}
-	return out
 }
 
 func assetClassToMaps(targets []repository.AssetClassTarget) []map[string]any {

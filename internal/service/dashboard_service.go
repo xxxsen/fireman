@@ -45,11 +45,34 @@ func assetClassOrderIndex(ac string) int {
 	return len(assetClassDisplayOrder)
 }
 
-// DashboardRegionBar is one domestic/foreign allocation bar.
+// DashboardRegionBar is one region allocation bar, used both for the
+// full-portfolio region exposure and for the within-asset-class region split.
 type DashboardRegionBar struct {
-	Region        string  `json:"region"`
-	TargetWeight  float64 `json:"target_weight"`
-	CurrentWeight float64 `json:"current_weight"`
+	Region             string                       `json:"region"`
+	TargetWeight       float64                      `json:"target_weight"`
+	CurrentWeight      float64                      `json:"current_weight"`
+	CurrentAmountMinor int64                        `json:"current_amount_minor"`
+	TargetAmountMinor  int64                        `json:"target_amount_minor"`
+	Holdings           []DashboardAllocationHolding `json:"holdings"`
+}
+
+// DashboardAssetClassRegionGroup is the domestic/foreign split inside one asset class.
+type DashboardAssetClassRegionGroup struct {
+	AssetClass string               `json:"asset_class"`
+	Regions    []DashboardRegionBar `json:"regions"`
+}
+
+// regionDisplayOrder fixes the region ordering: domestic, then foreign.
+var regionDisplayOrder = map[string]int{
+	string(domain.RegionDomestic): 0,
+	string(domain.RegionForeign):  1,
+}
+
+func regionOrderIndex(region string) int {
+	if idx, ok := regionDisplayOrder[region]; ok {
+		return idx
+	}
+	return len(regionDisplayOrder)
 }
 
 // PlanDashboardSummary is the lightweight plan-list summary.
@@ -70,23 +93,24 @@ type DashboardDeviation struct {
 
 // DashboardView aggregates the data required for the dashboard first screen.
 type DashboardView struct {
-	Plan             PlanDetail                    `json:"plan"`
-	ScenarioName     string                        `json:"scenario_name,omitempty"`
-	Parameters       repository.PlanParameters     `json:"parameters"`
-	WeightChecks     domain.WeightValidationResult `json:"weight_checks"`
-	HoldingsSumMinor int64                         `json:"holdings_sum_minor"`
-	InvestedMinor    int64                         `json:"invested_minor"`
-	InvestedRatio    float64                       `json:"invested_ratio"`
-	HoldingsGapMinor int64                         `json:"holdings_gap_minor"`
-	RebalanceSummary domain.RebalanceSummary       `json:"rebalance_summary"`
-	ActiveExecution  *ActiveRebalanceExecution     `json:"active_rebalance_execution,omitempty"`
-	AllocationBars   []DashboardAllocationBar      `json:"allocation_bars"`
-	RegionBars       []DashboardRegionBar          `json:"region_bars"`
-	TopDeviations    []DashboardDeviation          `json:"top_deviations"`
-	DataWarnings     []string                      `json:"data_warnings"`
-	LatestSimulation *SimulationRunView            `json:"latest_simulation,omitempty"`
-	StressTest       *DashboardAnalysisSummary     `json:"stress_test,omitempty"`
-	SensitivityTest  *DashboardAnalysisSummary     `json:"sensitivity_test,omitempty"`
+	Plan                   PlanDetail                       `json:"plan"`
+	ScenarioName           string                           `json:"scenario_name,omitempty"`
+	Parameters             repository.PlanParameters        `json:"parameters"`
+	WeightChecks           domain.WeightValidationResult    `json:"weight_checks"`
+	HoldingsSumMinor       int64                            `json:"holdings_sum_minor"`
+	InvestedMinor          int64                            `json:"invested_minor"`
+	InvestedRatio          float64                          `json:"invested_ratio"`
+	HoldingsGapMinor       int64                            `json:"holdings_gap_minor"`
+	RebalanceSummary       domain.RebalanceSummary          `json:"rebalance_summary"`
+	ActiveExecution        *ActiveRebalanceExecution        `json:"active_rebalance_execution,omitempty"`
+	AllocationBars         []DashboardAllocationBar         `json:"allocation_bars"`
+	RegionBars             []DashboardRegionBar             `json:"region_bars"`
+	AssetClassRegionGroups []DashboardAssetClassRegionGroup `json:"asset_class_region_groups"`
+	TopDeviations          []DashboardDeviation             `json:"top_deviations"`
+	DataWarnings           []string                         `json:"data_warnings"`
+	LatestSimulation       *SimulationRunView               `json:"latest_simulation,omitempty"`
+	StressTest             *DashboardAnalysisSummary        `json:"stress_test,omitempty"`
+	SensitivityTest        *DashboardAnalysisSummary        `json:"sensitivity_test,omitempty"`
 }
 
 // ActiveRebalanceExecution is the in-progress execution summary for dashboard navigation.
@@ -200,29 +224,31 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 
 	bars := buildAllocationBars(targets)
 	regionBars := buildRegionBars(targets)
+	regionGroups := buildAssetClassRegionGroups(targets)
 	topDev := topDeviations(targets.Holdings, holds, 5)
 	warnings := collectDataWarnings(ctx, s.instRepo, holds)
 
 	latest := s.loadLatestSimulationRun(ctx, planID)
 
 	return DashboardView{
-		Plan:             PlanDetail{Plan: plan, ConfigHash: configHash},
-		ScenarioName:     scenarioName,
-		Parameters:       params,
-		WeightChecks:     targets.WeightChecks,
-		HoldingsSumMinor: holdingsSum,
-		InvestedMinor:    investedMinor,
-		InvestedRatio:    investedRatio,
-		HoldingsGapMinor: holdingsSum - params.TotalAssetsMinor,
-		RebalanceSummary: reb.Summary,
-		ActiveExecution:  activeExecution,
-		AllocationBars:   bars,
-		RegionBars:       regionBars,
-		TopDeviations:    topDev,
-		DataWarnings:     warnings,
-		LatestSimulation: latest,
-		StressTest:       s.stressSummary(ctx, planID),
-		SensitivityTest:  s.sensitivitySummary(ctx, planID),
+		Plan:                   PlanDetail{Plan: plan, ConfigHash: configHash},
+		ScenarioName:           scenarioName,
+		Parameters:             params,
+		WeightChecks:           targets.WeightChecks,
+		HoldingsSumMinor:       holdingsSum,
+		InvestedMinor:          investedMinor,
+		InvestedRatio:          investedRatio,
+		HoldingsGapMinor:       holdingsSum - params.TotalAssetsMinor,
+		RebalanceSummary:       reb.Summary,
+		ActiveExecution:        activeExecution,
+		AllocationBars:         bars,
+		RegionBars:             regionBars,
+		AssetClassRegionGroups: regionGroups,
+		TopDeviations:          topDev,
+		DataWarnings:           warnings,
+		LatestSimulation:       latest,
+		StressTest:             s.stressSummary(ctx, planID),
+		SensitivityTest:        s.sensitivitySummary(ctx, planID),
 	}, nil
 }
 
@@ -312,28 +338,6 @@ func (s *DashboardService) sensitivitySummary(ctx context.Context, planID string
 	return sum
 }
 
-type weightAgg struct {
-	target, current float64
-}
-
-func aggregateWeights(targets TargetView, keyFn func(domain.HoldingTargetLine) string) map[string]*weightAgg {
-	byKey := map[string]*weightAgg{}
-	for _, line := range targets.Holdings {
-		if !line.Enabled {
-			continue
-		}
-		key := keyFn(line)
-		a := byKey[key]
-		if a == nil {
-			a = &weightAgg{}
-			byKey[key] = a
-		}
-		a.target += line.PortfolioTargetWeight
-		a.current += line.StructuralCurrentWeight
-	}
-	return byKey
-}
-
 func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 	type barAgg struct {
 		bar      DashboardAllocationBar
@@ -383,15 +387,130 @@ func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 	return out
 }
 
+func holdingDetail(line domain.HoldingTargetLine) DashboardAllocationHolding {
+	return DashboardAllocationHolding{
+		InstrumentName:     line.InstrumentName,
+		InstrumentCode:     line.InstrumentCode,
+		CurrentAmountMinor: line.CurrentAmountMinor,
+		TargetAmountMinor:  line.TargetAmountMinor,
+		CurrentWeight:      line.StructuralCurrentWeight,
+		TargetWeight:       line.PortfolioTargetWeight,
+	}
+}
+
+func sortHoldingsByAmount(holdings []DashboardAllocationHolding) {
+	// Largest holdings first so the front-end "top N" truncation stays meaningful.
+	sort.SliceStable(holdings, func(i, j int) bool {
+		ai := holdings[i].TargetAmountMinor + holdings[i].CurrentAmountMinor
+		aj := holdings[j].TargetAmountMinor + holdings[j].CurrentAmountMinor
+		return ai > aj
+	})
+}
+
+// buildRegionBars aggregates full-portfolio domestic/foreign exposure: target uses
+// portfolio target weights, current uses structural current weights.
 func buildRegionBars(targets TargetView) []DashboardRegionBar {
-	byRegion := aggregateWeights(targets, func(line domain.HoldingTargetLine) string { return line.Region })
-	out := make([]DashboardRegionBar, 0, len(byRegion))
-	for region, a := range byRegion {
-		out = append(out, DashboardRegionBar{
-			Region: region, TargetWeight: a.target, CurrentWeight: a.current,
+	type regionAgg struct {
+		bar      DashboardRegionBar
+		holdings []DashboardAllocationHolding
+	}
+	byRegion := map[string]*regionAgg{}
+	order := []string{}
+	for _, line := range targets.Holdings {
+		if !line.Enabled {
+			continue
+		}
+		agg := byRegion[line.Region]
+		if agg == nil {
+			agg = &regionAgg{bar: DashboardRegionBar{Region: line.Region}}
+			byRegion[line.Region] = agg
+			order = append(order, line.Region)
+		}
+		agg.bar.TargetWeight += line.PortfolioTargetWeight
+		agg.bar.CurrentWeight += line.StructuralCurrentWeight
+		agg.bar.CurrentAmountMinor += line.CurrentAmountMinor
+		agg.bar.TargetAmountMinor += line.TargetAmountMinor
+		agg.holdings = append(agg.holdings, holdingDetail(line))
+	}
+	out := make([]DashboardRegionBar, 0, len(order))
+	for _, region := range order {
+		agg := byRegion[region]
+		sortHoldingsByAmount(agg.holdings)
+		agg.bar.Holdings = agg.holdings
+		out = append(out, agg.bar)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return regionOrderIndex(out[i].Region) < regionOrderIndex(out[j].Region)
+	})
+	return out
+}
+
+// buildAssetClassRegionGroups produces the within-asset-class domestic/foreign
+// split. Target weights use RegionTarget.weight_within_class; current weights use
+// the holding's current amount over that asset class's current total.
+func buildAssetClassRegionGroups(targets TargetView) []DashboardAssetClassRegionGroup {
+	type regionKey struct{ class, region string }
+	currentByCR := map[regionKey]int64{}
+	targetAmtByCR := map[regionKey]int64{}
+	holdingsByCR := map[regionKey][]DashboardAllocationHolding{}
+	classCurrentTotal := map[string]int64{}
+	for _, line := range targets.Holdings {
+		if !line.Enabled {
+			continue
+		}
+		k := regionKey{line.AssetClass, line.Region}
+		currentByCR[k] += line.CurrentAmountMinor
+		targetAmtByCR[k] += line.TargetAmountMinor
+		classCurrentTotal[line.AssetClass] += line.CurrentAmountMinor
+		holdingsByCR[k] = append(holdingsByCR[k], holdingDetail(line))
+	}
+
+	classWeight := map[string]float64{}
+	for _, ac := range targets.AssetClass {
+		classWeight[ac.AssetClass] = ac.Weight
+	}
+
+	groups := map[string]*DashboardAssetClassRegionGroup{}
+	classOrder := []string{}
+	for _, rt := range targets.RegionTargets {
+		// Only surface asset classes the plan actually allocates to or holds.
+		if classWeight[rt.AssetClass] <= 0 && classCurrentTotal[rt.AssetClass] == 0 {
+			continue
+		}
+		g := groups[rt.AssetClass]
+		if g == nil {
+			g = &DashboardAssetClassRegionGroup{AssetClass: rt.AssetClass}
+			groups[rt.AssetClass] = g
+			classOrder = append(classOrder, rt.AssetClass)
+		}
+		k := regionKey{rt.AssetClass, rt.Region}
+		var currentWeight float64
+		if total := classCurrentTotal[rt.AssetClass]; total > 0 {
+			currentWeight = float64(currentByCR[k]) / float64(total)
+		}
+		holdings := holdingsByCR[k]
+		sortHoldingsByAmount(holdings)
+		g.Regions = append(g.Regions, DashboardRegionBar{
+			Region:             rt.Region,
+			TargetWeight:       rt.WeightWithinClass,
+			CurrentWeight:      currentWeight,
+			CurrentAmountMinor: currentByCR[k],
+			TargetAmountMinor:  targetAmtByCR[k],
+			Holdings:           holdings,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Region < out[j].Region })
+
+	out := make([]DashboardAssetClassRegionGroup, 0, len(classOrder))
+	for _, ac := range classOrder {
+		g := groups[ac]
+		sort.SliceStable(g.Regions, func(i, j int) bool {
+			return regionOrderIndex(g.Regions[i].Region) < regionOrderIndex(g.Regions[j].Region)
+		})
+		out = append(out, *g)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return assetClassOrderIndex(out[i].AssetClass) < assetClassOrderIndex(out[j].AssetClass)
+	})
 	return out
 }
 

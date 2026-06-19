@@ -25,7 +25,6 @@ vi.mock("next/navigation", () => ({
 
 const defaultParameters = {
   parameters: { simulation_runs: 20000, plan_id: "plan_1" },
-  cash_flows: [],
 };
 
 vi.mock("@/lib/api/plans", () => ({
@@ -258,7 +257,9 @@ describe("AnalysisPage zero success", () => {
     });
 
     renderAnalysis();
-    fireEvent.click(await screen.findByRole("button", { name: "运行压力测试" }));
+    const stressBtn = await screen.findByRole("button", { name: "运行压力测试" });
+    await waitFor(() => expect(stressBtn).not.toBeDisabled());
+    fireEvent.click(stressBtn);
     await waitFor(() => expect(createStressTest).toHaveBeenCalled());
 
     await act(async () => {
@@ -285,7 +286,9 @@ describe("AnalysisPage zero success", () => {
     });
 
     renderAnalysis();
-    fireEvent.click(await screen.findByRole("button", { name: "运行敏感性测试" }));
+    const sensBtn = await screen.findByRole("button", { name: "运行敏感性测试" });
+    await waitFor(() => expect(sensBtn).not.toBeDisabled());
+    fireEvent.click(sensBtn);
     await waitFor(() => expect(createSensitivityTest).toHaveBeenCalled());
 
     await act(async () => {
@@ -429,5 +432,60 @@ describe("AnalysisPage zero success", () => {
     renderAnalysis();
 
     expect(await screen.findByText(/无法加载敏感性测试结果/)).toBeInTheDocument();
+  });
+
+  it("defaults to the latest run and queries attached analysis by run id (td/050 §5,§6)", async () => {
+    renderAnalysis();
+    await screen.findByText(/成功率 0%/);
+    await waitFor(() =>
+      expect(listStressTestsMock).toHaveBeenCalledWith("plan_1", "run_1"),
+    );
+    expect(listSensitivityTestsMock).toHaveBeenCalledWith("plan_1", "run_1");
+  });
+
+  it("switches attached analysis queries when a historical run is selected (td/050 §6)", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        { ...defaultSimulations.simulations[0] },
+        {
+          ...defaultSimulations.simulations[0],
+          id: "run_0",
+          job_id: "job_0",
+          created_at: -1000,
+        },
+      ],
+    });
+    renderAnalysis();
+    const select = await screen.findByTestId("simulation-history-select");
+    fireEvent.change(select, { target: { value: "run_0" } });
+    await waitFor(() =>
+      expect(listStressTestsMock).toHaveBeenCalledWith("plan_1", "run_0"),
+    );
+    expect(listSensitivityTestsMock).toHaveBeenCalledWith("plan_1", "run_0");
+  });
+
+  it("disables attached analysis when no simulation exists (td/050 §6)", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({ simulations: [] });
+    renderAnalysis();
+    expect(await screen.findByRole("button", { name: "运行压力测试" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "运行敏感性测试" })).toBeDisabled();
+    expect(screen.getAllByText("请先运行 Monte Carlo 模拟").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("disables attached analysis when the selected run is not completed (td/050 §6)", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        {
+          ...defaultSimulations.simulations[0],
+          summary_json: undefined,
+        },
+      ],
+    });
+    renderAnalysis();
+    expect(await screen.findByRole("button", { name: "运行压力测试" })).toBeDisabled();
+    expect(screen.getAllByText(/当前模拟尚未完成/).length).toBeGreaterThanOrEqual(1);
   });
 });

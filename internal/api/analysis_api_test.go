@@ -30,7 +30,10 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 
-	stressBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "7"})
+	// Stress / sensitivity now require an existing Monte Carlo run to attach to.
+	runID := createSimulationAndWait(t, srv, planID, "7")
+
+	stressBody, _ := json.Marshal(map[string]any{"simulation_run_id": runID})
 	stressReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/stress-tests",
 		bytes.NewReader(stressBody))
 	stressReq.Header.Set("Content-Type", "application/json")
@@ -50,12 +53,15 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stressView := decodeEnvelope(t, mustRead(t, stressGet))
-	if stressView["data"].(map[string]any)["status"] != "succeeded" {
+	stressView := decodeEnvelope(t, mustRead(t, stressGet))["data"].(map[string]any)
+	if stressView["status"] != "succeeded" {
 		t.Fatalf("stress job not succeeded: %+v", stressView)
 	}
+	if stressView["simulation_run_id"].(string) != runID {
+		t.Fatalf("stress should be bound to run %s, got %+v", runID, stressView["simulation_run_id"])
+	}
 
-	sensBody, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "8"})
+	sensBody, _ := json.Marshal(map[string]any{"simulation_run_id": runID})
 	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests",
 		bytes.NewReader(sensBody))
 	sensReq.Header.Set("Content-Type", "application/json")
@@ -70,7 +76,8 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	sensJobID := sensEnv["data"].(map[string]any)["job_id"].(string)
 	waitJobSucceeded(t, srv, sensJobID)
 
-	listResp, err := http.Get(srv.URL + "/api/v1/plans/" + planID + "/stress-tests")
+	// List filtered by run returns exactly the latest result for that run.
+	listResp, err := http.Get(srv.URL + "/api/v1/plans/" + planID + "/stress-tests?simulation_run_id=" + runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +85,47 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	if listResp.StatusCode != http.StatusOK {
 		t.Fatalf("list stress status=%d", listResp.StatusCode)
 	}
+	listEnv := decodeEnvelope(t, mustRead(t, listResp))
+	stressList := listEnv["data"].(map[string]any)["stress_tests"].([]any)
+	if len(stressList) != 1 {
+		t.Fatalf("expected exactly 1 stress test for run, got %d", len(stressList))
+	}
+}
+
+func TestStressTestRequiresSimulationRun(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+	services := buildServices(db, "")
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/v1/plans/"+planID+"/stress-tests", "application/json",
+		bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("expected error creating stress test without any simulation run")
+	}
+}
+
+func createSimulationAndWait(t *testing.T, srv *httptest.Server, planID, seed string) string {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": seed})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/simulations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create simulation status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
+	}
+	env := decodeEnvelope(t, mustRead(t, resp))
+	data := env["data"].(map[string]any)
+	waitJobSucceeded(t, srv, data["job_id"].(string))
+	return data["run_id"].(string)
 }
 
 func waitJobSucceeded(t *testing.T, srv *httptest.Server, jobID string) {

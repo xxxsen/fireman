@@ -312,38 +312,6 @@ func sumBalances(slots []assetSlot) float64 {
 	return sum
 }
 
-func cashFlowAmount(flows []SnapshotCashFlow, month int, inflCumulative float64, kind string) int64 {
-	var sum int64
-	for _, f := range flows {
-		if !f.Enabled || f.Kind != kind {
-			continue
-		}
-		if month < f.StartMonthOffset || month > f.EndMonthOffset {
-			continue
-		}
-		apply := false
-		switch f.Recurrence {
-		case "once":
-			apply = month == f.StartMonthOffset
-		case "annual":
-			apply = (month-f.StartMonthOffset)%12 == 0
-		default:
-			apply = true
-		}
-		if !apply {
-			continue
-		}
-		amt := float64(f.AmountMinor)
-		years := float64(month / 12)
-		amt *= math.Pow(1+f.AnnualGrowthRate, years)
-		if f.InflationLinked {
-			amt *= inflCumulative
-		}
-		sum += int64(math.Round(amt))
-	}
-	return sum
-}
-
 func classifyFailure(month, retire, horizon int, inflCumulative float64) string {
 	if month < retire+60 {
 		return FailureEarlySequence

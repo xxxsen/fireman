@@ -43,9 +43,9 @@ func runPathMonths(
 			state.yearAcc.start = monthStart
 		}
 
-		income := pathMonthIncome(in, p, month, retire, infl, slots, cashIdx)
+		income := pathMonthIncome(p, month, retire, slots, cashIdx)
 		netSpend, tax, grossWithdrawal := pathMonthSpending(
-			in, p, month, retire, monthStart, infl, withdraw, monthShock, hasShock, &state.summary,
+			p, month, retire, monthStart, infl, withdraw, monthShock, hasShock, &state.summary,
 		)
 
 		txCost := int64(0)
@@ -86,10 +86,8 @@ func runPathMonths(
 }
 
 func pathMonthIncome(
-	in *InputSnapshot,
 	p SnapshotParameters,
 	month, retire int,
-	infl *InflationState,
 	slots []assetSlot,
 	cashIdx int,
 ) int64 {
@@ -99,7 +97,6 @@ func pathMonthIncome(
 		saving := float64(p.AnnualSavingsMinor) * math.Pow(1+p.AnnualSavingsGrowthRate, float64(yearIdx)) / 12
 		income += int64(math.Round(saving))
 	}
-	income += cashFlowAmount(in.CashFlows, month, infl.Cumulative, "income")
 	if income > 0 {
 		addCash(slots, cashIdx, float64(income))
 	}
@@ -107,7 +104,6 @@ func pathMonthIncome(
 }
 
 func pathMonthSpending(
-	in *InputSnapshot,
 	p SnapshotParameters,
 	month, retire int,
 	monthStart int64,
@@ -120,7 +116,6 @@ func pathMonthSpending(
 	if month >= retire {
 		isAnniv := month > retire && (month-retire)%12 == 0
 		net := withdraw.MonthlySpending(month, retire, monthStart, infl.Cumulative, isAnniv)
-		net += cashFlowAmount(in.CashFlows, month, infl.Cumulative, "expense")
 		if hasShock {
 			if monthShock.SpendingMultiplier > 0 && monthShock.SpendingMultiplier != 1 {
 				net = int64(math.Round(float64(net) * monthShock.SpendingMultiplier))
@@ -131,7 +126,7 @@ func pathMonthSpending(
 		summary.TotalSpendingMinor += net
 		return net, t, gross
 	}
-	netSpend := cashFlowAmount(in.CashFlows, month, infl.Cumulative, "expense")
+	netSpend := int64(0)
 	if hasShock {
 		netSpend += monthShock.ExtraSpendingMinor
 	}

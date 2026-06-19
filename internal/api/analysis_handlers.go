@@ -37,7 +37,17 @@ func (s Services) createStressTest(c *gin.Context) {
 }
 
 func (s Services) listStressTests(c *gin.Context) {
-	out, err := s.Stress.ListByPlan(c.Request.Context(), c.Param("plan_id"))
+	planID := c.Param("plan_id")
+	if runID := c.Query("simulation_run_id"); runID != "" {
+		out, err := s.Stress.ListByRun(c.Request.Context(), planID, runID)
+		if err != nil {
+			FailErr(c, err)
+			return
+		}
+		OK(c, gin.H{"stress_tests": out})
+		return
+	}
+	out, err := s.Stress.ListByPlan(c.Request.Context(), planID)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -71,7 +81,17 @@ func (s Services) createSensitivityTest(c *gin.Context) {
 }
 
 func (s Services) listSensitivityTests(c *gin.Context) {
-	out, err := s.Sensitivity.ListByPlan(c.Request.Context(), c.Param("plan_id"))
+	planID := c.Param("plan_id")
+	if runID := c.Query("simulation_run_id"); runID != "" {
+		out, err := s.Sensitivity.ListByRun(c.Request.Context(), planID, runID)
+		if err != nil {
+			FailErr(c, err)
+			return
+		}
+		OK(c, gin.H{"sensitivity_tests": out})
+		return
+	}
+	out, err := s.Sensitivity.ListByPlan(c.Request.Context(), planID)
 	if err != nil {
 		FailErr(c, err)
 		return

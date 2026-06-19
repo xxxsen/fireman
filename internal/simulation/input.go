@@ -54,19 +54,6 @@ type SnapshotAsset struct {
 	FXDataWarnings       []string       `json:"fx_data_warnings,omitempty"`
 }
 
-// SnapshotCashFlow is a frozen cash-flow event.
-type SnapshotCashFlow struct {
-	ID               string  `json:"id"`
-	Kind             string  `json:"kind"`
-	AmountMinor      int64   `json:"amount_minor"`
-	StartMonthOffset int     `json:"start_month_offset"`
-	EndMonthOffset   int     `json:"end_month_offset"`
-	Recurrence       string  `json:"recurrence"`
-	InflationLinked  bool    `json:"inflation_linked"`
-	AnnualGrowthRate float64 `json:"annual_growth_rate"`
-	Enabled          bool    `json:"enabled"`
-}
-
 // SnapshotParameters are plan FIRE parameters frozen for a run.
 type SnapshotParameters struct {
 	CurrentAge               int     `json:"current_age"`
@@ -104,7 +91,6 @@ type InputSnapshot struct {
 	RandomFactorModel  string             `json:"random_factor_model"`
 	Parameters         SnapshotParameters `json:"parameters"`
 	Assets             []SnapshotAsset    `json:"assets"`
-	CashFlows          []SnapshotCashFlow `json:"cash_flows"`
 	ConfigHash         string             `json:"config_hash"`
 	MarketSnapshotHash string             `json:"market_snapshot_hash"`
 }

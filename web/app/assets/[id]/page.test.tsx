@@ -364,6 +364,8 @@ describe("AssetDetailPage layout and return curve", () => {
     expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
 
     expect(screen.getByText("收益曲线")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "近3天" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "近1天" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "近3月" })).toBeInTheDocument();
     expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
   });

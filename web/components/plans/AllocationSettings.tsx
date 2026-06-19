@@ -4,12 +4,20 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import { PercentInput } from "@/components/ui/PercentInput";
 import { SaveBar } from "@/components/ui/SaveBar";
 import { usePlanEdit } from "@/hooks/usePlanEdit";
-import { applyScenario, getAllocation, listScenarios } from "@/lib/api/allocation";
+import {
+  applyScenario,
+  getAllocation,
+  listScenarios,
+  updateAllocation,
+} from "@/lib/api/allocation";
 import { getParameters, getPlan } from "@/lib/api/plans";
 import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
+import { validatePercentSum } from "@/lib/percent";
+import type { RegionTarget } from "@/types/api";
 
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
@@ -18,6 +26,8 @@ export function PlanTargetsContent() {
   const queryClient = useQueryClient();
   const { markDirty, markClean } = usePlanEdit();
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
+  const [localRegionTargets, setLocalRegionTargets] = useState<RegionTarget[] | null>(null);
+  const [regionDirty, setRegionDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const plan = useQuery({
@@ -39,7 +49,8 @@ export function PlanTargetsContent() {
 
   const initialScenarioId = parameters.data?.parameters.selected_scenario_id ?? "";
   const currentScenarioId = selectedScenarioId ?? initialScenarioId;
-  const dirty = currentScenarioId !== initialScenarioId;
+  const scenarioDirty = currentScenarioId !== initialScenarioId;
+  const dirty = scenarioDirty || regionDirty;
 
   useEffect(() => {
     if (dirty) markDirty();
@@ -51,29 +62,55 @@ export function PlanTargetsContent() {
     [scenarios.data, currentScenarioId],
   );
 
-  const assetTargets = previewScenario?.weights ?? allocation.data?.asset_class_targets ?? [];
+  // Scenario templates only carry asset-class structure; the domestic/foreign
+  // split belongs to the plan and is never overwritten by switching templates.
+  const assetTargets = scenarioDirty
+    ? (previewScenario?.weights ?? allocation.data?.asset_class_targets ?? [])
+    : (allocation.data?.asset_class_targets ?? []);
   const regionTargets =
-    previewScenario?.region_targets ?? allocation.data?.region_targets ?? [];
+    regionDirty && localRegionTargets
+      ? localRegionTargets
+      : (allocation.data?.region_targets ?? []);
+
+  const regionChecks = ASSET_CLASSES.map((ac) => {
+    const items = regionTargets
+      .filter((r) => r.asset_class === ac)
+      .map((r) => ({ label: regionLabel(r.region), value: r.weight_within_class }));
+    return { ac, ...validatePercentSum(items) };
+  });
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!plan.data || !currentScenarioId) throw new Error("计划尚未加载");
-      return applyScenario(planId, {
-        scenario_id: currentScenarioId,
-        config_version: plan.data.config_version,
-        dry_run: false,
-      });
+      if (!plan.data) throw new Error("计划尚未加载");
+      let version = plan.data.config_version;
+      if (scenarioDirty) {
+        if (!currentScenarioId) throw new Error("请选择一个场景模板");
+        const res = await applyScenario(planId, {
+          scenario_id: currentScenarioId,
+          config_version: version,
+          dry_run: false,
+        });
+        version = res.config_version ?? version + 1;
+      }
+      if (regionDirty) {
+        await updateAllocation(planId, {
+          config_version: version,
+          asset_class_targets: assetTargets,
+          region_targets: regionTargets,
+        });
+      }
     },
     onSuccess: () => {
       setSelectedScenarioId(null);
+      setLocalRegionTargets(null);
+      setRegionDirty(false);
       setSaveError(null);
       markClean();
       for (const key of ["plan", "parameters", "allocation", "targets", "dashboard"]) {
         void queryClient.invalidateQueries({ queryKey: [key, planId] });
       }
     },
-    onError: (error) =>
-      setSaveError(error instanceof ApiError ? error.message : "保存失败"),
+    onError: (error) => setSaveError(error instanceof ApiError ? error.message : "保存失败"),
   });
 
   if (!allocation.data || !parameters.data) {
@@ -85,7 +122,7 @@ export function PlanTargetsContent() {
       <div>
         <h2 className="text-lg font-medium">当前计划目标配置</h2>
         <p className="mt-1 text-sm text-ink-muted">
-          切换当前计划使用的场景模板；模板内的大类与地区权重仅可查看。
+          场景模板决定大类目标权重；国内/国外配比是本计划自己的设置，切换模板不会改变它。
         </p>
         <label className="mt-3 block text-sm">
           场景模板
@@ -103,20 +140,21 @@ export function PlanTargetsContent() {
             ))}
           </select>
         </label>
-        {dirty && (
+        {scenarioDirty && (
           <p className="mt-2 text-sm text-warning" data-testid="plan-targets-preview-note">
-            大类与地区组内权重均随所选场景预览；保存后将应用完整模板配置。
+            大类目标权重随所选场景预览；保存后将应用新模板的大类权重，地区配比保持不变。
           </p>
         )}
         <p className="mt-3 text-sm text-ink-muted">
-          要修改场景结构，请前往「场景配置」
+          要修改场景结构，请前往{" "}
+          <Link
+            href="/scenarios"
+            className="font-medium text-brand underline underline-offset-2"
+            data-testid="plan-targets-scenarios-link"
+          >
+            场景配置
+          </Link>
         </p>
-        <Link
-          href="/scenarios"
-          className="mt-2 inline-flex min-h-11 items-center rounded-md border border-line px-4 text-sm font-medium"
-        >
-          前往场景配置
-        </Link>
       </div>
 
       <div>
@@ -131,38 +169,52 @@ export function PlanTargetsContent() {
         </dl>
       </div>
 
-      {ASSET_CLASSES.map((assetClass) => {
-        const regions = regionTargets.filter((target) => target.asset_class === assetClass);
-        if (regions.length === 0) return null;
-        return (
-          <div key={assetClass}>
-            <h3 className="text-sm font-medium">
-              {assetClassLabel(assetClass)} · 地区组内权重（只读）
-            </h3>
-            <dl className="mt-2 grid gap-2 sm:grid-cols-2">
-              {regions.map((target) => (
-                <div
-                  key={`${target.asset_class}:${target.region}`}
-                  className="rounded-md bg-surface-muted px-3 py-2 text-sm"
-                >
-                  <dt className="text-ink-muted">{regionLabel(target.region)}</dt>
-                  <dd className="font-medium tabular-nums">
-                    {formatPercent(target.weight_within_class)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        );
-      })}
+      <div className="space-y-4">
+        <h3 className="text-sm font-medium">本计划国内/国外配比</h3>
+        {ASSET_CLASSES.map((assetClass) => {
+          const regions = regionTargets.filter((target) => target.asset_class === assetClass);
+          if (regions.length === 0) return null;
+          const check = regionChecks.find((c) => c.ac === assetClass);
+          return (
+            <div key={assetClass}>
+              <h4 className="text-sm text-ink-muted">{assetClassLabel(assetClass)}</h4>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                {regions.map((target) => {
+                  const idx = regionTargets.indexOf(target);
+                  return (
+                    <PercentInput
+                      key={`${target.asset_class}:${target.region}`}
+                      label={regionLabel(target.region)}
+                      value={target.weight_within_class}
+                      onChange={(v) => {
+                        const next = [...regionTargets];
+                        next[idx] = { ...target, weight_within_class: v };
+                        setLocalRegionTargets(next);
+                        setRegionDirty(true);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+              {check && !check.passed && (
+                <p className="mt-1 text-sm text-danger">{check.message}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       <SaveBar
         dirty={dirty}
         saving={save.isPending}
         error={saveError}
         onSave={() => {
-          if (!currentScenarioId) {
+          if (scenarioDirty && !currentScenarioId) {
             setSaveError("请选择一个场景模板。");
+            return;
+          }
+          if (regionDirty && regionChecks.some((c) => !c.passed)) {
+            setSaveError("各大类国内与国外配比须合计 100%。");
             return;
           }
           save.mutate();

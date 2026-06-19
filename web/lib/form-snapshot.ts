@@ -1,9 +1,8 @@
-import type { PlanCashFlow, PlanParameters } from "@/types/api";
+import type { PlanParameters } from "@/types/api";
 
 export interface ParametersFormSnapshot {
   planName: string;
   parameters: ReturnType<typeof normalizeParameters>;
-  cashFlows: ReturnType<typeof normalizeCashFlows>;
   gapAction: "" | "cash";
 }
 
@@ -14,23 +13,14 @@ function normalizeParameters(params: PlanParameters) {
   return rest;
 }
 
-function normalizeCashFlows(flows: PlanCashFlow[]) {
-  return flows.map(({ plan_id, ...rest }) => {
-    void plan_id;
-    return rest;
-  });
-}
-
 export function buildParametersFormSnapshot(
   planName: string,
   parameters: PlanParameters,
-  cashFlows: PlanCashFlow[],
   gapAction: "" | "cash",
 ): ParametersFormSnapshot {
   return {
     planName,
     parameters: normalizeParameters(parameters),
-    cashFlows: normalizeCashFlows(cashFlows),
     gapAction,
   };
 }

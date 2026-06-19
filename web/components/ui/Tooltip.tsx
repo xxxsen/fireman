@@ -15,7 +15,13 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/cn";
-import { computeTooltipPosition, TOOLTIP_VIEWPORT_PADDING, type TooltipAlign } from "@/lib/tooltip-position";
+import {
+  computeCursorTooltipPosition,
+  computeTooltipPosition,
+  TOOLTIP_VIEWPORT_PADDING,
+  type TooltipAlign,
+  type TooltipPoint,
+} from "@/lib/tooltip-position";
 
 const CLOSE_DELAY_MS = 200;
 
@@ -28,6 +34,7 @@ export interface TooltipProps {
   triggerTestId?: string;
   contentTestId?: string;
   clickToggle?: boolean;
+  followCursor?: boolean;
 }
 
 export function Tooltip({
@@ -39,12 +46,15 @@ export function Tooltip({
   triggerTestId,
   contentTestId,
   clickToggle = false,
+  followCursor = false,
 }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<CSSProperties | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
+  const cursorRef = useRef<TooltipPoint | null>(null);
+  const openedByPointerRef = useRef(false);
   const tooltipId = useId();
 
   const cancelClose = useCallback(() => {
@@ -72,16 +82,24 @@ export function Tooltip({
       return;
     }
 
-    const triggerRect = triggerRef.current.getBoundingClientRect();
     const tooltipRect = tooltipRef.current.getBoundingClientRect();
-    const next = computeTooltipPosition(
-      triggerRect,
-      tooltipRect,
-      window.innerWidth,
-      align,
-      TOOLTIP_VIEWPORT_PADDING,
-      window.innerHeight,
-    );
+    const usePointer = followCursor && openedByPointerRef.current && cursorRef.current !== null;
+    const next = usePointer
+      ? computeCursorTooltipPosition(
+          cursorRef.current as TooltipPoint,
+          tooltipRect,
+          window.innerWidth,
+          window.innerHeight,
+          TOOLTIP_VIEWPORT_PADDING,
+        )
+      : computeTooltipPosition(
+          triggerRef.current.getBoundingClientRect(),
+          tooltipRect,
+          window.innerWidth,
+          align,
+          TOOLTIP_VIEWPORT_PADDING,
+          window.innerHeight,
+        );
 
     setPosition({
       position: "fixed",
@@ -89,7 +107,7 @@ export function Tooltip({
       left: next.left,
       zIndex: 30,
     });
-  }, [open, align, content]);
+  }, [open, align, content, followCursor]);
 
   if (!isValidElement(children)) {
     throw new Error("Tooltip requires a single React element child");
@@ -116,13 +134,29 @@ export function Tooltip({
 
   const trigger = cloneElement(child, triggerProps);
 
+  // The wrapper's pointer handlers capture the latest cursor before any click,
+  // so the click toggle itself never needs to touch refs during render.
+  const handlePointer = (event: React.MouseEvent<HTMLElement>) => {
+    if (followCursor) {
+      cursorRef.current = { x: event.clientX, y: event.clientY };
+      openedByPointerRef.current = true;
+    }
+  };
+
   return (
     <span
       ref={triggerRef}
       className={cn("relative inline-flex", className)}
-      onMouseEnter={show}
+      onMouseEnter={(event) => {
+        handlePointer(event);
+        show();
+      }}
+      onMouseMove={handlePointer}
       onMouseLeave={scheduleClose}
-      onFocus={show}
+      onFocus={() => {
+        openedByPointerRef.current = false;
+        show();
+      }}
       onBlur={scheduleClose}
     >
       {trigger}

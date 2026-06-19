@@ -73,24 +73,6 @@ CREATE TABLE plan_parameters (
   FOREIGN KEY(selected_scenario_id) REFERENCES allocation_scenarios(id)
 );
 
-CREATE TABLE plan_cash_flows (
-  id                  TEXT    PRIMARY KEY,
-  plan_id             TEXT    NOT NULL,
-  name                TEXT    NOT NULL,
-  kind                TEXT    NOT NULL,                 -- income | expense
-  amount_minor        INTEGER NOT NULL,
-  start_month_offset  INTEGER NOT NULL,
-  end_month_offset    INTEGER NOT NULL,
-  recurrence          TEXT    NOT NULL,                 -- once | monthly | annual
-  inflation_linked    INTEGER NOT NULL DEFAULT 1,
-  annual_growth_rate  REAL    NOT NULL DEFAULT 0,
-  enabled             INTEGER NOT NULL DEFAULT 1,
-  note                TEXT    NOT NULL DEFAULT '',
-  created_at          INTEGER NOT NULL,
-  updated_at          INTEGER NOT NULL,
-  FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
-);
-
 ------------------------------------------------------------
 -- Plan layered allocation targets
 ------------------------------------------------------------

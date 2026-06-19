@@ -97,7 +97,7 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 	}
 
 	expectedTables := []string{
-		"plans", "plan_parameters", "plan_cash_flows",
+		"plans", "plan_parameters",
 		"allocation_scenarios", "allocation_scenario_weights",
 		"plan_asset_class_targets", "plan_region_targets",
 		"instruments", "market_data_points", "instrument_annual_returns",
@@ -171,8 +171,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 13 {
-		t.Errorf("expected 13 migration records after idempotent re-run, got %d", migrationCount)
+	if migrationCount != 14 {
+		t.Errorf("expected 14 migration records after idempotent re-run, got %d", migrationCount)
 	}
 }
 

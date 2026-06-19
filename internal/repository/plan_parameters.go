@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// ParametersRepo manages plan_parameters and plan_cash_flows.
+// ParametersRepo manages plan_parameters.
 type ParametersRepo struct {
 	db *sql.DB
 }
@@ -137,61 +137,6 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 		p.RebalanceFrequency, p.RebalanceThreshold, p.TransactionCostRate,
 		p.SimulationRuns, p.StudentTDf, seed, p.UpdatedAt)
 	return wrapSQL("upsert plan parameters", err)
-}
-
-func (r *ParametersRepo) ListCashFlows(ctx context.Context, planID string) ([]PlanCashFlow, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, plan_id, name, kind, amount_minor, start_month_offset, end_month_offset,
-			recurrence, inflation_linked, annual_growth_rate, enabled, note, created_at, updated_at
-		FROM plan_cash_flows WHERE plan_id=? ORDER BY start_month_offset`, planID)
-	if err != nil {
-		return nil, wrapSQL("query plan cash flows", err)
-	}
-	defer func() { _ = rows.Close() }()
-	return scanCashFlows(rows)
-}
-
-func (r *ParametersRepo) ReplaceCashFlows(ctx context.Context, tx *sql.Tx, planID string, flows []PlanCashFlow) error {
-	exec := r.exec(tx)
-	if _, err := exec.ExecContext(ctx, `DELETE FROM plan_cash_flows WHERE plan_id=?`, planID); err != nil {
-		return wrapSQL("delete plan cash flows", err)
-	}
-	now := time.Now().UnixMilli()
-	for _, f := range flows {
-		if f.CreatedAt == 0 {
-			f.CreatedAt = now
-		}
-		f.UpdatedAt = now
-		_, err := exec.ExecContext(ctx, `
-			INSERT INTO plan_cash_flows (
-				id, plan_id, name, kind, amount_minor, start_month_offset, end_month_offset,
-				recurrence, inflation_linked, annual_growth_rate, enabled, note, created_at, updated_at
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			f.ID, planID, f.Name, f.Kind, f.AmountMinor, f.StartMonthOffset, f.EndMonthOffset,
-			f.Recurrence, boolToInt(f.InflationLinked), f.AnnualGrowthRate, boolToInt(f.Enabled),
-			f.Note, f.CreatedAt, f.UpdatedAt)
-		if err != nil {
-			return wrapSQL("insert plan cash flow", err)
-		}
-	}
-	return nil
-}
-
-func scanCashFlows(rows *sql.Rows) ([]PlanCashFlow, error) {
-	var out []PlanCashFlow
-	for rows.Next() {
-		var f PlanCashFlow
-		var inflLinked, enabled int
-		if err := rows.Scan(&f.ID, &f.PlanID, &f.Name, &f.Kind, &f.AmountMinor,
-			&f.StartMonthOffset, &f.EndMonthOffset, &f.Recurrence, &inflLinked,
-			&f.AnnualGrowthRate, &enabled, &f.Note, &f.CreatedAt, &f.UpdatedAt); err != nil {
-			return nil, wrapSQL("scan cash flow row", err)
-		}
-		f.InflationLinked = inflLinked == 1
-		f.Enabled = enabled == 1
-		out = append(out, f)
-	}
-	return out, wrapSQL("iterate cash flow rows", rows.Err())
 }
 
 func (r *ParametersRepo) exec(tx *sql.Tx) dbExec {

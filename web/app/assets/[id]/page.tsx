@@ -42,7 +42,7 @@ import {
 } from "@/lib/format";
 
 const RETURN_SERIES_RANGES: { key: ReturnSeriesRange; label: string }[] = [
-  { key: "1d", label: "近1天" },
+  { key: "3d", label: "近3天" },
   { key: "1w", label: "近1周" },
   { key: "1m", label: "近1月" },
   { key: "3m", label: "近3月" },

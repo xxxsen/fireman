@@ -21,6 +21,7 @@ export function MetricHelp({ termKey, text, label, className }: MetricHelpProps)
       content={helpText}
       align="center"
       clickToggle
+      followCursor
       triggerTestId="metric-help-trigger"
       contentTestId="metric-help-tooltip"
       contentClassName="w-60"

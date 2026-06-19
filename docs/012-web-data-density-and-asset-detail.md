@@ -34,7 +34,7 @@
 
 - 顶部改为左右布局：左侧返回入口、资产名称、代码与关键元信息；右上角直接呈现刷新 / 强制刷新 / 删除操作（按权限与系统标的规则禁用或隐藏）。基础信息归入独立分区卡片，主体由窄单列调整为 `max-w-6xl` 宽容器分区。
 - 新增 `compressYears(years)`：将纳入模拟的年份数组压缩为区间串（如 `2006-2009`），不连续年份展示为多个区间（如 `2006-2012、2014-2025`）。
-- 新增 `GET /api/v1/instruments/:instrument_id/return-series?range=...`：基于行情点位计算归一化累计收益序列，支持 `1d/1w/1m/3m/6m/1y/3y/5y/all`；历史不足时返回 `insufficient_history` 状态。前端 `ReturnSeriesChart`（ECharts 折线）在「区间收益」分区附近渲染收益曲线，并提供区间切换；切换区间只重新请求曲线数据，不刷新整页详情。
+- 新增 `GET /api/v1/instruments/:instrument_id/return-series?range=...`：基于行情点位计算归一化累计收益序列，支持 `3d/1w/1m/3m/6m/1y/3y/5y/all`；历史不足时返回 `insufficient_history` 状态。前端 `ReturnSeriesChart`（ECharts 折线）在「区间收益」分区附近渲染收益曲线，并提供区间切换；切换区间只重新请求曲线数据，不刷新整页详情。
 
 ## 7. FIRE 计划列表更新时间修正
 

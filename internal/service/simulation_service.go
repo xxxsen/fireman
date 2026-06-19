@@ -35,6 +35,10 @@ type CreateSimulationResponse struct {
 	Status string `json:"status"`
 }
 
+// SimulationRetentionLimit is how many Monte Carlo runs are kept per plan; older
+// runs (and their attached analysis results) are pruned on each new run (td/050).
+const SimulationRetentionLimit = 7
+
 // SimulationService orchestrates simulation jobs and results.
 type SimulationService struct {
 	sql      *sql.DB
@@ -46,6 +50,7 @@ type SimulationService struct {
 	fx       *marketdata.FXResolver
 	jobs     *repository.JobRepo
 	sims     *repository.SimulationRepo
+	analysis *repository.AnalysisRepo
 	hash     *ConfigHashService
 }
 
@@ -60,34 +65,68 @@ func NewSimulationService(
 	market *repository.MarketDataRepo,
 	jobs *repository.JobRepo,
 	sims *repository.SimulationRepo,
+	analysis *repository.AnalysisRepo,
 	hash *ConfigHashService,
 ) *SimulationService {
 	return &SimulationService{
 		sql: sqlDB, plans: plans, params: params, alloc: alloc, holdings: holdings,
 		snapRepo: snapRepo,
 		fx:       marketdata.NewFXResolver(inst, market),
-		jobs:     jobs, sims: sims, hash: hash,
+		jobs:     jobs, sims: sims, analysis: analysis, hash: hash,
 	}
 }
 
-// BuildInputSnapshot freezes the current plan configuration for analysis jobs.
-func (s *SimulationService) BuildInputSnapshot(ctx context.Context, planID string, runs *int,
-	seed *string,
-) (*simulation.InputSnapshot, string, error) {
-	plan, err := s.plans.GetByID(ctx, planID)
+// AnalysisRunContext is a resolved Monte Carlo run used as the frozen input for
+// an attached stress / sensitivity analysis (td/050).
+type AnalysisRunContext struct {
+	RunID     string
+	Snapshot  *simulation.InputSnapshot
+	InputHash string
+}
+
+// ResolveAnalysisRun returns the frozen input snapshot of the Monte Carlo run an
+// attached analysis must run against. When runID is empty it falls back to the
+// plan's latest run; if the plan has no run it returns a simulation_required
+// business error.
+func (s *SimulationService) ResolveAnalysisRun(
+	ctx context.Context, planID, runID string,
+) (AnalysisRunContext, error) {
+	run, err := s.loadAnalysisRun(ctx, planID, runID)
 	if err != nil {
-		if errors.Is(err, repository.ErrPlanNotFound) {
-			return nil, "", newErr("plan_not_found", "plan not found", nil)
+		return AnalysisRunContext{}, err
+	}
+	var snap simulation.InputSnapshot
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
+		return AnalysisRunContext{}, wrapRepo("decode simulation run snapshot", err)
+	}
+	return AnalysisRunContext{RunID: run.ID, Snapshot: &snap, InputHash: run.InputHash}, nil
+}
+
+func (s *SimulationService) loadAnalysisRun(
+	ctx context.Context, planID, runID string,
+) (repository.SimulationRun, error) {
+	if runID == "" {
+		runs, err := s.sims.ListByPlan(ctx, planID, 1)
+		if err != nil {
+			return repository.SimulationRun{}, wrapRepo("list simulation runs for analysis", err)
 		}
-		return nil, "", wrapRepo("get plan for snapshot", err)
+		if len(runs) == 0 {
+			return repository.SimulationRun{}, newErr("simulation_required", "请先运行 Monte Carlo 模拟", nil)
+		}
+		return runs[0], nil
 	}
-	parsed, err := ParseSeedString(seed)
-	if err != nil && !errors.Is(err, errSeedNotProvided) {
-		return nil, "", newErr("parameters_invalid", err.Error(), nil)
+	run, err := s.sims.GetByID(ctx, runID)
+	if err != nil {
+		if errors.Is(err, repository.ErrSimulationNotFound) {
+			return repository.SimulationRun{}, newErr("simulation_not_found", "simulation not found", nil)
+		}
+		return repository.SimulationRun{}, wrapRepo("get simulation run for analysis", err)
 	}
-	return s.buildInputSnapshot(ctx, plan, CreateSimulationRequest{
-		PlanID: planID, Runs: runs, Seed: seed, seedInt: parsed,
-	})
+	if run.PlanID != planID {
+		return repository.SimulationRun{}, newErr("simulation_not_found",
+			"simulation run does not belong to this plan", nil)
+	}
+	return run, nil
 }
 
 func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequest) (CreateSimulationResponse, error) {
@@ -112,18 +151,8 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 		return CreateSimulationResponse{}, err
 	}
 
-	if req.IdempotencyKey != "" {
-		existing, found, err := findExistingIdempotentJob(
-			ctx, s.jobs, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, inputHash,
-			"find simulation idempotency",
-		)
-		if err != nil {
-			return CreateSimulationResponse{}, err
-		}
-		if found {
-			run, _ := s.sims.GetByJobID(ctx, existing.ID)
-			return CreateSimulationResponse{JobID: existing.ID, RunID: run.ID, Status: existing.Status}, nil
-		}
+	if resp, found, err := s.idempotentSimulation(ctx, req, inputHash); err != nil || found {
+		return resp, err
 	}
 
 	jobID := "job_" + uuid.New().String()
@@ -150,15 +179,51 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 			return wrapRepo("create pending simulation run", err)
 		}
 		if req.IdempotencyKey != "" {
-			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, jobID,
-				inputHash)
+			if err := s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSimulation,
+				req.IdempotencyKey, jobID, inputHash); err != nil {
+				return wrapRepo("save simulation idempotency", err)
+			}
 		}
-		return nil
+		return s.pruneOldRuns(ctx, tx, req.PlanID)
 	})
 	if err != nil {
 		return CreateSimulationResponse{}, wrapRepo("create simulation tx", err)
 	}
 	return CreateSimulationResponse{JobID: jobID, RunID: runID, Status: repository.JobStatusQueued}, nil
+}
+
+func (s *SimulationService) idempotentSimulation(
+	ctx context.Context, req CreateSimulationRequest, inputHash string,
+) (CreateSimulationResponse, bool, error) {
+	if req.IdempotencyKey == "" {
+		return CreateSimulationResponse{}, false, nil
+	}
+	existing, found, err := findExistingIdempotentJob(
+		ctx, s.jobs, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, inputHash,
+		"find simulation idempotency",
+	)
+	if err != nil {
+		return CreateSimulationResponse{}, false, err
+	}
+	if !found {
+		return CreateSimulationResponse{}, false, nil
+	}
+	run, _ := s.sims.GetByJobID(ctx, existing.ID)
+	return CreateSimulationResponse{JobID: existing.ID, RunID: run.ID, Status: existing.Status}, true, nil
+}
+
+// pruneOldRuns keeps only the newest N runs per plan and removes analysis results
+// attached to the pruned runs. The just-inserted pending run is part of the count,
+// so the oldest is pruned as soon as the (N+1)th run is created.
+func (s *SimulationService) pruneOldRuns(ctx context.Context, tx *sql.Tx, planID string) error {
+	pruned, err := s.sims.PruneByPlan(ctx, tx, planID, SimulationRetentionLimit)
+	if err != nil {
+		return wrapRepo("prune simulation runs", err)
+	}
+	if err := s.analysis.DeleteBySimulationRunIDs(ctx, tx, pruned); err != nil {
+		return wrapRepo("delete analysis for pruned runs", err)
+	}
+	return nil
 }
 
 func (s *SimulationService) ListByPlan(ctx context.Context, planID string) ([]SimulationRunView, error) {
@@ -168,7 +233,7 @@ func (s *SimulationService) ListByPlan(ctx context.Context, planID string) ([]Si
 		}
 		return nil, wrapRepo("get plan for simulation list", err)
 	}
-	runs, err := s.sims.ListByPlan(ctx, planID, 50)
+	runs, err := s.sims.ListByPlan(ctx, planID, SimulationRetentionLimit)
 	if err != nil {
 		return nil, wrapRepo("list simulation runs", err)
 	}
@@ -319,17 +384,11 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", err
 	}
 
-	flows, err := s.params.ListCashFlows(ctx, plan.ID)
-	if err != nil {
-		return nil, "", wrapRepo("list plan holdings for snapshot", err)
-	}
-
 	lines := domain.ComputeHoldingTargets(da, dh, holdingMeta(holds), params.TotalAssetsMinor)
 	assets, err := s.buildSnapshotAssets(ctx, plan, lines)
 	if err != nil {
 		return nil, "", err
 	}
-	cfSnap := snapshotCashFlows(flows)
 
 	seed := params.Seed
 	if seed == nil {
@@ -345,7 +404,7 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", err
 	}
 
-	in := buildInputSnapshotStruct(plan, params, *seed, configHash, assets, cfSnap)
+	in := buildInputSnapshotStruct(plan, params, *seed, configHash, assets)
 	inputHash, err := simulation.HashInput(in)
 	if err != nil {
 		return nil, "", wrapRepo("hash simulation input", err)

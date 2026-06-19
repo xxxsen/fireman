@@ -121,7 +121,7 @@ func (s *SystemService) ExportPlanJSON(ctx context.Context, planID string) (map[
 	if err != nil {
 		return nil, err
 	}
-	params, flows, err := s.plans.GetParameters(ctx, planID)
+	params, err := s.plans.GetParameters(ctx, planID)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,6 @@ func (s *SystemService) ExportPlanJSON(ctx context.Context, planID string) (map[
 		"exported_at": time.Now().UTC().Format(time.RFC3339),
 		"plan":        plan,
 		"parameters":  params,
-		"cash_flows":  flows,
 		"targets":     targets,
 		"rebalance":   reb,
 	}, nil

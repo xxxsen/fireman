@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { AllocationBarChart } from "@/components/charts/AllocationBarChart";
 import { RegionAllocationBarChart } from "@/components/charts/RegionAllocationBarChart";
+import { AssetClassRegionGroups } from "@/components/charts/AssetClassRegionGroups";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { Alert } from "@/components/ui/Alert";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -174,11 +175,29 @@ export default function OverviewPage() {
             </div>
             <div className="rounded-lg border border-line bg-surface p-4">
               <h2 className="flex items-center text-lg font-medium text-ink">
-                国内 / 国外配置
+                地区配置
                 <MetricHelp termKey="region_allocation" />
               </h2>
-              <RegionAllocationBarChart bars={data.region_bars} />
+              <p className="mt-1 text-xs text-ink-muted">全组合地区暴露（按全组合权重折算）</p>
+              <RegionAllocationBarChart
+                bars={data.region_bars}
+                currency={data.plan.base_currency}
+              />
             </div>
+          </section>
+
+          <section className="rounded-lg border border-line bg-surface p-4">
+            <h2 className="flex items-center text-lg font-medium text-ink">
+              大类内地区配置
+              <MetricHelp termKey="region_allocation" />
+            </h2>
+            <p className="mt-1 text-xs text-ink-muted">
+              各资产大类内部的国内 / 国外目标与当前比例
+            </p>
+            <AssetClassRegionGroups
+              groups={data.asset_class_region_groups}
+              currency={data.plan.base_currency}
+            />
           </section>
 
           <section className="rounded-lg border border-line bg-surface p-4">

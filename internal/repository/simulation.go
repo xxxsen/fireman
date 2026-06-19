@@ -132,6 +132,53 @@ func (r *SimulationRepo) ListByPlan(ctx context.Context, planID string, limit in
 	return out, wrapSQL("iterate simulation runs", rows.Err())
 }
 
+// PruneByPlan keeps the newest `keep` simulation runs of a plan and deletes the
+// rest, returning the deleted run IDs. Path index and quantile series rows are
+// removed via ON DELETE CASCADE; callers must clean up analysis_results, which
+// is not foreign-keyed to run_id, using the returned IDs.
+func (r *SimulationRepo) PruneByPlan(ctx context.Context, tx *sql.Tx, planID string, keep int) ([]string, error) {
+	if keep < 0 {
+		keep = 0
+	}
+	exec := r.execQuery(tx)
+	ids, err := listRunIDsByPlan(ctx, exec, planID)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) <= keep {
+		return nil, nil
+	}
+	stale := ids[keep:]
+	for _, id := range stale {
+		if _, err := exec.ExecContext(ctx, `DELETE FROM simulation_runs WHERE id=?`, id); err != nil {
+			return nil, wrapSQL("delete stale simulation run", err)
+		}
+	}
+	return stale, nil
+}
+
+func listRunIDsByPlan(ctx context.Context, exec dbExecQuery, planID string) ([]string, error) {
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id FROM simulation_runs WHERE plan_id=?
+		ORDER BY created_at DESC, id DESC`, planID)
+	if err != nil {
+		return nil, wrapSQL("list simulation run ids for prune", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, wrapSQL("scan simulation run id for prune", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapSQL("iterate simulation run ids for prune", err)
+	}
+	return ids, nil
+}
+
 func (r *SimulationRepo) ReplacePathIndex(ctx context.Context, tx *sql.Tx, runID string, paths []PathIndexRow) error {
 	exec := r.exec(tx)
 	if _, err := exec.ExecContext(ctx, `DELETE FROM simulation_path_index WHERE run_id=?`, runID); err != nil {
@@ -281,6 +328,19 @@ func scanSimulationRunRows(rows *sql.Rows) (SimulationRun, error) {
 }
 
 func (r *SimulationRepo) exec(tx *sql.Tx) dbExec {
+	if tx != nil {
+		return tx
+	}
+	return r.db
+}
+
+// dbExecQuery can both exec and query (satisfied by *sql.DB and *sql.Tx).
+type dbExecQuery interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func (r *SimulationRepo) execQuery(tx *sql.Tx) dbExecQuery {
 	if tx != nil {
 		return tx
 	}

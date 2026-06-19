@@ -41,10 +41,9 @@ type PlanParametersAPI struct {
 
 // ParametersUpdateAPIRequest updates parameters via API DTOs.
 type ParametersUpdateAPIRequest struct {
-	ConfigVersion          int                       `json:"config_version"`
-	Parameters             PlanParametersAPI         `json:"parameters"`
-	CashFlows              []repository.PlanCashFlow `json:"cash_flows,omitempty"`
-	ApplyUnallocatedToCash bool                      `json:"apply_unallocated_to_cash,omitempty"`
+	ConfigVersion          int               `json:"config_version"`
+	Parameters             PlanParametersAPI `json:"parameters"`
+	ApplyUnallocatedToCash bool              `json:"apply_unallocated_to_cash,omitempty"`
 }
 
 func ParametersToAPI(p repository.PlanParameters) PlanParametersAPI {

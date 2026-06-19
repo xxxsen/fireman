@@ -44,24 +44,6 @@ type PlanParameters struct {
 	UpdatedAt                int64   `json:"updated_at"`
 }
 
-// PlanCashFlow is an optional income/expense event.
-type PlanCashFlow struct {
-	ID               string  `json:"id"`
-	PlanID           string  `json:"plan_id"`
-	Name             string  `json:"name"`
-	Kind             string  `json:"kind"`
-	AmountMinor      int64   `json:"amount_minor"`
-	StartMonthOffset int     `json:"start_month_offset"`
-	EndMonthOffset   int     `json:"end_month_offset"`
-	Recurrence       string  `json:"recurrence"`
-	InflationLinked  bool    `json:"inflation_linked"`
-	AnnualGrowthRate float64 `json:"annual_growth_rate"`
-	Enabled          bool    `json:"enabled"`
-	Note             string  `json:"note"`
-	CreatedAt        int64   `json:"created_at"`
-	UpdatedAt        int64   `json:"updated_at"`
-}
-
 // AssetClassTarget is a plan-level asset class weight.
 type AssetClassTarget struct {
 	AssetClass string  `json:"asset_class"`

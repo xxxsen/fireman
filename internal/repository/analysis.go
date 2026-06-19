@@ -15,12 +15,13 @@ const (
 
 // AnalysisResult stores stress/sensitivity job output.
 type AnalysisResult struct {
-	JobID      string `json:"job_id"`
-	PlanID     string `json:"plan_id"`
-	Type       string `json:"type"`
-	InputHash  string `json:"input_hash"`
-	ResultJSON string `json:"result_json"`
-	CreatedAt  int64  `json:"created_at"`
+	JobID           string `json:"job_id"`
+	PlanID          string `json:"plan_id"`
+	Type            string `json:"type"`
+	InputHash       string `json:"input_hash"`
+	SimulationRunID string `json:"simulation_run_id"`
+	ResultJSON      string `json:"result_json"`
+	CreatedAt       int64  `json:"created_at"`
 }
 
 // AnalysisRepo manages analysis_results.
@@ -39,9 +40,9 @@ func (r *AnalysisRepo) CreatePending(ctx context.Context, tx *sql.Tx, rec Analys
 		rec.CreatedAt = now
 	}
 	_, err := exec.ExecContext(ctx, `
-		INSERT INTO analysis_results (job_id, plan_id, type, input_hash, result_json, created_at)
-		VALUES (?,?,?,?,?,?)`,
-		rec.JobID, rec.PlanID, rec.Type, rec.InputHash, rec.ResultJSON, rec.CreatedAt)
+		INSERT INTO analysis_results (job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at)
+		VALUES (?,?,?,?,?,?,?)`,
+		rec.JobID, rec.PlanID, rec.Type, rec.InputHash, rec.SimulationRunID, rec.ResultJSON, rec.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert analysis result: %w", err)
 	}
@@ -59,10 +60,11 @@ func (r *AnalysisRepo) Complete(ctx context.Context, jobID, resultJSON string) e
 
 func (r *AnalysisRepo) GetByJobID(ctx context.Context, jobID string) (AnalysisResult, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT job_id, plan_id, type, input_hash, result_json, created_at
+		SELECT job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
 		FROM analysis_results WHERE job_id=?`, jobID)
 	var rec AnalysisResult
-	err := row.Scan(&rec.JobID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.ResultJSON, &rec.CreatedAt)
+	err := row.Scan(&rec.JobID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.SimulationRunID,
+		&rec.ResultJSON, &rec.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AnalysisResult{}, ErrAnalysisNotFound
 	}
@@ -81,18 +83,76 @@ func (r *AnalysisRepo) ListByPlan(
 		limit = 20
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT job_id, plan_id, type, input_hash, result_json, created_at
+		SELECT job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
 		FROM analysis_results WHERE plan_id=? AND type=? ORDER BY created_at DESC LIMIT ?`,
 		planID, typ, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query analysis results: %w", err)
 	}
+	return scanAnalysisRows(rows)
+}
+
+// ListBySimulationRun returns analysis results of a type bound to one simulation run.
+func (r *AnalysisRepo) ListBySimulationRun(
+	ctx context.Context,
+	runID, typ string,
+	limit int,
+) ([]AnalysisResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
+		FROM analysis_results WHERE simulation_run_id=? AND type=? ORDER BY created_at DESC LIMIT ?`,
+		runID, typ, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query analysis results by run: %w", err)
+	}
+	return scanAnalysisRows(rows)
+}
+
+// DeleteBySimulationRunAndType removes existing analysis of one type for a run,
+// enforcing "keep only the latest stress/sensitivity per Monte Carlo run".
+func (r *AnalysisRepo) DeleteBySimulationRunAndType(ctx context.Context, tx *sql.Tx, runID, typ string) error {
+	exec := r.exec(tx)
+	_, err := exec.ExecContext(ctx,
+		`DELETE FROM analysis_results WHERE simulation_run_id=? AND type=?`, runID, typ)
+	if err != nil {
+		return fmt.Errorf("delete analysis by run and type: %w", err)
+	}
+	return nil
+}
+
+// DeleteBySimulationRunIDs removes all analysis results attached to pruned runs.
+func (r *AnalysisRepo) DeleteBySimulationRunIDs(ctx context.Context, tx *sql.Tx, runIDs []string) error {
+	if len(runIDs) == 0 {
+		return nil
+	}
+	exec := r.exec(tx)
+	placeholders := make([]byte, 0, len(runIDs)*2)
+	args := make([]any, 0, len(runIDs))
+	for i, id := range runIDs {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args = append(args, id)
+	}
+	query := `DELETE FROM analysis_results WHERE simulation_run_id IN (` + string(placeholders) + `)`
+	if _, err := exec.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("delete analysis by run ids: %w", err)
+	}
+	return nil
+}
+
+func scanAnalysisRows(rows *sql.Rows) ([]AnalysisResult, error) {
 	defer func() { _ = rows.Close() }()
 	var out []AnalysisResult
 	for rows.Next() {
 		var rec AnalysisResult
 		if err := rows.Scan(
-			&rec.JobID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.ResultJSON, &rec.CreatedAt,
+			&rec.JobID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.SimulationRunID,
+			&rec.ResultJSON, &rec.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan analysis result row: %w", err)
 		}

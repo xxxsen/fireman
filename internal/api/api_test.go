@@ -375,6 +375,37 @@ func TestScenarioRegionTargetsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The plan sets its own domestic/foreign split (equity domestic 0.8).
+	planAllocBody, _ := json.Marshal(map[string]any{
+		"config_version": planRow.ConfigVersion,
+		"asset_class_targets": []map[string]any{
+			{"asset_class": "equity", "weight": 0.6},
+			{"asset_class": "bond", "weight": 0.4},
+			{"asset_class": "cash", "weight": 0},
+		},
+		"region_targets": []map[string]any{
+			{"asset_class": "equity", "region": "domestic", "weight_within_class": 0.8},
+			{"asset_class": "equity", "region": "foreign", "weight_within_class": 0.2},
+			{"asset_class": "bond", "region": "domestic", "weight_within_class": 1},
+			{"asset_class": "bond", "region": "foreign", "weight_within_class": 0},
+			{"asset_class": "cash", "region": "domestic", "weight_within_class": 1},
+			{"asset_class": "cash", "region": "foreign", "weight_within_class": 0},
+		},
+	})
+	planAllocReq := httptest.NewRequest(http.MethodPut, "/api/v1/plans/"+plan.ID+"/allocation",
+		bytes.NewReader(planAllocBody))
+	planAllocReq.Header.Set("Content-Type", "application/json")
+	planAllocW := httptest.NewRecorder()
+	r.ServeHTTP(planAllocW, planAllocReq)
+	if planAllocW.Code != http.StatusOK {
+		t.Fatalf("set plan allocation status=%d %s", planAllocW.Code, planAllocW.Body.String())
+	}
+	planRow, err = planRepo.GetByID(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	applyBody, _ := json.Marshal(map[string]any{
 		"scenario_id": scenarioID, "config_version": planRow.ConfigVersion, "dry_run": false,
 	})
@@ -402,8 +433,21 @@ func TestScenarioRegionTargetsRoundTrip(t *testing.T) {
 			equityDomestic = row["weight_within_class"].(float64)
 		}
 	}
-	if equityDomestic != 0.6 {
-		t.Fatalf("expected equity domestic 0.6 after apply, got %v", equityDomestic)
+	// td/049 §3: applying a scenario must NOT overwrite the plan's region split.
+	if equityDomestic != 0.8 {
+		t.Fatalf("expected plan equity domestic 0.8 preserved after apply, got %v", equityDomestic)
+	}
+	// Asset-class weights, however, switch to the scenario's structure (equity 0.7).
+	gotWeights := alloc["asset_class_targets"].([]any)
+	var equityWeight float64
+	for _, item := range gotWeights {
+		row := item.(map[string]any)
+		if row["asset_class"] == "equity" {
+			equityWeight = row["weight"].(float64)
+		}
+	}
+	if equityWeight != 0.7 {
+		t.Fatalf("expected equity asset-class weight 0.7 from scenario, got %v", equityWeight)
 	}
 }
 

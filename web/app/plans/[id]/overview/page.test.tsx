@@ -28,6 +28,9 @@ vi.mock("@/components/charts/AllocationBarChart", () => ({
 vi.mock("@/components/charts/RegionAllocationBarChart", () => ({
   RegionAllocationBarChart: () => <div data-testid="region-chart" />,
 }));
+vi.mock("@/components/charts/AssetClassRegionGroups", () => ({
+  AssetClassRegionGroups: () => <div data-testid="asset-class-region-groups" />,
+}));
 
 const mockDashboard = vi.hoisted(() => ({
   data: {
@@ -45,6 +48,7 @@ const mockDashboard = vi.hoisted(() => ({
     region_bars: [
       { region: "domestic", target_weight: 0.6, current_weight: 0.5 },
     ],
+    asset_class_region_groups: [],
     top_deviations: [
       {
         instrument_name: "测试基金",

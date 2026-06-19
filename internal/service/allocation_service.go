@@ -272,9 +272,11 @@ func (s *AllocationService) ApplyScenario(
 		return result, nil
 	}
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		// Scenario templates only carry asset-class structure; the plan's own
+		// domestic/foreign split is preserved and not overwritten (td/049 §3).
 		newAlloc := repository.PlanAllocation{
 			AssetClassTargets: scn.Weights,
-			RegionTargets:     scn.RegionTargets,
+			RegionTargets:     current.RegionTargets,
 		}
 		if err := s.alloc.Replace(ctx, tx, planID, newAlloc); err != nil {
 			return fmt.Errorf("replace allocation: %w", err)

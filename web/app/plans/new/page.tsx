@@ -236,7 +236,7 @@ export default function NewPlanWizardPage() {
   const wideStep = step >= 2;
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className="mx-auto w-full max-w-[96rem]">
       <Link href="/" className="text-sm underline">
         ← 计划列表
       </Link>

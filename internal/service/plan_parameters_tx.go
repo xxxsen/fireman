@@ -25,11 +25,6 @@ func applyParametersUpdateInTx(
 		if err := s.params.Upsert(ctx, tx, req.Parameters); err != nil {
 			return wrapRepo("upsert plan parameters", err)
 		}
-		if req.CashFlows != nil {
-			if err := s.params.ReplaceCashFlows(ctx, tx, planID, req.CashFlows); err != nil {
-				return wrapRepo("replace plan cash flows", err)
-			}
-		}
 		if _, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion); err != nil {
 			return wrapRepo("bump plan version", err)
 		}

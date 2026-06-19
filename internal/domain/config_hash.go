@@ -14,7 +14,6 @@ type ConfigHashInput struct {
 	BaseCurrency  string           `json:"base_currency"`
 	ValuationDate string           `json:"valuation_date"`
 	Parameters    map[string]any   `json:"parameters"`
-	CashFlows     []map[string]any `json:"cash_flows"`
 	AssetClass    []map[string]any `json:"asset_class_targets"`
 	RegionTargets []map[string]any `json:"region_targets"`
 	Holdings      []map[string]any `json:"holdings"`
@@ -32,9 +31,6 @@ func ComputeConfigHash(in ConfigHashInput) (string, error) {
 }
 
 func sortConfigForHash(in *ConfigHashInput) {
-	sort.Slice(in.CashFlows, func(i, j int) bool {
-		return stringVal(in.CashFlows[i]["id"]) < stringVal(in.CashFlows[j]["id"])
-	})
 	sort.Slice(in.AssetClass, func(i, j int) bool {
 		return stringVal(in.AssetClass[i]["asset_class"]) < stringVal(in.AssetClass[j]["asset_class"])
 	})

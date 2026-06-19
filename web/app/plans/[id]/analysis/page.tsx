@@ -35,8 +35,23 @@ import {
   listSimulations,
 } from "@/lib/api/simulations";
 import { formatMoney, formatPercent, historyDepthLabel } from "@/lib/format";
+import type { SimulationRun } from "@/types/api";
 
 type JobKind = "sim" | "stress" | "sensitivity";
+
+function simulationOptionLabel(run: SimulationRun): string {
+  const date = new Date(run.created_at).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const success = run.summary_json?.success_probability;
+  const tail =
+    typeof success === "number" ? `成功率 ${formatPercent(success)}` : "进行中";
+  return `${date} · ${run.runs} 次 · ${tail}`;
+}
 
 function AnalysisJobPanel({
   title,
@@ -48,6 +63,8 @@ function AnalysisJobPanel({
   onRetry,
   onRun,
   running,
+  runDisabled,
+  runDisabledHint,
   onCancel,
   latest,
   listError,
@@ -62,6 +79,8 @@ function AnalysisJobPanel({
   onRetry?: () => void;
   onRun: () => void;
   running: boolean;
+  runDisabled?: boolean;
+  runDisabledHint?: string;
   onCancel?: () => void;
   latest?: {
     status: string;
@@ -86,9 +105,12 @@ function AnalysisJobPanel({
         <MetricHelp termKey={termKey} />
       </h2>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Button disabled={running || jobBusy} onClick={onRun}>
+        <Button disabled={running || jobBusy || runDisabled} onClick={onRun}>
           运行{title}
         </Button>
+        {runDisabled && runDisabledHint && (
+          <span className="text-sm text-ink-muted">{runDisabledHint}</span>
+        )}
         {activeJobId && (
           <>
             <span className="text-sm text-ink-muted">
@@ -318,6 +340,7 @@ export function AnalysisContent() {
   );
   const [runsOverride, setRunsOverride] = useState<number | null>(null);
   const [jobErrors, setJobErrors] = useState<Partial<Record<JobKind, string>>>({});
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   const paramsQ = useQuery({
     queryKey: ["parameters", planId],
@@ -335,16 +358,23 @@ export function AnalysisContent() {
     queryKey: ["simulations", planId],
     queryFn: () => listSimulations(planId),
   });
+
+  const simulations = simsQ.data?.simulations ?? [];
+  const selectedRun =
+    simulations.find((run) => run.id === selectedRunId) ?? simulations[0];
+
   const stressQ = useQuery({
-    queryKey: ["stress-tests", planId],
-    queryFn: () => listStressTests(planId),
+    queryKey: ["stress-tests", planId, selectedRun?.id],
+    queryFn: () => listStressTests(planId, selectedRun!.id),
+    enabled: !!selectedRun?.id,
   });
   const sensQ = useQuery({
-    queryKey: ["sensitivity-tests", planId],
-    queryFn: () => listSensitivityTests(planId),
+    queryKey: ["sensitivity-tests", planId, selectedRun?.id],
+    queryFn: () => listSensitivityTests(planId, selectedRun!.id),
+    enabled: !!selectedRun?.id,
   });
 
-  const latest = simsQ.data?.simulations[0];
+  const latest = selectedRun;
   const latestStress = stressQ.data?.stress_tests[0];
   const latestSens = sensQ.data?.sensitivity_tests[0];
 
@@ -413,6 +443,11 @@ export function AnalysisContent() {
       clearJobError("sim");
       setActiveJobKind("sim");
       setActiveJobId(res.job_id);
+      // Select the freshly created run; it is surfaced in the dropdown once the
+      // simulations list is refetched when the job reaches a terminal state. We
+      // intentionally do not refetch here: showing the pending run early would
+      // make simJobQ cache a non-terminal status that never refreshes.
+      if (res.run_id) setSelectedRunId(res.run_id);
     },
     onError: (e) =>
       setJobErrors((prev) => ({
@@ -422,7 +457,10 @@ export function AnalysisContent() {
   });
 
   const stressMut = useMutation({
-    mutationFn: () => createStressTest(planId, { runs }),
+    mutationFn: () => {
+      if (!selectedRun) throw new Error("请先运行 Monte Carlo 模拟");
+      return createStressTest(planId, { runs, simulation_run_id: selectedRun.id });
+    },
     onSuccess: (res) => {
       clearJobError("stress");
       setActiveJobKind("stress");
@@ -436,7 +474,10 @@ export function AnalysisContent() {
   });
 
   const sensMut = useMutation({
-    mutationFn: () => createSensitivityTest(planId, { runs }),
+    mutationFn: () => {
+      if (!selectedRun) throw new Error("请先运行 Monte Carlo 模拟");
+      return createSensitivityTest(planId, { runs, simulation_run_id: selectedRun.id });
+    },
     onSuccess: (res) => {
       clearJobError("sensitivity");
       setActiveJobKind("sensitivity");
@@ -448,6 +489,13 @@ export function AnalysisContent() {
         sensitivity: e instanceof Error ? e.message : "启动失败",
       })),
   });
+
+  const attachDisabled = !selectedRun || !simCompleted;
+  const attachHint = !selectedRun
+    ? "请先运行 Monte Carlo 模拟"
+    : !simCompleted
+      ? "当前模拟尚未完成，无法运行附属分析"
+      : undefined;
 
   const repPaths =
     pathsQ.data?.paths.filter((p) => p.representative_percentile) ?? [];
@@ -515,6 +563,23 @@ export function AnalysisContent() {
           <Alert variant="warning" className="mt-2">
             以下持仓历史样本有限，模拟结果长期不确定性较高：{snapshotWarningLabels.join("；")}
           </Alert>
+        )}
+        {simulations.length > 0 && (
+          <label className="mt-3 block text-sm text-ink">
+            历史模拟
+            <select
+              className="ml-2 rounded border border-line px-2 py-1"
+              value={selectedRun?.id ?? ""}
+              onChange={(e) => setSelectedRunId(e.target.value)}
+              data-testid="simulation-history-select"
+            >
+              {simulations.map((run) => (
+                <option key={run.id} value={run.id}>
+                  {simulationOptionLabel(run)}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         <div className="mt-3 flex flex-wrap items-end gap-4">
           <label className="text-sm text-ink">
@@ -584,7 +649,7 @@ export function AnalysisContent() {
       {latest && simCompleted && (
         <section className="rounded-lg border border-line bg-surface p-4">
           <h2 className="flex items-center font-medium text-ink">
-            最新结果
+            模拟结果
             <MetricHelp termKey="fire_success_rate" />
           </h2>
           {latest.summary_json?.success_probability !== undefined && (
@@ -657,6 +722,8 @@ export function AnalysisContent() {
         }}
         onRun={() => stressMut.mutate()}
         running={stressMut.isPending}
+        runDisabled={attachDisabled}
+        runDisabledHint={attachHint}
         onCancel={activeJobId && activeJobKind === "stress" ? () => void cancelJob(activeJobId) : undefined}
         latest={latestStress}
         listError={stressQ.isError && !stressQ.data ? queryErrorMessage(stressQ.error) : null}
@@ -679,6 +746,8 @@ export function AnalysisContent() {
         }}
         onRun={() => sensMut.mutate()}
         running={sensMut.isPending}
+        runDisabled={attachDisabled}
+        runDisabledHint={attachHint}
         onCancel={
           activeJobId && activeJobKind === "sensitivity" ? () => void cancelJob(activeJobId) : undefined
         }

@@ -1,4 +1,4 @@
-import type { Plan, PlanCashFlow, PlanParameters, RegionTarget } from "@/types/api";
+import type { Plan, PlanParameters, RegionTarget } from "@/types/api";
 import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export function listPlans(): Promise<Plan[]> {
@@ -56,7 +56,6 @@ export function deletePlan(planId: string): Promise<{ deleted: boolean }> {
 
 export function getParameters(planId: string): Promise<{
   parameters: PlanParameters;
-  cash_flows: PlanCashFlow[];
 }> {
   return apiGet(`/api/v1/plans/${planId}/parameters`);
 }
@@ -66,10 +65,9 @@ export function updateParameters(
   body: {
     config_version: number;
     parameters: PlanParameters;
-    cash_flows?: PlanCashFlow[];
     apply_unallocated_to_cash?: boolean;
   },
-): Promise<{ parameters: PlanParameters; cash_flows: PlanCashFlow[] }> {
+): Promise<{ parameters: PlanParameters }> {
   return apiPut(`/api/v1/plans/${planId}/parameters`, body);
 }
 
@@ -87,6 +85,6 @@ export function syncPlanTotalAssets(
     config_version: number;
     parameters: PlanParameters;
   },
-): Promise<{ parameters: PlanParameters; cash_flows: PlanCashFlow[] }> {
+): Promise<{ parameters: PlanParameters }> {
   return updateParameters(planId, body);
 }

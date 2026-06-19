@@ -221,7 +221,7 @@ export function getAnnualReturns(id: string) {
 }
 
 export type ReturnSeriesRange =
-  | "1d"
+  | "3d"
   | "1w"
   | "1m"
   | "3m"

@@ -66,7 +66,6 @@ vi.mock("@/lib/api/plans", () => ({
         student_t_df: 7,
         updated_at: 0,
       },
-      cash_flows: [],
     }),
   updateParameters: (...args: unknown[]) => updateParameters(...args),
 }));
@@ -276,6 +275,20 @@ describe("ParametersPage strategy enums", () => {
     };
     expect(req.parameters.withdrawal_type).toBe("fixed_portfolio");
     expect(req.parameters.inflation_mode).toBe("random_ar1");
+  });
+
+  it("renders the plan baseline help inline with its label (td/049 §5)", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("资金与现金流");
+    const label = screen.getByText("计划基准规模").closest("label");
+    expect(label).not.toBeNull();
+    expect(label!.querySelector('[data-testid="metric-help-trigger"]')).not.toBeNull();
   });
 
   it("shows scale gap wording when plan baseline exceeds holdings (§6.4)", async () => {

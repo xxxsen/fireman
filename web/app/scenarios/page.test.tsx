@@ -71,11 +71,13 @@ describe("ScenariosPage", () => {
     expect(screen.getByRole("button", { name: "新建场景" })).toBeInTheDocument();
   });
 
-  it("allows editing cash region weights in scenario modal", () => {
+  it("edits only asset-class weights (no region inputs) in scenario modal", () => {
     render(<ScenariosPage />);
     fireEvent.click(screen.getByRole("button", { name: "编辑场景" }));
-    expect(screen.getAllByText("现金/其他").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByTestId("percent-input").length).toBeGreaterThan(0);
+    expect(screen.getByText("大类权重")).toBeInTheDocument();
+    expect(screen.queryByText("地区组内权重")).not.toBeInTheDocument();
+    // Only the three asset-class weight inputs remain; region inputs are removed.
+    expect(screen.getAllByTestId("percent-input")).toHaveLength(3);
   });
 
   it("hides edit/delete for builtin scenario, shows badge and copy only", () => {

@@ -67,7 +67,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		db, plans, executionRepo, holdings, holdingsSvc, rebalanceSvc,
 	)
 	simSvc := service.NewSimulationService(
-		db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, hash,
+		db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, analysisRepo, hash,
 	)
 	stressSvc := service.NewStressService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	sensitivitySvc := service.NewSensitivityService(db, plans, jobRepo, analysisRepo, simSvc, hash)
@@ -226,12 +226,12 @@ func (s Services) deletePlan(c *gin.Context) {
 }
 
 func (s Services) getParameters(c *gin.Context) {
-	params, flows, err := s.Plans.GetParameters(c.Request.Context(), c.Param("plan_id"))
+	params, err := s.Plans.GetParameters(c.Request.Context(), c.Param("plan_id"))
 	if err != nil {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"parameters": service.ParametersToAPI(params), "cash_flows": flows})
+	OK(c, gin.H{"parameters": service.ParametersToAPI(params)})
 }
 
 func (s Services) updateParameters(c *gin.Context) {
@@ -245,16 +245,16 @@ func (s Services) updateParameters(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "parameters_invalid", err.Error(), nil)
 		return
 	}
-	updated, flows, err := s.Plans.UpdateParameters(c.Request.Context(), c.Param("plan_id"),
+	updated, err := s.Plans.UpdateParameters(c.Request.Context(), c.Param("plan_id"),
 		service.ParametersUpdateRequest{
 			ConfigVersion: req.ConfigVersion, Parameters: params,
-			CashFlows: req.CashFlows, ApplyUnallocatedToCash: req.ApplyUnallocatedToCash,
+			ApplyUnallocatedToCash: req.ApplyUnallocatedToCash,
 		})
 	if err != nil {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"parameters": service.ParametersToAPI(updated), "cash_flows": flows})
+	OK(c, gin.H{"parameters": service.ParametersToAPI(updated)})
 }
 
 func (s Services) getAllocation(c *gin.Context) {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/fireman/fireman/internal/domain"
+	"github.com/fireman/fireman/internal/repository"
 )
 
 func TestBuildRegionBars(t *testing.T) {
@@ -92,6 +93,83 @@ func TestBuildAllocationBarsOrdersByBusinessClassAndAggregatesHoldings(t *testin
 	}
 	if equity.Holdings[0].InstrumentCode != "EQ-L" {
 		t.Fatalf("first equity holding = %s, want EQ-L (largest first)", equity.Holdings[0].InstrumentCode)
+	}
+}
+
+func TestBuildAssetClassRegionGroupsSplitsWithinClass(t *testing.T) {
+	// Plan: equity 70% / bond 30%; equity 70/30 domestic/foreign, bond 80/20.
+	targets := TargetView{
+		AssetClass: []repository.AssetClassTarget{
+			{AssetClass: domain.AssetClassEquity, Weight: 0.70},
+			{AssetClass: domain.AssetClassBond, Weight: 0.30},
+			{AssetClass: domain.AssetClassCash, Weight: 0.0},
+		},
+		RegionTargets: []repository.RegionTarget{
+			{AssetClass: domain.AssetClassEquity, Region: domain.RegionForeign, WeightWithinClass: 0.30},
+			{AssetClass: domain.AssetClassEquity, Region: domain.RegionDomestic, WeightWithinClass: 0.70},
+			{AssetClass: domain.AssetClassBond, Region: domain.RegionDomestic, WeightWithinClass: 0.80},
+			{AssetClass: domain.AssetClassBond, Region: domain.RegionForeign, WeightWithinClass: 0.20},
+			{AssetClass: domain.AssetClassCash, Region: domain.RegionDomestic, WeightWithinClass: 1.0},
+			{AssetClass: domain.AssetClassCash, Region: domain.RegionForeign, WeightWithinClass: 0.0},
+		},
+		Holdings: []domain.HoldingTargetLine{
+			{
+				Enabled: true, AssetClass: domain.AssetClassEquity, Region: domain.RegionDomestic,
+				InstrumentName: "A股", InstrumentCode: "EQD",
+				PortfolioTargetWeight: 0.49, CurrentAmountMinor: 7_000, TargetAmountMinor: 7_000,
+			},
+			{
+				Enabled: true, AssetClass: domain.AssetClassEquity, Region: domain.RegionForeign,
+				InstrumentName: "美股", InstrumentCode: "EQF",
+				PortfolioTargetWeight: 0.21, CurrentAmountMinor: 3_000, TargetAmountMinor: 3_000,
+			},
+			{
+				Enabled: true, AssetClass: domain.AssetClassBond, Region: domain.RegionDomestic,
+				InstrumentName: "国债", InstrumentCode: "BDD",
+				PortfolioTargetWeight: 0.24, CurrentAmountMinor: 2_400, TargetAmountMinor: 2_400,
+			},
+			{
+				Enabled: true, AssetClass: domain.AssetClassBond, Region: domain.RegionForeign,
+				InstrumentName: "海外债", InstrumentCode: "BDF",
+				PortfolioTargetWeight: 0.06, CurrentAmountMinor: 600, TargetAmountMinor: 600,
+			},
+		},
+	}
+
+	groups := buildAssetClassRegionGroups(targets)
+	if len(groups) != 2 {
+		t.Fatalf("groups len = %d, want 2 (equity, bond; cash excluded)", len(groups))
+	}
+	if groups[0].AssetClass != domain.AssetClassEquity || groups[1].AssetClass != domain.AssetClassBond {
+		t.Fatalf("group order = %s,%s want equity,bond", groups[0].AssetClass, groups[1].AssetClass)
+	}
+	equity := groups[0]
+	if len(equity.Regions) != 2 || equity.Regions[0].Region != domain.RegionDomestic {
+		t.Fatalf("equity regions = %+v want domestic first", equity.Regions)
+	}
+	if equity.Regions[0].TargetWeight != 0.70 || equity.Regions[1].TargetWeight != 0.30 {
+		t.Fatalf("equity target split = %v/%v want 0.7/0.3",
+			equity.Regions[0].TargetWeight, equity.Regions[1].TargetWeight)
+	}
+	if equity.Regions[0].CurrentWeight != 0.70 {
+		t.Fatalf("equity domestic current within class = %v want 0.70", equity.Regions[0].CurrentWeight)
+	}
+	bond := groups[1]
+	if bond.Regions[0].TargetWeight != 0.80 || bond.Regions[1].TargetWeight != 0.20 {
+		t.Fatalf("bond target split = %v/%v want 0.8/0.2",
+			bond.Regions[0].TargetWeight, bond.Regions[1].TargetWeight)
+	}
+	if bond.Regions[0].CurrentWeight != 0.80 {
+		t.Fatalf("bond domestic current within class = %v want 0.80", bond.Regions[0].CurrentWeight)
+	}
+
+	// Full-portfolio region exposure should be ~73% / 27%.
+	region := buildRegionBars(targets)
+	if len(region) != 2 || region[0].Region != domain.RegionDomestic {
+		t.Fatalf("region bars = %+v", region)
+	}
+	if d := region[0].TargetWeight; d < 0.729 || d > 0.731 {
+		t.Fatalf("full-portfolio domestic target = %v want ~0.73", d)
 	}
 }
 

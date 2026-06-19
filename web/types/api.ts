@@ -57,21 +57,6 @@ export interface PlanParameters {
   updated_at: number;
 }
 
-export interface PlanCashFlow {
-  id: string;
-  plan_id: string;
-  name: string;
-  kind: "income" | "expense";
-  amount_minor: number;
-  start_month_offset: number;
-  end_month_offset: number;
-  recurrence: "once" | "monthly" | "annual";
-  inflation_linked: boolean;
-  annual_growth_rate: number;
-  enabled: boolean;
-  note: string;
-}
-
 export interface AssetClassTarget {
   asset_class: string;
   weight: number;
@@ -504,6 +489,20 @@ export interface AllocationBar {
   holdings: AllocationHolding[];
 }
 
+export interface RegionBar {
+  region: string;
+  target_weight: number;
+  current_weight: number;
+  current_amount_minor: number;
+  target_amount_minor: number;
+  holdings: AllocationHolding[];
+}
+
+export interface AssetClassRegionGroup {
+  asset_class: string;
+  regions: RegionBar[];
+}
+
 export interface DashboardView {
   plan: Plan;
   scenario_name?: string;
@@ -516,11 +515,8 @@ export interface DashboardView {
   rebalance_summary: RebalanceSummary;
   active_rebalance_execution?: ActiveRebalanceExecution | null;
   allocation_bars: AllocationBar[];
-  region_bars: {
-    region: string;
-    target_weight: number;
-    current_weight: number;
-  }[];
+  region_bars: RegionBar[];
+  asset_class_region_groups: AssetClassRegionGroup[];
   top_deviations: {
     instrument_name: string;
     instrument_code: string;

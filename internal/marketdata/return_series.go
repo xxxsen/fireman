@@ -28,7 +28,7 @@ const (
 )
 
 var returnSeriesRanges = map[string]bool{
-	"1d": true, "1w": true, "1m": true, "3m": true, "6m": true,
+	"3d": true, "1w": true, "1m": true, "3m": true, "6m": true,
 	"1y": true, "3y": true, "5y": true, "all": true,
 }
 
@@ -38,9 +38,8 @@ func IsValidReturnSeriesRange(rangeKey string) bool {
 }
 
 // ComputeReturnSeries builds a cumulative-return curve normalized to the first
-// valid point in the range (0%). For "1d" it falls back to the last two
-// available trading days. Returns an insufficient_history status with empty
-// points when the range has fewer than two valid observations.
+// valid point in the range (0%). Returns an insufficient_history status with
+// empty points when the range has fewer than two valid observations.
 func ComputeReturnSeries(points []DataPoint, asOfDate, rangeKey, pointType, sourceName string) ReturnSeries {
 	out := ReturnSeries{
 		AsOfDate:   asOfDate,
@@ -98,18 +97,14 @@ func ComputeReturnSeries(points []DataPoint, asOfDate, rangeKey, pointType, sour
 }
 
 func returnSeriesStartIndex(points []DataPoint, endIdx int, endDate, rangeKey string) (int, bool) {
-	if rangeKey == "1d" {
-		if endIdx-1 < 0 {
-			return 0, false
-		}
-		return endIdx - 1, true
-	}
 	if rangeKey == "all" {
 		return 0, true
 	}
 	endT := parseDate(endDate)
 	var target time.Time
 	switch rangeKey {
+	case "3d":
+		target = endT.AddDate(0, 0, -3)
 	case "1w":
 		target = endT.AddDate(0, 0, -7)
 	case "1m":

@@ -199,7 +199,6 @@ func applyEquityWeightDelta(in *simulation.InputSnapshot, delta float64) {
 func cloneSnapshot(in *simulation.InputSnapshot) simulation.InputSnapshot {
 	cp := *in
 	cp.Assets = append([]simulation.SnapshotAsset(nil), in.Assets...)
-	cp.CashFlows = append([]simulation.SnapshotCashFlow(nil), in.CashFlows...)
 	return cp
 }
 

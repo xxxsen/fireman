@@ -34,16 +34,15 @@ func TestUpdateParameters_ApplyUnallocatedGapToCash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, flows, err := svc.GetParameters(context.Background(), plan.ID)
+	p, err := svc.GetParameters(context.Background(), plan.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.TotalAssetsMinor = 2_000_000_00
 
-	_, _, err = svc.UpdateParameters(context.Background(), plan.ID, ParametersUpdateRequest{
+	_, err = svc.UpdateParameters(context.Background(), plan.ID, ParametersUpdateRequest{
 		ConfigVersion:          plan.ConfigVersion,
 		Parameters:             p,
-		CashFlows:              flows,
 		ApplyUnallocatedToCash: true,
 	})
 	if err != nil {

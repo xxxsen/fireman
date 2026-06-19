@@ -185,25 +185,12 @@ func parseSnapshotWarnings(raw string) []string {
 	return out
 }
 
-func snapshotCashFlows(flows []repository.PlanCashFlow) []simulation.SnapshotCashFlow {
-	cfSnap := make([]simulation.SnapshotCashFlow, 0, len(flows))
-	for _, f := range flows {
-		cfSnap = append(cfSnap, simulation.SnapshotCashFlow{
-			ID: f.ID, Kind: f.Kind, AmountMinor: f.AmountMinor, StartMonthOffset: f.StartMonthOffset,
-			EndMonthOffset: f.EndMonthOffset, Recurrence: f.Recurrence, InflationLinked: f.InflationLinked,
-			AnnualGrowthRate: f.AnnualGrowthRate, Enabled: f.Enabled,
-		})
-	}
-	return cfSnap
-}
-
 func buildInputSnapshotStruct(
 	plan repository.Plan,
 	params repository.PlanParameters,
 	seed int64,
 	configHash string,
 	assets []simulation.SnapshotAsset,
-	cfSnap []simulation.SnapshotCashFlow,
 ) *simulation.InputSnapshot {
 	in := &simulation.InputSnapshot{
 		EngineVersion:     simulation.EngineVersion,
@@ -225,8 +212,7 @@ func buildInputSnapshotStruct(
 			TransactionCostRate: params.TransactionCostRate, SimulationRuns: params.SimulationRuns,
 			StudentTDf: params.StudentTDf, Seed: strconv.FormatInt(seed, 10),
 		},
-		Assets:    assets,
-		CashFlows: cfSnap,
+		Assets: assets,
 	}
 	in.MarketSnapshotHash = simulation.MarketHashFromAssets(assets)
 	return in

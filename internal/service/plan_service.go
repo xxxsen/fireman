@@ -38,11 +38,10 @@ type PlanDetail struct {
 	ConfigHash string `json:"config_hash"`
 }
 
-// ParametersUpdateRequest updates parameters and optional cash flows.
+// ParametersUpdateRequest updates plan FIRE parameters.
 type ParametersUpdateRequest struct {
 	ConfigVersion          int                       `json:"config_version"`
 	Parameters             repository.PlanParameters `json:"parameters"`
-	CashFlows              []repository.PlanCashFlow `json:"cash_flows,omitempty"`
 	ApplyUnallocatedToCash bool                      `json:"apply_unallocated_to_cash,omitempty"`
 }
 
@@ -237,64 +236,58 @@ func (s *PlanService) Delete(ctx context.Context, planID string) error {
 	return nil
 }
 
-// GetParameters returns parameters and cash flows.
-func (s *PlanService) GetParameters(ctx context.Context, planID string) (repository.PlanParameters,
-	[]repository.PlanCashFlow, error,
-) {
+// GetParameters returns plan FIRE parameters.
+func (s *PlanService) GetParameters(ctx context.Context, planID string) (repository.PlanParameters, error) {
 	if _, err := s.plans.GetByID(ctx, planID); err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
-			return repository.PlanParameters{}, nil, newErr("plan_not_found", "plan not found", nil)
+			return repository.PlanParameters{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PlanParameters{}, nil, wrapRepo("load plan", err)
+		return repository.PlanParameters{}, wrapRepo("load plan", err)
 	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
-		return repository.PlanParameters{}, nil, wrapRepo("load plan parameters", err)
+		return repository.PlanParameters{}, wrapRepo("load plan parameters", err)
 	}
-	flows, err := s.params.ListCashFlows(ctx, planID)
-	if err != nil {
-		return repository.PlanParameters{}, nil, wrapRepo("list plan cash flows", err)
-	}
-	return params, flows, nil
+	return params, nil
 }
 
 func (s *PlanService) UpdateParameters(ctx context.Context, planID string,
 	req ParametersUpdateRequest,
-) (repository.PlanParameters, []repository.PlanCashFlow, error) {
+) (repository.PlanParameters, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
-			return repository.PlanParameters{}, nil, newErr("plan_not_found", "plan not found", nil)
+			return repository.PlanParameters{}, newErr("plan_not_found", "plan not found", nil)
 		}
-		return repository.PlanParameters{}, nil, wrapRepo("load plan", err)
+		return repository.PlanParameters{}, wrapRepo("load plan", err)
 	}
 	if req.ConfigVersion != plan.ConfigVersion {
-		return repository.PlanParameters{}, nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+		return repository.PlanParameters{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 	}
 	req.Parameters.PlanID = planID
 	if err := validateParameters(req.Parameters); err != nil {
-		return repository.PlanParameters{}, nil, newErr("parameters_invalid", err.Error(), nil)
+		return repository.PlanParameters{}, newErr("parameters_invalid", err.Error(), nil)
 	}
 
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
-		return repository.PlanParameters{}, nil, wrapRepo("list plan holdings", err)
+		return repository.PlanParameters{}, wrapRepo("list plan holdings", err)
 	}
 	if err := validateParametersAssetsGap(req.Parameters, holds, req.ApplyUnallocatedToCash); err != nil {
-		return repository.PlanParameters{}, nil, err
+		return repository.PlanParameters{}, err
 	}
 	gap := req.Parameters.TotalAssetsMinor - enabledHoldingsSum(holds)
 
 	err = applyParametersUpdateInTx(ctx, s, planID, req, gap, holds)
 	if err != nil {
 		if errors.Is(err, repository.ErrVersionConflict) {
-			return repository.PlanParameters{}, nil, newErr(
+			return repository.PlanParameters{}, newErr(
 				"plan_version_conflict",
 				"plan configuration version mismatch",
 				nil,
 			)
 		}
-		return repository.PlanParameters{}, nil, wrapRepo("update plan parameters", err)
+		return repository.PlanParameters{}, wrapRepo("update plan parameters", err)
 	}
 	return s.GetParameters(ctx, planID)
 }

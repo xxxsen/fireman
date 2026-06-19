@@ -28,7 +28,6 @@ vi.mock("@/lib/api/plans", () => ({
   getParameters: () =>
     Promise.resolve({
       parameters: { selected_scenario_id: "scn_1" },
-      cash_flows: [],
     }),
 }));
 

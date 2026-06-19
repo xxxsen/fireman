@@ -3,7 +3,7 @@ import {
   buildParametersFormSnapshot,
   isParametersFormDirty,
 } from "./form-snapshot";
-import type { PlanCashFlow, PlanParameters } from "@/types/api";
+import type { PlanParameters } from "@/types/api";
 
 const baseParams: PlanParameters = {
   plan_id: "plan_1",
@@ -36,17 +36,15 @@ const baseParams: PlanParameters = {
   updated_at: 1,
 };
 
-const baseFlows: PlanCashFlow[] = [];
-
 describe("form-snapshot", () => {
   it("detects dirty only when values actually change", () => {
-    const initial = buildParametersFormSnapshot("计划 A", baseParams, baseFlows, "");
+    const initial = buildParametersFormSnapshot("计划 A", baseParams, "");
     expect(isParametersFormDirty(initial, initial)).toBe(false);
 
-    const changedName = buildParametersFormSnapshot("计划 B", baseParams, baseFlows, "");
+    const changedName = buildParametersFormSnapshot("计划 B", baseParams, "");
     expect(isParametersFormDirty(initial, changedName)).toBe(true);
 
-    const reverted = buildParametersFormSnapshot("计划 A", baseParams, baseFlows, "");
+    const reverted = buildParametersFormSnapshot("计划 A", baseParams, "");
     expect(isParametersFormDirty(initial, reverted)).toBe(false);
   });
 });

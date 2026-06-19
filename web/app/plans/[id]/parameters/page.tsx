@@ -8,7 +8,6 @@ import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { SaveBar } from "@/components/ui/SaveBar";
 import { StaleBanner } from "@/components/ui/StaleBanner";
-import { CashFlowEditor } from "@/components/plans/CashFlowEditor";
 import { usePlanResultStale } from "@/hooks/usePlanResultStale";
 import { usePlanEdit } from "../layout";
 import { getPlan, updatePlan } from "@/lib/api/plans";
@@ -25,7 +24,7 @@ import {
   buildParametersFormSnapshot,
   isParametersFormDirty,
 } from "@/lib/form-snapshot";
-import type { AssetClassTarget, PlanCashFlow, PlanParameters, RegionTarget } from "@/types/api";
+import type { AssetClassTarget, PlanParameters, RegionTarget } from "@/types/api";
 
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 const MAX_SEED = "9223372036854775807";
@@ -51,7 +50,6 @@ export function ParametersContent({
   const { markDirty, markClean } = usePlanEdit();
   const qc = useQueryClient();
   const [localParams, setLocalParams] = useState<PlanParameters | null>(null);
-  const [localCashFlows, setLocalCashFlows] = useState<PlanCashFlow[] | null>(null);
   const [localPlanName, setLocalPlanName] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [gapAction, setGapAction] = useState<"" | "cash">("");
@@ -81,26 +79,17 @@ export function ParametersContent({
   });
 
   const params = localParams ?? paramsQ.data?.parameters ?? null;
-  const cashFlows = useMemo(
-    () => localCashFlows ?? paramsQ.data?.cash_flows ?? [],
-    [localCashFlows, paramsQ.data?.cash_flows],
-  );
   const planName = localPlanName ?? planQ.data?.name ?? "";
 
   const initialSnapshot = useMemo(() => {
     if (!paramsQ.data || !planQ.data) return null;
-    return buildParametersFormSnapshot(
-      planQ.data.name,
-      paramsQ.data.parameters,
-      paramsQ.data.cash_flows,
-      "",
-    );
+    return buildParametersFormSnapshot(planQ.data.name, paramsQ.data.parameters, "");
   }, [paramsQ.data, planQ.data]);
 
   const currentSnapshot = useMemo(() => {
     if (!params) return null;
-    return buildParametersFormSnapshot(planName, params, cashFlows, gapAction);
-  }, [planName, params, cashFlows, gapAction]);
+    return buildParametersFormSnapshot(planName, params, gapAction);
+  }, [planName, params, gapAction]);
 
   const formDirty = useMemo(
     () => (currentSnapshot ? isParametersFormDirty(initialSnapshot, currentSnapshot) : false),
@@ -154,14 +143,12 @@ export function ParametersContent({
       return updateParameters(planId, {
         config_version: version,
         parameters: params,
-        cash_flows: cashFlows,
         apply_unallocated_to_cash: gap > 100 && gapAction === "cash",
       });
     },
     onSuccess: () => {
       markClean();
       setLocalParams(null);
-      setLocalCashFlows(null);
       setLocalPlanName(null);
       setLocalAssetTargets(null);
       setLocalRegionTargets(null);
@@ -280,42 +267,32 @@ export function ParametersContent({
 
       <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">资金与现金流</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <div>
-            <MoneyInput
-              label="计划基准规模"
-              valueMinor={params.total_assets_minor}
-              currency={planQ.data?.base_currency}
-              onChange={(v) => update("total_assets_minor", v)}
-            />
-            <p className="mt-1 text-xs text-ink-muted">
-              <MetricHelp termKey="configured_total_assets" />
-            </p>
-            {holdingsSum > params.total_assets_minor + 100 && (
-              <p className="mt-1 text-xs text-warning">
-                低于当前持仓 {formatMoney(holdingsSum - params.total_assets_minor, planQ.data?.base_currency)}
-              </p>
-            )}
-            {params.total_assets_minor > holdingsSum + 100 && (
-              <p className="mt-1 text-xs text-warning">
-                高于当前持仓 {formatMoney(params.total_assets_minor - holdingsSum, planQ.data?.base_currency)}（规模缺口）
-              </p>
-            )}
-          </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <MoneyInput
+            label={
+              <span className="flex items-center">
+                计划基准规模
+                <MetricHelp termKey="configured_total_assets" />
+              </span>
+            }
+            valueMinor={params.total_assets_minor}
+            currency={planQ.data?.base_currency}
+            onChange={(v) => update("total_assets_minor", v)}
+          />
           <MoneyInput
             label="当前年储蓄"
             valueMinor={params.annual_savings_minor}
             onChange={(v) => update("annual_savings_minor", v)}
           />
-          <PercentInput
-            label="年储蓄增长率"
-            value={params.annual_savings_growth_rate}
-            onChange={(v) => update("annual_savings_growth_rate", v)}
-          />
           <MoneyInput
             label="退休后首年支出"
             valueMinor={params.annual_spending_minor}
             onChange={(v) => update("annual_spending_minor", v)}
+          />
+          <PercentInput
+            label="年储蓄增长率"
+            value={params.annual_savings_growth_rate}
+            onChange={(v) => update("annual_savings_growth_rate", v)}
           />
           <MoneyInput
             label="期末最低资产目标"
@@ -325,46 +302,26 @@ export function ParametersContent({
         </div>
         {Math.abs(gap) > 100 && (
           <div className="mt-4 rounded-md border border-warning/30 bg-warning/5 p-3 text-sm">
-            <p>
-              {gap > 0 ? (
-                <>
-                  规模缺口 {formatMoney(gap, planQ.data?.base_currency)}
-                  <MetricHelp termKey="unallocated_gap" />
-                </>
-              ) : (
-                <>
-                  规模超出 {formatMoney(Math.abs(gap), planQ.data?.base_currency)}
-                  <MetricHelp termKey="scale_gap_over" />
-                </>
-              )}
-            </p>
             {gap > 0 ? (
-              <label className="mt-2 flex items-center gap-2">
+              <label className="flex flex-wrap items-center gap-2">
                 <input
                   type="checkbox"
                   checked={gapAction === "cash"}
                   onChange={(e) => setGapAction(e.target.checked ? "cash" : "")}
                 />
-                计入现金/其他（保存前请补充持仓或下调计划基准规模）
+                <span className="flex items-center">
+                  规模缺口 {formatMoney(gap, planQ.data?.base_currency)}，可计入现金/其他
+                  <MetricHelp termKey="unallocated_gap" />
+                </span>
               </label>
             ) : (
-              <p className="mt-1 text-danger">持仓合计超过计划基准规模，无法保存。</p>
+              <p className="flex items-center text-danger">
+                持仓合计超过计划基准规模 {formatMoney(Math.abs(gap), planQ.data?.base_currency)}，无法保存。
+                <MetricHelp termKey="scale_gap_over" />
+              </p>
             )}
           </div>
         )}
-      </section>
-
-      <section className="rounded-lg border border-line p-4">
-        <h2 className="text-lg font-medium">额外现金流事件</h2>
-        <div className="mt-4">
-          <CashFlowEditor
-            planId={planId}
-            flows={cashFlows}
-            onChange={(next) => {
-              setLocalCashFlows(next);
-            }}
-          />
-        </div>
       </section>
 
       {showAllocation && <section className="rounded-lg border border-line p-4">

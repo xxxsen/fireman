@@ -17,7 +17,7 @@ import {
   listScenarios,
   updateScenario,
 } from "@/lib/api/allocation";
-import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
+import { assetClassLabel, formatPercent } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
 import { queryErrorMessage } from "@/lib/query-error";
 import {
@@ -25,8 +25,6 @@ import {
   defaultWizardRegionTargets,
 } from "@/lib/wizard-allocation";
 import type { AllocationScenario, RegionTarget } from "@/types/api";
-
-const EDITABLE_REGION_CLASSES = ["equity", "bond", "cash"] as const;
 
 function CopyIcon() {
   return (
@@ -62,32 +60,6 @@ function defaultScenarioRegionTargets(): RegionTarget[] {
 
 function ensureRegionTargets(targets: RegionTarget[] | undefined): RegionTarget[] {
   return targets && targets.length > 0 ? targets : defaultScenarioRegionTargets();
-}
-
-function updateRegionTarget(
-  targets: RegionTarget[],
-  assetClass: string,
-  region: string,
-  weight: number,
-): RegionTarget[] {
-  return targets.map((target) =>
-    target.asset_class === assetClass && target.region === region
-      ? { ...target, weight_within_class: weight }
-      : target,
-  );
-}
-
-function validateScenarioRegionTargets(targets: RegionTarget[]): string | null {
-  for (const assetClass of ["equity", "bond", "cash"] as const) {
-    const group = targets.filter((target) => target.asset_class === assetClass);
-    const check = validatePercentSum(
-      group.map((target) => ({ label: target.region, value: target.weight_within_class })),
-    );
-    if (!check.passed) {
-      return `${assetClassLabel(assetClass)} 地区组内权重：${check.message}`;
-    }
-  }
-  return null;
 }
 
 export function ScenariosPageContent() {
@@ -145,13 +117,6 @@ export function ScenariosPageContent() {
     );
     if (!weightCheck.passed) {
       setFormError(weightCheck.message);
-      return;
-    }
-    const regionError = validateScenarioRegionTargets(
-      ensureRegionTargets(editing.region_targets),
-    );
-    if (regionError) {
-      setFormError(regionError);
       return;
     }
     saveMut.mutate(editing);
@@ -376,39 +341,9 @@ export function ScenariosPageContent() {
                 />
               </div>
             ))}
-            <p className="mt-4 flex items-center text-sm font-medium text-ink">
-              地区组内权重
-              <MetricHelp termKey="target_weight_within_asset_class" />
+            <p className="mt-3 text-xs text-ink-muted">
+              场景模板只决定大类目标权重；国内/国外配比在各计划的设置中维护。
             </p>
-            {EDITABLE_REGION_CLASSES.map((assetClass) => {
-              const regions = ensureRegionTargets(editing.region_targets).filter(
-                (target) => target.asset_class === assetClass,
-              );
-              return (
-                <div key={assetClass} className="mt-3 rounded-md border border-line p-3">
-                  <p className="text-sm font-medium text-ink">{assetClassLabel(assetClass)}</p>
-                  {regions.map((target) => (
-                    <div key={`${target.asset_class}:${target.region}`} className="mt-2">
-                      <PercentInput
-                        label={regionLabel(target.region)}
-                        value={target.weight_within_class}
-                        onChange={(value) =>
-                          setEditing({
-                            ...editing,
-                            region_targets: updateRegionTarget(
-                              ensureRegionTargets(editing.region_targets),
-                              target.asset_class,
-                              target.region,
-                              value,
-                            ),
-                          })
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
             {formError && (
               <p className="mt-4 text-sm text-danger" role="alert">
                 {formError}
