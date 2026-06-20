@@ -259,6 +259,76 @@ func TestSystemProfileRegistryGuardsV3(t *testing.T) {
 	}
 }
 
+// TestHistoricalSystemProfileVariants pins the read-only variant registry that
+// records every recognized published system CONTENT keyed by (id, version,
+// content_hash), including the TD 065 v2 variant (td/067 R14). LookupSystemContent
+// must accept exactly these contents and reject unknown ones, and only the current
+// identity (v3) may be a global default.
+func TestHistoricalSystemProfileVariants(t *testing.T) {
+	variants := HistoricalSystemProfileVariants()
+	// v1, v2 (TD064), v2 (TD065 variant), v3.
+	if len(variants) != 4 {
+		t.Fatalf("expected 4 recognized system contents, got %d", len(variants))
+	}
+	// Both published v2 contents must be recognized under the same identity.
+	v2Hashes := RecognizedSystemContentHashes(SystemProfileV2ID, SystemProfileV2Version)
+	if len(v2Hashes) != 2 {
+		t.Fatalf("expected 2 recognized v2 contents, got %v", v2Hashes)
+	}
+
+	// The current v3 content is recognized and carries the live evidence hash.
+	cur := CurrentSystemIdentity()
+	v3, ok := LookupSystemContent(SystemProfileID, SystemProfileVersion, cur.CanonicalHash)
+	if !ok {
+		t.Fatal("current v3 content must be recognized")
+	}
+	if v3.EvidenceHash != CMAEvidenceContentHash {
+		t.Errorf("v3 variant evidence hash %q != artifact %q", v3.EvidenceHash, CMAEvidenceContentHash)
+	}
+
+	// The TD 065 v2 variant is recognized and pins its own evidence hash, distinct
+	// from the TD 064 v2 (which has no evidence artifact).
+	td065, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, systemProfileV2TD065CanonicalHash)
+	if !ok {
+		t.Fatal("TD 065 v2 variant content must be recognized")
+	}
+	if td065.EvidenceHash != systemProfileV2TD065EvidenceHash || td065.EvidenceHash == "" {
+		t.Errorf("TD 065 v2 evidence hash %q != pinned %q", td065.EvidenceHash, systemProfileV2TD065EvidenceHash)
+	}
+	td064, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, systemProfileV2CanonicalHash)
+	if !ok {
+		t.Fatal("TD 064 v2 content must be recognized")
+	}
+	if td064.EvidenceHash != "" {
+		t.Errorf("TD 064 v2 must have no evidence artifact, got %q", td064.EvidenceHash)
+	}
+
+	// A fabricated system content is never recognized (cannot forge provenance).
+	if _, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, strings.Repeat("0", 64)); ok {
+		t.Error("an unknown system content must not be recognized")
+	}
+	// Every recognized content has a 64-char canonical hash.
+	for _, v := range variants {
+		if len(v.CanonicalHash) != 64 {
+			t.Errorf("%s content hash must be a 64-char sha256, got %q", v.Ref(), v.CanonicalHash)
+		}
+	}
+}
+
+// TestReservedSystemNamespace covers td/067 R13: the system_cma_ prefix is reserved.
+func TestReservedSystemNamespace(t *testing.T) {
+	for _, id := range []string{"system_cma_v3", "system_cma_v1", "system_cma_anything"} {
+		if !HasReservedSystemID(id) {
+			t.Errorf("%q must be reserved", id)
+		}
+	}
+	for _, id := range []string{"user_abc", "user_cma_x", "custom", ""} {
+		if HasReservedSystemID(id) {
+			t.Errorf("%q must NOT be reserved", id)
+		}
+	}
+}
+
 // TestSystemProfileRegistryChain pins the immutable identity chain and the frozen
 // v1/v2 canonical hashes (td/066 R12).
 func TestSystemProfileRegistryChain(t *testing.T) {

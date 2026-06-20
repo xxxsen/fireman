@@ -1,6 +1,9 @@
 package assumptions
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // System profile identities form an append-only, immutable chain. Each published
 // identity's canonical content is frozen forever; correcting the model or its
@@ -33,6 +36,17 @@ const (
 	SystemLegacyProfileVersion = 1
 )
 
+// SystemProfileIDPrefix is the reserved id namespace for system-owned profiles.
+// A user profile may NEVER use an id with this prefix, otherwise it could shadow a
+// system identity in the (id, version)-keyed table and steal its CMA evidence
+// provenance (td/067 R13).
+const SystemProfileIDPrefix = "system_cma_"
+
+// HasReservedSystemID reports whether an id is in the reserved system namespace.
+func HasReservedSystemID(id string) bool {
+	return strings.HasPrefix(id, SystemProfileIDPrefix)
+}
+
 // Pinned canonical/evidence SHA-256 for every published system identity. These are
 // asserted in tests: editing the v3 evidence artifact (or the built canonical
 // content) without publishing a new identity and updating this registry fails CI
@@ -40,9 +54,15 @@ const (
 // canonical JSON (see internal/repository/testdata).
 const (
 	systemProfileV1CanonicalHash = "6eecc14f7c8c8f812382e9cea88b7c056c18db8e6fd1a832961e63dd66f0971c"
+	// systemProfileV2CanonicalHash is the TD 064 published v2 canonical content.
 	systemProfileV2CanonicalHash = "3a1545466b5f40856706e66952a3cad26ef546a929e181949727b96dbd143698"
-	systemProfileV3CanonicalHash = "27fdbe1790afb5b0f75ec780472e4426abce1f46e966dc689f9dd0dd04cf2886"
-	systemProfileV3EvidenceHash  = "6cc582c4b0a1695199f09c9dc24b0f5d22df3af13cf08f6bc4fe6bef2c119eb2"
+	// systemProfileV2TD065CanonicalHash is the v2 VARIANT briefly built from
+	// cma_evidence_v2.json during TD 065 (commit 9700d69) under the same v2 identity
+	// (td/067 R14). Databases first initialized on that build hold this content.
+	systemProfileV2TD065CanonicalHash = "732e64f958bf5d48b6089516cf546b356537b34b23e7fdd7798079a3ac7af570"
+	systemProfileV2TD065EvidenceHash  = "079d7844f2a365771895db97f4e3d5b1388ce6ea23ec6969be86725a9d5bce22"
+	systemProfileV3CanonicalHash      = "27fdbe1790afb5b0f75ec780472e4426abce1f46e966dc689f9dd0dd04cf2886"
+	systemProfileV3EvidenceHash       = "6cc582c4b0a1695199f09c9dc24b0f5d22df3af13cf08f6bc4fe6bef2c119eb2"
 )
 
 // SystemProfileIdentity is one immutable entry in the system-profile registry.
@@ -108,6 +128,83 @@ func IsCurrentSystemDefaultIdentity(id string, version int) bool {
 // from.
 func CurrentSystemPredecessorRef() string {
 	return CurrentSystemIdentity().Predecessor
+}
+
+// HistoricalSystemProfileVariant is one recognized, immutable published system
+// profile CONTENT, keyed by (id, version, content_hash). Unlike the identity chain
+// (one canonical content per identity), the variant registry also records contents
+// that were briefly published under an already-used identity — notably the TD 065
+// v2 variant (td/067 R14). It is read-only: it backs historical replay/pin
+// provenance and lets EnsureSystemDefault recognize a legitimate historical system
+// row, but a variant can never become the global default.
+type HistoricalSystemProfileVariant struct {
+	ID            string
+	Version       int
+	CanonicalHash string
+	EvidenceHash  string // backing CMA evidence artifact hash ("" if none)
+	Note          string
+}
+
+// Ref returns the "id@version" reference for this variant.
+func (v HistoricalSystemProfileVariant) Ref() string {
+	return profileRef(v.ID, v.Version)
+}
+
+var historicalSystemProfileVariants = []HistoricalSystemProfileVariant{
+	{
+		ID: SystemLegacyProfileID, Version: SystemLegacyProfileVersion,
+		CanonicalHash: systemProfileV1CanonicalHash,
+		Note:          "td/061/062 original v1",
+	},
+	{
+		ID: SystemProfileV2ID, Version: SystemProfileV2Version,
+		CanonicalHash: systemProfileV2CanonicalHash,
+		Note:          "td/064 published v2 (additive shortcut)",
+	},
+	{
+		ID: SystemProfileV2ID, Version: SystemProfileV2Version,
+		CanonicalHash: systemProfileV2TD065CanonicalHash,
+		EvidenceHash:  systemProfileV2TD065EvidenceHash,
+		Note:          "td/065 v2 variant built from cma_evidence_v2.json (commit 9700d69)",
+	},
+	{
+		ID: SystemProfileID, Version: SystemProfileVersion,
+		CanonicalHash: systemProfileV3CanonicalHash,
+		EvidenceHash:  systemProfileV3EvidenceHash,
+		Note:          "td/066 current v3 (compounded, evidence-backed)",
+	},
+}
+
+// HistoricalSystemProfileVariants returns the read-only variant registry.
+func HistoricalSystemProfileVariants() []HistoricalSystemProfileVariant {
+	out := make([]HistoricalSystemProfileVariant, len(historicalSystemProfileVariants))
+	copy(out, historicalSystemProfileVariants)
+	return out
+}
+
+// LookupSystemContent returns the recognized system content for an exact
+// (id, version, content_hash). It is the single source of truth for "is this
+// system row a known, immutable published content" used by the startup upgrade
+// guard and by run provenance (td/067 R13/R14).
+func LookupSystemContent(id string, version int, contentHash string) (HistoricalSystemProfileVariant, bool) {
+	for _, v := range historicalSystemProfileVariants {
+		if v.ID == id && v.Version == version && v.CanonicalHash == contentHash {
+			return v, true
+		}
+	}
+	return HistoricalSystemProfileVariant{}, false
+}
+
+// RecognizedSystemContentHashes returns the set of recognized canonical content
+// hashes for a given system id@version (e.g. both published v2 contents).
+func RecognizedSystemContentHashes(id string, version int) []string {
+	var out []string
+	for _, v := range historicalSystemProfileVariants {
+		if v.ID == id && v.Version == version {
+			out = append(out, v.CanonicalHash)
+		}
+	}
+	return out
 }
 
 func profileRef(id string, version int) string {

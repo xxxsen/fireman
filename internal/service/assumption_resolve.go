@@ -18,6 +18,14 @@ type resolvedAssumption struct {
 	Profile  assumptions.Profile
 	Scenario string
 	Mode     string
+	// ProfileContentHash is the FROZEN stored content hash of the resolved profile
+	// row (not a re-canonicalization of the decoded struct). For a legacy system
+	// profile whose on-disk canonical predates current struct fields, the stored
+	// hash is the only one that matches the immutable registry, so run provenance
+	// and the system-content recognition check must use it (td/067 R13/R14). Empty
+	// for an in-memory profile (unit tests / built-in fallback), in which case the
+	// snapshot builder recomputes it.
+	ProfileContentHash string
 }
 
 // ResolveAssumptionProfile loads the profile + scenario a plan's parameters
@@ -39,20 +47,22 @@ func (s *SimulationService) ResolveAssumptionProfile(
 		scenario = assumptions.ScenarioBaseline
 	}
 
-	profile, scenario, err := s.resolveProfileAndScenario(ctx, params, scenario)
+	profile, scenario, contentHash, err := s.resolveProfileAndScenario(ctx, params, scenario)
 	if err != nil {
 		return resolvedAssumption{}, err
 	}
-	return resolvedAssumption{Profile: profile, Scenario: scenario, Mode: mode}, nil
+	return resolvedAssumption{
+		Profile: profile, Scenario: scenario, Mode: mode, ProfileContentHash: contentHash,
+	}, nil
 }
 
 func (s *SimulationService) resolveProfileAndScenario(
 	ctx context.Context, params repository.PlanParameters, scenario string,
-) (assumptions.Profile, string, error) {
+) (assumptions.Profile, string, string, error) {
 	if params.AssumptionSelectionMode == SelectionPinnedProfile && params.ReturnAssumptionSetID != "" {
-		p, err := s.assumptions.Get(ctx, params.ReturnAssumptionSetID, params.ReturnAssumptionSetVersion)
+		p, hash, err := s.assumptions.GetWithHash(ctx, params.ReturnAssumptionSetID, params.ReturnAssumptionSetVersion)
 		if err != nil {
-			return assumptions.Profile{}, "", newErr("assumption_profile_not_found",
+			return assumptions.Profile{}, "", "", newErr("assumption_profile_not_found",
 				"pinned assumption profile is unavailable", map[string]any{
 					"profile_id": params.ReturnAssumptionSetID, "version": params.ReturnAssumptionSetVersion,
 				})
@@ -60,34 +70,34 @@ func (s *SimulationService) resolveProfileAndScenario(
 		// A pinned profile must reference an active version: a draft/superseded pin
 		// must never enter a run (td/063 N2).
 		if p.Status != assumptions.StatusActive {
-			return assumptions.Profile{}, "", newErr("assumption_profile_not_active",
+			return assumptions.Profile{}, "", "", newErr("assumption_profile_not_active",
 				"pinned assumption profile must be an active version", map[string]any{
 					"profile_id": params.ReturnAssumptionSetID, "version": params.ReturnAssumptionSetVersion,
 				})
 		}
-		return p, scenario, nil
+		return p, scenario, hash, nil
 	}
 
 	pref, err := s.assumptions.GetPreferences(ctx)
 	if err != nil {
-		return assumptions.Profile{}, "", wrapRepo("get assumption preferences", err)
+		return assumptions.Profile{}, "", "", wrapRepo("get assumption preferences", err)
 	}
 	if scenario == assumptions.ScenarioBaseline && pref.DefaultScenario != "" {
 		scenario = pref.DefaultScenario
 	}
-	p, err := s.assumptions.Get(ctx, pref.DefaultProfileID, pref.DefaultProfileVersion)
+	p, hash, err := s.assumptions.GetWithHash(ctx, pref.DefaultProfileID, pref.DefaultProfileVersion)
 	if err == nil {
-		return p, scenario, nil
+		return p, scenario, hash, nil
 	}
 	if !errors.Is(err, repository.ErrAssumptionProfileNotFound) {
-		return assumptions.Profile{}, "", wrapRepo("get default assumption profile", err)
+		return assumptions.Profile{}, "", "", wrapRepo("get default assumption profile", err)
 	}
 	// The configured default version was removed; fall back to the system default.
-	sys, sysErr := s.assumptions.Get(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion)
+	sys, sysHash, sysErr := s.assumptions.GetWithHash(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion)
 	if sysErr != nil {
-		return assumptions.Profile{}, "", wrapRepo("get system assumption profile", sysErr)
+		return assumptions.Profile{}, "", "", wrapRepo("get system assumption profile", sysErr)
 	}
-	return sys, scenario, nil
+	return sys, scenario, sysHash, nil
 }
 
 // calibrateAsset derives forward return + volatility for one asset using the

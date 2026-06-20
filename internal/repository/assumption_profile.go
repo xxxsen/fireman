@@ -14,6 +14,13 @@ import (
 // ErrAssumptionProfileNotFound is returned when a profile id@version is missing.
 var ErrAssumptionProfileNotFound = errors.New("assumption profile not found")
 
+// ErrSystemProfileIdentityConflict is returned when a row that occupies a system
+// identity (id+version) is not a recognized, immutable published content: e.g. an
+// owner_scope=system row whose content hash matches no entry in the system content
+// registry. The startup upgrade refuses to overwrite or silently accept it; a
+// release data-repair script must resolve it explicitly (td/067 R13/R14).
+var ErrSystemProfileIdentityConflict = errors.New("system profile identity conflict")
+
 // AssumptionProfileRepo persists global simulation assumption profiles, their
 // normalized projections and the single-row user preference (td/061 §4.1).
 type AssumptionProfileRepo struct {
@@ -53,43 +60,278 @@ type AssumptionPreferences struct {
 }
 
 // EnsureSystemDefault performs the idempotent system-profile upgrade (td/064 R6,
-// td/066 R12). It publishes the current system default (system_cma_v3@1) as a NEW
-// immutable identity without ever updating or deleting the frozen system_cma_v1@1
-// and system_cma_v2@1, then atomically repoints the global default preference to
-// v3 only when it is empty or still points at v3's DIRECT predecessor (v2). A
-// preference pointing at a user-chosen custom profile, or at a non-direct
-// predecessor (v1), is left untouched. Safe to call on every startup/read path.
+// td/066 R12, td/067 R13/R14). It publishes the current system default
+// (system_cma_v3@1) as a NEW immutable identity without ever updating or deleting
+// the frozen system_cma_v1@1 / system_cma_v2@1, then atomically repoints the
+// global default preference to v3 only when it is empty or still points at v3's
+// DIRECT predecessor (v2). A preference pointing at a user-chosen custom profile,
+// or at a non-direct predecessor (v1), is left untouched.
+//
+// Identity integrity (td/067 R13/R14):
+//   - The current identity row, if present, must be owner_scope=system and its
+//     stored + recomputed content hash must equal the registry canonical hash.
+//   - A user profile that squats on the reserved system_cma_ namespace is migrated
+//     to a deterministic user_legacy_<hash> id (repointing plan pins and the global
+//     default) before the real system identity is published.
+//   - A surviving owner_scope=system v2 row must match one of the recognized
+//     published v2 contents; an unknown system content yields a conflict and is
+//     never overwritten.
+//
+// Safe to call on every startup/read path.
 func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
-	p := assumptions.SystemDefaultProfile()
-	var exists int
-	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM simulation_assumption_profiles WHERE id=? AND version=?`,
-		p.ID, p.Version).Scan(&exists)
+	cur := assumptions.CurrentSystemIdentity()
+	// Fast path: a correctly-published current identity needs no transaction. We
+	// still validate it read-only on every call so a tampered/hijacked v3 row is
+	// rejected before any run or default write (td/067 R13 #2).
+	row, found, err := probeProfileRow(ctx, r.db, cur.ID, cur.Version)
 	if err != nil {
-		return wrapSQL("probe system assumption profile", err)
+		return err
 	}
-	if exists > 0 {
-		// Already upgraded. The one-time default migration ran inside the upgrade
-		// transaction below, so there is nothing to do on subsequent calls (and
-		// re-running it would fight a user who deliberately re-selected v2).
-		return nil
+	if found && row.ownerScope == assumptions.OwnerSystem {
+		return assertRecognizedCurrentIdentity(cur, row)
 	}
+	// Slow path: fresh install, legacy (v1/v2) upgrade, or a reserved-namespace
+	// hijack to repair. All mutations happen inside one transaction.
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return wrapSQL("begin system profile tx", err)
 	}
-	if err := insertProfileTx(ctx, tx, p, assumptions.OwnerSystem, assumptions.StatusActive,
-		assumptions.SystemProfileSourceNote, assumptions.SystemProfileReviewedBy,
-		assumptions.SystemProfileReviewedAt); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if err := r.migrateDefaultToCurrentSystem(ctx, tx); err != nil {
+	if err := r.runSystemDefaultUpgrade(ctx, tx, cur); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return wrapSQL("commit system profile", err)
+	}
+	return nil
+}
+
+// runSystemDefaultUpgrade executes the transactional upgrade/repair body.
+func (r *AssumptionProfileRepo) runSystemDefaultUpgrade(
+	ctx context.Context, tx *sql.Tx, cur assumptions.SystemProfileIdentity,
+) error {
+	// R13 #3: migrate any user profile squatting on the reserved system namespace
+	// so the real system identity can be published without a primary-key clash.
+	if err := repairReservedUserProfilesTx(ctx, tx); err != nil {
+		return err
+	}
+	// R14: a surviving system v2 row must be a recognized published content.
+	if err := assertRecognizedSystemV2(ctx, tx); err != nil {
+		return err
+	}
+	// Re-evaluate the current identity inside the tx (a user v3 squatter is gone).
+	row, found, err := probeProfileRow(ctx, tx, cur.ID, cur.Version)
+	if err != nil {
+		return err
+	}
+	if found {
+		if row.ownerScope != assumptions.OwnerSystem {
+			return fmt.Errorf("current system identity %s is owner_scope=%s: %w",
+				cur.Ref(), row.ownerScope, ErrSystemProfileIdentityConflict)
+		}
+		return assertRecognizedCurrentIdentity(cur, row)
+	}
+	// Publish the current system identity and migrate the default from its direct
+	// predecessor (v2 -> v3) only.
+	p := assumptions.SystemDefaultProfile()
+	if err := insertProfileTx(ctx, tx, p, assumptions.OwnerSystem, assumptions.StatusActive,
+		assumptions.SystemProfileSourceNote, assumptions.SystemProfileReviewedBy,
+		assumptions.SystemProfileReviewedAt); err != nil {
+		return err
+	}
+	return r.migrateDefaultToCurrentSystem(ctx, tx)
+}
+
+// profileRow is the minimal identity-validation projection of a profile row.
+type profileRow struct {
+	ownerScope  string
+	contentHash string
+	canonical   string
+}
+
+// probeProfileRow loads the owner_scope, content hash and canonical JSON for an
+// id@version, reporting found=false (no error) when the row is absent.
+func probeProfileRow(ctx context.Context, q dbQuerier, id string, version int) (profileRow, bool, error) {
+	var row profileRow
+	err := q.QueryRowContext(ctx,
+		`SELECT owner_scope, content_hash, canonical_json
+		 FROM simulation_assumption_profiles WHERE id=? AND version=?`,
+		id, version).Scan(&row.ownerScope, &row.contentHash, &row.canonical)
+	if errors.Is(err, sql.ErrNoRows) {
+		return profileRow{}, false, nil
+	}
+	if err != nil {
+		return profileRow{}, false, wrapSQL("probe assumption profile row", err)
+	}
+	return row, true, nil
+}
+
+// assertRecognizedCurrentIdentity verifies a system-owned current-identity row is
+// byte-faithful to the pinned registry canonical hash (td/067 R13 #2): the stored
+// content hash AND the hash recomputed from the stored canonical JSON must both
+// equal the registry hash, otherwise the row was tampered/hijacked and is refused.
+func assertRecognizedCurrentIdentity(cur assumptions.SystemProfileIdentity, row profileRow) error {
+	if row.contentHash != cur.CanonicalHash {
+		return fmt.Errorf("system identity %s stored content hash %q != registry %q: %w",
+			cur.Ref(), row.contentHash, cur.CanonicalHash, ErrSystemProfileIdentityConflict)
+	}
+	recomputed, err := recomputeCanonicalHash(row.canonical)
+	if err != nil {
+		return fmt.Errorf("recompute system identity %s canonical hash: %w", cur.Ref(), err)
+	}
+	if recomputed != cur.CanonicalHash {
+		return fmt.Errorf("system identity %s recomputed canonical hash %q != registry %q: %w",
+			cur.Ref(), recomputed, cur.CanonicalHash, ErrSystemProfileIdentityConflict)
+	}
+	return nil
+}
+
+// assertRecognizedSystemV2 ensures a surviving owner_scope=system v2 row carries a
+// content recognized in the historical variant registry (td/067 R14). An unknown
+// system v2 content is a conflict, never guessed at.
+func assertRecognizedSystemV2(ctx context.Context, tx *sql.Tx) error {
+	row, found, err := probeProfileRow(ctx, tx, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version)
+	if err != nil {
+		return err
+	}
+	if !found || row.ownerScope != assumptions.OwnerSystem {
+		return nil
+	}
+	if _, ok := assumptions.LookupSystemContent(
+		assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version, row.contentHash); !ok {
+		return fmt.Errorf("system v2 content hash %q is not a recognized published variant: %w",
+			row.contentHash, ErrSystemProfileIdentityConflict)
+	}
+	recomputed, err := recomputeCanonicalHash(row.canonical)
+	if err != nil {
+		return fmt.Errorf("recompute system v2 canonical hash: %w", err)
+	}
+	if recomputed != row.contentHash {
+		return fmt.Errorf("system v2 stored canonical hash %q != content_hash %q: %w",
+			recomputed, row.contentHash, ErrSystemProfileIdentityConflict)
+	}
+	return nil
+}
+
+// recomputeCanonicalHash re-canonicalizes a stored canonical JSON and returns its
+// content hash, so a tampered canonical_json that no longer hashes to its claimed
+// value is detected.
+func recomputeCanonicalHash(canonical string) (string, error) {
+	var p assumptions.Profile
+	if err := json.Unmarshal([]byte(canonical), &p); err != nil {
+		return "", fmt.Errorf("decode canonical json: %w", err)
+	}
+	h, err := p.ContentHash()
+	if err != nil {
+		return "", fmt.Errorf("content hash: %w", err)
+	}
+	return h, nil
+}
+
+// legacySquatter is one user-owned profile that illegally occupies the reserved
+// system_cma_ namespace and must be migrated to a deterministic user_legacy_ id.
+type legacySquatter struct {
+	oldID, newID           string
+	version                int
+	name, status           string
+	canonical, sourceNote  string
+	reviewedBy, reviewedAt string
+}
+
+// repairReservedUserProfilesTx migrates every owner_scope=user profile whose id is
+// in the reserved system_cma_ namespace to a deterministic user_legacy_<old hash
+// prefix> id, repointing plan pins and the global default to the new id before
+// deleting the conflicting row (td/067 R13 #3). Frozen run input snapshots are
+// never rewritten.
+func repairReservedUserProfilesTx(ctx context.Context, tx *sql.Tx) error {
+	squatters, err := collectReservedUserProfiles(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, sq := range squatters {
+		if err := migrateLegacySquatter(ctx, tx, sq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectReservedUserProfiles(ctx context.Context, tx *sql.Tx) ([]legacySquatter, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, version, name, status, canonical_json, content_hash,
+		        source_note, reviewed_by, reviewed_at
+		 FROM simulation_assumption_profiles
+		 WHERE owner_scope=? AND id LIKE 'system\_cma\_%' ESCAPE '\'`,
+		assumptions.OwnerUser)
+	if err != nil {
+		return nil, wrapSQL("list reserved-namespace user profiles", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []legacySquatter
+	for rows.Next() {
+		var sq legacySquatter
+		var contentHash string
+		if err := rows.Scan(&sq.oldID, &sq.version, &sq.name, &sq.status, &sq.canonical,
+			&contentHash, &sq.sourceNote, &sq.reviewedBy, &sq.reviewedAt); err != nil {
+			return nil, wrapSQL("scan reserved-namespace user profile", err)
+		}
+		sq.newID = legacyUserProfileID(contentHash)
+		out = append(out, sq)
+	}
+	return out, wrapSQL("iterate reserved-namespace user profiles", rows.Err())
+}
+
+// legacyUserProfileID derives the deterministic migration id from the old
+// canonical content hash (td/067 R13 #3).
+func legacyUserProfileID(oldContentHash string) string {
+	h := oldContentHash
+	if len(h) > 16 {
+		h = h[:16]
+	}
+	return "user_legacy_" + h
+}
+
+func migrateLegacySquatter(ctx context.Context, tx *sql.Tx, sq legacySquatter) error {
+	var p assumptions.Profile
+	if err := json.Unmarshal([]byte(sq.canonical), &p); err != nil {
+		return fmt.Errorf("decode squatter %s@%d canonical: %w", sq.oldID, sq.version, err)
+	}
+	p.ID = sq.newID
+	if err := insertProfileTx(ctx, tx, p, assumptions.OwnerUser, sq.status,
+		sq.sourceNote, sq.reviewedBy, sq.reviewedAt); err != nil {
+		return fmt.Errorf("insert migrated user profile %s@%d: %w", sq.newID, sq.version, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE plan_parameters SET return_assumption_set_id=?
+		 WHERE return_assumption_set_id=? AND return_assumption_set_version=?`,
+		sq.newID, sq.oldID, sq.version); err != nil {
+		return wrapSQL("repoint plan pinned assumption profile", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE simulation_assumption_preferences SET default_profile_id=?, updated_at=?
+		 WHERE id=1 AND default_profile_id=? AND default_profile_version=?`,
+		sq.newID, time.Now().UnixMilli(), sq.oldID, sq.version); err != nil {
+		return wrapSQL("repoint global default assumption preference", err)
+	}
+	return deleteProfileVersionTx(ctx, tx, sq.oldID, sq.version)
+}
+
+// deleteProfileVersionTx removes a single profile version and its normalized
+// projections (explicitly, so it works regardless of the SQLite foreign-key
+// pragma).
+func deleteProfileVersionTx(ctx context.Context, tx *sql.Tx, id string, version int) error {
+	for _, stmt := range []string{
+		`DELETE FROM simulation_assumption_scenarios WHERE profile_id=? AND profile_version=?`,
+		`DELETE FROM simulation_assumption_return_priors WHERE profile_id=? AND profile_version=?`,
+		`DELETE FROM simulation_assumption_correlation_priors WHERE profile_id=? AND profile_version=?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, id, version); err != nil {
+			return wrapSQL("delete assumption projection", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM simulation_assumption_profiles WHERE id=? AND version=?`, id, version); err != nil {
+		return wrapSQL("delete conflicting assumption profile", err)
 	}
 	return nil
 }
@@ -120,6 +362,12 @@ func (r *AssumptionProfileRepo) exec(tx *sql.Tx) dbExec {
 	return r.db
 }
 
+// dbQuerier is satisfied by both *sql.DB and *sql.Tx, letting identity probes run
+// on either the connection (fast path) or inside the upgrade transaction.
+type dbQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // Get returns a single profile id@version decoded from its canonical JSON. The
 // lifecycle status comes from the row (not the frozen JSON) so a profile that was
 // activated/superseded after it was first saved reports its current status.
@@ -140,6 +388,31 @@ func (r *AssumptionProfileRepo) Get(ctx context.Context, id string, version int)
 	}
 	p.Status = status
 	return p, nil
+}
+
+// GetWithHash is Get plus the FROZEN stored content_hash column. The stored hash
+// is the canonical identity of the row even when the on-disk canonical JSON
+// predates current struct fields (so re-canonicalizing the decoded struct would
+// drift); run provenance must use it (td/067 R13/R14).
+func (r *AssumptionProfileRepo) GetWithHash(
+	ctx context.Context, id string, version int,
+) (assumptions.Profile, string, error) {
+	var canonical, status, hash string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT canonical_json, status, content_hash FROM simulation_assumption_profiles
+		 WHERE id=? AND version=?`, id, version).Scan(&canonical, &status, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assumptions.Profile{}, "", ErrAssumptionProfileNotFound
+	}
+	if err != nil {
+		return assumptions.Profile{}, "", wrapSQL("get assumption profile", err)
+	}
+	var p assumptions.Profile
+	if err := json.Unmarshal([]byte(canonical), &p); err != nil {
+		return assumptions.Profile{}, "", wrapSQL("decode assumption profile", err)
+	}
+	p.Status = status
+	return p, hash, nil
 }
 
 // GetActiveLatest returns the highest active version for an id.

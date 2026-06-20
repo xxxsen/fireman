@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/fireman/fireman/internal/assumptions"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/simulation"
@@ -139,9 +141,12 @@ func (s *AssumptionService) ValidateProfile(p assumptions.Profile) AssumptionVal
 	return out
 }
 
-// SaveDraft validates then persists a new draft version. The system profile id
-// is read-only; an attempt to overwrite it (or any existing active version) is
-// rejected by the repository's unique (id, version) constraint.
+// SaveDraft validates then persists a new draft version. User profiles are always
+// owner_scope=user with a server-assigned id: a brand-new profile (version 1) is
+// given a fresh user_<uuid> id (the client id is never trusted), and the reserved
+// system_cma_ namespace is rejected outright, so a user profile can never shadow a
+// system identity and steal its evidence provenance (td/067 R13). A new version
+// (version > 1) of an existing user profile keeps its id.
 func (s *AssumptionService) SaveDraft(
 	ctx context.Context, p assumptions.Profile, sourceNote, reviewedBy, reviewedAt string,
 ) (assumptions.Profile, error) {
@@ -151,6 +156,18 @@ func (s *AssumptionService) SaveDraft(
 	if p.OwnerScope == assumptions.OwnerSystem {
 		return assumptions.Profile{}, newErr("assumption_profile_read_only",
 			"system profile is read-only; copy it to a custom profile first", nil)
+	}
+	// Reserved namespace: a user profile must never use a system_cma_ id (td/067 R13).
+	if assumptions.HasReservedSystemID(p.ID) {
+		return assumptions.Profile{}, newErr("assumption_profile_reserved_id",
+			"profile id uses the reserved 'system_cma_' namespace; user profiles receive a server-assigned id",
+			map[string]any{"id": p.ID})
+	}
+	// Server-authoritative ids: a brand-new profile gets a fresh user id regardless
+	// of what the client sent; only an explicit new version keeps the existing id.
+	if p.Version <= 1 {
+		p.ID = "user_" + uuid.New().String()
+		p.Version = 1
 	}
 	if err := validateProfileAudit(sourceNote, reviewedBy, reviewedAt); err != nil {
 		return assumptions.Profile{}, err

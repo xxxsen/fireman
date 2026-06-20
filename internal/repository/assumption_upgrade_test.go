@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -75,6 +76,65 @@ func insertRealV2Row(t *testing.T, db *sql.DB) (string, string) {
 	return canonical, hash
 }
 
+// insertProfileRowRaw inserts a single profile row with explicit owner_scope and
+// status, mimicking a row written by an older release or a hijacking client.
+func insertProfileRowRaw(
+	t *testing.T, db *sql.DB, p assumptions.Profile, ownerScope, status string,
+) (string, string) {
+	t.Helper()
+	canonical, err := p.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonical json: %v", err)
+	}
+	hash, err := p.ContentHash()
+	if err != nil {
+		t.Fatalf("content hash: %v", err)
+	}
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO simulation_assumption_profiles
+		(id, version, owner_scope, name, status, canonical_json, content_hash,
+		 source_note, reviewed_by, reviewed_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Version, ownerScope, p.Name, status, string(canonical), hash,
+		"seed", "tester", "2026-06-20", now, now); err != nil {
+		t.Fatalf("insert profile %s@%d: %v", p.ID, p.Version, err)
+	}
+	return string(canonical), hash
+}
+
+// seedPlanWithPinnedProfile inserts a minimal plan + plan_parameters that pins a
+// specific assumption profile id@version, so a pin-repoint can be asserted.
+func seedPlanWithPinnedProfile(t *testing.T, db *sql.DB, planID, pinID string, pinVersion int) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO plans (id, name, base_currency, valuation_date, created_at, updated_at)
+		VALUES (?,?,?,?,?,?)`, planID, "test plan", "CNY", "2026-06-20", now, now); err != nil {
+		t.Fatalf("insert plan: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO plan_parameters
+		(plan_id, current_age, retirement_age, end_age, total_assets_minor,
+		 annual_savings_minor, annual_spending_minor, inflation_mode,
+		 assumption_selection_mode, return_assumption_set_id, return_assumption_set_version,
+		 updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		planID, 30, 55, 90, 1000000, 0, 100000, "fixed",
+		"pinned_profile", pinID, pinVersion, now); err != nil {
+		t.Fatalf("insert plan_parameters: %v", err)
+	}
+}
+
+func readPlanPin(t *testing.T, db *sql.DB, planID string) (string, int) {
+	t.Helper()
+	var id string
+	var version int
+	if err := db.QueryRow(
+		`SELECT return_assumption_set_id, return_assumption_set_version
+		 FROM plan_parameters WHERE plan_id=?`, planID).Scan(&id, &version); err != nil {
+		t.Fatalf("read plan pin: %v", err)
+	}
+	return id, version
+}
+
 func seedDefaultPreference(t *testing.T, db *sql.DB, id string, version int, scenario string) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO simulation_assumption_preferences
@@ -84,8 +144,11 @@ func seedDefaultPreference(t *testing.T, db *sql.DB, id string, version int, sce
 	}
 }
 
-func readProfileBytes(t *testing.T, db *sql.DB, id string, version int) (string, string) {
+// readProfileBytes reads the canonical JSON and stored content hash for version 1
+// of a profile (all system identities in these upgrade tests are single-version).
+func readProfileBytes(t *testing.T, db *sql.DB, id string) (string, string) {
 	t.Helper()
+	const version = 1
 	var canonical, hash string
 	if err := db.QueryRow(
 		`SELECT canonical_json, content_hash FROM simulation_assumption_profiles WHERE id=? AND version=?`,
@@ -116,10 +179,10 @@ func TestEnsureSystemDefaultUpgradesV2ToV3(t *testing.T) {
 	}
 
 	// v1 and v2 are byte-for-byte unchanged.
-	if c, h := readProfileBytes(t, db, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion); c != v1Canonical || h != v1Hash {
+	if c, h := readProfileBytes(t, db, assumptions.SystemLegacyProfileID); c != v1Canonical || h != v1Hash {
 		t.Fatalf("legacy v1 must be immutable: got hash %s want %s", h, v1Hash)
 	}
-	if c, h := readProfileBytes(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version); c != v2Canonical || h != v2Hash {
+	if c, h := readProfileBytes(t, db, assumptions.SystemProfileV2ID); c != v2Canonical || h != v2Hash {
 		t.Fatalf("v2 must be immutable: got hash %s want %s", h, v2Hash)
 	}
 
@@ -159,7 +222,7 @@ func TestEnsureSystemDefaultUpgradesV2ToV3(t *testing.T) {
 	if err := repo.EnsureSystemDefault(ctx); err != nil {
 		t.Fatalf("second upgrade: %v", err)
 	}
-	if c, _ := readProfileBytes(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version); c != v2Canonical {
+	if c, _ := readProfileBytes(t, db, assumptions.SystemProfileV2ID); c != v2Canonical {
 		t.Fatal("v2 changed on a second upgrade run")
 	}
 }
@@ -250,5 +313,152 @@ func TestEnsureSystemDefaultFreshInstallHasOnlyV3(t *testing.T) {
 	if pref.DefaultProfileID != assumptions.SystemProfileID ||
 		pref.DefaultProfileVersion != assumptions.SystemProfileVersion {
 		t.Fatalf("fresh default must resolve to v3, got %+v", pref)
+	}
+}
+
+// TestEnsureSystemDefaultRepairsUserSystemSquatter covers td/067 R13 acceptance #2:
+// a database where a user profile illegally occupies system_cma_v3@1 must, after
+// the upgrade, migrate that user profile to a deterministic user_legacy_<hash> id
+// (repointing the plan pin and the global default to it), and publish the REAL
+// system v3 with the registry-pinned content.
+func TestEnsureSystemDefaultRepairsUserSystemSquatter(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := repository.NewAssumptionProfileRepo(db)
+
+	// A user-owned profile squatting on the reserved v3 identity (distinct content).
+	squat := assumptions.SystemDefaultProfile()
+	squat.OwnerScope = assumptions.OwnerUser
+	squat.Name = "我的劫持模型"
+	squat.StudentTDf = 9 // makes the content differ from the real v3
+	_, squatHash := insertProfileRowRaw(t, db, squat, assumptions.OwnerUser, assumptions.StatusActive)
+	wantLegacyID := "user_legacy_" + squatHash[:16]
+
+	// A plan pins it, and it is the global default.
+	seedPlanWithPinnedProfile(t, db, "plan_hijack", assumptions.SystemProfileID, assumptions.SystemProfileVersion)
+	seedDefaultPreference(t, db, assumptions.SystemProfileID, assumptions.SystemProfileVersion, "conservative")
+
+	if err := repo.EnsureSystemDefault(ctx); err != nil {
+		t.Fatalf("upgrade with squatter: %v", err)
+	}
+
+	// The migrated user profile exists under the deterministic legacy id, owner=user.
+	migrated, err := repo.Get(ctx, wantLegacyID, 1)
+	if err != nil {
+		t.Fatalf("migrated user profile %s must exist: %v", wantLegacyID, err)
+	}
+	if migrated.OwnerScope != assumptions.OwnerUser || migrated.StudentTDf != 9 {
+		t.Fatalf("migrated profile must keep user content, got owner=%s df=%d",
+			migrated.OwnerScope, migrated.StudentTDf)
+	}
+
+	// The plan pin and the global default both resolve to the migrated user profile.
+	if id, ver := readPlanPin(t, db, "plan_hijack"); id != wantLegacyID || ver != 1 {
+		t.Fatalf("plan pin must repoint to %s@1, got %s@%d", wantLegacyID, id, ver)
+	}
+	pref, err := repo.GetPreferences(ctx)
+	if err != nil {
+		t.Fatalf("get preferences: %v", err)
+	}
+	if pref.DefaultProfileID != wantLegacyID || pref.DefaultProfileVersion != 1 {
+		t.Fatalf("default must repoint to migrated profile %s@1, got %+v", wantLegacyID, pref)
+	}
+
+	// The real system v3 is now published with the registry-pinned content.
+	v3, err := repo.Get(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion)
+	if err != nil {
+		t.Fatalf("real system v3 must exist: %v", err)
+	}
+	if v3.OwnerScope != assumptions.OwnerSystem {
+		t.Fatalf("published v3 must be system-owned, got %s", v3.OwnerScope)
+	}
+	v3Hash, err := v3.ContentHash()
+	if err != nil {
+		t.Fatalf("v3 content hash: %v", err)
+	}
+	if v3Hash != assumptions.CurrentSystemIdentity().CanonicalHash {
+		t.Fatalf("published v3 hash %s != registry %s", v3Hash, assumptions.CurrentSystemIdentity().CanonicalHash)
+	}
+
+	// Idempotent: re-running keeps everything stable.
+	if err := repo.EnsureSystemDefault(ctx); err != nil {
+		t.Fatalf("second upgrade: %v", err)
+	}
+}
+
+// TestEnsureSystemDefaultRejectsTamperedSystemV3 covers td/067 R13 acceptance #3:
+// an owner_scope=system v3 row whose content does not match the registry canonical
+// hash is refused with a conflict and is never overwritten.
+func TestEnsureSystemDefaultRejectsTamperedSystemV3(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := repository.NewAssumptionProfileRepo(db)
+
+	tampered := assumptions.SystemDefaultProfile()
+	tampered.StudentTDf = 4 // diverges from the published v3 content
+	canonicalBefore, _ := insertProfileRowRaw(t, db, tampered, assumptions.OwnerSystem, assumptions.StatusActive)
+
+	err := repo.EnsureSystemDefault(ctx)
+	if !errors.Is(err, repository.ErrSystemProfileIdentityConflict) {
+		t.Fatalf("tampered v3 must yield identity conflict, got %v", err)
+	}
+	// The on-disk row is untouched.
+	if c, _ := readProfileBytes(t, db, assumptions.SystemProfileID); c != canonicalBefore {
+		t.Fatal("tampered v3 row must not be overwritten")
+	}
+}
+
+// TestEnsureSystemDefaultUpgradesTD065V2Variant covers td/067 R14 acceptance #1: a
+// database first initialized on the TD 065 build holds the v2 VARIANT content; the
+// upgrade must accept it (recognized variant), keep it byte-for-byte, publish v3,
+// and migrate the v2-pointing default to v3.
+func TestEnsureSystemDefaultUpgradesTD065V2Variant(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := repository.NewAssumptionProfileRepo(db)
+
+	canonical, hash := loadFixture(t, "system_cma_v2_td065_canonical.json")
+	insertSystemProfileRow(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version,
+		"系统默认（CMA v2 TD065 变体）", canonical, hash)
+	seedDefaultPreference(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version, "baseline")
+
+	if err := repo.EnsureSystemDefault(ctx); err != nil {
+		t.Fatalf("upgrade TD065 v2 variant: %v", err)
+	}
+	// v2 variant is byte-for-byte unchanged.
+	if c, h := readProfileBytes(t, db, assumptions.SystemProfileV2ID); c != canonical || h != hash {
+		t.Fatalf("TD065 v2 variant must be immutable: got hash %s want %s", h, hash)
+	}
+	// v3 published, default migrated.
+	if _, err := repo.Get(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion); err != nil {
+		t.Fatalf("v3 must be published: %v", err)
+	}
+	pref, err := repo.GetPreferences(ctx)
+	if err != nil {
+		t.Fatalf("get preferences: %v", err)
+	}
+	if pref.DefaultProfileID != assumptions.SystemProfileID {
+		t.Fatalf("default must migrate to v3, got %+v", pref)
+	}
+}
+
+// TestEnsureSystemDefaultRejectsUnknownSystemV2 covers td/067 R14 acceptance #3: an
+// owner_scope=system v2 row whose content matches no recognized published variant
+// is refused with a conflict (its meaning is never guessed).
+func TestEnsureSystemDefaultRejectsUnknownSystemV2(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := repository.NewAssumptionProfileRepo(db)
+
+	// A fabricated v2 (v3 priors under the v2 id) is NOT a recognized v2 content.
+	fake := assumptions.SystemDefaultProfile()
+	fake.ID = assumptions.SystemProfileV2ID
+	fake.Version = assumptions.SystemProfileV2Version
+	fake.Name = "伪造 v2"
+	insertProfileRowRaw(t, db, fake, assumptions.OwnerSystem, assumptions.StatusActive)
+
+	err := repo.EnsureSystemDefault(ctx)
+	if !errors.Is(err, repository.ErrSystemProfileIdentityConflict) {
+		t.Fatalf("unknown system v2 must yield identity conflict, got %v", err)
 	}
 }

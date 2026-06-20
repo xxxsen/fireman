@@ -3,10 +3,14 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,7 +52,9 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 	doRaw(t, r, http.MethodPost, "/api/v1/simulation-assumptions/profiles",
 		map[string]any{"profile": sysCopy}, "assumption_profile_read_only")
 
-	// Copy to a user draft, save it.
+	// Copy to a user draft, save it. The client-proposed id is ignored: the server
+	// assigns a fresh user_ id so a user profile can never squat a system id
+	// (td/067 R13).
 	draft := cloneProfile(profile)
 	draft["id"] = "user_cma_custom"
 	draft["version"] = 1
@@ -62,19 +68,66 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 	if saved["status"] != "draft" {
 		t.Fatalf("saved profile should be draft, got %v", saved["status"])
 	}
+	savedID := saved["id"].(string)
+	if !strings.HasPrefix(savedID, "user_") || strings.HasPrefix(savedID, assumptions.SystemProfileIDPrefix) {
+		t.Fatalf("server must assign a fresh user_ id, got %q", savedID)
+	}
 
-	// Activate it.
+	// Activate it (using the server-assigned id).
 	doJSON(t, r, http.MethodPost,
-		"/api/v1/simulation-assumptions/profiles/user_cma_custom/1/activate", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/"+savedID+"/1/activate", nil, http.StatusOK)
 
 	// Set it as the global default.
 	setEnv := doJSON(t, r, http.MethodPut, "/api/v1/simulation-assumptions/preferences",
 		map[string]any{"preferences": map[string]any{
-			"default_profile_id": "user_cma_custom", "default_profile_version": 1, "default_scenario": "conservative",
+			"default_profile_id": savedID, "default_profile_version": 1, "default_scenario": "conservative",
 		}}, http.StatusOK)
 	setPref := setEnv["data"].(map[string]any)["preferences"].(map[string]any)
-	if setPref["default_profile_id"] != "user_cma_custom" || setPref["default_scenario"] != "conservative" {
+	if setPref["default_profile_id"] != savedID || setPref["default_scenario"] != "conservative" {
 		t.Fatalf("preferences not updated: %+v", setPref)
+	}
+}
+
+// TestCreateUserProfileRejectsReservedID covers td/067 R13 acceptance #1: a user
+// profile may never claim a reserved system_cma_ id (create AND validate paths
+// reject it), and a normal user profile always receives a server-assigned user_ id.
+func TestCreateUserProfileRejectsReservedID(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	r := NewRouter(context.Background(), Deps{DB: db})
+
+	getEnv := doJSON(t, r, http.MethodGet,
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1", nil, http.StatusOK)
+	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
+
+	reserved := cloneProfile(profile)
+	reserved["id"] = "system_cma_v3"
+	reserved["version"] = 1
+	reserved["owner_scope"] = "user"
+	reserved["status"] = "draft"
+	reserved["name"] = "hijack"
+
+	// Create is rejected with the stable reserved-id code.
+	doRaw(t, r, http.MethodPost, "/api/v1/simulation-assumptions/profiles",
+		map[string]any{"profile": reserved, "source_note": "x", "reviewed_by": "me", "reviewed_at": "2026-06-20"},
+		"assumption_profile_reserved_id")
+	// Validate is rejected too.
+	doRaw(t, r, http.MethodPost,
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1/validate",
+		map[string]any{"profile": reserved}, "assumption_profile_reserved_id")
+
+	// A normal user profile (even with a client id) gets a server-assigned user_ id.
+	ok := cloneProfile(profile)
+	ok["id"] = "anything_client_sends"
+	ok["version"] = 1
+	ok["owner_scope"] = "user"
+	ok["status"] = "draft"
+	ok["name"] = "正常自定义"
+	saveEnv := doJSON(t, r, http.MethodPost, "/api/v1/simulation-assumptions/profiles",
+		map[string]any{"profile": ok, "source_note": "x", "reviewed_by": "me", "reviewed_at": "2026-06-20"},
+		http.StatusOK)
+	savedID := saveEnv["data"].(map[string]any)["profile"].(map[string]any)["id"].(string)
+	if !strings.HasPrefix(savedID, "user_") || strings.HasPrefix(savedID, assumptions.SystemProfileIDPrefix) {
+		t.Fatalf("normal user profile must get a server-assigned user_ id, got %q", savedID)
 	}
 }
 
@@ -164,12 +217,12 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 			p.ReturnFloor = 0
 			p.ReturnCeil = 0
 		})
-	// Seed an active v2 row that is structurally valid (passes assertActivatable)
-	// but is NOT the current identity. It must still be ineligible purely on the
-	// identity rule (td/066 R12), proving the gate is identity-based, not only
+	// Seed the REAL published td/064 v2 content (byte-exact fixture). It is a
+	// recognized historical system content (so the upgrade accepts it) but is NOT
+	// the current identity, so it must still be ineligible purely on the identity
+	// rule (td/066 R12 / td/067 R14), proving the gate is identity-based, not only
 	// structural.
-	seedSystemProfileRow(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version,
-		"系统默认（CMA v2）", nil)
+	seedRealV2SystemRow(t, db)
 
 	// List surfaces eligibility: v3 eligible; v1 and v2 not.
 	listEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
@@ -208,6 +261,29 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	after := afterEnv["data"].(map[string]any)["preferences"].(map[string]any)
 	if after["default_profile_id"] != "system_cma_v3" {
 		t.Fatalf("default must stay on v3 after rejected set, got %+v", after)
+	}
+}
+
+// seedRealV2SystemRow inserts the byte-exact published td/064 system_cma_v2@1
+// canonical fixture so a v2 row carries a content hash recognized by the system
+// content registry (td/067 R14).
+func seedRealV2SystemRow(t *testing.T, db *sql.DB) {
+	t.Helper()
+	raw, err := os.ReadFile("../repository/testdata/system_cma_v2_canonical.json")
+	if err != nil {
+		t.Fatalf("read v2 fixture: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	hash := hex.EncodeToString(sum[:])
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO simulation_assumption_profiles
+		(id, version, owner_scope, name, status, canonical_json, content_hash,
+		 source_note, reviewed_by, reviewed_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version, "system",
+		"系统默认（CMA v2）", "active", string(raw), hash,
+		"historical release", "FIRE", "2026-06-20", now, now); err != nil {
+		t.Fatalf("seed v2 fixture: %v", err)
 	}
 }
 

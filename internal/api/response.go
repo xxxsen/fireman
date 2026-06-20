@@ -56,7 +56,7 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusBadGateway
 		case "plan_version_conflict", "instrument_version_conflict":
 			status = http.StatusConflict
-		case "idempotency_conflict", "job_already_terminal":
+		case "idempotency_conflict", "job_already_terminal", "system_profile_identity_conflict":
 			status = http.StatusConflict
 		case "simulation_not_found", "path_not_found", "job_not_found":
 			status = http.StatusNotFound

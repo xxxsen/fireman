@@ -12,7 +12,12 @@ import (
 // (blended_prior) snapshot freezes the active profile's Student-t df and return
 // truncation band into the InputSnapshot, ignoring the plan's legacy df.
 func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
+	// A profile with edited tail params is, by definition, a user-customized copy
+	// (the system identity is immutable), so mark it user-owned: the snapshot
+	// provenance guard only blesses byte-faithful system content (td/067 R13/R14).
 	profile := assumptions.SystemDefaultProfile()
+	profile.OwnerScope = assumptions.OwnerUser
+	profile.ID = "user_tail_custom"
 	profile.StudentTDf = 11
 	profile.ReturnFloor = -0.80
 	profile.ReturnCeil = 1.5

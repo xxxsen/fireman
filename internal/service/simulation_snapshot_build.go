@@ -386,13 +386,39 @@ func buildInputSnapshotStruct(
 	}
 	// Freeze the resolved assumption provenance so a run is always explainable by a
 	// specific immutable model identity + content/evidence hash (td/066 R11/R12).
+	// The CMA evidence hash is recorded ONLY when the resolved profile is genuinely
+	// system-owned AND its content matches a recognized published system identity by
+	// exact (id, version, content_hash). A user profile (even one that squats on a
+	// reserved id) never inherits official evidence provenance, and an unrecognized
+	// system content is refused outright so it can never run with forged provenance
+	// (td/067 R13 #4 / R14 #3).
 	in.AssumptionProfileID = resolved.Profile.ID
 	in.AssumptionProfileVersion = resolved.Profile.Version
-	if h, err := resolved.Profile.ContentHash(); err == nil {
-		in.AssumptionProfileContentHash = h
+	contentHash := resolved.ProfileContentHash
+	if contentHash == "" {
+		// In-memory profile (no stored row, e.g. a unit test or built-in fallback):
+		// recompute from the decoded struct.
+		h, err := resolved.Profile.ContentHash()
+		if err != nil {
+			return nil, newErr("simulation_input_invalid",
+				"resolved assumption profile content hash unavailable",
+				map[string]any{"profile_id": resolved.Profile.ID, "error": err.Error()})
+		}
+		contentHash = h
 	}
-	if entry, ok := assumptions.LookupSystemIdentity(resolved.Profile.ID, resolved.Profile.Version); ok {
-		in.AssumptionEvidenceHash = entry.EvidenceHash
+	in.AssumptionProfileContentHash = contentHash
+	if resolved.Profile.OwnerScope == assumptions.OwnerSystem {
+		variant, ok := assumptions.LookupSystemContent(
+			resolved.Profile.ID, resolved.Profile.Version, contentHash)
+		if !ok {
+			return nil, newErr("system_profile_identity_conflict",
+				"system assumption profile content is not a recognized published identity",
+				map[string]any{
+					"profile_id": resolved.Profile.ID, "version": resolved.Profile.Version,
+					"content_hash": contentHash,
+				})
+		}
+		in.AssumptionEvidenceHash = variant.EvidenceHash
 	}
 	// Forward-looking modes (blended_prior / custom) run the joint, correlated
 	// engine and apply the deterministic cash return; historical_cagr keeps the
