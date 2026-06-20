@@ -52,12 +52,13 @@ type AssumptionPreferences struct {
 	DefaultScenario       string `json:"default_scenario"`
 }
 
-// EnsureSystemDefault performs the idempotent system-profile upgrade (td/064 R6).
-// It publishes the current system default (system_cma_v2@1) as a NEW immutable
-// identity without ever updating or deleting the legacy system_cma_v1@1, then
-// atomically repoints the global default preference from v1 to v2 only when it
-// still points at v1 (user custom defaults and explicit pins are untouched).
-// Safe to call on every startup and on every read path.
+// EnsureSystemDefault performs the idempotent system-profile upgrade (td/064 R6,
+// td/066 R12). It publishes the current system default (system_cma_v3@1) as a NEW
+// immutable identity without ever updating or deleting the frozen system_cma_v1@1
+// and system_cma_v2@1, then atomically repoints the global default preference to
+// v3 only when it is empty or still points at v3's DIRECT predecessor (v2). A
+// preference pointing at a user-chosen custom profile, or at a non-direct
+// predecessor (v1), is left untouched. Safe to call on every startup/read path.
 func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 	p := assumptions.SystemDefaultProfile()
 	var exists int
@@ -68,9 +69,9 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 		return wrapSQL("probe system assumption profile", err)
 	}
 	if exists > 0 {
-		// Already upgraded. The one-time v1->v2 default migration ran inside the
-		// upgrade transaction below, so there is nothing to do on subsequent calls
-		// (and re-running it would fight a user who deliberately re-selects v1).
+		// Already upgraded. The one-time default migration ran inside the upgrade
+		// transaction below, so there is nothing to do on subsequent calls (and
+		// re-running it would fight a user who deliberately re-selected v2).
 		return nil
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -94,11 +95,12 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 }
 
 // migrateDefaultToCurrentSystem atomically repoints the single global default
-// preference from the legacy system_cma_v1@1 to the current system default
-// (system_cma_v2@1 / baseline) ONLY when it currently points at the legacy
-// identity. A preference row pointing at a user-chosen custom profile is left
-// untouched, and a missing preference row resolves to the current default via
-// GetPreferences's fallback (td/064 R6).
+// preference from the current identity's DIRECT predecessor (system_cma_v2@1) to
+// the current system default (system_cma_v3@1 / baseline) ONLY when it currently
+// points at that direct predecessor. A preference row pointing at a user-chosen
+// custom profile, or at a non-direct predecessor (system_cma_v1@1), is left
+// untouched; a missing preference row resolves to the current default via
+// GetPreferences's fallback (td/064 R6 / td/066 R12).
 func (r *AssumptionProfileRepo) migrateDefaultToCurrentSystem(ctx context.Context, tx *sql.Tx) error {
 	exec := r.exec(tx)
 	_, err := exec.ExecContext(ctx,
@@ -107,7 +109,7 @@ func (r *AssumptionProfileRepo) migrateDefaultToCurrentSystem(ctx context.Contex
 		 WHERE id=1 AND default_profile_id=? AND default_profile_version=?`,
 		assumptions.SystemProfileID, assumptions.SystemProfileVersion,
 		assumptions.ScenarioBaseline, time.Now().UnixMilli(),
-		assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion)
+		assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version)
 	return wrapSQL("migrate default assumption preference", err)
 }
 

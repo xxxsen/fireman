@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -470,12 +471,29 @@ func TestSimulationJobFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("paths status=%d", resp.StatusCode)
 	}
+	pathsEnv := decodeEnvelope(t, mustRead(t, resp))
+	pathList := pathsEnv["data"].(map[string]any)["paths"].([]any)
+	// Pick a representative path that ran the full horizon (succeeded) so the
+	// snake_case contract check (monthly == 12×yearly) is exercised against a
+	// full-horizon path. The exact path numbers depend on the active assumption
+	// model (system_cma_v3), so select by outcome rather than a hardcoded index.
+	fullHorizonPathNo := -1
+	for _, raw := range pathList {
+		p := raw.(map[string]any)
+		if p["succeeded"].(bool) {
+			fullHorizonPathNo = int(p["path_no"].(float64))
+			break
+		}
+	}
+	if fullHorizonPathNo < 0 {
+		t.Fatalf("no succeeded representative path to verify path-detail contract: %+v", pathList)
+	}
 
-	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/simulations/" + runID + "/paths/0")
+	resp, err = http.DefaultClient.Get(
+		srv.URL + "/api/v1/simulations/" + runID + "/paths/" + strconv.Itoa(fullHorizonPathNo))
 	if err != nil {
 		t.Fatal(err)
 	}

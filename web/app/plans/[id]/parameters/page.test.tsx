@@ -80,10 +80,10 @@ vi.mock("@/lib/api/assumptions", () => ({
     Promise.resolve({
       profiles: [
         {
-          id: "system_cma_v2",
+          id: "system_cma_v3",
           version: 1,
           owner_scope: "system",
-          name: "系统默认（CMA v1）",
+          name: "系统默认（CMA v3）",
           status: "active",
           content_hash: "h",
           created_at: 0,
@@ -92,7 +92,7 @@ vi.mock("@/lib/api/assumptions", () => ({
         },
       ],
       preferences: {
-        default_profile_id: "system_cma_v2",
+        default_profile_id: "system_cma_v3",
         default_profile_version: 1,
         default_scenario: "baseline",
       },

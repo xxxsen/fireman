@@ -81,6 +81,14 @@ func (s *AssumptionService) isEligibleForGlobalDefault(
 		}
 		return false, wrapRepo("get assumption profile", err)
 	}
+	// A system-owned profile is only eligible when it is the CURRENT system
+	// identity (v3). Frozen historical system profiles (v1/v2) stay active for
+	// replay and explicit pins but can never be re-selected as the global default
+	// (td/066 R12).
+	if p.OwnerScope == assumptions.OwnerSystem &&
+		!assumptions.IsCurrentSystemDefaultIdentity(p.ID, p.Version) {
+		return false, nil
+	}
 	return s.assertActivatable(p) == nil, nil
 }
 
@@ -223,10 +231,20 @@ func (s *AssumptionService) SetPreferences(
 		return repository.AssumptionPreferences{}, newErr("assumption_profile_not_active",
 			"default profile must be an active version", nil)
 	}
+	// A frozen historical system profile (system_cma_v1@1 / v2@1) is active for
+	// replay and explicit pins but is NOT the current default-able system identity,
+	// so it can never be re-selected as the global default — which would otherwise
+	// silently undo the system-default migration (td/066 R12).
+	if p.OwnerScope == assumptions.OwnerSystem &&
+		!assumptions.IsCurrentSystemDefaultIdentity(p.ID, p.Version) {
+		return repository.AssumptionPreferences{}, newErr("assumption_profile_not_eligible",
+			"this system profile version is retained only for historical replay and cannot be the global default; "+
+				"use the current system default",
+			map[string]any{"id": pref.DefaultProfileID, "version": pref.DefaultProfileVersion})
+	}
 	// The global default must also still pass the current publish gate (structure,
-	// coverage, PSD, tail). The legacy system_cma_v1@1 is active for replay/pins
-	// but fails this gate, so it can never be re-selected as the default — which
-	// would otherwise silently undo the R6 v1->v2 migration (td/065 R8).
+	// coverage, PSD, tail). The legacy system profiles fail this gate, so they can
+	// never be re-selected as the default (td/065 R8 / td/066 R12).
 	if err := s.assertActivatable(p); err != nil {
 		var ae *AppError
 		if errors.As(err, &ae) {

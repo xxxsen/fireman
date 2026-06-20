@@ -165,6 +165,14 @@ type InputSnapshot struct {
 	TailStudentTDf  int      `json:"tail_student_t_df,omitempty"`
 	TailReturnFloor *float64 `json:"tail_return_floor,omitempty"`
 	TailReturnCeil  *float64 `json:"tail_return_ceil,omitempty"`
+	// td/066 R11/R12 assumption provenance: the exact system/user profile identity,
+	// its canonical content hash and (for system profiles) the backing CMA evidence
+	// artifact hash a run was calibrated against, so a result is always explainable
+	// by a specific, immutable model. Empty on legacy snapshots predating the field.
+	AssumptionProfileID          string `json:"assumption_profile_id,omitempty"`
+	AssumptionProfileVersion     int    `json:"assumption_profile_version,omitempty"`
+	AssumptionProfileContentHash string `json:"assumption_profile_content_hash,omitempty"`
+	AssumptionEvidenceHash       string `json:"assumption_evidence_hash,omitempty"`
 }
 
 // EffectiveDf returns the frozen Student-t degrees of freedom for sampling: the

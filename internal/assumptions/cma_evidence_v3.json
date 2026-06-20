@@ -1,6 +1,6 @@
 {
-  "version": "cma-v2-2026-06-20",
-  "convention": "Nominal CNY geometric, after-fee. nominal_geometric = round4(real_geometric + expected_inflation - fee_drag). FX from/base drift = round4(base_inflation - quote_inflation) (relative PPP; HKD via USD peg).",
+  "version": "cma-v3-2026-06-20",
+  "calculation_convention": "Per prior, exact (no premature rounding): nominal_after_fee = (1 + real_geometric_return) * (1 + expected_inflation) * (1 - annual_fee_rate) - 1. If a source already publishes a nominal, after-fee figure, set nominal_after_fee=true and use nominal_after_fee_return verbatim (no further conversion). FX from->base drift = (1 + base_inflation) / (1 + quote_inflation) - 1 (relative PPP; HKD via USD peg). Values are rounded to 4 decimals only when written into the canonical profile.",
   "return_priors": [
     {
       "asset_class": "equity",
@@ -9,30 +9,32 @@
       "market": "China A-shares broad market (CSI 300 total return)",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=CNY&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.040,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.12,
       "annual_volatility_ceiling": 0.35,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "RA 10y expected real geometric return for China equity (4.0%) + CNY long-run inflation (2.0%); index-level, no investor fee drag."
+      "note": "RA 10y expected real geometric return for China equity (4.0%) compounded with CNY long-run inflation (2.0%); index-level, no investor fee."
     },
     {
       "asset_class": "equity",
       "region": "foreign",
       "valuation_currency": "CNY",
-      "market": "Developed ex-China equity (MSCI World), CNY-hedged proxy",
+      "market": "Developed ex-China equity (MSCI World), CNY-priced proxy",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=CNY&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.045,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.12,
       "annual_volatility_ceiling": 0.40,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "RA developed-market equity expected real return (4.5%) + CNY long-run inflation (2.0%). Currency view carried separately by the FX factor."
+      "note": "RA developed-market equity expected real return (4.5%) compounded with CNY long-run inflation (2.0%). Currency view carried separately by the FX factor."
     },
     {
       "asset_class": "bond",
@@ -41,14 +43,15 @@
       "market": "China aggregate government + policy-bank bonds (7-10y)",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=CNY&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.010,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.02,
       "annual_volatility_ceiling": 0.10,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "RA China aggregate bond expected real return (1.0%) + CNY long-run inflation (2.0%)."
+      "note": "RA China aggregate bond expected real return (1.0%) compounded with CNY long-run inflation (2.0%)."
     },
     {
       "asset_class": "bond",
@@ -57,14 +60,15 @@
       "market": "Developed ex-China aggregate bonds (Bloomberg Global Agg ex-CNY)",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=CNY&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.010,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.03,
       "annual_volatility_ceiling": 0.12,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "RA developed-market aggregate bond expected real return (1.0%) + CNY long-run inflation (2.0%). Currency view carried separately by the FX factor."
+      "note": "RA developed-market aggregate bond expected real return (1.0%) compounded with CNY long-run inflation (2.0%). Currency view carried separately by the FX factor."
     },
     {
       "asset_class": "cash",
@@ -73,14 +77,15 @@
       "market": "China 7-day reverse repo / 1y deposit proxy",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=CNY&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": -0.002,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.00,
       "annual_volatility_ceiling": 0.00,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "RA China cash expected real return (-0.2%) + CNY long-run inflation (2.0%) = 1.8% nominal. Cash is deterministic (no volatility band)."
+      "note": "RA China cash expected real return (-0.2%) compounded with CNY long-run inflation (2.0%). Cash is deterministic (no volatility band)."
     },
     {
       "asset_class": "equity",
@@ -89,14 +94,15 @@
       "market": "Developed ex-China equity (MSCI World), USD-priced",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=USD&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.045,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.12,
       "annual_volatility_ceiling": 0.40,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "Native-currency local return: RA developed equity real return (4.5%) + US long-run inflation (2.0%). USD->CNY conversion handled by the FX factor."
+      "note": "Native-currency local return: RA developed equity real return (4.5%) compounded with US long-run inflation (2.0%). USD->CNY conversion handled by the FX factor."
     },
     {
       "asset_class": "bond",
@@ -105,14 +111,15 @@
       "market": "Developed ex-China aggregate bonds, USD-priced",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=USD&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.010,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.03,
       "annual_volatility_ceiling": 0.12,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "Native-currency local return: RA developed bond real return (1.0%) + US long-run inflation (2.0%). USD->CNY conversion handled by the FX factor."
+      "note": "Native-currency local return: RA developed bond real return (1.0%) compounded with US long-run inflation (2.0%). USD->CNY conversion handled by the FX factor."
     },
     {
       "asset_class": "equity",
@@ -121,14 +128,15 @@
       "market": "Developed ex-China equity, HKD-priced (HKD pegged to USD)",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=USD&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.045,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.12,
       "annual_volatility_ceiling": 0.40,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "HKD is USD-pegged (LERS), so local-currency return mirrors the USD developed-equity prior. HKD->CNY conversion handled by the FX factor."
+      "note": "HKD is USD-pegged (LERS), so the local-currency return mirrors the USD developed-equity prior. HKD->CNY conversion handled by the FX factor."
     },
     {
       "asset_class": "bond",
@@ -137,14 +145,15 @@
       "market": "Developed ex-China aggregate bonds, HKD-priced (HKD pegged to USD)",
       "source_url": "https://interactive.researchaffiliates.com/asset-allocation/#!/?currency=USD&expanded=&model=ER&scale=LINEAR&selected=&terms=REAL",
       "source_published_at": "2026-03-31",
+      "nominal_after_fee": false,
       "real_geometric_return": 0.010,
       "expected_inflation": 0.020,
-      "fee_drag": 0.000,
+      "annual_fee_rate": 0.000,
       "annual_volatility_floor": 0.03,
       "annual_volatility_ceiling": 0.12,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "HKD is USD-pegged (LERS), so local-currency return mirrors the USD developed-bond prior. HKD->CNY conversion handled by the FX factor."
+      "note": "HKD is USD-pegged (LERS), so the local-currency return mirrors the USD developed-bond prior. HKD->CNY conversion handled by the FX factor."
     }
   ],
   "fx_priors": [
@@ -158,9 +167,9 @@
       "quote_inflation": 0.020,
       "annual_volatility_floor": 0.03,
       "annual_volatility_ceiling": 0.12,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "Long-run USD/CNY drift via relative PPP = CNY inflation (2.0%) - USD inflation (2.0%) = 0%. BIS effective-exchange-rate series used to confirm no persistent real-rate trend."
+      "note": "Long-run USD/CNY drift via relative PPP = (1+CNY inflation)/(1+USD inflation)-1. With equal 2.0% long-run inflation this is 0%. BIS effective-exchange-rate series used to confirm no persistent real-rate trend."
     },
     {
       "from_currency": "HKD",
@@ -172,9 +181,9 @@
       "quote_inflation": 0.020,
       "annual_volatility_floor": 0.03,
       "annual_volatility_ceiling": 0.12,
-      "reviewed_by": "FIRE 投研团队 (CMA v2 sign-off)",
+      "reviewed_by": "FIRE 投研团队 (CMA v3 sign-off)",
       "reviewed_at": "2026-06-20",
-      "note": "HKD is USD-pegged (LERS, 7.75-7.85 band), so HKD/CNY drift and volatility track USD/CNY; drift = CNY inflation - HKD inflation = 0%."
+      "note": "HKD is USD-pegged (LERS, 7.75-7.85 band), so HKD/CNY drift and volatility track USD/CNY; drift = (1+CNY inflation)/(1+HKD inflation)-1 = 0%."
     }
   ]
 }

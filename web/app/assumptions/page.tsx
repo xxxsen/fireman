@@ -329,7 +329,7 @@ function PreferencesCard({
     <section className="rounded-lg border border-line bg-surface p-4">
       <h2 className="font-medium text-ink">全局默认</h2>
       <p className="mt-1 text-xs text-ink-muted">
-        新建计划默认使用此处选择的 profile 与情景；未配置时使用系统 system_cma_v2。
+        新建计划默认使用此处选择的 profile 与情景；未配置时使用系统 system_cma_v3。
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-4">
         <label className="text-sm text-ink">
@@ -374,7 +374,7 @@ function PreferencesCard({
       </div>
       {ineligibleActive.length > 0 && (
         <p className="mt-3 text-xs text-ink-muted" data-testid="ineligible-default-note">
-          以下 profile 仅用于历史兼容，不能作为全局默认（缺少当前发布门槛要求的覆盖/厚尾/校验）：
+          以下 profile 仅用于历史回放或显式 pin，不能作为全局默认（已被更新的系统默认取代，或缺少当前发布门槛要求的覆盖/厚尾/校验）：
           {ineligibleActive.map((p) => `${p.id}@${p.version}`).join("、")}
         </p>
       )}

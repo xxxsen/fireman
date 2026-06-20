@@ -23,7 +23,7 @@ describe("ScenarioComparisonCard (td/061 §3.6/§5.4.6)", () => {
   it("runs three scenarios on demand and shows deltas vs baseline", async () => {
     mockGet.mockResolvedValue({
       plan_id: "plan_1",
-      profile_id: "system_cma_v2",
+      profile_id: "system_cma_v3",
       profile_version: 1,
       seed: "42",
       runs: 3000,

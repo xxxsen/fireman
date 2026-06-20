@@ -43,6 +43,45 @@ func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 	}
 }
 
+// TestSnapshotRecordsAssumptionProvenance covers td/066 R11/R12 acceptance #4: a
+// run snapshot freezes the resolved profile identity, its canonical content hash
+// and (for the current system profile) the backing CMA evidence hash, so a result
+// is always explainable by a specific immutable model. For the system default this
+// must be system_cma_v3@1 with the registry-pinned hashes.
+func TestSnapshotRecordsAssumptionProvenance(t *testing.T) {
+	profile := assumptions.SystemDefaultProfile()
+	resolved := resolvedAssumption{
+		Profile: profile, Mode: assumptions.SourceBlendedPrior, Scenario: assumptions.ScenarioBaseline,
+	}
+	plan := repository.Plan{ID: "p1", BaseCurrency: "CNY"}
+	params := repository.PlanParameters{
+		CurrentAge: 30, RetirementAge: 55, EndAge: 90, StudentTDf: 7, SimulationRuns: 100,
+	}
+	in, err := buildInputSnapshotStruct(plan, params, 42, "cfg", nil, resolved)
+	if err != nil {
+		t.Fatalf("build snapshot: %v", err)
+	}
+	if in.AssumptionProfileID != assumptions.SystemProfileID ||
+		in.AssumptionProfileVersion != assumptions.SystemProfileVersion {
+		t.Fatalf("provenance identity = %s@%d, want %s@%d",
+			in.AssumptionProfileID, in.AssumptionProfileVersion,
+			assumptions.SystemProfileID, assumptions.SystemProfileVersion)
+	}
+	wantHash, err := profile.ContentHash()
+	if err != nil {
+		t.Fatalf("content hash: %v", err)
+	}
+	cur := assumptions.CurrentSystemIdentity()
+	if in.AssumptionProfileContentHash != wantHash || in.AssumptionProfileContentHash != cur.CanonicalHash {
+		t.Fatalf("provenance content hash = %q, want %q (registry %q)",
+			in.AssumptionProfileContentHash, wantHash, cur.CanonicalHash)
+	}
+	if in.AssumptionEvidenceHash != assumptions.CMAEvidenceContentHash {
+		t.Fatalf("provenance evidence hash = %q, want %q",
+			in.AssumptionEvidenceHash, assumptions.CMAEvidenceContentHash)
+	}
+}
+
 // TestLegacySnapshotKeepsConstantsAndPlanDf covers td/063 R3: a historical_cagr
 // snapshot stays on the legacy engine and does not freeze profile tail params, so
 // it falls back to the plan df and the engine constants for byte-for-byte replay.

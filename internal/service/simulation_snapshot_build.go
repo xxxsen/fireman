@@ -384,6 +384,16 @@ func buildInputSnapshotStruct(
 		},
 		Assets: assets,
 	}
+	// Freeze the resolved assumption provenance so a run is always explainable by a
+	// specific immutable model identity + content/evidence hash (td/066 R11/R12).
+	in.AssumptionProfileID = resolved.Profile.ID
+	in.AssumptionProfileVersion = resolved.Profile.Version
+	if h, err := resolved.Profile.ContentHash(); err == nil {
+		in.AssumptionProfileContentHash = h
+	}
+	if entry, ok := assumptions.LookupSystemIdentity(resolved.Profile.ID, resolved.Profile.Version); ok {
+		in.AssumptionEvidenceHash = entry.EvidenceHash
+	}
 	// Forward-looking modes (blended_prior / custom) run the joint, correlated
 	// engine and apply the deterministic cash return; historical_cagr keeps the
 	// legacy independent path with implicit 0% cash so migrated plans reproduce

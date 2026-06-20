@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,17 +30,17 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 		t.Fatalf("expected 1 system profile, got %d", len(profiles))
 	}
 	sys := profiles[0].(map[string]any)
-	if sys["id"] != "system_cma_v2" || sys["owner_scope"] != "system" {
+	if sys["id"] != "system_cma_v3" || sys["owner_scope"] != "system" {
 		t.Fatalf("unexpected system profile: %+v", sys)
 	}
 	pref := data["preferences"].(map[string]any)
-	if pref["default_profile_id"] != "system_cma_v2" {
+	if pref["default_profile_id"] != "system_cma_v3" {
 		t.Fatalf("preferences should default to system profile, got %+v", pref)
 	}
 
 	// Get full system profile.
 	getEnv := doJSON(t, r, http.MethodGet,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1", nil, http.StatusOK)
 	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
 
 	// Attempt to overwrite the system id/owner -> rejected as read-only.
@@ -82,14 +83,14 @@ func TestAssumptionValidateRejectsBadProfile(t *testing.T) {
 	r := NewRouter(context.Background(), Deps{DB: db})
 
 	getEnv := doJSON(t, r, http.MethodGet,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1", nil, http.StatusOK)
 	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
 
 	// A profile missing scenarios must fail validation.
 	bad := cloneProfile(profile)
 	delete(bad, "scenarios")
 	env := doJSON(t, r, http.MethodPost,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1/validate",
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1/validate",
 		map[string]any{"profile": bad}, http.StatusOK)
 	res := env["data"].(map[string]any)
 	if res["valid"].(bool) {
@@ -106,7 +107,7 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 	r := NewRouter(context.Background(), Deps{DB: db})
 
 	getEnv := doJSON(t, r, http.MethodGet,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1", nil, http.StatusOK)
 	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
 
 	bent := cloneProfile(profile)
@@ -118,7 +119,7 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 
 	// Validate endpoint surfaces the heavy repair but still parses structurally.
 	valEnv := doJSON(t, r, http.MethodPost,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1/validate",
+		"/api/v1/simulation-assumptions/profiles/system_cma_v3/1/validate",
 		map[string]any{"profile": bent}, http.StatusOK)
 	val := valEnv["data"].(map[string]any)
 	if !val["psd_repair_heavy"].(bool) {
@@ -145,10 +146,11 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 		nil, "assumption_profile_invalid")
 }
 
-// td/065 R8: an active-but-ineligible legacy profile (predating the current
-// publish gate) must not be selectable as the global default. The list exposes
-// eligible_for_global_default, SetPreferences rejects ineligible targets with
-// assumption_profile_not_eligible, and the stored default stays on v2.
+// td/065 R8 + td/066 R12: a frozen historical system profile (v1 ineligible by the
+// publish gate, v2 ineligible because it is no longer the current identity) must
+// not be selectable as the global default. The list exposes
+// eligible_for_global_default, SetPreferences rejects both with
+// assumption_profile_not_eligible, and the stored default stays on v3.
 func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	r := NewRouter(context.Background(), Deps{DB: db})
@@ -157,17 +159,77 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	// truncation, which fails the current Validate gate, so it is ineligible even
 	// though it is active. Raw SQL bypasses the service gate, mimicking a DB
 	// upgraded from a pre-td063 release.
-	legacy := assumptions.SystemDefaultProfile()
-	legacy.ID = assumptions.SystemLegacyProfileID
-	legacy.Version = assumptions.SystemLegacyProfileVersion
-	legacy.Name = "系统默认（CMA v1）"
-	legacy.ReturnFloor = 0
-	legacy.ReturnCeil = 0
-	cb, err := legacy.CanonicalJSON()
+	seedSystemProfileRow(t, db, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion,
+		"系统默认（CMA v1）", func(p *assumptions.Profile) {
+			p.ReturnFloor = 0
+			p.ReturnCeil = 0
+		})
+	// Seed an active v2 row that is structurally valid (passes assertActivatable)
+	// but is NOT the current identity. It must still be ineligible purely on the
+	// identity rule (td/066 R12), proving the gate is identity-based, not only
+	// structural.
+	seedSystemProfileRow(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version,
+		"系统默认（CMA v2）", nil)
+
+	// List surfaces eligibility: v3 eligible; v1 and v2 not.
+	listEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
+	data := listEnv["data"].(map[string]any)
+	elig := map[string]bool{}
+	for _, raw := range data["profiles"].([]any) {
+		p := raw.(map[string]any)
+		elig[p["id"].(string)] = p["eligible_for_global_default"].(bool)
+	}
+	if !elig["system_cma_v3"] {
+		t.Fatalf("v3 must be eligible: %+v", elig)
+	}
+	if elig["system_cma_v2"] {
+		t.Fatalf("frozen v2 must NOT be eligible: %+v", elig)
+	}
+	if elig["system_cma_v1"] {
+		t.Fatalf("legacy v1 must NOT be eligible: %+v", elig)
+	}
+	// Default resolves to v3 after the fresh-install seed.
+	if data["preferences"].(map[string]any)["default_profile_id"] != "system_cma_v3" {
+		t.Fatalf("default should be v3, got %+v", data["preferences"])
+	}
+
+	// Setting the ineligible v1 or v2 as default is rejected.
+	doRaw(t, r, http.MethodPut, "/api/v1/simulation-assumptions/preferences",
+		map[string]any{"preferences": map[string]any{
+			"default_profile_id": "system_cma_v1", "default_profile_version": 1, "default_scenario": "baseline",
+		}}, "assumption_profile_not_eligible")
+	doRaw(t, r, http.MethodPut, "/api/v1/simulation-assumptions/preferences",
+		map[string]any{"preferences": map[string]any{
+			"default_profile_id": "system_cma_v2", "default_profile_version": 1, "default_scenario": "baseline",
+		}}, "assumption_profile_not_eligible")
+
+	// The stored default is unchanged (still v3).
+	afterEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
+	after := afterEnv["data"].(map[string]any)["preferences"].(map[string]any)
+	if after["default_profile_id"] != "system_cma_v3" {
+		t.Fatalf("default must stay on v3 after rejected set, got %+v", after)
+	}
+}
+
+// seedSystemProfileRow inserts an active system-owned profile row directly via SQL
+// (bypassing the service gate) to mimic a database upgraded from an older release.
+// mutate optionally bends the profile content before it is frozen.
+func seedSystemProfileRow(
+	t *testing.T, db *sql.DB, id string, version int, name string, mutate func(*assumptions.Profile),
+) {
+	t.Helper()
+	p := assumptions.SystemDefaultProfile()
+	p.ID = id
+	p.Version = version
+	p.Name = name
+	if mutate != nil {
+		mutate(&p)
+	}
+	cb, err := p.CanonicalJSON()
 	if err != nil {
 		t.Fatalf("canonical json: %v", err)
 	}
-	h, err := legacy.ContentHash()
+	h, err := p.ContentHash()
 	if err != nil {
 		t.Fatalf("content hash: %v", err)
 	}
@@ -176,41 +238,9 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 		(id, version, owner_scope, name, status, canonical_json, content_hash,
 		 source_note, reviewed_by, reviewed_at, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		legacy.ID, legacy.Version, "system", legacy.Name, "active", string(cb), h,
+		p.ID, p.Version, "system", p.Name, "active", string(cb), h,
 		"legacy", "FIRE", "2026-06-20", now, now); err != nil {
-		t.Fatalf("seed legacy v1: %v", err)
-	}
-
-	// List surfaces eligibility: v2 eligible, legacy v1 not.
-	listEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
-	data := listEnv["data"].(map[string]any)
-	elig := map[string]bool{}
-	for _, raw := range data["profiles"].([]any) {
-		p := raw.(map[string]any)
-		elig[p["id"].(string)] = p["eligible_for_global_default"].(bool)
-	}
-	if !elig["system_cma_v2"] {
-		t.Fatalf("v2 must be eligible: %+v", elig)
-	}
-	if elig["system_cma_v1"] {
-		t.Fatalf("legacy v1 must NOT be eligible: %+v", elig)
-	}
-	// Default resolves to v2 after the fresh-install seed.
-	if data["preferences"].(map[string]any)["default_profile_id"] != "system_cma_v2" {
-		t.Fatalf("default should be v2, got %+v", data["preferences"])
-	}
-
-	// Setting the ineligible legacy v1 as default is rejected.
-	doRaw(t, r, http.MethodPut, "/api/v1/simulation-assumptions/preferences",
-		map[string]any{"preferences": map[string]any{
-			"default_profile_id": "system_cma_v1", "default_profile_version": 1, "default_scenario": "baseline",
-		}}, "assumption_profile_not_eligible")
-
-	// The stored default is unchanged (still v2).
-	afterEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
-	after := afterEnv["data"].(map[string]any)["preferences"].(map[string]any)
-	if after["default_profile_id"] != "system_cma_v2" {
-		t.Fatalf("default must stay on v2 after rejected set, got %+v", after)
+		t.Fatalf("seed system profile %s@%d: %v", id, version, err)
 	}
 }
 
