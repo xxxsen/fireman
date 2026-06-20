@@ -37,6 +37,12 @@ type ProfileSummary struct {
 	ReviewedAt  string `json:"reviewed_at,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+	// EligibleForGlobalDefault reports whether this profile may be selected as the
+	// user's global default: it must be active AND still pass the current publish
+	// gate (structure + coverage + PSD + tail). The legacy system_cma_v1@1 stays
+	// active for replay/pins but is NOT eligible (td/065 R8). Computed by the
+	// service, not stored.
+	EligibleForGlobalDefault bool `json:"eligible_for_global_default"`
 }
 
 // AssumptionPreferences is the resolved global default selection.

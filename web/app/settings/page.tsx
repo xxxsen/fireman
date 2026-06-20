@@ -179,7 +179,7 @@ export default function SettingsPage() {
             <dt>部署模式</dt>
             <dd>单用户本地优先</dd>
             <dt className="mt-2">基础货币</dt>
-            <dd>CNY（可在各计划中调整）</dd>
+            <dd>CNY（系统假设 profile 仅覆盖 CNY，所有计划固定使用）</dd>
           </dl>
         </div>
       </section>

@@ -88,6 +88,7 @@ vi.mock("@/lib/api/assumptions", () => ({
           content_hash: "h",
           created_at: 0,
           updated_at: 0,
+          eligible_for_global_default: true,
         },
       ],
       preferences: {

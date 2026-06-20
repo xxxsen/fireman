@@ -19,28 +19,24 @@ const (
 	SystemLegacyProfileVersion = 1
 )
 
-// System profile review metadata (td/063 N1 / td/064 N5). The provenance points
-// at externally sourced, publicly openable capital-market assumptions (not the
-// project's own design docs) with a named, dated sign-off, so the active default
-// is auditable. Any change to the underlying CMA inputs must publish a NEW system
-// profile identity/version rather than editing this one in place.
+// System profile review metadata (td/063 N1 / td/064 N5 / td/065 R10). The
+// provenance points at externally sourced, publicly openable capital-market
+// assumptions (not the project's own design docs) with a named, dated sign-off,
+// and references the immutable CMA evidence artifact (version + content hash) that
+// records, per prior, the specific source, raw inputs and conversion to a
+// CNY-nominal after-fee geometric return. Any change to the underlying CMA inputs
+// changes the artifact hash and must publish a NEW system profile identity/version
+// rather than editing this one in place.
+var SystemProfileSourceNote = "CMA v2: conservative, after-fee, CNY-nominal geometric return priors " +
+	"reproducible from the committed evidence artifact " + CMAEvidenceVersion +
+	" (sha256:" + CMAEvidenceContentHash[:12] + "). Asset real returns from Research Affiliates' " +
+	"Asset Allocation Interactive and FX from BIS exchange-rate statistics, converted to CNY nominal " +
+	"terms (real + expected inflation - fee) and signed off by the FIRE investment team. See " +
+	"internal/assumptions/cma_evidence_v2.json for the per-prior derivation."
+
 const (
-	SystemProfileSourceNote = "CMA v2: conservative, after-fee, CNY-nominal geometric return priors " +
-		"compiled from public long-run capital-market assumptions — asset-class real returns from " +
-		"Research Affiliates' Asset Allocation Interactive and FX from BIS effective exchange-rate " +
-		"statistics — converted to CNY nominal terms and signed off by the FIRE investment team."
 	SystemProfileReviewedBy = "FIRE 投研团队 (CMA v2 sign-off)"
 	SystemProfileReviewedAt = "2026-06-20"
-)
-
-// External, publicly openable CMA provenance for each prior (td/064 N5). These are
-// the original published sources rather than internal project documents, so a
-// reviewer can open the page and confirm the asset class / currency view.
-const (
-	cmaAssetSourceURL = "https://interactive.researchaffiliates.com/asset-allocation"
-	cmaFXSourceURL    = "https://www.bis.org/statistics/eer.htm"
-	cmaPublishedAt    = "2026-06-20"
-	cmaReviewedAt     = "2026-06-20"
 )
 
 // SystemDefaultProfile returns the current read-only system assumption profile
@@ -66,51 +62,16 @@ func SystemDefaultProfile() Profile {
 			ScenarioBaseline:     {ReturnShiftLog: 0, ReturnShiftLogFX: 0, VolatilityMultiplier: 1.00},
 			ScenarioOptimistic:   {ReturnShiftLog: 0.015, ReturnShiftLogFX: 0, VolatilityMultiplier: 0.90},
 		},
-		ReturnPriors: []ReturnPrior{
-			seedReturnPrior("equity", "domestic", "CNY", 0.060, 0.12, 0.35),
-			seedReturnPrior("equity", "foreign", "CNY", 0.065, 0.12, 0.40),
-			seedReturnPrior("bond", "domestic", "CNY", 0.030, 0.02, 0.10),
-			seedReturnPrior("bond", "foreign", "CNY", 0.030, 0.03, 0.12),
-			seedReturnPrior("cash", "domestic", "CNY", 0.018, 0.00, 0.00),
-			// Native-currency foreign priors so an asset priced in its own currency
-			// calibrates its local return without an FX/currency mismatch; the FX
-			// priors below carry the currency view separately (td/063 R2). These
-			// share the equity:foreign / bond:foreign factor with the CNY cells.
-			seedReturnPrior("equity", "foreign", "USD", 0.065, 0.12, 0.40),
-			seedReturnPrior("bond", "foreign", "USD", 0.030, 0.03, 0.12),
-			seedReturnPrior("equity", "foreign", "HKD", 0.065, 0.12, 0.40),
-			seedReturnPrior("bond", "foreign", "HKD", 0.030, 0.03, 0.12),
-		},
-		FXPriors: []FXPrior{
-			seedFXPrior("USD", 0.03, 0.12),
-			// HKD is pegged to USD, so its CNY drift and volatility track USD/CNY.
-			seedFXPrior("HKD", 0.03, 0.12),
-		},
+		// Return and FX priors are materialized from the immutable CMA evidence
+		// artifact (td/065 R10): the value is recomputed from documented inputs and
+		// each carries its specific dated source. Native-currency foreign priors
+		// (USD/HKD) let an asset priced in its own currency calibrate its local
+		// return without an FX/currency mismatch; the FX priors carry the currency
+		// view separately (td/063 R2) and share the equity:foreign / bond:foreign
+		// factor with the CNY cells.
+		ReturnPriors:      buildSystemReturnPriors(),
+		FXPriors:          buildSystemFXPriors(),
 		CorrelationPriors: systemCorrelationPriors(),
-	}
-}
-
-func seedFXPrior(from string, volFloor, volCeil float64) FXPrior {
-	return FXPrior{
-		FromCurrency: from, BaseCurrency: "CNY",
-		AnnualGeometricReturn:   0.0,
-		AnnualVolatilityFloor:   volFloor,
-		AnnualVolatilityCeiling: volCeil,
-		SourceURL:               cmaFXSourceURL,
-		PublishedAt:             cmaPublishedAt,
-		ReviewedAt:              cmaReviewedAt,
-	}
-}
-
-func seedReturnPrior(assetClass, region, currency string, ret, volFloor, volCeil float64) ReturnPrior {
-	return ReturnPrior{
-		AssetClass: assetClass, Region: region, ValuationCurrency: currency,
-		AnnualGeometricReturn:   ret,
-		AnnualVolatilityFloor:   volFloor,
-		AnnualVolatilityCeiling: volCeil,
-		SourceURL:               cmaAssetSourceURL,
-		PublishedAt:             cmaPublishedAt,
-		ReviewedAt:              cmaReviewedAt,
 	}
 }
 

@@ -33,13 +33,18 @@ type PlanWizardRequest struct {
 
 // CreateWizard creates a complete plan in a single transaction.
 func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (PlanDetail, error) {
+	if req.BaseCurrency == "" {
+		req.BaseCurrency = "CNY"
+	}
+	// Reject the unsupported currency before any other work so a non-CNY plan can
+	// never be partially created (td/065 R9).
+	if err := validateBaseCurrency(req.BaseCurrency); err != nil {
+		return PlanDetail{}, newErr("validation_failed", err.Error(), nil)
+	}
 	if err := validateWizardRequest(req); err != nil {
 		return PlanDetail{}, err
 	}
 	req.RegionTargets = normalizeWizardRegionTargets(req.RegionTargets)
-	if req.BaseCurrency == "" {
-		req.BaseCurrency = "CNY"
-	}
 
 	scenarioID := req.SelectedScenarioID
 	params, err := ParametersFromAPI(req.Parameters)

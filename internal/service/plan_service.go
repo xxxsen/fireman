@@ -138,6 +138,9 @@ func (s *PlanService) Create(ctx context.Context, req CreatePlanRequest) (PlanDe
 	if req.BaseCurrency == "" {
 		req.BaseCurrency = "CNY"
 	}
+	if err := validateBaseCurrency(req.BaseCurrency); err != nil {
+		return PlanDetail{}, newErr("validation_failed", err.Error(), nil)
+	}
 	planID := "plan_" + uuid.New().String()
 	now := time.Now().UnixMilli()
 	plan := repository.Plan{
@@ -219,6 +222,9 @@ func (s *PlanService) Update(ctx context.Context, planID string, req UpdatePlanR
 		plan.Name = req.Name
 	}
 	if req.BaseCurrency != "" {
+		if err := validateBaseCurrency(req.BaseCurrency); err != nil {
+			return PlanDetail{}, newErr("validation_failed", err.Error(), nil)
+		}
 		plan.BaseCurrency = req.BaseCurrency
 	}
 	if req.ValuationDate != "" {

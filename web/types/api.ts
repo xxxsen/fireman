@@ -471,6 +471,10 @@ export interface AssumptionProfileSummary {
   reviewed_at?: string;
   created_at: number;
   updated_at: number;
+  // Whether this profile may be selected as the global default: active AND still
+  // passing the current publish gate (structure + coverage + PSD + tail). The
+  // legacy system_cma_v1@1 stays active for replay/pins but is not eligible.
+  eligible_for_global_default: boolean;
 }
 
 export interface AssumptionPreferences {

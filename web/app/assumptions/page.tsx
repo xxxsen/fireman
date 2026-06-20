@@ -313,7 +313,10 @@ function PreferencesCard({
   pending: boolean;
   onSave: (id: string, version: number, scenario: string) => void;
 }) {
-  const activeProfiles = profiles.filter((p) => p.status === "active");
+  const eligibleProfiles = profiles.filter((p) => p.eligible_for_global_default);
+  const ineligibleActive = profiles.filter(
+    (p) => p.status === "active" && !p.eligible_for_global_default,
+  );
   const [sel, setSel] = useState(`${defaultId}@${defaultVersion}`);
   const [scenario, setScenario] = useState(defaultScenario);
 
@@ -337,7 +340,7 @@ function PreferencesCard({
             onChange={(e) => setSel(e.target.value)}
             data-testid="default-profile-select"
           >
-            {activeProfiles.map((p) => (
+            {eligibleProfiles.map((p) => (
               <option key={`${p.id}@${p.version}`} value={`${p.id}@${p.version}`}>
                 {p.name}（{p.id}@{p.version}）
               </option>
@@ -369,6 +372,12 @@ function PreferencesCard({
           保存默认
         </Button>
       </div>
+      {ineligibleActive.length > 0 && (
+        <p className="mt-3 text-xs text-ink-muted" data-testid="ineligible-default-note">
+          以下 profile 仅用于历史兼容，不能作为全局默认（缺少当前发布门槛要求的覆盖/厚尾/校验）：
+          {ineligibleActive.map((p) => `${p.id}@${p.version}`).join("、")}
+        </p>
+      )}
     </section>
   );
 }

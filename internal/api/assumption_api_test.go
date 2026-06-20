@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/fireman/fireman/internal/assumptions"
 	"github.com/fireman/fireman/internal/repository"
@@ -44,7 +45,7 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 	// Attempt to overwrite the system id/owner -> rejected as read-only.
 	sysCopy := cloneProfile(profile)
 	doRaw(t, r, http.MethodPost, "/api/v1/simulation-assumptions/profiles",
-		map[string]any{"profile": sysCopy}, http.StatusBadRequest, "assumption_profile_read_only")
+		map[string]any{"profile": sysCopy}, "assumption_profile_read_only")
 
 	// Copy to a user draft, save it.
 	draft := cloneProfile(profile)
@@ -127,7 +128,7 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 	// Save must be rejected.
 	doRaw(t, r, http.MethodPost, "/api/v1/simulation-assumptions/profiles",
 		map[string]any{"profile": bent, "source_note": "x", "reviewed_by": "me", "reviewed_at": "2026-06-20"},
-		http.StatusBadRequest, "assumption_profile_invalid")
+		"assumption_profile_invalid")
 
 	// And activate of a directly-seeded heavy-PSD draft must also be rejected.
 	repo := repository.NewAssumptionProfileRepo(db)
@@ -141,7 +142,76 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 	}
 	doRaw(t, r, http.MethodPost,
 		"/api/v1/simulation-assumptions/profiles/user_cma_psd/1/activate",
-		nil, http.StatusBadRequest, "assumption_profile_invalid")
+		nil, "assumption_profile_invalid")
+}
+
+// td/065 R8: an active-but-ineligible legacy profile (predating the current
+// publish gate) must not be selectable as the global default. The list exposes
+// eligible_for_global_default, SetPreferences rejects ineligible targets with
+// assumption_profile_not_eligible, and the stored default stays on v2.
+func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	r := NewRouter(context.Background(), Deps{DB: db})
+
+	// Seed an active legacy v1 row directly via SQL: it carries zero tail
+	// truncation, which fails the current Validate gate, so it is ineligible even
+	// though it is active. Raw SQL bypasses the service gate, mimicking a DB
+	// upgraded from a pre-td063 release.
+	legacy := assumptions.SystemDefaultProfile()
+	legacy.ID = assumptions.SystemLegacyProfileID
+	legacy.Version = assumptions.SystemLegacyProfileVersion
+	legacy.Name = "系统默认（CMA v1）"
+	legacy.ReturnFloor = 0
+	legacy.ReturnCeil = 0
+	cb, err := legacy.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonical json: %v", err)
+	}
+	h, err := legacy.ContentHash()
+	if err != nil {
+		t.Fatalf("content hash: %v", err)
+	}
+	now := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO simulation_assumption_profiles
+		(id, version, owner_scope, name, status, canonical_json, content_hash,
+		 source_note, reviewed_by, reviewed_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		legacy.ID, legacy.Version, "system", legacy.Name, "active", string(cb), h,
+		"legacy", "FIRE", "2026-06-20", now, now); err != nil {
+		t.Fatalf("seed legacy v1: %v", err)
+	}
+
+	// List surfaces eligibility: v2 eligible, legacy v1 not.
+	listEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
+	data := listEnv["data"].(map[string]any)
+	elig := map[string]bool{}
+	for _, raw := range data["profiles"].([]any) {
+		p := raw.(map[string]any)
+		elig[p["id"].(string)] = p["eligible_for_global_default"].(bool)
+	}
+	if !elig["system_cma_v2"] {
+		t.Fatalf("v2 must be eligible: %+v", elig)
+	}
+	if elig["system_cma_v1"] {
+		t.Fatalf("legacy v1 must NOT be eligible: %+v", elig)
+	}
+	// Default resolves to v2 after the fresh-install seed.
+	if data["preferences"].(map[string]any)["default_profile_id"] != "system_cma_v2" {
+		t.Fatalf("default should be v2, got %+v", data["preferences"])
+	}
+
+	// Setting the ineligible legacy v1 as default is rejected.
+	doRaw(t, r, http.MethodPut, "/api/v1/simulation-assumptions/preferences",
+		map[string]any{"preferences": map[string]any{
+			"default_profile_id": "system_cma_v1", "default_profile_version": 1, "default_scenario": "baseline",
+		}}, "assumption_profile_not_eligible")
+
+	// The stored default is unchanged (still v2).
+	afterEnv := doJSON(t, r, http.MethodGet, "/api/v1/simulation-assumptions/profiles", nil, http.StatusOK)
+	after := afterEnv["data"].(map[string]any)["preferences"].(map[string]any)
+	if after["default_profile_id"] != "system_cma_v2" {
+		t.Fatalf("default must stay on v2 after rejected set, got %+v", after)
+	}
 }
 
 // bendCorrelationTriangle rewrites three pairwise correlations among domestic
@@ -209,15 +279,16 @@ func doJSON(t *testing.T, r http.Handler, method, path string, body any, _ int) 
 	return decodeEnvelope(t, w.Body.Bytes())
 }
 
-func doRaw(t *testing.T, r http.Handler, method, path string, body any, wantStatus int, wantCode string) {
+// doRaw issues a request expecting a 400 error envelope with the given code.
+func doRaw(t *testing.T, r http.Handler, method, path string, body any, wantCode string) {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(method, path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != wantStatus {
-		t.Fatalf("%s %s status=%d want=%d body=%s", method, path, w.Code, wantStatus, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("%s %s status=%d want=400 body=%s", method, path, w.Code, w.Body.String())
 	}
 	if wantCode != "" {
 		assertErrorCode(t, w.Body.Bytes(), wantCode)

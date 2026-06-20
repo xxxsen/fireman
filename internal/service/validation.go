@@ -61,6 +61,26 @@ const (
 	SelectionPinnedProfile = "pinned_profile"
 )
 
+// errBaseCurrencyUnsupported rejects any plan base currency the published system
+// profile does not cover. The system profile's return/FX/cash priors and the
+// RequiredGlobalCoverage gate are CNY-only, so a non-CNY plan would save but then
+// fail to simulate for a missing currency mapping (td/065 R9). Supporting another
+// base currency requires first publishing a system profile that fully covers it.
+var errBaseCurrencyUnsupported = errors.New(
+	"base_currency must be " + assumptions.BaseCoverageCurrency +
+		" (the only currency the system assumption profile covers)",
+)
+
+// validateBaseCurrency enforces the CNY-only base-currency boundary at every plan
+// write entry point (create, wizard, metadata update) so an unsupported plan is
+// blocked at save time rather than at simulation time.
+func validateBaseCurrency(c string) error {
+	if c != assumptions.BaseCoverageCurrency {
+		return errBaseCurrencyUnsupported
+	}
+	return nil
+}
+
 func validateParameters(p repository.PlanParameters) error {
 	if err := validateParameterAges(p); err != nil {
 		return err

@@ -77,6 +77,7 @@ beforeEach(() => {
         content_hash: "abc",
         created_at: 0,
         updated_at: 0,
+        eligible_for_global_default: true,
       },
     ],
     preferences: {

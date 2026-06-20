@@ -47,6 +47,13 @@ func (s *AssumptionService) ListProfiles(ctx context.Context) (AssumptionProfile
 	if err != nil {
 		return AssumptionProfilesView{}, wrapRepo("get assumption preferences", err)
 	}
+	for i := range profiles {
+		eligible, err := s.isEligibleForGlobalDefault(ctx, profiles[i].ID, profiles[i].Version, profiles[i].Status)
+		if err != nil {
+			return AssumptionProfilesView{}, err
+		}
+		profiles[i].EligibleForGlobalDefault = eligible
+	}
 	return AssumptionProfilesView{
 		Profiles:    profiles,
 		Preferences: pref,
@@ -54,6 +61,27 @@ func (s *AssumptionService) ListProfiles(ctx context.Context) (AssumptionProfile
 			assumptions.ScenarioConservative, assumptions.ScenarioBaseline, assumptions.ScenarioOptimistic,
 		},
 	}, nil
+}
+
+// isEligibleForGlobalDefault reports whether a profile may be the user's global
+// default: it must be active AND still pass the current publish gate (structure +
+// coverage + PSD + tail). The legacy system_cma_v1@1 stays active for replay/pins
+// but fails this gate (no tail truncation, stale correlation universe), so it can
+// never be re-selected as the default (td/065 R8).
+func (s *AssumptionService) isEligibleForGlobalDefault(
+	ctx context.Context, id string, version int, status string,
+) (bool, error) {
+	if status != assumptions.StatusActive {
+		return false, nil
+	}
+	p, err := s.repo.Get(ctx, id, version)
+	if err != nil {
+		if errors.Is(err, repository.ErrAssumptionProfileNotFound) {
+			return false, nil
+		}
+		return false, wrapRepo("get assumption profile", err)
+	}
+	return s.assertActivatable(p) == nil, nil
 }
 
 // GetProfile returns one full profile id@version.
@@ -194,6 +222,19 @@ func (s *AssumptionService) SetPreferences(
 	if p.Status != assumptions.StatusActive {
 		return repository.AssumptionPreferences{}, newErr("assumption_profile_not_active",
 			"default profile must be an active version", nil)
+	}
+	// The global default must also still pass the current publish gate (structure,
+	// coverage, PSD, tail). The legacy system_cma_v1@1 is active for replay/pins
+	// but fails this gate, so it can never be re-selected as the default — which
+	// would otherwise silently undo the R6 v1->v2 migration (td/065 R8).
+	if err := s.assertActivatable(p); err != nil {
+		var ae *AppError
+		if errors.As(err, &ae) {
+			return repository.AssumptionPreferences{}, newErr("assumption_profile_not_eligible",
+				"profile is not eligible as a global default: "+ae.Message,
+				map[string]any{"id": pref.DefaultProfileID, "version": pref.DefaultProfileVersion})
+		}
+		return repository.AssumptionPreferences{}, err
 	}
 	if err := s.repo.SetPreferences(ctx, pref); err != nil {
 		return repository.AssumptionPreferences{}, wrapRepo("set assumption preferences", err)
