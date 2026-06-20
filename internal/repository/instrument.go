@@ -81,6 +81,26 @@ func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 	return scanInstrumentRecords(rows)
 }
 
+// ListWithMetrics returns the asset library joined with the precomputed
+// instrument_library_metrics projection (market metadata, simulation eligibility
+// and trailing returns). It performs a single LEFT JOIN so the library list
+// reads list metadata in a constant number of queries, never recomputing full
+// price history per row (td/057 P1). Instruments without a projection row keep
+// empty/nil list fields, which the frontend renders as "—".
+func (r *InstrumentRepo) ListWithMetrics(ctx context.Context) ([]InstrumentRecord, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+instrumentBaseColumnsAliased+`, `+instrumentProjectionColumns+`
+		FROM instruments i
+		LEFT JOIN instrument_library_metrics m ON m.instrument_id = i.id
+		WHERE i.provider='akshare' OR i.is_system=1
+		ORDER BY i.is_system DESC, i.name`)
+	if err != nil {
+		return nil, fmt.Errorf("query instruments with metrics: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanInstrumentListRecords(rows)
+}
+
 // InstrumentSearchOptions filters and paginates the asset library.
 type InstrumentSearchOptions struct {
 	Query         string
@@ -157,18 +177,17 @@ func (r *InstrumentRepo) Search(ctx context.Context, opts InstrumentSearchOption
 	}
 	pagedArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
-			expense_ratio, expense_ratio_status, fee_treatment, status,
-			created_at, updated_at
-		FROM instruments `+whereSQL+`
-		ORDER BY created_at DESC, id DESC
+		SELECT `+instrumentBaseColumnsAliased+`, `+instrumentProjectionColumns+`
+		FROM instruments i
+		LEFT JOIN instrument_library_metrics m ON m.instrument_id = i.id
+		`+whereSQL+`
+		ORDER BY i.created_at DESC, i.id DESC
 		LIMIT ? OFFSET ?`, pagedArgs...)
 	if err != nil {
 		return InstrumentSearchResult{}, fmt.Errorf("query instruments search: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	recs, err := scanInstrumentRecords(rows)
+	recs, err := scanInstrumentListRecords(rows)
 	if err != nil {
 		return InstrumentSearchResult{}, err
 	}

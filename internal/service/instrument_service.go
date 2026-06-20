@@ -28,6 +28,7 @@ type InstrumentService struct {
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
 	annualRepo *repository.AnnualReturnsRepo
+	libMetrics *repository.InstrumentLibraryMetricsRepo
 	jobs       *repository.JobRepo
 	tickets    *repository.ResolutionTicketRepo
 	provider   *marketdata.ProviderClient
@@ -44,11 +45,37 @@ func NewInstrumentService(
 ) *InstrumentService {
 	return &InstrumentService{
 		sql: sqlDB, instRepo: instRepo, marketRepo: marketRepo,
-		annualRepo: annualRepo, jobs: jobs, tickets: tickets, provider: provider,
+		annualRepo: annualRepo, libMetrics: repository.NewInstrumentLibraryMetricsRepo(sqlDB),
+		jobs: jobs, tickets: tickets, provider: provider,
 	}
 }
 
 func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]repository.InstrumentRecord, error) {
+	// Plan-context listing (valuation_date set) truncates quality to the plan's
+	// valuation date, which the precomputed list projection cannot express, so it
+	// keeps the per-row path. The asset library itself (no valuation_date) reads
+	// the projection in a single JOIN (td/057 P1).
+	if valuationDate != "" {
+		return s.listAtValuationDate(ctx, valuationDate)
+	}
+	items, err := s.instRepo.ListWithMetrics(ctx)
+	if err != nil {
+		return nil, wrapRepo("list instruments", err)
+	}
+	refCounts, err := s.instRepo.ReferenceCounts(ctx)
+	if err != nil {
+		return nil, wrapRepo("list instrument reference counts", err)
+	}
+	for i := range items {
+		items[i].ReferencingPlanCount = refCounts[items[i].ID]
+		s.applyProjectedListMeta(&items[i])
+	}
+	return items, nil
+}
+
+func (s *InstrumentService) listAtValuationDate(
+	ctx context.Context, valuationDate string,
+) ([]repository.InstrumentRecord, error) {
 	items, err := s.instRepo.List(ctx)
 	if err != nil {
 		return nil, wrapRepo("list instruments", err)
@@ -68,60 +95,52 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 			items[i].QualityStatus = "unavailable"
 			continue
 		}
-		if valuationDate != "" {
-			metrics, quality := libraryMetricsAtDate(ctx, s.marketRepo, items[i].ID, valuationDate)
-			items[i].QualityStatus = quality
-			applySimulationMeta(&items[i], metrics)
-		} else {
-			s.enrichMarketMeta(ctx, &items[i])
-		}
+		metrics, quality := libraryMetricsAtDate(ctx, s.marketRepo, items[i].ID, valuationDate)
+		items[i].QualityStatus = quality
+		applySimulationMeta(&items[i], metrics)
 	}
-	s.attachTrailingReturns(ctx, items)
 	return items, nil
 }
 
-// attachTrailingReturns batch-loads market points for the listed active assets in
-// a single grouped query and computes 近1/3/5年年化收益 per instrument. It never
-// issues per-row detail calls; pending/failed/system rows keep nil (rendered "—").
-func (s *InstrumentService) attachTrailingReturns(ctx context.Context, items []repository.InstrumentRecord) {
-	ids := make([]string, 0, len(items))
-	for i := range items {
-		if items[i].IsSystem || items[i].Status != "active" {
-			continue
-		}
-		ids = append(ids, items[i].ID)
-	}
-	if len(ids) == 0 {
+// applyProjectedListMeta finalizes one row from ListWithMetrics/Search: it
+// applies system overrides, clears projected fields for non-active rows (which
+// must render "—" instead of stale values), and derives the time-relative stale
+// flag from the projection's data_as_of. It issues no per-instrument query.
+func (s *InstrumentService) applyProjectedListMeta(inst *repository.InstrumentRecord) {
+	if inst.ID == repository.SystemCashInstrumentID {
+		clearProjectedListMeta(inst)
+		inst.QualityStatus = "available"
+		inst.SimulationEligible = true
 		return
 	}
-	now := time.Now()
-	asOf := now.Format("2006-01-02")
-	// Bound the batch to the trailing windows (~6 years) so a large library does
-	// not load full history; this still covers every 5y start point for fresh data.
-	since := now.AddDate(-6, 0, -7).Format("2006-01-02")
-	grouped, err := s.marketRepo.ListPointsByInstruments(ctx, ids, since)
-	if err != nil {
+	if inst.IsSystem {
+		clearProjectedListMeta(inst)
+		inst.QualityStatus = "unavailable"
 		return
 	}
-	for i := range items {
-		pts := grouped[items[i].ID]
-		if len(pts) == 0 {
-			continue
-		}
-		dp := repoToDataPoints(pts)
-		pointType, sourceName := "adjusted_close", "library"
-		if len(dp) > 0 {
-			pointType = dp[len(dp)-1].PointType
-			sourceName = dp[len(dp)-1].SourceName
-		}
-		lt := marketdata.ComputeListTrailingReturns(dp, asOf, pointType, sourceName)
-		items[i].TrailingReturns = &repository.InstrumentTrailingReturns{
-			AsOfDate:                  lt.AsOfDate,
-			OneYearAnnualizedReturn:   lt.OneYear,
-			ThreeYearAnnualizedReturn: lt.ThreeYear,
-			FiveYearAnnualizedReturn:  lt.FiveYear,
-		}
+	// Pending/failed instruments must not surface a previous projection; the
+	// library renders "—" until a fetch/refresh succeeds and rewrites it.
+	if inst.Status != "active" {
+		clearProjectedListMeta(inst)
+		return
 	}
+	applyDataStale(inst, inst.DataAsOf)
+}
+
+func clearProjectedListMeta(inst *repository.InstrumentRecord) {
+	inst.QualityStatus = ""
+	inst.DataAsOf = ""
+	inst.DataSourceName = ""
+	inst.PointType = ""
+	inst.SimulationEligible = false
+	inst.HistoryDepth = ""
+	inst.CompleteYearCount = 0
+	inst.MonthlyReturnCount = 0
+	inst.MetricsVersion = ""
+	inst.Warnings = nil
+	inst.TrailingReturns = nil
+	inst.DataStale = false
+	inst.StaleWarning = ""
 }
 
 // InstrumentSearchView is a paginated asset-library search response.
@@ -149,18 +168,8 @@ func (s *InstrumentService) Search(
 	}
 	for i := range res.Instruments {
 		res.Instruments[i].ReferencingPlanCount = refCounts[res.Instruments[i].ID]
-		if res.Instruments[i].ID == repository.SystemCashInstrumentID {
-			res.Instruments[i].QualityStatus = "available"
-			res.Instruments[i].SimulationEligible = true
-			continue
-		}
-		if res.Instruments[i].IsSystem {
-			res.Instruments[i].QualityStatus = "unavailable"
-			continue
-		}
-		s.enrichMarketMeta(ctx, &res.Instruments[i])
+		s.applyProjectedListMeta(&res.Instruments[i])
 	}
-	s.attachTrailingReturns(ctx, res.Instruments)
 	view := InstrumentSearchView{Instruments: res.Instruments, Total: res.Total}
 	if view.Instruments == nil {
 		view.Instruments = []repository.InstrumentRecord{}

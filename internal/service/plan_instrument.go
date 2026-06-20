@@ -140,23 +140,5 @@ func libraryMetricsAtDate(
 	if len(filtered) == 0 {
 		return marketdata.SnapshotMetrics{}, marketdata.QualityStatusInsufficientHistory
 	}
-	if marketdata.DetectDailyAnomaly(filtered) {
-		return marketdata.SnapshotMetrics{QualityStatus: marketdata.QualityStatusProviderDataAnomaly},
-			marketdata.QualityStatusProviderDataAnomaly
-	}
-	annual := marketdata.ComputeAnnualReturns(filtered)
-	pointType, sourceName := "adjusted_close", "library"
-	if len(filtered) > 0 {
-		pointType = filtered[0].PointType
-		sourceName = filtered[0].SourceName
-	}
-	years := marketdata.SelectSimulationYears(filtered, annual, inclusionDate)
-	metrics := marketdata.ComputeMetrics(filtered, years, pointType, sourceName)
-	quality := metrics.QualityStatus
-	if metrics.SimulationEligible {
-		quality = marketdata.QualityStatusAvailable
-	} else if quality == marketdata.QualityStatusAvailable {
-		quality = marketdata.QualityStatusInsufficientHistory
-	}
-	return metrics, quality
+	return marketdata.ComputeLibraryMetrics(filtered, inclusionDate)
 }

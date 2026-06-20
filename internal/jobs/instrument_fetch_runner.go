@@ -41,6 +41,7 @@ type InstrumentFetchRunner struct {
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
 	annualRepo *repository.AnnualReturnsRepo
+	libMetrics *repository.InstrumentLibraryMetricsRepo
 	provider   *marketdata.ProviderClient
 }
 
@@ -54,7 +55,8 @@ func NewInstrumentFetchRunner(
 ) *InstrumentFetchRunner {
 	return &InstrumentFetchRunner{
 		db: db, jobs: jobs, instRepo: instRepo, marketRepo: marketRepo,
-		annualRepo: annualRepo, provider: provider,
+		annualRepo: annualRepo, libMetrics: repository.NewInstrumentLibraryMetricsRepo(db),
+		provider: provider,
 	}
 }
 
