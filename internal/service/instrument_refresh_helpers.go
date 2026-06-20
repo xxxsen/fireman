@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"log/slog"
 
+	"github.com/fireman/fireman/internal/libmetrics"
 	"github.com/fireman/fireman/internal/marketdata"
-	"github.com/fireman/fireman/internal/repository"
 )
 
 func refreshOverlapStart(fullReplace bool, lastDate string) *string {
@@ -81,54 +81,11 @@ func persistRefreshMarketDataTx(
 			return wrapRepo("update instrument name", err)
 		}
 	}
-	if err := upsertLibraryMetricsTx(ctx, s.libMetrics, tx, instrumentID, reprocessed.Points); err != nil {
-		return err
+	// Keep the list projection exactly in sync with the history just written: a
+	// full replace that cleared every point must drop the stale projection, not
+	// leave the previous date/returns/eligibility behind (td/058 P1).
+	if err := libmetrics.SyncTx(ctx, s.libMetrics, tx, instrumentID, reprocessed.Points); err != nil {
+		return wrapRepo("sync library metrics", err)
 	}
 	return wrapRepo("touch instrument", s.instRepo.TouchUpdated(ctx, tx, instrumentID))
-}
-
-// upsertLibraryMetricsTx recomputes and persists the asset-library list
-// projection for instrumentID from its full cleaned history, inside the same
-// transaction that stored market_data_points (td/057 P1). It is a no-op when the
-// history is empty so callers never write an empty projection.
-func upsertLibraryMetricsTx(
-	ctx context.Context,
-	repo *repository.InstrumentLibraryMetricsRepo,
-	tx *sql.Tx,
-	instrumentID string,
-	points []marketdata.DataPoint,
-) error {
-	rec, ok := buildLibraryMetricsRecord(instrumentID, points)
-	if !ok {
-		return nil
-	}
-	return wrapRepo("upsert library metrics", repo.Upsert(ctx, tx, rec))
-}
-
-// buildLibraryMetricsRecord maps a computed marketdata projection onto the
-// repository row. ok is false when there is no usable history.
-func buildLibraryMetricsRecord(
-	instrumentID string, points []marketdata.DataPoint,
-) (repository.LibraryMetricsRecord, bool) {
-	proj, ok := marketdata.ComputeLibraryProjection(points)
-	if !ok {
-		return repository.LibraryMetricsRecord{}, false
-	}
-	return repository.LibraryMetricsRecord{
-		InstrumentID:        instrumentID,
-		DataAsOf:            proj.DataAsOf,
-		DataSourceName:      proj.SourceName,
-		PointType:           proj.PointType,
-		QualityStatus:       proj.QualityStatus,
-		SimulationEligible:  proj.SimulationEligible,
-		HistoryDepth:        proj.HistoryDepth,
-		CompleteYearCount:   proj.CompleteYearCount,
-		MonthlyReturnCount:  proj.MonthlyReturnCount,
-		MetricsVersion:      proj.MetricsVersion,
-		WarningsJSON:        proj.WarningsJSON(),
-		TrailingAsOf:        proj.Trailing.AsOfDate,
-		OneYearAnnualized:   proj.Trailing.OneYear,
-		ThreeYearAnnualized: proj.Trailing.ThreeYear,
-		FiveYearAnnualized:  proj.Trailing.FiveYear,
-	}, true
 }

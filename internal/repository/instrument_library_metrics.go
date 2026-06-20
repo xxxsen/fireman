@@ -49,6 +49,17 @@ func (r *InstrumentLibraryMetricsRepo) exec(tx *sql.Tx) dbExec {
 	return r.db
 }
 
+// DeleteTx removes the projection for one instrument. It must be called inside
+// the same transaction that cleared market_data_points (e.g. a full replace that
+// resulted in empty history) so the list projection never outlives its history.
+func (r *InstrumentLibraryMetricsRepo) DeleteTx(ctx context.Context, tx *sql.Tx, instrumentID string) error {
+	if _, err := r.exec(tx).ExecContext(ctx,
+		`DELETE FROM instrument_library_metrics WHERE instrument_id=?`, instrumentID); err != nil {
+		return fmt.Errorf("delete instrument library metrics: %w", err)
+	}
+	return nil
+}
+
 // Upsert writes (or replaces) the projection for one instrument. It must be
 // called inside the same transaction that persists market_data_points so the
 // list projection and stored history can never diverge.

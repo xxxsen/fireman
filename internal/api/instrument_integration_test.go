@@ -453,6 +453,268 @@ func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {
 	}
 }
 
+func emptyFullReplaceProvider(t *testing.T) *httptest.Server {
+	t.Helper()
+	fetchCount := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/instruments/resolve":
+			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
+				Code: 0, Message: "success",
+				Data: marketdata.ResolveData{
+					Ambiguous: false,
+					Resolved: &marketdata.ResolveCandidate{
+						Code: "sh510300", ProviderSymbol: "sh510300",
+						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
+					},
+				},
+			})
+			return
+		case "/v1/instruments/fetch":
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		fetchCount++
+		points := buildFixturePoints()
+		source := "test_fixture"
+		if fetchCount > 1 {
+			// Upstream succeeds but returns no observations on the forced refresh.
+			points = nil
+			source = "empty_source"
+		}
+		_ = json.NewEncoder(w).Encode(marketdata.FetchResponse{
+			Code: 0, Message: "success",
+			Data: marketdata.FetchData{
+				Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
+				AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
+				ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
+				Points: points, SourceName: source, SourceQuality: "full",
+			},
+		})
+	}))
+	t.Cleanup(provider.Close)
+	return provider
+}
+
+func countInstrumentRows(t *testing.T, db *sql.DB, table, instrumentID string) int {
+	t.Helper()
+	var n int
+	//nolint:gosec // table is a fixed test-controlled identifier, not user input.
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM "+table+" WHERE instrument_id=?", instrumentID).Scan(&n); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	return n
+}
+
+func getInstrumentFromList(t *testing.T, client *http.Client, baseURL, instrumentID string) map[string]any {
+	t.Helper()
+	resp, err := client.Get(baseURL + "/api/v1/instruments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	env := decodeEnvelope(t, readBody(t, resp))
+	insts := env["data"].(map[string]any)["instruments"].([]any)
+	for _, raw := range insts {
+		m := raw.(map[string]any)
+		if m["id"] == instrumentID {
+			return m
+		}
+	}
+	t.Fatalf("instrument %s not found in list", instrumentID)
+	return nil
+}
+
+// TestInstrumentForceRefreshEmptyClearsProjectionIntegration covers td/058 P1: a
+// full replace whose upstream returns empty points clears market data, annual
+// returns AND the list projection in the same transaction, so the library can
+// never show a stale data_as_of / trailing return / eligibility for an asset
+// whose history was just wiped.
+func TestInstrumentForceRefreshEmptyClearsProjectionIntegration(t *testing.T) {
+	provider := emptyFullReplaceProvider(t)
+
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := importFixtureInstrument(t, client, srv.URL)
+
+	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 1 {
+		t.Fatalf("expected projection row after import, got %d", got)
+	}
+
+	body, _ := json.Marshal(map[string]any{"force": true})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("force refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+
+	for _, table := range []string{"market_data_points", "instrument_annual_returns", "instrument_library_metrics"} {
+		if got := countInstrumentRows(t, db, table, instID); got != 0 {
+			t.Fatalf("%s still has %d rows after empty full replace", table, got)
+		}
+	}
+
+	inst := getInstrumentFromList(t, client, srv.URL, instID)
+	if v, ok := inst["data_as_of"]; ok && v != nil && v != "" {
+		t.Fatalf("data_as_of should be cleared, got %v", v)
+	}
+	if inst["trailing_returns"] != nil {
+		t.Fatalf("trailing_returns should be nil after wipe, got %v", inst["trailing_returns"])
+	}
+	if elig, _ := inst["simulation_eligible"].(bool); elig {
+		t.Fatalf("simulation_eligible should be false after wipe")
+	}
+}
+
+// TestInstrumentRefreshProjectionFailureRollsBackIntegration covers td/058
+// transaction atomicity: if the projection sync SQL fails, the whole refresh
+// rolls back, leaving the previous market data, annual returns and projection
+// untouched.
+func TestInstrumentRefreshProjectionFailureRollsBackIntegration(t *testing.T) {
+	provider := emptyFullReplaceProvider(t)
+
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := importFixtureInstrument(t, client, srv.URL)
+	beforePoints := countInstrumentRows(t, db, "market_data_points", instID)
+	beforeAnnual := countInstrumentRows(t, db, "instrument_annual_returns", instID)
+	if beforePoints == 0 || countInstrumentRows(t, db, "instrument_library_metrics", instID) != 1 {
+		t.Fatalf("fixture must seed market data and a projection")
+	}
+
+	// Force the projection delete (empty full replace path) to abort.
+	if _, err := db.ExecContext(context.Background(), `
+		CREATE TRIGGER test_fail_library_metrics_delete
+		BEFORE DELETE ON instrument_library_metrics
+		BEGIN
+			SELECT RAISE(ABORT, 'injected library metrics failure');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS test_fail_library_metrics_delete`)
+	})
+
+	body, _ := json.Marshal(map[string]any{"force": true})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("expected refresh to fail when projection sync aborts, got 200 body=%s", readBody(t, resp))
+	}
+
+	if got := countInstrumentRows(t, db, "market_data_points", instID); got != beforePoints {
+		t.Fatalf("market_data_points changed despite rollback: before=%d after=%d", beforePoints, got)
+	}
+	if got := countInstrumentRows(t, db, "instrument_annual_returns", instID); got != beforeAnnual {
+		t.Fatalf("instrument_annual_returns changed despite rollback: before=%d after=%d", beforeAnnual, got)
+	}
+	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 1 {
+		t.Fatalf("projection changed despite rollback, rows=%d", got)
+	}
+}
+
+// TestInstrumentSourceChangeEmptyClearsProjectionIntegration covers the td/058
+// acceptance variant where fullReplace is triggered by a source switch (not
+// force): an empty upstream payload still clears history, annual returns and the
+// projection together.
+func TestInstrumentSourceChangeEmptyClearsProjectionIntegration(t *testing.T) {
+	provider := emptyFullReplaceProvider(t)
+
+	db := testutil.OpenTestDB(t)
+	startInstrumentFetchWorker(t, db, provider.URL)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	instID := importFixtureInstrument(t, client, srv.URL)
+	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 1 {
+		t.Fatalf("expected projection row after import, got %d", got)
+	}
+
+	// Non-force refresh: the second fetch returns empty points under a different
+	// source ("empty_source" != "test_fixture"), so ShouldFullReplaceOnRefresh
+	// triggers a full replace that ends with empty history.
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+
+	for _, table := range []string{"market_data_points", "instrument_annual_returns", "instrument_library_metrics"} {
+		if got := countInstrumentRows(t, db, table, instID); got != 0 {
+			t.Fatalf("%s still has %d rows after source-change empty replace", table, got)
+		}
+	}
+	inst := getInstrumentFromList(t, client, srv.URL, instID)
+	if inst["trailing_returns"] != nil {
+		t.Fatalf("trailing_returns should be nil after wipe, got %v", inst["trailing_returns"])
+	}
+}
+
+// TestInstrumentImportProjectionFailureRollsBackIntegration covers td/058
+// transaction atomicity on the import/fetch (job) path: if the projection
+// upsert SQL fails, the whole fetch transaction rolls back (no market data) and
+// the instrument is marked fetch_failed.
+func TestInstrumentImportProjectionFailureRollsBackIntegration(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+
+	if _, err := db.ExecContext(context.Background(), `
+		CREATE TRIGGER test_fail_library_metrics_insert
+		BEFORE INSERT ON instrument_library_metrics
+		BEGIN
+			SELECT RAISE(ABORT, 'injected projection insert failure');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS test_fail_library_metrics_insert`)
+	})
+
+	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+
+	deadline := time.Now().Add(5 * time.Second)
+	var status string
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+		status, _ = inst["status"].(string)
+		if status == "fetch_failed" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if status != "fetch_failed" {
+		t.Fatalf("expected fetch_failed after projection insert abort, got %q", status)
+	}
+	if got := countInstrumentRows(t, db, "market_data_points", instID); got != 0 {
+		t.Fatalf("market_data_points must roll back on projection failure, got %d", got)
+	}
+	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 0 {
+		t.Fatalf("no projection should exist after rollback, got %d", got)
+	}
+}
+
 func TestHoldingSnapshotOnCreateIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 

@@ -15,6 +15,7 @@
 - 后续 schema 变更通过顺序 migration 文件表达，例如 `migrations/0014_xxx.sql`。
 - 当前未上线，不保留旧临时库兼容修补；遇到旧本地 DB 结构不一致时，删除旧 DB 并重新执行 migrations。
 - `migrations/0012_snapshot_metrics_columns.sql` 是 no-op，用于保留历史迁移编号；相关列已经在 `0001_init.sql` 中声明。
+- `migrations/0015_instrument_library_metrics.sql` 创建资料库列表投影表。该表只由导入、重试抓取和刷新事务写入；空历史必须删除投影，禁止运行时 DDL 或列表请求内回退为逐资产全量行情计算。
 
 ## 验收方式
 

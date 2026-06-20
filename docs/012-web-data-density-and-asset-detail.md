@@ -1,6 +1,6 @@
 # 012 · Web 数据密度与资产详情重排
 
-> 设计来源：`td/045-web-ux-data-density-and-asset-detail-refactor.md`、`td/053-asset-library-and-wizard-ui-refactor.md`（已完整实施并稳定）。
+> 设计来源：`td/045-web-ux-data-density-and-asset-detail-refactor.md`、`td/053-asset-library-and-wizard-ui-refactor.md`、`td/056-fire-simulation-library-and-wizard-ui-fixes.md`、`td/057-td056-implementation-review.md`、`td/058-td057-implementation-review.md`（均已完整实施并稳定）。
 > 本文自洽描述页面宽度与数据密度、资产选择分页、资产资料库分类与刷新、金额单位与配置 tooltip、资产详情重排、场景卡片权限等统一约定。除资料库分类的受控编辑与新增 `GET /api/v1/instruments/:id/return-series`、扩展 `GET /api/v1/instruments` 的分页/搜索、Dashboard allocation bar 明细外，不改变任何金额 / 权重 / 调仓 / 模拟计算口径。
 
 ## 1. 新建计划向导与页面容器宽度
@@ -12,7 +12,9 @@
 ## 2. 资产选择分页与滚动加载
 
 - 后端 `GET /api/v1/instruments` 在带 `limit`/`q`/`cursor`/`offset` 任一参数时进入分页搜索分支，返回 `{ instruments, next_cursor, total }`；不带这些参数时保持旧的全量列表行为（资产资料库页、资产刷新页等沿用旧契约不受影响）。
-- 仓储 `InstrumentRepo.Search` 支持按 `q`（代码/名称）、`asset_class`、`region`、`status`、`exclude_ids`、`exclude_system` 过滤，统一按 `created_at DESC, id DESC` 排序并 `LIMIT/OFFSET` 分页；服务层逐行补全引用计数与行情元数据，并在 `offset + 本页数量 < total` 时给出 `next_cursor`（offset 语义）。
+- 仓储 `InstrumentRepo.Search` 支持按 `q`（代码/名称）、`asset_class`、`region`、`status`、`exclude_ids`、`exclude_system` 过滤，统一按 `created_at DESC, id DESC` 排序并 `LIMIT/OFFSET` 分页；无分页的资料库列表与分页搜索都通过 `LEFT JOIN instrument_library_metrics` 读取行情元数据、模拟资格及近 1/3/5 年年化收益，不在 HTTP 请求中逐资产读取全量行情。服务层补全引用计数，并在 `offset + 本页数量 < total` 时给出 `next_cursor`（offset 语义）。
+- `instrument_library_metrics` 是资料库列表投影：包含 `data_as_of`、来源、点类型、质量、模拟资格、历史样本指标和近 1/3/5 年年化收益。收益以该标的自身最后交易日为截止日，因此停更标的仍按其实际可用历史展示收益；投影缺失、抓取中、抓取失败和系统标的统一展示 `—`，不会回退到同步计算。
+- 异步导入、重试抓取和手工刷新在与 `market_data_points`、`instrument_annual_returns` 相同的事务内调用 `libmetrics.SyncTx`：非空历史更新投影，空历史删除投影。强制刷新或来源切换清空行情时，资料库不会保留旧日期、收益或模拟资格；投影 SQL 失败会使整笔写入回滚。
 - 前端 `AssetClassHoldingPicker` 改用 `useInfiniteQuery`：聚焦即加载首页（默认 10 条最近标的），输入经 250ms 去抖后作为搜索词并重置游标，已选标的通过 `exclude_ids` 从候选中剔除；底部哨兵元素经 `IntersectionObserver` 触底加载下一页。
 - 本地候选使用 48px 单行行高和固定 `30rem`（10 行）滚动视口；长名称截断，翻页不会改变下拉高度或挤压周边内容。已选资产显示在搜索框上方。
 - 候选层遵循 combobox 关闭规则：点击 picker 外部或按 Escape 会同时收起本地候选、AKShare 候选、解析状态与错误；保留输入词，重新聚焦后可继续检索。
@@ -52,5 +54,5 @@
 
 ## 9. 测试与门禁
 
-- 为每个改动点补 / 改 Vitest 与 Go 单测，覆盖：分页/滚动加载、10 行视口、候选层关闭与已选剔除、AKShare 兜底触发条件、资料库分类乐观锁与计划冻结、抓取中编辑保护、allocation bar 排序与聚合、return-series 归一化与历史不足、毫秒日期与年份压缩、场景卡片权限与文案、向导宽度与侧栏 sticky。
+- 为每个改动点补 / 改 Vitest 与 Go 单测，覆盖：分页/滚动加载、10 行视口、候选层关闭与已选剔除、AKShare 兜底触发条件、资料库分类乐观锁与计划冻结、抓取中编辑保护、资料库投影读取/停更资产收益/空历史清理/事务回滚、allocation bar 排序与聚合、return-series 归一化与历史不足、毫秒日期与年份压缩、场景卡片权限与文案、向导宽度与侧栏 sticky。
 - 交付门禁：`go test ./...`、`make web-lint`、`make web-test`、`make web-build` 均通过。
