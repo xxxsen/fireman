@@ -34,6 +34,14 @@ type PathSummary struct {
 	TransactionCostMinor int64
 	TruncationCount      int
 	MonthlyWealthMinor   []int64
+	// MonthlyCumInflation is the path's realized cumulative inflation factor at
+	// each month (1.0 at start). Collected alongside MonthlyWealthMinor so real
+	// (start-of-plan purchasing power) wealth uses each path's own inflation
+	// process, never an averaged rate (td/061 §3.6).
+	MonthlyCumInflation []float64
+	// RealTerminalWealthMinor is TerminalWealthMinor deflated by the path's final
+	// cumulative inflation.
+	RealTerminalWealthMinor int64
 }
 
 // MonthRecord captures one month of path detail.
@@ -46,22 +54,38 @@ type MonthRecord struct {
 	TransactionCost  int64   `json:"transaction_cost"`
 	Drawdown         float64 `json:"drawdown"`
 	Rebalanced       bool    `json:"rebalanced"`
+	// td/061 §5.5: this path's realized cumulative inflation at month end and the
+	// wealth deflated into start-of-plan purchasing power, so the UI can toggle
+	// the amount caliber without re-deriving the inflation process.
+	CumInflation         float64 `json:"cum_inflation"`
+	RealTotalWealthMinor int64   `json:"real_total_wealth_minor"`
 }
 
 // YearRecord captures annual aggregates for path detail.
 type YearRecord struct {
-	Year               int                `json:"year"`
-	StartWealthMinor   int64              `json:"start_wealth_minor"`
-	IncomeMinor        int64              `json:"income_minor"`
-	SpendingMinor      int64              `json:"spending_minor"`
-	TaxMinor           int64              `json:"tax_minor"`
-	TransactionCost    int64              `json:"transaction_cost"`
-	InvestmentGainLoss int64              `json:"investment_gain_loss"`
-	EndWealthMinor     int64              `json:"end_wealth_minor"`
-	YearEndDrawdown    float64            `json:"year_end_drawdown"`
-	MaxIntraYearDD     float64            `json:"max_intra_year_dd"`
-	Rebalanced         bool               `json:"rebalanced"`
-	AssetWeights       map[string]float64 `json:"asset_weights"`
+	Year               int     `json:"year"`
+	StartWealthMinor   int64   `json:"start_wealth_minor"`
+	IncomeMinor        int64   `json:"income_minor"`
+	SpendingMinor      int64   `json:"spending_minor"`
+	TaxMinor           int64   `json:"tax_minor"`
+	TransactionCost    int64   `json:"transaction_cost"`
+	InvestmentGainLoss int64   `json:"investment_gain_loss"`
+	EndWealthMinor     int64   `json:"end_wealth_minor"`
+	YearEndDrawdown    float64 `json:"year_end_drawdown"`
+	MaxIntraYearDD     float64 `json:"max_intra_year_dd"`
+	// AnnualReturn is the year's pure investment return relative to opening
+	// wealth: InvestmentGainLoss / StartWealthMinor. Cash flows (income,
+	// spending, tax, transaction cost) are excluded by construction, so it
+	// reflects investment P&L only — not the year-end drawdown. It is nil when
+	// StartWealthMinor <= 0 (no meaningful denominator), rendered as "—".
+	AnnualReturn *float64           `json:"annual_return"`
+	Rebalanced   bool               `json:"rebalanced"`
+	AssetWeights map[string]float64 `json:"asset_weights"`
+	// td/061 §5.5: real (start-of-plan purchasing power) opening/closing wealth,
+	// deflated by this path's own cumulative inflation at year start/end.
+	CumInflation         float64 `json:"cum_inflation"`
+	RealStartWealthMinor int64   `json:"real_start_wealth_minor"`
+	RealEndWealthMinor   int64   `json:"real_end_wealth_minor"`
 }
 
 // PathDetail is the fully regenerated monthly and annual path.
@@ -131,7 +155,9 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 
 	if opts.CollectMonthlyWealth {
 		summary.MonthlyWealthMinor = padMonthlyWealth(summary.MonthlyWealthMinor, horizon)
+		summary.MonthlyCumInflation = padCumInflation(summary.MonthlyCumInflation, horizon)
 	}
+	summary.RealTerminalWealthMinor = deflate(summary.TerminalWealthMinor, infl.Cumulative)
 
 	if opts.CollectDetail {
 		detail.Succeeded = summary.Succeeded
@@ -173,6 +199,34 @@ func padMonthlyWealth(series []int64, horizon int) []int64 {
 		out[i] = last
 	}
 	return out
+}
+
+// padCumInflation extends a path's cumulative-inflation series to the horizon.
+// A path that ended early (failure) keeps its last realized inflation factor for
+// the padded months; the nominal wealth there is already 0, so real wealth is 0
+// regardless of the factor used.
+func padCumInflation(series []float64, horizon int) []float64 {
+	if len(series) >= horizon {
+		return series
+	}
+	out := make([]float64, horizon)
+	copy(out, series)
+	last := 1.0
+	if len(series) > 0 {
+		last = series[len(series)-1]
+	}
+	for i := len(series); i < horizon; i++ {
+		out[i] = last
+	}
+	return out
+}
+
+// deflate converts a nominal minor amount to start-of-plan purchasing power.
+func deflate(nominalMinor int64, cumInflation float64) int64 {
+	if cumInflation <= 0 {
+		return nominalMinor
+	}
+	return int64(math.Round(float64(nominalMinor) / cumInflation))
 }
 
 func totalWealth(slots []assetSlot) int64 {
@@ -333,15 +387,20 @@ type yearAccumulator struct {
 	lastDD                float64
 	maxDD                 float64
 	rebalanced            bool
+	startCumInfl          float64
+	lastCumInfl           float64
 }
 
-func (y *yearAccumulator) accum(netSpend, income, tax, tx int64, wealth int64, dd float64, rebal bool) {
+func (y *yearAccumulator) accum(netSpend, income, tax, tx int64, wealth int64,
+	dd float64, rebal bool, cumInfl float64,
+) {
 	y.income += income
 	y.netSpend += netSpend
 	y.tax += tax
 	y.txCost += tx
 	y.lastWealth = wealth
 	y.lastDD = dd
+	y.lastCumInfl = cumInfl
 	if dd > y.maxDD {
 		y.maxDD = dd
 	}
@@ -352,13 +411,27 @@ func (y *yearAccumulator) accum(netSpend, income, tax, tx int64, wealth int64, d
 
 func (y *yearAccumulator) finish(yearIdx, startAge int, weights map[string]float64) YearRecord {
 	gain := y.lastWealth - y.start - y.income + y.netSpend + y.tax + y.txCost
-	return YearRecord{
+	startCum := y.startCumInfl
+	if startCum <= 0 {
+		startCum = 1
+	}
+	rec := YearRecord{
 		Year: startAge + yearIdx, StartWealthMinor: y.start, IncomeMinor: y.income,
 		SpendingMinor: y.netSpend, TaxMinor: y.tax, TransactionCost: y.txCost,
 		InvestmentGainLoss: gain, EndWealthMinor: y.lastWealth,
 		YearEndDrawdown: y.lastDD, MaxIntraYearDD: y.maxDD, Rebalanced: y.rebalanced,
-		AssetWeights: weights,
+		AssetWeights:         weights,
+		CumInflation:         y.lastCumInfl,
+		RealStartWealthMinor: deflate(y.start, startCum),
+		RealEndWealthMinor:   deflate(y.lastWealth, y.lastCumInfl),
 	}
+	// Annual investment return only exists with a positive opening balance;
+	// otherwise leave it nil so the UI renders "—" instead of dividing by zero.
+	if y.start > 0 {
+		r := float64(gain) / float64(y.start)
+		rec.AnnualReturn = &r
+	}
+	return rec
 }
 
 func formatSeed(seed int64) string {

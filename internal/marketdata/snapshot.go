@@ -105,7 +105,16 @@ func metricsToRepositorySnapshot(
 		WarningsJSON:  repository.WarningsToJSON(metrics.Warnings),
 		SourceHash:    metrics.SourceHash,
 		Years:         toRepoYears(metrics.Years),
+		Months:        toRepoMonths(metrics.MonthlyReturns),
 	}
+}
+
+func toRepoMonths(months []MonthlyReturn) []repository.SnapshotMonth {
+	out := make([]repository.SnapshotMonth, len(months))
+	for i, m := range months {
+		out[i] = repository.SnapshotMonth{Year: m.Year, Month: m.Month, LogReturn: m.LogReturn}
+	}
+	return out
 }
 
 func insufficientHistoryError(metrics SnapshotMetrics) *SnapshotError {

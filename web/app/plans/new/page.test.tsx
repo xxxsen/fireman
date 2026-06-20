@@ -147,25 +147,27 @@ function renderWizard() {
   );
 }
 
-async function goToScenarioStep() {
-  fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-  await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+function getScenarioSelect() {
+  return screen.getByRole("combobox", { name: "选择场景" });
 }
 
-async function goToInstrumentStep(scenarioId: string, regionEdits?: { equityForeign?: string }) {
-  await goToScenarioStep();
+// Scenario + region targets now live on the merged 计划目标 step (step 0).
+async function selectScenario(scenarioId: string, regionEdits?: { equityForeign?: string }) {
   const scenarioLabel = scenarioId === "scn_a" ? "测试场景" : "保守";
   await waitFor(() =>
     expect(screen.getByRole("option", { name: new RegExp(scenarioLabel) })).toBeInTheDocument(),
   );
-  fireEvent.change(screen.getByRole("combobox"), { target: { value: scenarioId } });
+  fireEvent.change(getScenarioSelect(), { target: { value: scenarioId } });
 
   if (regionEdits?.equityForeign !== undefined) {
     await waitFor(() => expect(screen.getByText("地区组内权重")).toBeInTheDocument());
     const percentInputs = screen.getAllByTestId("percent-input");
     fireEvent.change(percentInputs[1]!, { target: { value: regionEdits.equityForeign } });
   }
+}
 
+async function goToInstrumentStep(scenarioId: string, regionEdits?: { equityForeign?: string }) {
+  await selectScenario(scenarioId, regionEdits);
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
   await waitFor(() =>
     expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
@@ -182,7 +184,7 @@ async function goToConfirmStep(scenarioId = "scn_a") {
   await goToInstrumentStep(scenarioId);
   await selectEquityInstrument();
   fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-  await waitFor(() => expect(screen.getByText(/确认组合/)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText(/已选标的：/)).toBeInTheDocument());
 }
 
 describe("NewPlanWizardPage", () => {
@@ -285,11 +287,10 @@ describe("NewPlanWizardPage", () => {
 
   it("auto-complements region allocation when editing domestic", async () => {
     renderWizard();
-    await goToScenarioStep();
     await waitFor(() =>
       expect(screen.getByRole("option", { name: /保守/ })).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "scn_conservative" } });
+    fireEvent.change(getScenarioSelect(), { target: { value: "scn_conservative" } });
     await waitFor(() => expect(screen.getByText("地区组内权重")).toBeInTheDocument());
 
     const percentInputs = screen.getAllByTestId("percent-input");
@@ -378,5 +379,215 @@ describe("NewPlanWizardPage", () => {
       ),
     );
     expect(createPlanWizard).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the three merged steps in the progress bar (td/060 §3.1)", () => {
+    renderWizard();
+    expect(screen.getByText("1. 计划目标")).toBeInTheDocument();
+    expect(screen.getByText("2. 建立持仓")).toBeInTheDocument();
+    expect(screen.getByText("3. 确认组合")).toBeInTheDocument();
+    expect(screen.queryByText(/^4\. /)).not.toBeInTheDocument();
+    expect(screen.queryByText("1. 计划基础")).not.toBeInTheDocument();
+  });
+
+  it("blocks leaving 计划目标 until a scenario is chosen (td/060 §3.1)", async () => {
+    renderWizard();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("请选择资产配置场景。")).toBeInTheDocument();
+    expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
+  });
+
+  it("preserves the draft when navigating back to 计划目标 and forward (td/060 §3.1)", async () => {
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
+
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    expect(getScenarioSelect()).toHaveValue("scn_a");
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() =>
+      expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText(/已选标的：1 个/)).toBeInTheDocument();
+  });
+
+  it("fire duration: one editable input with preset回填 (td/060 §3.2)", async () => {
+    renderWizard();
+    const durationInputs = screen.getAllByLabelText("预计 FIRE 时长（年）");
+    expect(durationInputs).toHaveLength(1);
+    const input = durationInputs[0]!;
+
+    fireEvent.change(input, { target: { value: "37" } });
+    expect(input).toHaveValue(37);
+    // Custom value is not a preset, so the suggestion select shows its placeholder.
+    const preset = screen.getByLabelText("常用 FIRE 时长预设");
+    expect(preset).toHaveValue("");
+
+    fireEvent.change(preset, { target: { value: "40" } });
+    expect(screen.getByLabelText("预计 FIRE 时长（年）")).toHaveValue(40);
+    expect(screen.getByLabelText("常用 FIRE 时长预设")).toHaveValue("40");
+  });
+
+  it("keeps a custom fire duration after switching scenario (td/060 §3.2)", async () => {
+    renderWizard();
+    fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), { target: { value: "37" } });
+    await selectScenario("scn_a");
+    expect(screen.getByLabelText("预计 FIRE 时长（年）")).toHaveValue(37);
+  });
+
+  it("advanced FIRE params start collapsed and submit current defaults (td/060 §3.3)", async () => {
+    renderWizard();
+    expect(screen.getByTestId("wizard-advanced-params")).not.toHaveAttribute("open");
+
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建计划" }));
+
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    const body = createPlanWizard.mock.calls[0]![0] as {
+      parameters: Record<string, unknown>;
+    };
+    expect(body.parameters).toMatchObject({
+      inflation_mode: "fixed_real",
+      fixed_inflation_rate: 0.03,
+      withdrawal_type: "fixed_real",
+      withdrawal_rate: 0.04,
+      withdrawal_floor_ratio: 0.7,
+      withdrawal_ceiling_ratio: 1.3,
+      withdrawal_tax_rate: 0,
+      taxable_withdrawal_ratio: 0,
+    });
+  });
+
+  it("removes a now-disabled region holding and excludes it from the payload (td/062 R1)", async () => {
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument(); // domestic T1
+
+    // Back to 计划目标 and flip equity to 国内 0% / 国外 100%.
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    const percentInputs = screen.getAllByTestId("percent-input");
+    fireEvent.change(percentInputs[0]!, { target: { value: "0" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("wizard-removed-by-targets")).toHaveTextContent(
+        "测试权益基金（T1）",
+      ),
+    );
+    // Domestic picker is gone; foreign picker is present.
+    expect(screen.queryByLabelText("权益国内搜索")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("权益国外搜索")).toBeInTheDocument();
+
+    // Pick a foreign equity, finish, and assert the payload omits T1.
+    const foreignSearch = screen.getByLabelText("权益国外搜索");
+    fireEvent.change(foreignSearch, { target: { value: "F1" } });
+    fireEvent.click(await screen.findByRole("button", { name: /测试国外权益基金/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建计划" }));
+
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    const body = createPlanWizard.mock.calls[0]![0] as {
+      holdings: { instrument_id: string }[];
+    };
+    const ids = body.holdings.map((h) => h.instrument_id);
+    expect(ids).toContain("ins_equity_foreign");
+    expect(ids).not.toContain("ins_equity_domestic");
+  });
+
+  it("blocks advancing when advanced params are out of range (td/062 R2)", async () => {
+    renderWizard();
+    const advancedInputs = screen.getAllByTestId("percent-input");
+    // Default fixed_real layout: [固定通胀率, 有效提取税率, 应税提取比例].
+    fireEvent.change(advancedInputs[1]!, { target: { value: "100" } });
+    fireEvent.change(advancedInputs[2]!, { target: { value: "100" } });
+    expect(screen.getByTestId("wizard-advanced-errors")).toHaveTextContent(
+      "有效提取税率 × 应税提取比例需小于 1。",
+    );
+
+    await selectScenario("scn_a");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText(/高级 FIRE 参数无效/)).toBeInTheDocument();
+    expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation when fixed inflation exceeds 15% (td/062 R2)", async () => {
+    renderWizard();
+    const advancedInputs = screen.getAllByTestId("percent-input");
+    fireEvent.change(advancedInputs[0]!, { target: { value: "18" } });
+
+    await selectScenario("scn_a");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText(/固定通胀率超过 15%，请/)).toBeInTheDocument();
+    expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /确认固定通胀率超过 15%/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() =>
+      expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
+    );
+  });
+
+  it("sends end_age = retirement_age + custom duration (td/062 R3)", async () => {
+    renderWizard();
+    fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), {
+      target: { value: "37" },
+    });
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建计划" }));
+
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    const body = createPlanWizard.mock.calls[0]![0] as {
+      parameters: { retirement_age: number; end_age: number };
+    };
+    expect(body.parameters.retirement_age).toBe(35);
+    expect(body.parameters.end_age).toBe(72);
+  });
+
+  it("summarizes advanced params on the confirm step (td/062 R3)", async () => {
+    renderWizard();
+    await goToConfirmStep();
+    const summary = screen.getByTestId("wizard-advanced-summary");
+    expect(summary).toHaveTextContent("使用默认值");
+    expect(summary).toHaveTextContent("固定 3%");
+    expect(summary).toHaveTextContent("固定实际支出");
+  });
+
+  it("marks advanced summary as 已自定义 after editing (td/062 R3)", async () => {
+    renderWizard();
+    fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "guardrail" } });
+    await goToConfirmStep();
+    const summary = screen.getByTestId("wizard-advanced-summary");
+    expect(summary).toHaveTextContent("已自定义");
+    expect(summary).toHaveTextContent("动态提取（护栏）");
+  });
+
+  it("persists guardrail withdrawal and random inflation from advanced panel (td/060 §3.3)", async () => {
+    renderWizard();
+    fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "guardrail" } });
+    fireEvent.change(screen.getByLabelText("通胀模式"), { target: { value: "random_ar1" } });
+
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建计划" }));
+
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    const body = createPlanWizard.mock.calls[0]![0] as {
+      parameters: Record<string, unknown>;
+    };
+    expect(body.parameters).toMatchObject({
+      withdrawal_type: "guardrail",
+      inflation_mode: "random_ar1",
+    });
+    expect(typeof body.parameters.inflation_mu).toBe("number");
+    expect(typeof body.parameters.withdrawal_rate).toBe("number");
   });
 });

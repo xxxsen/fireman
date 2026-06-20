@@ -241,6 +241,165 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 	t.Fatalf("model_warnings missing one-year asset warning: %v", rawWarnings)
 }
 
+// TestScenarioComparisonEndpoint covers td/061 §3.6 / §5.4.6: the comparison
+// runs the same frozen plan input under conservative/baseline/optimistic with one
+// shared seed, so the forward return and headline P50 must increase strictly from
+// conservative to optimistic and real wealth must stay below nominal.
+func TestScenarioComparisonEndpoint(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+
+	services := buildServices(db, "")
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	resp, err := http.DefaultClient.Get(srv.URL + "/api/v1/plans/" + planID + "/scenario-comparison")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("scenario comparison status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
+	}
+	env := decodeEnvelope(t, mustRead(t, resp))
+	data := env["data"].(map[string]any)
+	scenarios, ok := data["scenarios"].([]any)
+	if !ok || len(scenarios) != 3 {
+		t.Fatalf("expected 3 scenarios, got %+v", data["scenarios"])
+	}
+
+	fwd := map[string]float64{}
+	p50 := map[string]float64{}
+	for _, raw := range scenarios {
+		m := raw.(map[string]any)
+		key := m["scenario"].(string)
+		fwd[key] = m["forward_return"].(float64)
+		p50[key] = m["terminal_p50_minor"].(float64)
+		if m["real_terminal_p50_minor"].(float64) > m["terminal_p50_minor"].(float64) {
+			t.Fatalf("[%s] real P50 should not exceed nominal P50: %+v", key, m)
+		}
+	}
+	if !(fwd["conservative"] < fwd["baseline"] && fwd["baseline"] < fwd["optimistic"]) {
+		t.Fatalf("forward return must increase conservative<baseline<optimistic: %+v", fwd)
+	}
+	if !(p50["conservative"] < p50["baseline"] && p50["baseline"] < p50["optimistic"]) {
+		t.Fatalf("terminal P50 must increase conservative<baseline<optimistic: %+v", p50)
+	}
+}
+
+// TestReturnOverrideEndpoint covers td/061 §4.1.5: an asset-level override is
+// validated, persisted, and applied to the next run's frozen forward return
+// (source = plan_override), and only held instruments may be overridden.
+func TestReturnOverrideEndpoint(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+
+	services := buildServices(db, "")
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
+	defer srv.Close()
+	base := srv.URL + "/api/v1/plans/" + planID + "/return-overrides"
+
+	// Missing reason is rejected.
+	if status := putJSON(t, base+"/ins_sim_equity",
+		map[string]any{"forward_return": 0.2, "expires_at": "2099-12-31"}); status == http.StatusOK {
+		t.Fatal("override without reason must be rejected")
+	}
+	// Override for an instrument not held by the plan is rejected.
+	if status := putJSON(t, base+"/ins_not_in_plan",
+		map[string]any{"forward_return": 0.2, "reason": "x", "expires_at": "2099-12-31"}); status == http.StatusOK {
+		t.Fatal("override for unheld instrument must be rejected")
+	}
+
+	// Valid override is accepted.
+	if status := putJSON(t, base+"/ins_sim_equity", map[string]any{
+		"forward_return": 0.25, "reason": "锁定到期收益率", "expires_at": "2099-12-31",
+	}); status != http.StatusOK {
+		t.Fatalf("valid override status=%d", status)
+	}
+
+	// It shows up in the list.
+	resp, err := http.DefaultClient.Get(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listEnv := decodeEnvelope(t, mustRead(t, resp))
+	overrides := listEnv["data"].(map[string]any)["overrides"].([]any)
+	if len(overrides) != 1 {
+		t.Fatalf("expected 1 override, got %+v", overrides)
+	}
+
+	// The next run freezes the override as the forward return.
+	body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "7"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/simulations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create run status=%d body=%s", resp.StatusCode, string(mustRead(t, resp)))
+	}
+	runID := decodeEnvelope(t, mustRead(t, resp))["data"].(map[string]any)["run_id"].(string)
+
+	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/simulations/" + runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := decodeEnvelope(t, mustRead(t, resp))["data"].(map[string]any)
+	assumption := run["assumption"].(map[string]any)
+	assets := assumption["assets"].([]any)
+	var found bool
+	for _, raw := range assets {
+		a := raw.(map[string]any)
+		if a["is_cash"].(bool) {
+			continue
+		}
+		if a["source"].(string) != "plan_override" {
+			t.Fatalf("expected plan_override source, got %+v", a)
+		}
+		if got := a["forward_annual_geometric_return"].(float64); got < 0.2499 || got > 0.2501 {
+			t.Fatalf("forward return not overridden: %v", got)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("no non-cash asset in assumption view: %+v", assets)
+	}
+
+	// Delete clears it.
+	delReq, _ := http.NewRequest(http.MethodDelete, base+"/ins_sim_equity", nil)
+	resp, err = http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delStatus := resp.StatusCode
+	_ = mustRead(t, resp)
+	if delStatus != http.StatusOK {
+		t.Fatalf("delete override status=%d", delStatus)
+	}
+	resp, err = http.DefaultClient.Get(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listEnv = decodeEnvelope(t, mustRead(t, resp))
+	if got := listEnv["data"].(map[string]any)["overrides"].([]any); len(got) != 0 {
+		t.Fatalf("override should be deleted, got %+v", got)
+	}
+}
+
+func putJSON(t *testing.T, url string, payload map[string]any) int {
+	t.Helper()
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := resp.StatusCode
+	_ = mustRead(t, resp)
+	return status
+}
+
 func TestSimulationJobFlow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
@@ -372,7 +531,7 @@ func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
 		t.Fatalf("monthly length %d != 12×yearly %d (full-horizon path expected)", len(monthly), len(yearly)*12)
 	}
 	y0 := yearly[0].(map[string]any)
-	for _, key := range []string{"year", "start_wealth_minor", "income_minor", "spending_minor", "tax_minor", "transaction_cost", "investment_gain_loss", "end_wealth_minor", "year_end_drawdown", "max_intra_year_dd", "rebalanced"} {
+	for _, key := range []string{"year", "start_wealth_minor", "income_minor", "spending_minor", "tax_minor", "transaction_cost", "investment_gain_loss", "end_wealth_minor", "year_end_drawdown", "max_intra_year_dd", "annual_return", "rebalanced"} {
 		if _, present := y0[key]; !present {
 			t.Fatalf("yearly[0] missing snake_case field %q: %+v", key, y0)
 		}

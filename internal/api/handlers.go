@@ -27,6 +27,7 @@ type Services struct {
 	Instruments         *service.InstrumentService
 	HoldingSnapshots    *service.HoldingSnapshotService
 	Simulations         *service.SimulationService
+	Assumptions         *service.AssumptionService
 	Stress              *service.StressService
 	Sensitivity         *service.SensitivityService
 	Jobs                *service.JobService
@@ -49,7 +50,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	marketRepo := repository.NewMarketDataRepo(db)
 	annualRepo := repository.NewAnnualReturnsRepo(db)
 	snapRepo := repository.NewSnapshotRepo(db)
-	hash := service.NewConfigHashService(plans, params, alloc, holdings)
+	hash := service.NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
 	provider := marketdata.NewProviderClient(marketProviderURL).FetchClient()
 	snapSvc := marketdata.NewSnapshotService(snapRepo, instRepo, marketRepo)
 	jobRepo := repository.NewJobRepo(db)
@@ -94,6 +95,7 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 		),
 		HoldingSnapshots: service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
 		Simulations:      simSvc,
+		Assumptions:      service.NewAssumptionService(db),
 		Stress:           stressSvc,
 		Sensitivity:      sensitivitySvc,
 		Jobs:             service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),

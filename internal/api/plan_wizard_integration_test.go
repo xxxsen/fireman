@@ -169,6 +169,163 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 	}
 }
 
+func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+
+	instEquity := importInstrumentCode(t, client, srv.URL, "510300")
+	instBond := importInstrumentCode(t, client, srv.URL, "510500")
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
+		t.Fatal(err)
+	}
+
+	const total = int64(10_000_000_00)
+	params := wizardParams(total)
+	// td/060 §3.3: advanced FIRE params chosen in the wizard's disclosure must be
+	// persisted as plan parameters, not silently replaced by hard-coded defaults.
+	params["inflation_mode"] = "random_ar1"
+	params["inflation_mu"] = 0.025
+	params["inflation_sigma"] = 0.012
+	params["inflation_phi"] = 0.4
+	params["withdrawal_type"] = "guardrail"
+	params["withdrawal_rate"] = 0.045
+	params["withdrawal_floor_ratio"] = 0.65
+	params["withdrawal_ceiling_ratio"] = 1.25
+
+	body := map[string]any{
+		"name": "向导-高级参数", "base_currency": "CNY", "valuation_date": "2026-06-09",
+		"selected_scenario_id": "scn_builtin_near_fire",
+		"parameters":           params,
+		"region_targets":       wizardRegionTargets(),
+		"holdings": []map[string]any{
+			{
+				"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0,
+				"current_amount_minor": 7_000_000_00, "sort_order": 1,
+			},
+			{
+				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0,
+				"current_amount_minor": 3_000_000_00, "sort_order": 2,
+			},
+		},
+	}
+
+	resp, raw := postWizard(t, client, srv.URL, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wizard status=%d body=%s", resp.StatusCode, string(raw))
+	}
+	planID := decodeEnvelope(t, raw)["data"].(map[string]any)["id"].(string)
+
+	paramsResp, err := client.Get(srv.URL + "/api/v1/plans/" + planID + "/parameters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeEnvelope(t, readBody(t, paramsResp))["data"].(map[string]any)["parameters"].(map[string]any)
+
+	if got["inflation_mode"] != "random_ar1" {
+		t.Fatalf("inflation_mode=%v want random_ar1", got["inflation_mode"])
+	}
+	if got["withdrawal_type"] != "guardrail" {
+		t.Fatalf("withdrawal_type=%v want guardrail", got["withdrawal_type"])
+	}
+	numeric := map[string]float64{
+		"inflation_mu":             0.025,
+		"inflation_sigma":          0.012,
+		"inflation_phi":            0.4,
+		"withdrawal_rate":          0.045,
+		"withdrawal_floor_ratio":   0.65,
+		"withdrawal_ceiling_ratio": 1.25,
+	}
+	for k, want := range numeric {
+		if v, _ := got[k].(float64); v != want {
+			t.Fatalf("parameter %s=%v want %v", k, got[k], want)
+		}
+	}
+}
+
+func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+
+	instEquity := importInstrumentCode(t, client, srv.URL, "510300")
+	instBond := importInstrumentCode(t, client, srv.URL, "510500")
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
+		t.Fatal(err)
+	}
+
+	const total = int64(10_000_000_00)
+	holdings := []map[string]any{
+		{
+			"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0,
+			"current_amount_minor": 7_000_000_00, "sort_order": 1,
+		},
+		{
+			"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0,
+			"current_amount_minor": 3_000_000_00, "sort_order": 2,
+		},
+	}
+
+	// td/062 R2: each out-of-range advanced parameter must be rejected at wizard
+	// creation, leaving no plan / holdings / snapshot rows behind.
+	cases := []struct {
+		name  string
+		apply func(p map[string]any)
+	}{
+		{"tax product equals one", func(p map[string]any) {
+			p["withdrawal_tax_rate"] = 1.0
+			p["taxable_withdrawal_ratio"] = 1.0
+		}},
+		{"guardrail ceiling above two", func(p map[string]any) {
+			p["withdrawal_type"] = "guardrail"
+			p["withdrawal_ceiling_ratio"] = 2.5
+		}},
+		{"floor zero", func(p map[string]any) { p["withdrawal_floor_ratio"] = 0.0 }},
+		{"fixed inflation above cap", func(p map[string]any) { p["fixed_inflation_rate"] = 0.25 }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plansBefore := countTable(t, db, "plans")
+			snapsBefore := countTable(t, db, "instrument_simulation_snapshots")
+			params := wizardParams(total)
+			tc.apply(params)
+			body := map[string]any{
+				"name": "向导-非法参数", "base_currency": "CNY", "valuation_date": "2026-06-09",
+				"selected_scenario_id": "scn_builtin_near_fire",
+				"parameters":           params,
+				"region_targets":       wizardRegionTargets(),
+				"holdings":             holdings,
+			}
+			resp, raw := postWizard(t, client, srv.URL, body)
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("expected rejection, got 200 body=%s", string(raw))
+			}
+			assertErrorCode(t, raw, "parameters_invalid")
+			if got := countTable(t, db, "plans"); got != plansBefore {
+				t.Fatalf("plans changed: before=%d after=%d", plansBefore, got)
+			}
+			if got := countTable(t, db, "instrument_simulation_snapshots"); got != snapsBefore {
+				t.Fatalf("snapshots changed: before=%d after=%d", snapsBefore, got)
+			}
+		})
+	}
+
+	// Sanity: a valid tax product (0.2 * 0.8) is accepted and simulable.
+	params := wizardParams(total)
+	params["withdrawal_tax_rate"] = 0.2
+	params["taxable_withdrawal_ratio"] = 0.8
+	body := map[string]any{
+		"name": "向导-合法税率", "base_currency": "CNY", "valuation_date": "2026-06-09",
+		"selected_scenario_id": "scn_builtin_near_fire",
+		"parameters":           params,
+		"region_targets":       wizardRegionTargets(),
+		"holdings":             holdings,
+	}
+	resp, raw := postWizard(t, client, srv.URL, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected valid tax product accepted, status=%d body=%s", resp.StatusCode, string(raw))
+	}
+}
+
 func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 

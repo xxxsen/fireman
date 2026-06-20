@@ -42,17 +42,19 @@ const SimulationRetentionLimit = 7
 
 // SimulationService orchestrates simulation jobs and results.
 type SimulationService struct {
-	sql      *sql.DB
-	plans    *repository.PlanRepo
-	params   *repository.ParametersRepo
-	alloc    *repository.AllocationRepo
-	holdings *repository.HoldingsRepo
-	snapRepo *repository.SnapshotRepo
-	fx       *marketdata.FXResolver
-	jobs     *repository.JobRepo
-	sims     *repository.SimulationRepo
-	analysis *repository.AnalysisRepo
-	hash     *ConfigHashService
+	sql         *sql.DB
+	plans       *repository.PlanRepo
+	params      *repository.ParametersRepo
+	alloc       *repository.AllocationRepo
+	holdings    *repository.HoldingsRepo
+	snapRepo    *repository.SnapshotRepo
+	fx          *marketdata.FXResolver
+	jobs        *repository.JobRepo
+	sims        *repository.SimulationRepo
+	analysis    *repository.AnalysisRepo
+	hash        *ConfigHashService
+	assumptions *repository.AssumptionProfileRepo
+	overrides   *repository.ReturnOverrideRepo
 }
 
 func NewSimulationService(
@@ -74,6 +76,8 @@ func NewSimulationService(
 		snapRepo: snapRepo,
 		fx:       marketdata.NewFXResolver(inst, market),
 		jobs:     jobs, sims: sims, analysis: analysis, hash: hash,
+		assumptions: repository.NewAssumptionProfileRepo(sqlDB),
+		overrides:   repository.NewReturnOverrideRepo(sqlDB),
 	}
 }
 
@@ -188,7 +192,7 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 		req.seedInt = parsed
 	}
 
-	snap, inputHash, err := s.buildInputSnapshot(ctx, plan, req)
+	snap, inputHash, err := s.buildInputSnapshot(ctx, plan, req, "")
 	if err != nil {
 		return CreateSimulationResponse{}, err
 	}
@@ -215,7 +219,7 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 		if err := s.sims.CreatePending(ctx, tx, repository.SimulationRun{
 			ID: runID, JobID: jobID, PlanID: req.PlanID, InputHash: inputHash,
 			InputSnapshotJSON: string(snapJSON), MarketSnapshotHash: snap.MarketSnapshotHash,
-			EngineVersion: simulation.EngineVersion, Runs: snap.Parameters.SimulationRuns,
+			EngineVersion: snap.EngineVersion, Runs: snap.Parameters.SimulationRuns,
 			Seed: snap.RootSeed(), HorizonMonths: snap.HorizonMonths(),
 		}); err != nil {
 			return wrapRepo("create pending simulation run", err)
@@ -414,13 +418,80 @@ type SimulationRunView struct {
 	FailureCount       int                      `json:"failure_count"`
 	Summary            json.RawMessage          `json:"summary_json"`
 	AssetParticipation []AssetParticipationView `json:"asset_participation,omitempty"`
+	Assumption         *RunAssumptionView       `json:"assumption,omitempty"`
 	CreatedAt          int64                    `json:"created_at"`
+}
+
+// RunAssumptionView exposes the frozen return-calibration and risk-model audit of
+// a run so the UI can explain (per td/061 §8) which profile/scenario produced the
+// numbers and whether the joint risk model mainly relies on priors. It always
+// reflects the run's frozen snapshot, never the plan's current (mutable) values.
+type RunAssumptionView struct {
+	EngineVersion        string                   `json:"engine_version"`
+	RandomFactorModel    string                   `json:"random_factor_model"`
+	Mode                 string                   `json:"mode"`
+	Scenario             string                   `json:"scenario"`
+	ProfileID            string                   `json:"profile_id"`
+	ProfileVersion       int                      `json:"profile_version"`
+	CorrelationPriorOnly bool                     `json:"correlation_prior_only"`
+	MaxRepairDelta       float64                  `json:"max_repair_delta"`
+	Assets               []RunAssetAssumptionView `json:"assets"`
+}
+
+// RunAssetAssumptionView is one holding's frozen return calibration.
+type RunAssetAssumptionView struct {
+	HoldingID                       string   `json:"holding_id"`
+	InstrumentName                  string   `json:"instrument_name"`
+	InstrumentCode                  string   `json:"instrument_code"`
+	IsCash                          bool     `json:"is_cash"`
+	HistoricalAnnualGeometricReturn float64  `json:"historical_annual_geometric_return"`
+	ForwardAnnualGeometricReturn    float64  `json:"forward_annual_geometric_return"`
+	AnnualVolatilityUsed            float64  `json:"annual_volatility_used"`
+	Source                          string   `json:"source"`
+	SampleYears                     int      `json:"sample_years"`
+	HistoricalWeight                float64  `json:"historical_weight"`
+	Warnings                        []string `json:"warnings,omitempty"`
+}
+
+func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
+	if len(snap.Assets) == 0 {
+		return nil
+	}
+	view := &RunAssumptionView{
+		EngineVersion:     snap.EngineVersion,
+		RandomFactorModel: snap.RandomFactorModel,
+	}
+	for _, a := range snap.Assets {
+		if view.Mode == "" && a.ReturnAssumptionSource != "" {
+			view.Mode = a.ReturnAssumptionSource
+			view.Scenario = a.ReturnAssumptionScenario
+			view.ProfileID = a.ReturnAssumptionSetID
+			view.ProfileVersion = a.ReturnAssumptionSetVersion
+		}
+		view.Assets = append(view.Assets, RunAssetAssumptionView{
+			HoldingID: a.HoldingID, InstrumentName: a.InstrumentName, InstrumentCode: a.InstrumentCode,
+			IsCash:                          a.IsCash,
+			HistoricalAnnualGeometricReturn: a.HistoricalAnnualGeometricReturn,
+			ForwardAnnualGeometricReturn:    a.ForwardAnnualGeometricReturn,
+			AnnualVolatilityUsed:            a.AnnualVolatilityUsed,
+			Source:                          a.ReturnAssumptionSource,
+			SampleYears:                     a.ReturnSampleYears,
+			HistoricalWeight:                a.ReturnHistoricalWeight,
+			Warnings:                        a.ReturnWarnings,
+		})
+	}
+	if snap.FactorModel != nil {
+		view.CorrelationPriorOnly = len(snap.FactorModel.Audit.PriorOnlyPairs) > 0
+		view.MaxRepairDelta = snap.FactorModel.Audit.MaxRepairDelta
+	}
+	return view
 }
 
 func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView {
 	stale := false
 	var snap simulation.InputSnapshot
 	var participation []AssetParticipationView
+	var assumption *RunAssumptionView
 	if err := json.Unmarshal([]byte(r.InputSnapshotJSON), &snap); err == nil {
 		stale = currentHash != "" && snap.ConfigHash != currentHash
 		for _, a := range snap.Assets {
@@ -432,6 +503,7 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 				HoldingID: a.HoldingID, InstrumentID: a.InstrumentID, CompleteYears: years,
 			})
 		}
+		assumption = buildRunAssumptionView(snap)
 	}
 	return SimulationRunView{
 		ID: r.ID, JobID: r.JobID, PlanID: r.PlanID, InputHash: r.InputHash,
@@ -439,12 +511,64 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 		MarketSnapshotHash: r.MarketSnapshotHash, EngineVersion: r.EngineVersion,
 		Runs: r.Runs, Seed: strconv.FormatInt(r.Seed, 10), HorizonMonths: r.HorizonMonths,
 		SuccessCount: r.SuccessCount, FailureCount: r.FailureCount,
-		Summary: r.SummaryJSON, AssetParticipation: participation, CreatedAt: r.CreatedAt,
+		Summary: r.SummaryJSON, AssetParticipation: participation,
+		Assumption: assumption, CreatedAt: r.CreatedAt,
 	}
 }
 
+// buildInputSnapshot freezes a plan into a simulation input. When
+// scenarioOverride is non-empty the resolved assumption is forced to
+// blended_prior + that scenario, which is how the scenario comparison runs the
+// same frozen plan under conservative/baseline/optimistic with one shared seed
+// (td/061 §3.6 / §5.4.6). A normal run passes "" to keep the plan's selection.
+// resolveAndBuildAssets validates the plan's allocation/holdings, resolves the
+// return-assumption selection (optionally forced to a comparison scenario), and
+// builds the per-asset frozen snapshot including any active asset-level overrides.
+func (s *SimulationService) resolveAndBuildAssets(
+	ctx context.Context, plan repository.Plan, params repository.PlanParameters, scenarioOverride string,
+) ([]simulation.SnapshotAsset, resolvedAssumption, error) {
+	alloc, err := s.alloc.Get(ctx, plan.ID)
+	if err != nil {
+		return nil, resolvedAssumption{}, wrapRepo("get plan allocation for snapshot", err)
+	}
+	holds, err := s.holdings.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		return nil, resolvedAssumption{}, wrapRepo("list plan holdings for snapshot", err)
+	}
+	da := toDomainAllocation(alloc)
+	dh := holdingsToDomain(holds)
+	if checks := domain.ValidateAllWeights(da, dh); !checks.Passed {
+		return nil, resolvedAssumption{}, newErr("plan_weights_invalid",
+			"plan weights are incomplete or invalid", map[string]any{"checks": checks.Checks})
+	}
+	if err := validateSnapshotHoldings(holds, params.TotalAssetsMinor); err != nil {
+		return nil, resolvedAssumption{}, err
+	}
+
+	resolved, err := s.ResolveAssumptionProfile(ctx, params)
+	if err != nil {
+		return nil, resolvedAssumption{}, err
+	}
+	if scenarioOverride != "" {
+		resolved.Mode = repository.ModeBlendedPrior
+		resolved.Scenario = scenarioOverride
+	}
+	customByInstrument := parseCustomReturnAssumptions(params.CustomReturnAssumptionsJSON)
+	overrides, err := s.activeReturnOverrides(ctx, plan)
+	if err != nil {
+		return nil, resolvedAssumption{}, err
+	}
+
+	lines := domain.ComputeHoldingTargets(da, dh, holdingMeta(holds), params.TotalAssetsMinor)
+	assets, err := s.buildSnapshotAssets(ctx, plan, lines, resolved, customByInstrument, overrides)
+	if err != nil {
+		return nil, resolvedAssumption{}, err
+	}
+	return assets, resolved, nil
+}
+
 func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan repository.Plan,
-	req CreateSimulationRequest,
+	req CreateSimulationRequest, scenarioOverride string,
 ) (*simulation.InputSnapshot, string, error) {
 	params, err := s.params.Get(ctx, plan.ID)
 	if err != nil {
@@ -457,27 +581,7 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", newErr("simulation_input_invalid", err.Error(), nil)
 	}
 
-	alloc, err := s.alloc.Get(ctx, plan.ID)
-	if err != nil {
-		return nil, "", wrapRepo("get plan allocation for snapshot", err)
-	}
-	holds, err := s.holdings.ListByPlan(ctx, plan.ID)
-	if err != nil {
-		return nil, "", wrapRepo("list plan holdings for snapshot", err)
-	}
-	da := toDomainAllocation(alloc)
-	dh := holdingsToDomain(holds)
-	checks := domain.ValidateAllWeights(da, dh)
-	if !checks.Passed {
-		return nil, "", newErr("plan_weights_invalid", "plan weights are incomplete or invalid",
-			map[string]any{"checks": checks.Checks})
-	}
-	if err := validateSnapshotHoldings(holds, params.TotalAssetsMinor); err != nil {
-		return nil, "", err
-	}
-
-	lines := domain.ComputeHoldingTargets(da, dh, holdingMeta(holds), params.TotalAssetsMinor)
-	assets, err := s.buildSnapshotAssets(ctx, plan, lines)
+	assets, resolved, err := s.resolveAndBuildAssets(ctx, plan, params, scenarioOverride)
 	if err != nil {
 		return nil, "", err
 	}
@@ -496,7 +600,7 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", err
 	}
 
-	in := buildInputSnapshotStruct(plan, params, *seed, configHash, assets)
+	in := buildInputSnapshotStruct(plan, params, *seed, configHash, assets, resolved)
 	inputHash, err := simulation.HashInput(in)
 	if err != nil {
 		return nil, "", wrapRepo("hash simulation input", err)
@@ -504,15 +608,32 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 	return in, inputHash, nil
 }
 
+// activeReturnOverrides loads the plan's asset-level overrides and drops any that
+// have expired as of the plan's valuation date (td/061 §4.1.5). ISO dates compare
+// lexicographically, so an override is active while expires_at >= valuation_date.
+func (s *SimulationService) activeReturnOverrides(
+	ctx context.Context, plan repository.Plan,
+) (map[string]repository.PlanReturnOverride, error) {
+	rows, err := s.overrides.ListByPlan(ctx, plan.ID)
+	if err != nil {
+		return nil, wrapRepo("list plan return overrides", err)
+	}
+	out := make(map[string]repository.PlanReturnOverride, len(rows))
+	for _, o := range rows {
+		if o.ExpiresAt < plan.ValuationDate {
+			continue
+		}
+		out[o.InstrumentID] = o
+	}
+	return out, nil
+}
+
+// validateSimulationReady defers entirely to validateParameters, which now owns
+// the advanced-parameter ranges and the (1 - tax*taxable) > 0 rule. Keeping a
+// single source of truth prevents a plan that passes creation from failing only
+// at simulation time (td/062 R2).
 func validateSimulationReady(p repository.PlanParameters) error {
-	if err := validateParameters(p); err != nil {
-		return err
-	}
-	denom := 1 - p.WithdrawalTaxRate*p.TaxableWithdrawalRatio
-	if denom <= 0 {
-		return errWithdrawalTaxInvalid
-	}
-	return nil
+	return validateParameters(p)
 }
 
 func randomSeed() (int64, error) {

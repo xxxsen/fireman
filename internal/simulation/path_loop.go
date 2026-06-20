@@ -41,6 +41,7 @@ func runPathMonths(
 		monthStart := totalWealth(slots)
 		if opts.CollectDetail && month%12 == 0 {
 			state.yearAcc.start = monthStart
+			state.yearAcc.startCumInfl = infl.Cumulative
 		}
 
 		income := pathMonthIncome(p, month, retire, slots, cashIdx)
@@ -70,9 +71,11 @@ func runPathMonths(
 
 		if opts.CollectMonthlyWealth {
 			state.summary.MonthlyWealthMinor = append(state.summary.MonthlyWealthMinor, endWealth)
+			state.summary.MonthlyCumInflation = append(state.summary.MonthlyCumInflation, infl.Cumulative)
 		}
 		if opts.CollectDetail {
-			state = appendPathDetail(state, month, horizon, p, endWealth, netSpend, income, tax, txCost, rebalanced, slots)
+			state = appendPathDetail(state, month, horizon, p, endWealth, netSpend, income, tax, txCost,
+				rebalanced, slots, infl.Cumulative)
 		}
 
 		if endWealth <= 0 {
@@ -151,11 +154,96 @@ func applyPathReturns(
 	monthShock MonthShock,
 	hasShock bool,
 ) int {
+	if in.RandomFactorModel == FactorModelMultivariate && in.FactorModel != nil {
+		return applyPathReturnsJoint(in, slots, rng, p, monthShock, hasShock)
+	}
 	truncCount := 0
 	for i := range slots {
 		truncCount += applySlotReturn(in, slots, i, rng, p, monthShock, hasShock)
 	}
 	return truncCount
+}
+
+// applyPathReturnsJoint draws one jointly-distributed month for every factor and
+// composes asset-local with shared FX returns (td/061 §3.5.3). All factors share
+// one fat-tail scale so extreme months co-occur instead of being independent.
+func applyPathReturnsJoint(
+	in *InputSnapshot,
+	slots []assetSlot,
+	rng *RNG,
+	p SnapshotParameters,
+	monthShock MonthShock,
+	hasShock bool,
+) int {
+	mu := in.FactorModel.Mu
+	if hasShock {
+		mu = adjustedFactorMu(in, monthShock)
+	}
+	factorReturns, trunc := SampleMultivariateStudentT(rng, mu, in.FactorModel.L, p.StudentTDf)
+	for i := range slots {
+		applySlotJointReturn(in, slots, i, factorReturns, monthShock, hasShock)
+	}
+	return trunc
+}
+
+func applySlotJointReturn(
+	in *InputSnapshot,
+	slots []assetSlot,
+	i int,
+	factorReturns []float64,
+	monthShock MonthShock,
+	hasShock bool,
+) {
+	if slots[i].isCash || i >= len(in.AssetFactorRefs) {
+		return
+	}
+	ref := in.AssetFactorRefs[i]
+	if ref.AssetFactorIndex < 0 || ref.AssetFactorIndex >= len(factorReturns) {
+		return
+	}
+	local := factorReturns[ref.AssetFactorIndex]
+	var assetShock AssetShock
+	if hasShock {
+		assetShock = monthShock.Assets[i]
+	}
+	if assetShock.ReturnMul != 0 {
+		local = (1+local)*(1+assetShock.ReturnMul) - 1
+	}
+	ret := local
+	if ref.FXFactorIndex >= 0 && ref.FXFactorIndex < len(factorReturns) {
+		fx := factorReturns[ref.FXFactorIndex]
+		if assetShock.FXReturnMul != 0 {
+			fx = (1+fx)*(1+assetShock.FXReturnMul) - 1
+		}
+		ret = CompositeBaseReturn(local, fx)
+	}
+	slots[i].balance *= (1 + ret)
+	if slots[i].balance < 0 {
+		slots[i].balance = 0
+	}
+}
+
+// adjustedFactorMu copies the frozen factor drifts and applies per-asset annual
+// DriftDelta overlays (stress/sensitivity) in the same way the independent path
+// does, keeping volatility (and therefore L) unchanged.
+func adjustedFactorMu(in *InputSnapshot, monthShock MonthShock) []float64 {
+	mu := append([]float64(nil), in.FactorModel.Mu...)
+	for i := range in.Assets {
+		shock, ok := monthShock.Assets[i]
+		if !ok || shock.DriftDelta == 0 || i >= len(in.AssetFactorRefs) {
+			continue
+		}
+		ref := in.AssetFactorRefs[i]
+		if ref.AssetFactorIndex < 0 || ref.AssetFactorIndex >= len(mu) {
+			continue
+		}
+		annual := in.Assets[i].ModeledAnnualReturn + shock.DriftDelta
+		if annual < ReturnFloor {
+			annual = ReturnFloor
+		}
+		mu[ref.AssetFactorIndex] = math.Log(1+annual) / 12
+	}
+	return mu
 }
 
 func applySlotReturn(
@@ -228,20 +316,22 @@ func appendPathDetail(
 	endWealth, netSpend, income, tax, txCost int64,
 	rebalanced bool,
 	slots []assetSlot,
+	cumInfl float64,
 ) pathSimState {
 	mr := MonthRecord{
 		MonthOffset: month, TotalWealthMinor: endWealth, SpendingMinor: netSpend,
 		IncomeMinor: income, TaxMinor: tax, TransactionCost: txCost,
-		Rebalanced: rebalanced,
+		Rebalanced: rebalanced, CumInflation: cumInfl,
+		RealTotalWealthMinor: deflate(endWealth, cumInfl),
 	}
 	if state.peak > 0 {
 		mr.Drawdown = 1 - float64(endWealth)/float64(state.peak)
 	}
 	state.detail.Monthly = append(state.detail.Monthly, mr)
-	state.yearAcc.accum(netSpend, income, tax, txCost, endWealth, mr.Drawdown, rebalanced)
+	state.yearAcc.accum(netSpend, income, tax, txCost, endWealth, mr.Drawdown, rebalanced, cumInfl)
 	if month%12 == 11 || month == horizon-1 {
 		state.detail.Yearly = append(state.detail.Yearly, state.yearAcc.finish(month/12, p.CurrentAge, slotWeights(slots)))
-		state.yearAcc = yearAccumulator{start: endWealth}
+		state.yearAcc = yearAccumulator{start: endWealth, startCumInfl: cumInfl}
 	}
 	return state
 }

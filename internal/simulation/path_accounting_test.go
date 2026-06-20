@@ -44,6 +44,59 @@ func TestYearAccountingIdentityWithWithdrawalTax(t *testing.T) {
 	}
 }
 
+func TestYearAccumulatorAnnualReturn(t *testing.T) {
+	// td/060 §2.3: annual_return = (end - start - income + spending + tax + tx) / start,
+	// i.e. InvestmentGainLoss / StartWealthMinor. Cash flows must not be counted
+	// as investment return.
+	cases := []struct {
+		name                          string
+		start, income, spend, tax, tx int64
+		endWealth                     int64
+		wantNil                       bool
+		want                          float64
+	}{
+		{
+			// Doc example: start 100w, income 10w, spending 5w, tax 1w, tx 1w, end 120w -> 17%.
+			name: "positive with cashflows", start: 100_0000_00, income: 10_0000_00,
+			spend: 5_0000_00, tax: 1_0000_00, tx: 1_0000_00, endWealth: 120_0000_00,
+			want: 0.17,
+		},
+		{
+			// Pure investment loss: end below start with no cash flows -> negative.
+			name: "negative pure investment", start: 100_0000_00, endWealth: 90_0000_00,
+			want: -0.10,
+		},
+		{
+			// Income fully explains the wealth rise, so investment return is zero.
+			name: "income only no investment gain", start: 100_0000_00, income: 5_0000_00,
+			endWealth: 105_0000_00, want: 0,
+		},
+		{name: "zero opening balance", start: 0, endWealth: 5_0000_00, wantNil: true},
+		{name: "negative opening balance", start: -1, endWealth: 5_0000_00, wantNil: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			y := &yearAccumulator{
+				start: tc.start, income: tc.income, netSpend: tc.spend,
+				tax: tc.tax, txCost: tc.tx, lastWealth: tc.endWealth,
+			}
+			rec := y.finish(0, 50, nil)
+			if tc.wantNil {
+				if rec.AnnualReturn != nil {
+					t.Fatalf("expected nil annual_return for start=%d, got %v", tc.start, *rec.AnnualReturn)
+				}
+				return
+			}
+			if rec.AnnualReturn == nil {
+				t.Fatalf("expected annual_return %.4f, got nil", tc.want)
+			}
+			if math.Abs(*rec.AnnualReturn-tc.want) > 1e-9 {
+				t.Fatalf("annual_return = %.6f, want %.6f", *rec.AnnualReturn, tc.want)
+			}
+		})
+	}
+}
+
 func TestYearEndDrawdownLessThanMaxIntraYear(t *testing.T) {
 	in := &InputSnapshot{
 		EngineVersion: EngineVersion,

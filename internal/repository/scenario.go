@@ -107,6 +107,7 @@ func (r *ScenarioRepo) getWeights(ctx context.Context, scenarioID string) ([]Ass
 	return out, wrapSQL("iterate scenario weights", rows.Err())
 }
 
+//nolint:dupl // generic query/scan loop shared with other simple list readers
 func (r *ScenarioRepo) getRegionTargets(ctx context.Context, scenarioID string) ([]RegionTarget, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT asset_class, region, weight_within_class FROM allocation_scenario_region_targets

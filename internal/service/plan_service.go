@@ -105,6 +105,13 @@ func defaultParameters(planID string, scenarioID *string) repository.PlanParamet
 		TransactionCostRate:      0,
 		SimulationRuns:           10000,
 		StudentTDf:               7,
+		// td/061 §4.2.3 / §7.5: new plans default to the forward-looking,
+		// auditable blended_prior calibration with the baseline scenario, following
+		// the user's global profile. Existing plans were migrated to historical_cagr
+		// and keep their old numbers until the user explicitly switches.
+		ReturnAssumptionMode:     repository.ModeBlendedPrior,
+		AssumptionSelectionMode:  repository.DefaultAssumptionSelectionMode,
+		ReturnAssumptionScenario: repository.DefaultReturnAssumptionScenario,
 	}
 }
 

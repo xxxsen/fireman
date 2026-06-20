@@ -43,19 +43,59 @@ export function pruneSelectedByScenario(
   return selected.filter((s) => active.has(s.inst.asset_class));
 }
 
-/** Remove foreign holdings when a class's foreign region target is zero. */
+/** Threshold below which a class/region weight is treated as disabled (0%). */
+export const WIZARD_WEIGHT_EPS = 0.0001;
+
+/**
+ * A class+region direction is "enabled" only when both its scenario class weight
+ * and its region target weight are above {@link WIZARD_WEIGHT_EPS}. This is the
+ * single rule used to decide which pickers/groups render and which already-picked
+ * holdings survive, so a 国内 0% / 国外 100% target (or its mirror) never keeps a
+ * holding that would be saved with a zero portfolio target weight.
+ */
+export function isWizardRegionEnabled(
+  classWeight: number,
+  regionTargets: WizardRegionTargets,
+  assetClass: string,
+  region: string,
+): boolean {
+  if (classWeight <= WIZARD_WEIGHT_EPS) return false;
+  if (assetClass === "cash") return region === "domestic";
+  if (assetClass === "equity" || assetClass === "bond") {
+    const rt = regionTargets[assetClass];
+    if (region === "domestic") return rt.domestic > WIZARD_WEIGHT_EPS;
+    if (region === "foreign") return rt.foreign > WIZARD_WEIGHT_EPS;
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Remove equity/bond holdings whose region direction is disabled (region target
+ * weight ~ 0). Unlike the previous foreign-only rule this also drops domestic
+ * holdings when 国内 is 0%, so the wizard never persists a holding with a zero
+ * portfolio target weight. Returns the surviving selection plus the removed
+ * holdings (the latter only for user feedback).
+ */
 export function pruneSelectedByRegionTargets(
   selected: WizardHoldingSelection[],
   regionTargets: WizardRegionTargets,
-): WizardHoldingSelection[] {
-  return selected.filter((s) => {
+): { selected: WizardHoldingSelection[]; removed: WizardHoldingSelection[] } {
+  const kept: WizardHoldingSelection[] = [];
+  const removed: WizardHoldingSelection[] = [];
+  for (const s of selected) {
     const ac = s.inst.asset_class;
-    if (ac !== "equity" && ac !== "bond") return true;
-    if (s.inst.region === "foreign" && regionTargets[ac].foreign <= 0.0001) {
-      return false;
+    if (ac === "equity" || ac === "bond") {
+      const rt = regionTargets[ac];
+      const weight = s.inst.region === "foreign" ? rt.foreign : rt.domestic;
+      if (weight <= WIZARD_WEIGHT_EPS) {
+        removed.push(s);
+        continue;
+      }
     }
-    return true;
-  });
+    kept.push(s);
+  }
+  return { selected: kept, removed };
 }
 
 export interface WizardHoldingSelection {
@@ -209,25 +249,23 @@ export function getWizardAllocationGroups(
     }
 
     const rt = regionTargets[ac];
-    if (rt.foreign > 0.0001) {
+    const domesticEnabled = rt.domestic > 0.0001;
+    const foreignEnabled = rt.foreign > 0.0001;
+    const both = domesticEnabled && foreignEnabled;
+    if (domesticEnabled) {
       groups.push({
         key: `${ac}-domestic`,
-        label: `${assetClassLabel(ac)} · ${regionLabel("domestic")}`,
+        label: both ? `${assetClassLabel(ac)} · ${regionLabel("domestic")}` : assetClassLabel(ac),
         assetClass: ac,
         region: "domestic",
       });
+    }
+    if (foreignEnabled) {
       groups.push({
         key: `${ac}-foreign`,
-        label: `${assetClassLabel(ac)} · ${regionLabel("foreign")}`,
+        label: both ? `${assetClassLabel(ac)} · ${regionLabel("foreign")}` : assetClassLabel(ac),
         assetClass: ac,
         region: "foreign",
-      });
-    } else {
-      groups.push({
-        key: `${ac}-domestic`,
-        label: assetClassLabel(ac),
-        assetClass: ac,
-        region: "domestic",
       });
     }
   }

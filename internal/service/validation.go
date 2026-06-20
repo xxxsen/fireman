@@ -25,6 +25,15 @@ var (
 	errRegionTargetsRequired        = errors.New("region_targets is required")
 	errRegionWeightRange            = errors.New("region weight must be in [0, 1]")
 	errScenarioWeightsSum           = errors.New("scenario weights must sum to 100%")
+	errFixedInflationRange          = errors.New("fixed_inflation_rate must be in [-0.02, 0.20]")
+	errInflationMuRange             = errors.New("inflation_mu must be in [-0.02, 0.20]")
+	errInflationSigmaRange          = errors.New("inflation_sigma must be in [0, 0.20]")
+	errInflationPhiRange            = errors.New("inflation_phi must be in [0, 1]")
+	errWithdrawalRateRange          = errors.New("withdrawal_rate must be in [0, 1]")
+	errWithdrawalFloorRange         = errors.New("withdrawal_floor_ratio must be in (0, 1]")
+	errWithdrawalCeilingRange       = errors.New("withdrawal_ceiling_ratio must be in [1, 2]")
+	errWithdrawalTaxRateRange       = errors.New("withdrawal_tax_rate must be in [0, 1]")
+	errTaxableWithdrawalRange       = errors.New("taxable_withdrawal_ratio must be in [0, 1]")
 )
 
 func validateParameters(p repository.PlanParameters) error {
@@ -37,7 +46,63 @@ func validateParameters(p repository.PlanParameters) error {
 	if err := validateParameterRanges(p); err != nil {
 		return err
 	}
-	return validateParameterModes(p)
+	if err := validateParameterModes(p); err != nil {
+		return err
+	}
+	return validateParameterAdvanced(p)
+}
+
+// validateParameterAdvanced enforces the ranges and cross-field relationships for
+// the advanced FIRE parameters (inflation, withdrawal, taxation) exposed by the
+// creation wizard and parameters page. It is the single authority shared by plan
+// creation, wizard creation, parameter updates and simulation readiness, so a
+// plan can never be created that later fails to simulate (td/062 R2).
+func validateParameterAdvanced(p repository.PlanParameters) error {
+	if err := validateInflationParams(p); err != nil {
+		return err
+	}
+	return validateWithdrawalParams(p)
+}
+
+func validateInflationParams(p repository.PlanParameters) error {
+	if p.FixedInflationRate < -0.02 || p.FixedInflationRate > 0.20 {
+		return errFixedInflationRange
+	}
+	if p.InflationMu < -0.02 || p.InflationMu > 0.20 {
+		return errInflationMuRange
+	}
+	if p.InflationSigma < 0 || p.InflationSigma > 0.20 {
+		return errInflationSigmaRange
+	}
+	if p.InflationPhi < 0 || p.InflationPhi > 1 {
+		return errInflationPhiRange
+	}
+	return nil
+}
+
+func validateWithdrawalParams(p repository.PlanParameters) error {
+	if p.WithdrawalRate < 0 || p.WithdrawalRate > 1 {
+		return errWithdrawalRateRange
+	}
+	if p.WithdrawalFloorRatio <= 0 || p.WithdrawalFloorRatio > 1 {
+		return errWithdrawalFloorRange
+	}
+	if p.WithdrawalCeilingRatio < 1 || p.WithdrawalCeilingRatio > 2 {
+		return errWithdrawalCeilingRange
+	}
+	if p.WithdrawalTaxRate < 0 || p.WithdrawalTaxRate > 1 {
+		return errWithdrawalTaxRateRange
+	}
+	if p.TaxableWithdrawalRatio < 0 || p.TaxableWithdrawalRatio > 1 {
+		return errTaxableWithdrawalRange
+	}
+	// The net-of-tax withdrawal divides by (1 - tax*taxable); a product of 1 (or
+	// more) makes the plan impossible to fund, so reject it at creation rather
+	// than at simulation time.
+	if p.WithdrawalTaxRate*p.TaxableWithdrawalRatio >= 1 {
+		return errWithdrawalTaxInvalid
+	}
+	return nil
 }
 
 func validateParameterAges(p repository.PlanParameters) error {

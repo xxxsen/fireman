@@ -6,13 +6,56 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-func TestValidateParametersEnumWhitelist(t *testing.T) {
-	base := repository.PlanParameters{
+func validParametersFixture() repository.PlanParameters {
+	return repository.PlanParameters{
 		CurrentAge: 30, RetirementAge: 55, EndAge: 90,
 		TotalAssetsMinor: 1_000_000_00, AnnualSpendingMinor: 400_000_00,
 		SimulationRuns: 10000, StudentTDf: 7,
-		InflationMode: "fixed_real", WithdrawalType: "fixed_real",
+		InflationMode: "fixed_real", FixedInflationRate: 0.03,
+		InflationMu: 0.03, InflationPhi: 0.5, InflationSigma: 0.01,
+		WithdrawalType: "fixed_real", WithdrawalRate: 0.04,
+		WithdrawalFloorRatio: 0.70, WithdrawalCeilingRatio: 1.30,
+		WithdrawalTaxRate: 0, TaxableWithdrawalRatio: 0,
 	}
+}
+
+func TestValidateParametersAdvancedRanges(t *testing.T) {
+	mutate := func(f func(p *repository.PlanParameters)) repository.PlanParameters {
+		p := validParametersFixture()
+		f(&p)
+		return p
+	}
+	// Doc-defined boundaries must be rejected (td/062 R2).
+	invalid := map[string]repository.PlanParameters{
+		"fixed_inflation high":   mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = 0.25 }),
+		"fixed_inflation low":    mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = -0.05 }),
+		"inflation_mu high":      mutate(func(p *repository.PlanParameters) { p.InflationMu = 0.30 }),
+		"inflation_sigma neg":    mutate(func(p *repository.PlanParameters) { p.InflationSigma = -0.01 }),
+		"inflation_sigma high":   mutate(func(p *repository.PlanParameters) { p.InflationSigma = 0.30 }),
+		"inflation_phi high":     mutate(func(p *repository.PlanParameters) { p.InflationPhi = 1.2 }),
+		"withdrawal_rate high":   mutate(func(p *repository.PlanParameters) { p.WithdrawalRate = 1.5 }),
+		"floor zero":             mutate(func(p *repository.PlanParameters) { p.WithdrawalFloorRatio = 0 }),
+		"floor above one":        mutate(func(p *repository.PlanParameters) { p.WithdrawalFloorRatio = 1.1 }),
+		"ceiling below one":      mutate(func(p *repository.PlanParameters) { p.WithdrawalCeilingRatio = 0.9 }),
+		"ceiling above two":      mutate(func(p *repository.PlanParameters) { p.WithdrawalCeilingRatio = 2.5 }),
+		"tax rate high":          mutate(func(p *repository.PlanParameters) { p.WithdrawalTaxRate = 1.2 }),
+		"taxable ratio high":     mutate(func(p *repository.PlanParameters) { p.TaxableWithdrawalRatio = 1.2 }),
+		"tax product equals one": mutate(func(p *repository.PlanParameters) { p.WithdrawalTaxRate = 1; p.TaxableWithdrawalRatio = 1 }),
+	}
+	for name, p := range invalid {
+		if err := validateParameters(p); err == nil {
+			t.Fatalf("expected invalid for %s", name)
+		}
+	}
+	// 0.2 * 0.8 = 0.16 < 1 must pass.
+	ok := mutate(func(p *repository.PlanParameters) { p.WithdrawalTaxRate = 0.2; p.TaxableWithdrawalRatio = 0.8 })
+	if err := validateParameters(ok); err != nil {
+		t.Fatalf("expected valid tax product: %v", err)
+	}
+}
+
+func TestValidateParametersEnumWhitelist(t *testing.T) {
+	base := validParametersFixture()
 	valid := []struct {
 		withdrawal, inflation string
 	}{

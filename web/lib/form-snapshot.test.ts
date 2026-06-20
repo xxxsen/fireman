@@ -32,6 +32,11 @@ const baseParams: PlanParameters = {
   transaction_cost_rate: 0.001,
   simulation_runs: 5000,
   student_t_df: 10,
+  return_assumption_mode: "blended_prior",
+  assumption_selection_mode: "follow_global",
+  return_assumption_set_id: "",
+  return_assumption_set_version: 0,
+  return_assumption_scenario: "baseline",
   seed: null,
   updated_at: 1,
 };

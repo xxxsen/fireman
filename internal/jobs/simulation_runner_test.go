@@ -92,6 +92,8 @@ func TestSimulationCompleteCommitsSummaryPathIndexAndQuantileSeries(t *testing.T
 	rows := pathRowsFromResult(runID, snap)
 	qRows := quantileRowsFromResult(runID, snap)
 
+	realRows := realQuantileRowsFromResult(runID, snap)
+
 	err = fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
 		if err := repo.Complete(ctx, tx, runID, snap.SuccessCount, snap.FailureCount, summaryJSON); err != nil {
 			return err
@@ -99,7 +101,10 @@ func TestSimulationCompleteCommitsSummaryPathIndexAndQuantileSeries(t *testing.T
 		if err := repo.ReplacePathIndex(ctx, tx, runID, rows); err != nil {
 			return err
 		}
-		return repo.ReplaceQuantileSeries(ctx, tx, runID, qRows)
+		if err := repo.ReplaceQuantileSeries(ctx, tx, runID, qRows); err != nil {
+			return err
+		}
+		return repo.ReplaceRealQuantileSeries(ctx, tx, runID, realRows)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +136,22 @@ func TestSimulationCompleteCommitsSummaryPathIndexAndQuantileSeries(t *testing.T
 	}
 	if len(series) != len(snap.QuantileSeries) {
 		t.Fatalf("expected %d quantile rows, got %d", len(snap.QuantileSeries), len(series))
+	}
+
+	// td/061 §4.1.8: the real quantile series lands in its own table, aligned
+	// with the nominal series and below it under positive inflation.
+	realSeries, err := repo.ListRealQuantileSeries(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(realSeries) != len(snap.RealQuantileSeries) {
+		t.Fatalf("expected %d real quantile rows, got %d", len(snap.RealQuantileSeries), len(realSeries))
+	}
+	if len(realSeries) > 0 && len(series) > 0 {
+		if realSeries[len(realSeries)-1].P50Minor > series[len(series)-1].P50Minor {
+			t.Fatalf("real terminal P50 %d should not exceed nominal %d",
+				realSeries[len(realSeries)-1].P50Minor, series[len(series)-1].P50Minor)
+		}
 	}
 }
 
@@ -198,6 +219,18 @@ func pathRowsFromResult(runID string, snap simulation.RunResult) []repository.Pa
 			FailureMonth: p.FailureMonth, TerminalWealthMinor: p.TerminalWealthMinor,
 			MaxDrawdown: p.MaxDrawdown, RepresentativePercentile: repPath[p.PathNo],
 		})
+	}
+	return rows
+}
+
+func realQuantileRowsFromResult(runID string, snap simulation.RunResult) []repository.QuantileSeriesRow {
+	rows := make([]repository.QuantileSeriesRow, len(snap.RealQuantileSeries))
+	for i, q := range snap.RealQuantileSeries {
+		rows[i] = repository.QuantileSeriesRow{
+			RunID: runID, MonthOffset: q.MonthOffset,
+			P00Minor: q.P00Minor, P05Minor: q.P05Minor, P25Minor: q.P25Minor,
+			P50Minor: q.P50Minor, P75Minor: q.P75Minor, P95Minor: q.P95Minor,
+		}
 	}
 	return rows
 }

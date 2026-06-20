@@ -284,7 +284,7 @@ describe("AssetsPage", () => {
     await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("inst_1"));
   });
 
-  it("shows trailing-return columns with annualized values and — for missing (td/056 §4.2)", () => {
+  it("merges trailing returns into one 年化数据 column with labeled values (td/060 §1)", () => {
     mockState.instruments = defaultInstruments.map((i) =>
       i.id === "inst_1"
         ? {
@@ -300,18 +300,50 @@ describe("AssetsPage", () => {
     );
     renderPage();
 
+    // Single combined header, no separate 1/3/5y headers.
     expect(screen.getByText("数据截至")).toBeInTheDocument();
-    expect(screen.getByText("近1年年化")).toBeInTheDocument();
-    expect(screen.getByText("近3年年化")).toBeInTheDocument();
-    expect(screen.getByText("近5年年化")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "年化数据" })).toBeInTheDocument();
+    expect(screen.queryByText("近1年年化")).not.toBeInTheDocument();
+    expect(screen.queryByText("近3年年化")).not.toBeInTheDocument();
+    expect(screen.queryByText("近5年年化")).not.toBeInTheDocument();
 
     const rows = screen.getAllByRole("row");
     const eqRow = rows.find((row) => within(row).queryByRole("link", { name: "510300" }));
     expect(eqRow).toBeTruthy();
     expect(within(eqRow!).getByText("2026-06-18")).toBeInTheDocument();
-    expect(within(eqRow!).getByText("8.12%")).toBeInTheDocument();
-    expect(within(eqRow!).getByText("6.41%")).toBeInTheDocument();
-    // 5y not computable -> em dash.
-    expect(within(eqRow!).getAllByText("—").length).toBeGreaterThan(0);
+    // Labels are always kept; partial history renders 5年 — in the same cell.
+    expect(within(eqRow!).getByText("1年 8.12% · 3年 6.41% · 5年 —")).toBeInTheDocument();
+  });
+
+  it("renders all dashes in 年化数据 for an instrument without a projection (td/060 §1)", () => {
+    renderPage();
+    const rows = screen.getAllByRole("row");
+    const eqRow = rows.find((row) => within(row).queryByRole("link", { name: "510300" }));
+    expect(eqRow).toBeTruthy();
+    expect(within(eqRow!).getByText("1年 — · 3年 — · 5年 —")).toBeInTheDocument();
+  });
+
+  it("mobile card reuses the same labeled trailing-return order (td/060 §1)", () => {
+    mockState.instruments = defaultInstruments.map((i) =>
+      i.id === "inst_1"
+        ? {
+            ...i,
+            data_as_of: "2026-06-18",
+            trailing_returns: {
+              as_of_date: "2026-06-18",
+              one_year_annualized_return: 0.0812,
+              three_year_annualized_return: 0.0641,
+              five_year_annualized_return: null,
+            },
+          }
+        : { ...i },
+    );
+    renderPage();
+    const cards = screen.getAllByTestId("instrument-card");
+    const eqCard = cards.find((card) => within(card).queryByText("沪深300ETF"));
+    expect(eqCard).toBeTruthy();
+    expect(
+      within(eqCard!).getByText("截至 2026-06-18 · 1年 8.12% · 3年 6.41% · 5年 —"),
+    ).toBeInTheDocument();
   });
 });

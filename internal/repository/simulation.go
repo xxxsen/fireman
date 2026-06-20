@@ -222,9 +222,45 @@ func (r *SimulationRepo) ReplaceQuantileSeries(ctx context.Context, tx *sql.Tx, 
 }
 
 func (r *SimulationRepo) ListQuantileSeries(ctx context.Context, runID string) ([]QuantileSeriesRow, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return r.listQuantileSeries(ctx, `
 		SELECT run_id, month_offset, p00_minor, p05_minor, p25_minor, p50_minor, p75_minor, p95_minor
 		FROM simulation_quantile_series WHERE run_id=? ORDER BY month_offset`, runID)
+}
+
+// ReplaceRealQuantileSeries persists the real (start-of-plan purchasing power)
+// monthly wealth quantiles into the dedicated simulation_real_quantile_series
+// table (td/061 §4.1.8), kept separate from the nominal series so the two
+// calibers are never mixed in one row.
+func (r *SimulationRepo) ReplaceRealQuantileSeries(ctx context.Context, tx *sql.Tx, runID string,
+	series []QuantileSeriesRow,
+) error {
+	exec := r.exec(tx)
+	if _, err := exec.ExecContext(ctx, `DELETE FROM simulation_real_quantile_series WHERE run_id=?`, runID); err != nil {
+		return wrapSQL("delete simulation real quantile series", err)
+	}
+	for _, q := range series {
+		if _, err := exec.ExecContext(ctx, `
+			INSERT INTO simulation_real_quantile_series (
+				run_id, month_offset, p00_minor, p05_minor, p25_minor, p50_minor, p75_minor, p95_minor
+			) VALUES (?,?,?,?,?,?,?,?)`,
+			runID, q.MonthOffset, q.P00Minor, q.P05Minor, q.P25Minor, q.P50Minor, q.P75Minor, q.P95Minor); err != nil {
+			return wrapSQL("insert simulation real quantile series row", err)
+		}
+	}
+	return nil
+}
+
+// ListRealQuantileSeries reads the dedicated real quantile series for a run.
+func (r *SimulationRepo) ListRealQuantileSeries(ctx context.Context, runID string) ([]QuantileSeriesRow, error) {
+	return r.listQuantileSeries(ctx, `
+		SELECT run_id, month_offset, p00_minor, p05_minor, p25_minor, p50_minor, p75_minor, p95_minor
+		FROM simulation_real_quantile_series WHERE run_id=? ORDER BY month_offset`, runID)
+}
+
+// listQuantileSeries runs a fixed nominal/real quantile-series query (the query
+// is a compile-time constant supplied by the two callers, never user input).
+func (r *SimulationRepo) listQuantileSeries(ctx context.Context, query, runID string) ([]QuantileSeriesRow, error) {
+	rows, err := r.db.QueryContext(ctx, query, runID)
 	if err != nil {
 		return nil, wrapSQL("list quantile series", err)
 	}

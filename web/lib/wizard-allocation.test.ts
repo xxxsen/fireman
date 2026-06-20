@@ -5,10 +5,23 @@ import {
   complementRegionWeight,
   computeExpectedAmountMinor,
   defaultWizardRegionTargets,
+  getWizardAllocationGroups,
+  isWizardRegionEnabled,
+  pruneSelectedByRegionTargets,
   redistributeGroupWeights,
   updateInstrumentWeightInGroup,
 } from "./wizard-allocation";
 import type { WizardHoldingSelection } from "./wizard-allocation";
+
+const holding = (
+  id: string,
+  asset_class: string,
+  region: string,
+): WizardHoldingSelection => ({
+  inst: { id, code: id, name: id, asset_class, region } as never,
+  weight: 1,
+  amount: 0,
+});
 
 describe("complementRegionWeight", () => {
   it("returns complement clamped to [0, 1]", () => {
@@ -217,6 +230,91 @@ describe("buildWizardPortfolioReview", () => {
     expect(foreignRow?.portfolioTargetWeight).toBeCloseTo(0.135, 4);
     expect(foreignRow?.targetAmountMinor).toBe(54_000_000_00);
     expect(review.passed).toBe(true);
+  });
+});
+
+describe("isWizardRegionEnabled", () => {
+  const targets = { equity: { domestic: 0, foreign: 1 }, bond: { domestic: 1, foreign: 0 } };
+  it("requires both class weight and region target above eps", () => {
+    expect(isWizardRegionEnabled(0.6, targets, "equity", "domestic")).toBe(false);
+    expect(isWizardRegionEnabled(0.6, targets, "equity", "foreign")).toBe(true);
+    expect(isWizardRegionEnabled(0.4, targets, "bond", "domestic")).toBe(true);
+    expect(isWizardRegionEnabled(0.4, targets, "bond", "foreign")).toBe(false);
+    expect(isWizardRegionEnabled(0, targets, "equity", "foreign")).toBe(false);
+  });
+  it("treats cash as domestic-only", () => {
+    expect(isWizardRegionEnabled(0.1, targets, "cash", "domestic")).toBe(true);
+    expect(isWizardRegionEnabled(0.1, targets, "cash", "foreign")).toBe(false);
+  });
+});
+
+describe("pruneSelectedByRegionTargets", () => {
+  it("drops domestic holdings when domestic target is 0%", () => {
+    const targets = { equity: { domestic: 0, foreign: 1 }, bond: { domestic: 1, foreign: 0 } };
+    const { selected, removed } = pruneSelectedByRegionTargets(
+      [holding("dom", "equity", "domestic"), holding("for", "equity", "foreign")],
+      targets,
+    );
+    expect(selected.map((s) => s.inst.id)).toEqual(["for"]);
+    expect(removed.map((s) => s.inst.id)).toEqual(["dom"]);
+  });
+  it("drops foreign holdings when foreign target is 0% (mirror)", () => {
+    const targets = { equity: { domestic: 1, foreign: 0 }, bond: { domestic: 1, foreign: 0 } };
+    const { selected, removed } = pruneSelectedByRegionTargets(
+      [holding("dom", "equity", "domestic"), holding("for", "equity", "foreign")],
+      targets,
+    );
+    expect(selected.map((s) => s.inst.id)).toEqual(["dom"]);
+    expect(removed.map((s) => s.inst.id)).toEqual(["for"]);
+  });
+  it("keeps both directions when 70/30", () => {
+    const targets = { equity: { domestic: 0.7, foreign: 0.3 }, bond: { domestic: 1, foreign: 0 } };
+    const { selected, removed } = pruneSelectedByRegionTargets(
+      [holding("dom", "equity", "domestic"), holding("for", "equity", "foreign")],
+      targets,
+    );
+    expect(selected).toHaveLength(2);
+    expect(removed).toHaveLength(0);
+  });
+});
+
+describe("getWizardAllocationGroups", () => {
+  const weights = [
+    { asset_class: "equity", weight: 0.6 },
+    { asset_class: "bond", weight: 0.3 },
+    { asset_class: "cash", weight: 0.1 },
+  ];
+  it("creates only enabled-region groups (domestic 0 / foreign 100)", () => {
+    const groups = getWizardAllocationGroups(weights, {
+      equity: { domestic: 0, foreign: 1 },
+      bond: { domestic: 1, foreign: 0 },
+    });
+    const keys = groups.map((g) => g.key);
+    expect(keys).toContain("equity-foreign");
+    expect(keys).not.toContain("equity-domestic");
+    expect(keys).toContain("bond-domestic");
+    expect(keys).not.toContain("bond-foreign");
+    expect(keys).toContain("cash");
+  });
+  it("creates both groups when split 70/30", () => {
+    const groups = getWizardAllocationGroups(weights, {
+      equity: { domestic: 0.7, foreign: 0.3 },
+      bond: { domestic: 1, foreign: 0 },
+    });
+    const keys = groups.map((g) => g.key);
+    expect(keys).toContain("equity-domestic");
+    expect(keys).toContain("equity-foreign");
+  });
+  it("creates no group for a zero-weight asset class", () => {
+    const groups = getWizardAllocationGroups(
+      [
+        { asset_class: "equity", weight: 0 },
+        { asset_class: "bond", weight: 0.9 },
+        { asset_class: "cash", weight: 0.1 },
+      ],
+      defaultWizardRegionTargets(),
+    );
+    expect(groups.some((g) => g.assetClass === "equity")).toBe(false);
   });
 });
 

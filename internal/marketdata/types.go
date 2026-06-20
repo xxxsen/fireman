@@ -145,4 +145,8 @@ type SnapshotMetrics struct {
 	SourceHash string
 	Warnings   []string
 	Years      []SimulationYear
+	// MonthlyReturns is the complete-year monthly return series; frozen alongside
+	// the snapshot so the joint factor model can estimate historical correlations
+	// (td/061 §4.1.6).
+	MonthlyReturns []MonthlyReturn
 }

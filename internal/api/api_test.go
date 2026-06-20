@@ -504,7 +504,7 @@ func newConfigHashService(db *sql.DB) *service.ConfigHashService {
 	params := repository.NewParametersRepo(db)
 	alloc := repository.NewAllocationRepo(db)
 	holdings := repository.NewHoldingsRepo(db)
-	return service.NewConfigHashService(plans, params, alloc, holdings)
+	return service.NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
 }
 
 func mustRead(t *testing.T, resp *http.Response) []byte {

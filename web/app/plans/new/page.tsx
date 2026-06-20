@@ -33,49 +33,133 @@ import {
 import type { PlanParameters } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
 
-const STEPS = ["计划基础", "目标配置", "建立持仓", "确认组合"] as const;
+const STEPS = ["计划目标", "建立持仓", "确认组合"] as const;
+const GOAL_STEP = 0;
+const HOLDINGS_STEP = 1;
+const CONFIRM_STEP = 2;
 const DEFAULT_RUNS = 10000;
 const FIRE_DURATION_PRESETS = [30, 40, 50] as const;
+
+/**
+ * Advanced FIRE parameters edited inside the collapsible disclosure on the
+ * 计划目标 step. The defaults mirror the previous hard-coded wizard submission
+ * exactly, so an untouched wizard sends the same payload as before; opening the
+ * panel and editing values flows through to POST /plans/wizard.
+ */
+interface AdvancedFireParams {
+  inflation_mode: string;
+  fixed_inflation_rate: number;
+  inflation_mu: number;
+  inflation_phi: number;
+  inflation_sigma: number;
+  withdrawal_type: string;
+  withdrawal_rate: number;
+  withdrawal_floor_ratio: number;
+  withdrawal_ceiling_ratio: number;
+  withdrawal_tax_rate: number;
+  taxable_withdrawal_ratio: number;
+}
+
+const DEFAULT_ADVANCED: AdvancedFireParams = {
+  inflation_mode: "fixed_real",
+  fixed_inflation_rate: 0.03,
+  inflation_mu: 0.03,
+  inflation_phi: 0.5,
+  inflation_sigma: 0.01,
+  withdrawal_type: "fixed_real",
+  withdrawal_rate: 0.04,
+  withdrawal_floor_ratio: 0.7,
+  withdrawal_ceiling_ratio: 1.3,
+  withdrawal_tax_rate: 0,
+  taxable_withdrawal_ratio: 0,
+};
+
+/** High fixed-inflation threshold that requires an explicit risk acknowledgement. */
+const HIGH_FIXED_INFLATION = 0.15;
+
+/** Whether the advanced params still equal the documented defaults (td/062 R3). */
+function advancedIsDefault(a: AdvancedFireParams): boolean {
+  return (Object.keys(DEFAULT_ADVANCED) as (keyof AdvancedFireParams)[]).every(
+    (k) => a[k] === DEFAULT_ADVANCED[k],
+  );
+}
+
+/**
+ * Client mirror of the server's validateParameterAdvanced ranges (td/062 R2). All
+ * fields are checked unconditionally so a value edited in one withdrawal/inflation
+ * mode and then hidden by switching modes cannot slip past to a server rejection.
+ */
+function validateAdvancedParams(a: AdvancedFireParams): string[] {
+  const errs: string[] = [];
+  const within = (v: number, min: number, max: number) => v >= min && v <= max;
+  if (!within(a.fixed_inflation_rate, -0.02, 0.2)) errs.push("固定通胀率需在 -2% 到 20% 之间。");
+  if (!within(a.inflation_mu, -0.02, 0.2)) errs.push("通胀均值 μ 需在 -2% 到 20% 之间。");
+  if (!within(a.inflation_sigma, 0, 0.2)) errs.push("通胀波动 σ 需在 0% 到 20% 之间。");
+  if (!within(a.inflation_phi, 0, 1)) errs.push("通胀自回归 φ 需在 0 到 1 之间。");
+  if (!within(a.withdrawal_rate, 0, 1)) errs.push("提取率需在 0% 到 100% 之间。");
+  if (!(a.withdrawal_floor_ratio > 0 && a.withdrawal_floor_ratio <= 1))
+    errs.push("护栏下限比例需大于 0% 且不超过 100%。");
+  if (!within(a.withdrawal_ceiling_ratio, 1, 2)) errs.push("护栏上限比例需在 100% 到 200% 之间。");
+  if (!within(a.withdrawal_tax_rate, 0, 1)) errs.push("有效提取税率需在 0% 到 100% 之间。");
+  if (!within(a.taxable_withdrawal_ratio, 0, 1)) errs.push("应税提取比例需在 0% 到 100% 之间。");
+  if (a.withdrawal_tax_rate * a.taxable_withdrawal_ratio >= 1)
+    errs.push("有效提取税率 × 应税提取比例需小于 1。");
+  return errs;
+}
+
+const WITHDRAWAL_TYPE_LABEL: Record<string, string> = {
+  fixed_real: "固定实际支出",
+  fixed_portfolio: "组合百分比",
+  guardrail: "动态提取（护栏）",
+};
 
 function defaultPlanName(): string {
   const today = new Date().toISOString().slice(0, 10);
   return `我的 FIRE 计划 (${today})`;
 }
 
-function defaultParameters(
-  totalAssets: number,
-  annualSpending: number,
-  annualSavings: number,
-  scenarioId: string,
-  ages: { current: number; retirement: number; end: number },
+function buildParameters(
+  base: {
+    totalAssets: number;
+    annualSpending: number;
+    annualSavings: number;
+    scenarioId: string;
+    ages: { current: number; retirement: number; end: number };
+  },
+  advanced: AdvancedFireParams,
 ): PlanParameters {
   return {
     plan_id: "",
-    current_age: ages.current,
-    retirement_age: ages.retirement,
-    end_age: ages.end,
-    total_assets_minor: totalAssets,
-    annual_savings_minor: annualSavings,
+    current_age: base.ages.current,
+    retirement_age: base.ages.retirement,
+    end_age: base.ages.end,
+    total_assets_minor: base.totalAssets,
+    annual_savings_minor: base.annualSavings,
     annual_savings_growth_rate: 0,
-    annual_spending_minor: annualSpending,
+    annual_spending_minor: base.annualSpending,
     terminal_wealth_floor_minor: 0,
-    selected_scenario_id: scenarioId,
-    inflation_mode: "fixed_real",
-    fixed_inflation_rate: 0.03,
-    inflation_mu: 0.03,
-    inflation_phi: 0.5,
-    inflation_sigma: 0.01,
-    withdrawal_type: "fixed_real",
-    withdrawal_rate: 0.04,
-    withdrawal_floor_ratio: 0.7,
-    withdrawal_ceiling_ratio: 1.3,
-    withdrawal_tax_rate: 0,
-    taxable_withdrawal_ratio: 0,
+    selected_scenario_id: base.scenarioId,
+    inflation_mode: advanced.inflation_mode,
+    fixed_inflation_rate: advanced.fixed_inflation_rate,
+    inflation_mu: advanced.inflation_mu,
+    inflation_phi: advanced.inflation_phi,
+    inflation_sigma: advanced.inflation_sigma,
+    withdrawal_type: advanced.withdrawal_type,
+    withdrawal_rate: advanced.withdrawal_rate,
+    withdrawal_floor_ratio: advanced.withdrawal_floor_ratio,
+    withdrawal_ceiling_ratio: advanced.withdrawal_ceiling_ratio,
+    withdrawal_tax_rate: advanced.withdrawal_tax_rate,
+    taxable_withdrawal_ratio: advanced.taxable_withdrawal_ratio,
     rebalance_frequency: "annual",
     rebalance_threshold: 0.03,
     transaction_cost_rate: 0,
     simulation_runs: DEFAULT_RUNS,
     student_t_df: 7,
+    return_assumption_mode: "blended_prior",
+    assumption_selection_mode: "follow_global",
+    return_assumption_set_id: "",
+    return_assumption_set_version: 0,
+    return_assumption_scenario: "baseline",
     updated_at: Date.now(),
   };
 }
@@ -93,7 +177,10 @@ export default function NewPlanWizardPage() {
   const [annualSavings, setAnnualSavings] = useState(100_000_00);
   const [scenarioId, setScenarioId] = useState("");
   const [regionTargets, setRegionTargets] = useState<WizardRegionTargets>(defaultWizardRegionTargets);
+  const [advanced, setAdvanced] = useState<AdvancedFireParams>(DEFAULT_ADVANCED);
+  const [highInflationConfirmed, setHighInflationConfirmed] = useState(false);
   const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
+  const [removedByTargets, setRemovedByTargets] = useState<string[]>([]);
   const [runSimulation, setRunSimulation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [holdingTab, setHoldingTab] = useState<string>("equity");
@@ -101,6 +188,14 @@ export default function NewPlanWizardPage() {
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
 
   const endAge = retirementAge + fireDurationYears;
+
+  const advancedErrors = useMemo(() => validateAdvancedParams(advanced), [advanced]);
+  const needsHighInflationConfirm = advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION;
+  const advancedBlocked =
+    advancedErrors.length > 0 || (needsHighInflationConfirm && !highInflationConfirmed);
+
+  const updateAdvanced = <K extends keyof AdvancedFireParams>(key: K, value: AdvancedFireParams[K]) =>
+    setAdvanced((prev) => ({ ...prev, [key]: value }));
 
   const finishMut = useMutation({
     mutationFn: async () => {
@@ -115,11 +210,16 @@ export default function NewPlanWizardPage() {
         name,
         valuation_date: valuationDate,
         selected_scenario_id: scenarioId,
-        parameters: defaultParameters(totalAssets, annualSpending, annualSavings, scenarioId, {
-          current: currentAge,
-          retirement: retirementAge,
-          end: endAge,
-        }),
+        parameters: buildParameters(
+          {
+            totalAssets,
+            annualSpending,
+            annualSavings,
+            scenarioId,
+            ages: { current: currentAge, retirement: retirementAge, end: endAge },
+          },
+          advanced,
+        ),
         holdings,
         region_targets: buildRegionTargetsPayload(regionTargets),
         apply_unallocated_to_cash: assetGap > 100,
@@ -231,6 +331,65 @@ export default function NewPlanWizardPage() {
     [selectedInstruments],
   );
 
+  // Validation that runs when leaving 计划目标: a scenario must be chosen, region
+  // splits must sum to 100%, and incompatible already-picked instruments are
+  // pruned by scenario/region. Returns false (with an error set) to block.
+  const leaveGoalStep = (): boolean => {
+    if (!scenarioId) {
+      setError("请选择资产配置场景。");
+      return false;
+    }
+    if (!regionTargetChecks.every((c) => c.passed)) {
+      setError("各「大类」国内与国外配比须合计 100%。");
+      return false;
+    }
+    if (advancedErrors.length > 0) {
+      setError(`高级 FIRE 参数无效：${advancedErrors[0]}`);
+      return false;
+    }
+    if (needsHighInflationConfirm && !highInflationConfirmed) {
+      setError("固定通胀率超过 15%，请在「高级 FIRE 参数」中勾选确认。");
+      return false;
+    }
+    if (selectedScenario) {
+      const afterScenario = pruneSelectedByScenario(selectedInstruments, selectedScenario.weights);
+      const { selected, removed } = pruneSelectedByRegionTargets(afterScenario, regionTargets);
+      const scenarioRemoved = selectedInstruments.filter((s) => !afterScenario.includes(s));
+      const removedAll = [...scenarioRemoved, ...removed];
+      setRemovedByTargets(
+        removedAll.map((s) => `${s.inst.name}（${s.inst.code}）`),
+      );
+      setSelectedInstruments(selected);
+    }
+    return true;
+  };
+
+  const leaveHoldingsStep = (): boolean => {
+    if (selectedInstruments.length === 0) {
+      setError("请至少选择一个标的。");
+      return false;
+    }
+    if (!groupWeightChecks.every((g) => g.passed)) {
+      setError("各「大类 × 地区」组内权重须合计 100%。");
+      return false;
+    }
+    const unavailable = selectedInstruments.filter(
+      (s) => s.inst.quality_status === "insufficient_history",
+    );
+    if (unavailable.length > 0) {
+      setError(
+        `以下标的历史不足，不能用于模拟：${unavailable.map((s) => s.inst.code).join("、")}`,
+      );
+      return false;
+    }
+    const sum = selectedInstruments.reduce((a, s) => a + s.amount, 0);
+    if (sum > totalAssets + 100) {
+      setError("持仓合计不能超过总资产，请调整金额。");
+      return false;
+    }
+    return true;
+  };
+
   return (
     <div className="mx-auto w-full max-w-[96rem]">
       <Link href="/" className="text-sm underline">
@@ -254,157 +413,187 @@ export default function NewPlanWizardPage() {
         data-testid="wizard-step-card"
         className="mt-8 w-full space-y-4 rounded-lg border p-6"
       >
-        {step === 0 && (
-          <div className="max-w-6xl space-y-6">
-            <label className="block text-sm">
-              计划名称
-              <input
-                className="mt-1 w-full min-w-0 max-w-3xl rounded-md border px-3 py-2"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <div>
-              <h2 className="flex items-center text-sm font-medium">
-                FIRE 模拟参数
-                <MetricHelp termKey="fire_params_for_simulation" />
-              </h2>
-              <div className="mt-2 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                <label className="text-sm">
-                  当前年龄
-                  <input
-                    type="number"
-                    className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
-                    value={currentAge}
-                    onChange={(e) => setCurrentAge(Number(e.target.value))}
-                  />
-                </label>
-                <label className="text-sm">
-                  退休年龄
-                  <input
-                    type="number"
-                    className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
-                    value={retirementAge}
-                    onChange={(e) => setRetirementAge(Number(e.target.value))}
-                  />
-                </label>
-                <label className="text-sm">
-                  预计 FIRE 时长
-                  <div className="mt-1 grid grid-cols-2 gap-2">
-                    <select
-                      className="w-full min-w-0 rounded-md border px-3 py-2"
-                      value={
-                        FIRE_DURATION_PRESETS.includes(fireDurationYears as (typeof FIRE_DURATION_PRESETS)[number])
-                          ? String(fireDurationYears)
-                          : "custom"
-                      }
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        if (value !== "custom") setFireDurationYears(Number(value));
-                      }}
-                    >
-                      {FIRE_DURATION_PRESETS.map((years) => (
-                        <option key={years} value={years}>
-                          {years} 年
-                        </option>
-                      ))}
-                      <option value="custom">其他年限</option>
-                    </select>
+        {step === GOAL_STEP && (
+          <div className="max-w-6xl space-y-8">
+            <section className="space-y-6">
+              <h2 className="text-sm font-semibold text-ink">基本资料</h2>
+              <label className="block text-sm">
+                计划名称
+                <input
+                  className="mt-1 w-full min-w-0 max-w-3xl rounded-md border px-3 py-2"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <div>
+                <h3 className="flex items-center text-sm font-medium">
+                  FIRE 模拟参数
+                  <MetricHelp termKey="fire_params_for_simulation" />
+                </h3>
+                <div className="mt-2 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <label className="text-sm">
+                    当前年龄
                     <input
                       type="number"
-                      min={1}
-                      className="w-full min-w-0 rounded-md border px-3 py-2"
-                      value={fireDurationYears}
-                      onChange={(e) => setFireDurationYears(Number(e.target.value))}
-                      aria-label="预计 FIRE 时长（年）"
+                      className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                      value={currentAge}
+                      onChange={(e) => setCurrentAge(Number(e.target.value))}
                     />
-                  </div>
-                </label>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
-              <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
-              <label className="block text-sm">
-                <span className="mb-1 flex items-center gap-1">
-                  年储蓄
-                  <MetricHelp termKey="annual_savings_wizard" />
-                </span>
-                <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
-              </label>
-            </div>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div className="max-w-6xl space-y-4">
-            <label className="block max-w-3xl text-sm">
-              选择场景
-              <select
-                className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
-                value={scenarioId}
-                onChange={(e) => setScenarioId(e.target.value)}
-              >
-                <option value="">请选择</option>
-                {scenariosQ.data?.scenarios.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} —{" "}
-                    {s.weights.map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`).join(" / ")}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="max-w-3xl text-sm text-ink-muted">
-              权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
-            </p>
-            {selectedScenario && regionTargetChecks.length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-sm font-medium">地区组内权重</h3>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {regionTargetChecks.map((check) => {
-                  const ac = check.assetClass as WizardRegionEditableClass;
-                  const rt = regionTargets[ac];
-                  return (
-                    <div key={ac} className="space-y-2 rounded-md border border-line p-3">
-                      <p className="text-sm font-medium">{check.label}</p>
-                      <div className="flex flex-wrap items-end gap-4">
-                        <PercentInput
-                          label="国内"
-                          value={rt.domestic}
-                          onChange={(v) =>
-                            setRegionTargets((prev) => ({
-                              ...prev,
-                              [ac]: { domestic: v, foreign: complementRegionWeight(v) },
-                            }))
-                          }
-                        />
-                        <PercentInput
-                          label="国外"
-                          value={rt.foreign}
-                          onChange={(v) =>
-                            setRegionTargets((prev) => ({
-                              ...prev,
-                              [ac]: { domestic: complementRegionWeight(v), foreign: v },
-                            }))
-                          }
-                        />
-                      </div>
-                      <p
-                        className={`text-xs ${check.passed ? "text-positive" : "text-danger"}`}
+                  </label>
+                  <label className="text-sm">
+                    退休年龄
+                    <input
+                      type="number"
+                      className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                      value={retirementAge}
+                      onChange={(e) => setRetirementAge(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="text-sm">
+                    预计 FIRE 时长
+                    <div className="mt-1 space-y-1">
+                      <input
+                        type="number"
+                        min={1}
+                        className="w-full min-w-0 rounded-md border px-3 py-2"
+                        value={fireDurationYears}
+                        onChange={(e) => setFireDurationYears(Number(e.target.value))}
+                        aria-label="预计 FIRE 时长（年）"
+                      />
+                      <select
+                        className="w-full min-w-0 rounded-md border px-3 py-2 text-xs text-ink-muted"
+                        aria-label="常用 FIRE 时长预设"
+                        value={
+                          FIRE_DURATION_PRESETS.includes(
+                            fireDurationYears as (typeof FIRE_DURATION_PRESETS)[number],
+                          )
+                            ? String(fireDurationYears)
+                            : ""
+                        }
+                        onChange={(e) => {
+                          if (e.target.value) setFireDurationYears(Number(e.target.value));
+                        }}
                       >
-                        {check.label} 地区配比：{check.message}
-                      </p>
+                        <option value="">选择常用时长</option>
+                        {FIRE_DURATION_PRESETS.map((years) => (
+                          <option key={years} value={years}>
+                            {years} 年
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                  );
-                })}
+                  </label>
                 </div>
               </div>
-            )}
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
+                <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
+                <label className="block text-sm">
+                  <span className="mb-1 flex items-center gap-1">
+                    年储蓄
+                    <MetricHelp termKey="annual_savings_wizard" />
+                  </span>
+                  <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
+                </label>
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <h2 className="text-sm font-semibold text-ink">目标配置</h2>
+              <label className="block max-w-3xl text-sm">
+                选择场景
+                <select
+                  className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                  value={scenarioId}
+                  onChange={(e) => setScenarioId(e.target.value)}
+                >
+                  <option value="">请选择</option>
+                  {scenariosQ.data?.scenarios.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} —{" "}
+                      {s.weights.map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`).join(" / ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="max-w-3xl text-sm text-ink-muted">
+                权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
+              </p>
+              {selectedScenario && regionTargetChecks.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium">地区组内权重</h3>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {regionTargetChecks.map((check) => {
+                      const ac = check.assetClass as WizardRegionEditableClass;
+                      const rt = regionTargets[ac];
+                      return (
+                        <div key={ac} className="space-y-2 rounded-md border border-line p-3">
+                          <p className="text-sm font-medium">{check.label}</p>
+                          <div className="flex flex-wrap items-end gap-4">
+                            <PercentInput
+                              label="国内"
+                              value={rt.domestic}
+                              onChange={(v) =>
+                                setRegionTargets((prev) => ({
+                                  ...prev,
+                                  [ac]: { domestic: v, foreign: complementRegionWeight(v) },
+                                }))
+                              }
+                            />
+                            <PercentInput
+                              label="国外"
+                              value={rt.foreign}
+                              onChange={(v) =>
+                                setRegionTargets((prev) => ({
+                                  ...prev,
+                                  [ac]: { domestic: complementRegionWeight(v), foreign: v },
+                                }))
+                              }
+                            />
+                          </div>
+                          <p
+                            className={`text-xs ${check.passed ? "text-positive" : "text-danger"}`}
+                          >
+                            {check.label} 地区配比：{check.message}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <AdvancedFireParamsSection
+              advanced={advanced}
+              onChange={updateAdvanced}
+              errors={advancedErrors}
+              isDefault={advancedIsDefault(advanced)}
+              highInflationConfirmed={highInflationConfirmed}
+              onHighInflationConfirmChange={setHighInflationConfirmed}
+            />
           </div>
         )}
 
-        {step === 2 && (
+        {step === HOLDINGS_STEP && (
           <div className="space-y-4">
+            {removedByTargets.length > 0 && (
+              <div
+                className="flex items-start justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning"
+                role="status"
+                data-testid="wizard-removed-by-targets"
+              >
+                <span>因地区目标调整，已移除：{removedByTargets.join("、")}</span>
+                <button
+                  type="button"
+                  className="shrink-0 underline"
+                  aria-label="关闭已移除提示"
+                  onClick={() => setRemovedByTargets([])}
+                >
+                  知道了
+                </button>
+              </div>
+            )}
             <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
               <div className="space-y-2">
                 <p className="text-sm text-ink-muted">
@@ -472,13 +661,16 @@ export default function NewPlanWizardPage() {
                       const other = selectedInstruments.filter(
                         (s) => s.inst.asset_class !== assetClass,
                       );
+                      setRemovedByTargets([]);
                       setSelectedInstruments([...other, ...next]);
                     };
 
                     const rt =
                       regionTargets[assetClass as WizardRegionEditableClass] ??
                       defaultWizardRegionTargets()[assetClass as WizardRegionEditableClass];
-                    const splitForeign = rt.foreign > 0.0001;
+                    const domesticEnabled = rt.domestic > 0.0001;
+                    const foreignEnabled = rt.foreign > 0.0001;
+                    const splitBoth = domesticEnabled && foreignEnabled;
 
                     return (
                       <section
@@ -487,12 +679,12 @@ export default function NewPlanWizardPage() {
                         role="tabpanel"
                         aria-label={`${assetClassLabel(assetClass)}选标`}
                       >
-                        {!splitForeign ? (
+                        {!splitBoth ? (
                           <AssetClassHoldingPicker
                             assetClass={assetClass}
                             classWeight={classWeight}
-                            regionWeight={rt.domestic}
-                            region="domestic"
+                            regionWeight={foreignEnabled ? rt.foreign : rt.domestic}
+                            region={foreignEnabled ? "foreign" : "domestic"}
                             totalAssetsMinor={totalAssets}
                             selected={classSelected}
                             onSelectedChange={mergeSelected}
@@ -544,7 +736,7 @@ export default function NewPlanWizardPage() {
           </div>
         )}
 
-        {step === 3 && (
+        {step === CONFIRM_STEP && (
           <>
             <ul className="list-disc pl-5 text-sm text-ink">
               <li>组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}</li>
@@ -562,6 +754,19 @@ export default function NewPlanWizardPage() {
                 </p>
                 <p className="text-sm text-ink-muted">
                   地区目标：{formatRegionTargetsSummary(selectedScenario.weights, regionTargets)}
+                </p>
+                <p className="text-sm text-ink-muted" data-testid="wizard-advanced-summary">
+                  高级参数：
+                  {advancedIsDefault(advanced) ? "使用默认值 · " : "已自定义 · "}
+                  通胀{" "}
+                  {advanced.inflation_mode === "random_ar1"
+                    ? `随机（μ ${formatPercent(advanced.inflation_mu)}）`
+                    : `固定 ${formatPercent(advanced.fixed_inflation_rate)}`}
+                  {" · "}
+                  提取 {WITHDRAWAL_TYPE_LABEL[advanced.withdrawal_type] ?? advanced.withdrawal_type}
+                  {advanced.withdrawal_type !== "fixed_real"
+                    ? `（${formatPercent(advanced.withdrawal_rate)}）`
+                    : ""}
                 </p>
                 {selectedInstruments.length > 0 && (
                   <p className="text-sm text-ink-muted">
@@ -631,7 +836,7 @@ export default function NewPlanWizardPage() {
                 </div>
                 {!portfolioReview.passed && portfolioReview.missingClasses.length > 0 && (
                   <p className="text-sm text-warning">
-                    建议：返回「选择标的」补充
+                    建议：返回「建立持仓」补充
                     {portfolioReview.missingClasses.map((m) => m.label).join("、")}
                     类资产；若暂时无法配置，可先调整场景或稍后在计划内完善持仓。
                   </p>
@@ -676,7 +881,7 @@ export default function NewPlanWizardPage() {
         )}
       </div>
 
-      {error && step < 3 && (
+      {error && step < CONFIRM_STEP && (
         <p className="mt-4 text-sm text-danger" role="alert">
           {error}
         </p>
@@ -686,59 +891,19 @@ export default function NewPlanWizardPage() {
         <button
           type="button"
           className="rounded-md border px-4 py-2 text-sm"
-          disabled={step === 0}
+          disabled={step === GOAL_STEP}
           onClick={() => setStep((s) => s - 1)}
         >
           上一步
         </button>
-        {step < 3 ? (
+        {step < CONFIRM_STEP ? (
           <button
             type="button"
             className="rounded-md bg-brand px-4 py-2 text-sm text-white"
             onClick={() => {
               setError(null);
-              if (step === 1 && !scenarioId) {
-                setError("请选择资产配置场景。");
-                return;
-              }
-              if (step === 1) {
-                if (!regionTargetChecks.every((c) => c.passed)) {
-                  setError("各「大类」国内与国外配比须合计 100%。");
-                  return;
-                }
-                if (selectedScenario) {
-                  setSelectedInstruments((prev) =>
-                    pruneSelectedByRegionTargets(
-                      pruneSelectedByScenario(prev, selectedScenario.weights),
-                      regionTargets,
-                    ),
-                  );
-                }
-              }
-              if (step === 2) {
-                if (selectedInstruments.length === 0) {
-                  setError("请至少选择一个标的。");
-                  return;
-                }
-                if (!groupWeightChecks.every((g) => g.passed)) {
-                  setError("各「大类 × 地区」组内权重须合计 100%。");
-                  return;
-                }
-                const unavailable = selectedInstruments.filter(
-                  (s) => s.inst.quality_status === "insufficient_history",
-                );
-                if (unavailable.length > 0) {
-                  setError(
-                    `以下标的历史不足，不能用于模拟：${unavailable.map((s) => s.inst.code).join("、")}`,
-                  );
-                  return;
-                }
-                const sum = selectedInstruments.reduce((a, s) => a + s.amount, 0);
-                if (sum > totalAssets + 100) {
-                  setError("持仓合计不能超过总资产，请调整金额。");
-                  return;
-                }
-              }
+              if (step === GOAL_STEP && !leaveGoalStep()) return;
+              if (step === HOLDINGS_STEP && !leaveHoldingsStep()) return;
               setStep((s) => s + 1);
             }}
           >
@@ -754,6 +919,7 @@ export default function NewPlanWizardPage() {
               selectedInstruments.length === 0 ||
               !scenarioId ||
               assetGap < -100 ||
+              advancedBlocked ||
               finishMut.isPending
             }
             title={
@@ -768,5 +934,147 @@ export default function NewPlanWizardPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Collapsible advanced FIRE parameters. Defaults are shown closed; opening and
+ * editing reuses the plan parameters page's controls (PercentInput, the same
+ * inflation/withdrawal field semantics and ranges) so the wizard and parameters
+ * page stay consistent. Guardrail withdrawal exposes its floor/ceiling with an
+ * explanation of the existing dynamic-withdrawal model.
+ */
+function AdvancedFireParamsSection({
+  advanced,
+  onChange,
+  errors,
+  isDefault,
+  highInflationConfirmed,
+  onHighInflationConfirmChange,
+}: {
+  advanced: AdvancedFireParams;
+  onChange: <K extends keyof AdvancedFireParams>(key: K, value: AdvancedFireParams[K]) => void;
+  errors: string[];
+  isDefault: boolean;
+  highInflationConfirmed: boolean;
+  onHighInflationConfirmChange: (value: boolean) => void;
+}) {
+  return (
+    <details className="rounded-md border border-line p-3" data-testid="wizard-advanced-params">
+      <summary className="cursor-pointer text-sm font-medium">
+        高级 FIRE 参数（{isDefault ? "使用默认值" : "已自定义"}）
+      </summary>
+      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+        <label className="block text-sm">
+          通胀模式
+          <select
+            className="mt-1 w-full rounded-md border px-3 py-2"
+            value={advanced.inflation_mode}
+            onChange={(e) => onChange("inflation_mode", e.target.value)}
+          >
+            <option value="fixed_real">固定通胀率</option>
+            <option value="random_ar1">随机通胀</option>
+          </select>
+        </label>
+        <PercentInput
+          label="固定通胀率"
+          value={advanced.fixed_inflation_rate}
+          onChange={(v) => onChange("fixed_inflation_rate", v)}
+        />
+        {advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION && (
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={highInflationConfirmed}
+              onChange={(e) => onHighInflationConfirmChange(e.target.checked)}
+            />
+            确认固定通胀率超过 15%（非常规假设）
+          </label>
+        )}
+        {advanced.inflation_mode === "random_ar1" && (
+          <>
+            <PercentInput
+              label="通胀均值 μ"
+              value={advanced.inflation_mu}
+              onChange={(v) => onChange("inflation_mu", v)}
+            />
+            <PercentInput
+              label="通胀波动 σ"
+              value={advanced.inflation_sigma}
+              onChange={(v) => onChange("inflation_sigma", v)}
+            />
+            <label className="block text-sm">
+              通胀自回归 φ
+              <input
+                type="number"
+                step={0.01}
+                min={0}
+                max={1}
+                className="mt-1 w-full rounded-md border px-3 py-2"
+                value={advanced.inflation_phi}
+                onChange={(e) => onChange("inflation_phi", Number(e.target.value))}
+              />
+            </label>
+          </>
+        )}
+        <label className="block text-sm">
+          提取策略
+          <select
+            className="mt-1 w-full rounded-md border px-3 py-2"
+            value={advanced.withdrawal_type}
+            onChange={(e) => onChange("withdrawal_type", e.target.value)}
+          >
+            <option value="fixed_real">固定实际支出</option>
+            <option value="fixed_portfolio">组合百分比</option>
+            <option value="guardrail">动态提取（护栏）</option>
+          </select>
+        </label>
+        {(advanced.withdrawal_type === "fixed_portfolio" ||
+          advanced.withdrawal_type === "guardrail") && (
+          <PercentInput
+            label="提取率"
+            value={advanced.withdrawal_rate}
+            onChange={(v) => onChange("withdrawal_rate", v)}
+          />
+        )}
+        {advanced.withdrawal_type === "guardrail" && (
+          <>
+            <PercentInput
+              label="护栏下限比例"
+              value={advanced.withdrawal_floor_ratio}
+              onChange={(v) => onChange("withdrawal_floor_ratio", v)}
+            />
+            <PercentInput
+              label="护栏上限比例"
+              value={advanced.withdrawal_ceiling_ratio}
+              onChange={(v) => onChange("withdrawal_ceiling_ratio", v)}
+            />
+            <p className="text-xs text-ink-muted sm:col-span-2">
+              系统在退休周年按当前提取率相对初始提取率调整年度支出（过高下调、过低上调），再受上下限约束。
+            </p>
+          </>
+        )}
+        <PercentInput
+          label="有效提取税率"
+          value={advanced.withdrawal_tax_rate}
+          onChange={(v) => onChange("withdrawal_tax_rate", v)}
+        />
+        <PercentInput
+          label="应税提取比例"
+          value={advanced.taxable_withdrawal_ratio}
+          onChange={(v) => onChange("taxable_withdrawal_ratio", v)}
+        />
+        {errors.length > 0 && (
+          <ul
+            className="space-y-1 text-xs text-danger sm:col-span-2"
+            data-testid="wizard-advanced-errors"
+          >
+            {errors.map((msg) => (
+              <li key={msg}>{msg}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   );
 }

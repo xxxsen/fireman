@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { ReturnOverridesCard } from "@/components/parameters/ReturnOverridesCard";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { SaveBar } from "@/components/ui/SaveBar";
@@ -14,6 +15,7 @@ import { getPlan, updatePlan } from "@/lib/api/plans";
 import { getParameters, updateParameters } from "@/lib/api/plans";
 import { getHoldings } from "@/lib/api/holdings";
 import { getAllocation, listScenarios, updateAllocation } from "@/lib/api/allocation";
+import { listAssumptionProfiles } from "@/lib/api/assumptions";
 import { ApiError } from "@/lib/api/client";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
@@ -29,6 +31,18 @@ import type { AssetClassTarget, PlanParameters, RegionTarget } from "@/types/api
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 const MAX_SEED = "9223372036854775807";
 const SEED_PATTERN = /^\d*$/;
+
+const RETURN_MODE_OPTIONS: { value: string; label: string }[] = [
+  { value: "blended_prior", label: "前瞻收益（历史向长期先验收缩，推荐）" },
+  { value: "custom", label: "自定义前瞻收益" },
+  { value: "historical_cagr", label: "历史 CAGR（旧模式，不建议用于长期 FIRE）" },
+];
+
+const SCENARIO_OPTIONS: { value: string; label: string }[] = [
+  { value: "conservative", label: "保守" },
+  { value: "baseline", label: "基准" },
+  { value: "optimistic", label: "乐观" },
+];
 
 function normalizeSeedInput(raw: string): string | null {
   if (raw === "") return null;
@@ -54,6 +68,7 @@ export function ParametersContent({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [gapAction, setGapAction] = useState<"" | "cash">("");
   const [highInflationConfirmed, setHighInflationConfirmed] = useState(false);
+  const [assumptionModeConfirmed, setAssumptionModeConfirmed] = useState(false);
   const [localAssetTargets, setLocalAssetTargets] = useState<AssetClassTarget[] | null>(null);
   const [localRegionTargets, setLocalRegionTargets] = useState<RegionTarget[] | null>(null);
   const [allocationDirty, setAllocationDirty] = useState(false);
@@ -76,6 +91,10 @@ export function ParametersContent({
   const scenariosQ = useQuery({
     queryKey: ["scenarios"],
     queryFn: listScenarios,
+  });
+  const assumptionProfilesQ = useQuery({
+    queryKey: ["assumption-profiles"],
+    queryFn: listAssumptionProfiles,
   });
 
   const params = localParams ?? paramsQ.data?.parameters ?? null;
@@ -118,6 +137,10 @@ export function ParametersContent({
 
   const gap = params ? params.total_assets_minor - holdingsSum : 0;
 
+  const savedAssumptionMode = paramsQ.data?.parameters.return_assumption_mode ?? "";
+  const assumptionModeChanged =
+    !!params && savedAssumptionMode !== "" && params.return_assumption_mode !== savedAssumptionMode;
+
   const saveMut = useMutation({
     mutationFn: async () => {
       if (!params || !planQ.data) throw new Error("未加载");
@@ -154,6 +177,7 @@ export function ParametersContent({
       setLocalRegionTargets(null);
       setAllocationDirty(false);
       setGapAction("");
+      setAssumptionModeConfirmed(false);
       setSaveError(null);
       void qc.invalidateQueries({ queryKey: ["plan", planId] });
       void qc.invalidateQueries({ queryKey: ["parameters", planId] });
@@ -577,6 +601,155 @@ export function ParametersContent({
       </section>
 
       <section className="rounded-lg border border-line p-4">
+        <h2 className="text-lg font-medium">收益率假设</h2>
+        <p className="mt-1 text-sm text-ink-muted">
+          通用的收益先验、波动率边界与相关性在左侧「模拟假设」统一维护，此处只选择本计划如何使用它们。
+        </p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm">
+            收益假设来源
+            <select
+              className="mt-1 w-full rounded-md border px-3 py-2"
+              value={params.return_assumption_mode}
+              onChange={(e) => update("return_assumption_mode", e.target.value)}
+            >
+              {RETURN_MODE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {params.return_assumption_mode === "blended_prior" && (
+            <label className="block text-sm">
+              情景
+              <select
+                className="mt-1 w-full rounded-md border px-3 py-2"
+                value={params.return_assumption_scenario}
+                onChange={(e) => update("return_assumption_scenario", e.target.value)}
+              >
+                {SCENARIO_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {params.return_assumption_mode === "blended_prior" && (
+            <label className="block text-sm">
+              假设集
+              <select
+                className="mt-1 w-full rounded-md border px-3 py-2"
+                value={params.assumption_selection_mode}
+                onChange={(e) => {
+                  const mode = e.target.value;
+                  if (mode === "follow_global") {
+                    update("assumption_selection_mode", mode);
+                    setLocalParams((p) =>
+                      p
+                        ? {
+                            ...p,
+                            assumption_selection_mode: mode,
+                            return_assumption_set_id: "",
+                            return_assumption_set_version: 0,
+                          }
+                        : p,
+                    );
+                  } else {
+                    const first = assumptionProfilesQ.data?.profiles.find(
+                      (pr) => pr.status === "active",
+                    );
+                    setLocalParams((p) =>
+                      p
+                        ? {
+                            ...p,
+                            assumption_selection_mode: mode,
+                            return_assumption_set_id:
+                              p.return_assumption_set_id ||
+                              first?.id ||
+                              assumptionProfilesQ.data?.preferences.default_profile_id ||
+                              "",
+                            return_assumption_set_version:
+                              p.return_assumption_set_version ||
+                              first?.version ||
+                              assumptionProfilesQ.data?.preferences.default_profile_version ||
+                              0,
+                          }
+                        : p,
+                    );
+                  }
+                }}
+              >
+                <option value="follow_global">跟随全局默认</option>
+                <option value="pinned_profile">固定指定假设集</option>
+              </select>
+            </label>
+          )}
+          {params.return_assumption_mode === "blended_prior" &&
+            params.assumption_selection_mode === "pinned_profile" && (
+              <label className="block text-sm">
+                指定假设集版本
+                <select
+                  className="mt-1 w-full rounded-md border px-3 py-2"
+                  value={`${params.return_assumption_set_id}@${params.return_assumption_set_version}`}
+                  onChange={(e) => {
+                    const [id, ver] = e.target.value.split("@");
+                    setLocalParams((p) =>
+                      p
+                        ? {
+                            ...p,
+                            return_assumption_set_id: id,
+                            return_assumption_set_version: Number(ver),
+                          }
+                        : p,
+                    );
+                  }}
+                >
+                  {(assumptionProfilesQ.data?.profiles ?? []).map((pr) => (
+                    <option key={`${pr.id}@${pr.version}`} value={`${pr.id}@${pr.version}`}>
+                      {pr.name}（{pr.id}@{pr.version}·{pr.status}）
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+        </div>
+        {params.return_assumption_mode === "blended_prior" &&
+          params.assumption_selection_mode === "follow_global" &&
+          assumptionProfilesQ.data && (
+            <p className="mt-2 text-xs text-ink-muted">
+              当前全局默认：{assumptionProfilesQ.data.preferences.default_profile_id}@
+              {assumptionProfilesQ.data.preferences.default_profile_version}（情景{" "}
+              {assumptionProfilesQ.data.preferences.default_scenario}）。可在「模拟假设」修改。
+            </p>
+          )}
+        {params.return_assumption_mode === "historical_cagr" && (
+          <p className="mt-3 rounded-md border border-danger/30 bg-danger/5 p-3 text-sm text-danger">
+            历史收益不代表未来收益。有限历史样本（尤其是高景气区间）不适合直接外推到数十年的 FIRE
+            规划，可能严重高估期末资产与成功率。仅建议用于历史复盘或兼容旧计划。
+          </p>
+        )}
+        {params.return_assumption_mode === "custom" && (
+          <p className="mt-3 rounded-md border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+            自定义前瞻收益由你自行负责其来源与合理性；请确保为「费用后、基准币种、名义几何年化」口径。
+          </p>
+        )}
+        {assumptionModeChanged && (
+          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={assumptionModeConfirmed}
+              onChange={(e) => setAssumptionModeConfirmed(e.target.checked)}
+            />
+            我确认切换收益假设来源会改变后续模拟结果，且需重新运行模拟（旧结果将标记为过期）。
+          </label>
+        )}
+      </section>
+
+      <ReturnOverridesCard planId={planId} />
+
+      <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">模拟设置</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
@@ -648,6 +821,10 @@ export function ParametersContent({
           }
           if (params.fixed_inflation_rate > 0.15 && !highInflationConfirmed) {
             setSaveError("固定通胀率超过 15%，请勾选确认。");
+            return;
+          }
+          if (assumptionModeChanged && !assumptionModeConfirmed) {
+            setSaveError("切换收益假设来源需先勾选确认。");
             return;
           }
           saveMut.mutate();

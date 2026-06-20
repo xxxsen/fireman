@@ -204,6 +204,41 @@ describe("AnalysisPage zero success", () => {
     expect(screen.getByTestId("wealth-chart")).toBeInTheDocument();
   });
 
+  it("drops the terminal_quantiles Pxx grid but keeps ordered representative paths (td/060 §2.1)", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        {
+          ...defaultSimulations.simulations[0],
+          summary_json: {
+            success_probability: 0.5,
+            // Distinct minor amount that would only appear in the removed grid.
+            terminal_quantiles: { p50: 3_000_000_00 },
+            monthly_wealth_quantiles: [{ month_offset: 0, p50_minor: 100 }],
+          },
+        },
+      ],
+    });
+
+    renderAnalysis();
+    await screen.findAllByText(/成功率 50%/);
+
+    // The interpolated terminal-quantile grid is gone.
+    expect(screen.queryByText("¥3,000,000.00")).toBeNull();
+    // The representative-path section explains it is the sole Pxx source.
+    expect(
+      await screen.findByText(/每项为期末资产最接近对应分位数的实际模拟路径/),
+    ).toBeInTheDocument();
+    // Representative path buttons remain, and render in business order P00→P50
+    // regardless of the order returned by listPaths.
+    const repButtons = screen
+      .getAllByRole("button", { name: /^P\d{2} ·/ })
+      .map((b) => b.textContent?.slice(0, 3));
+    expect(repButtons).toEqual(["P00", "P50"]);
+    // The wealth path chart (P25-P75/P50 band) is unaffected.
+    expect(screen.getByTestId("wealth-chart")).toBeInTheDocument();
+  });
+
   it("initializes simulation runs from plan parameters", async () => {
     renderAnalysis();
     const input = await screen.findByLabelText("模拟次数");

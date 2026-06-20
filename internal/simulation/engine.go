@@ -3,6 +3,7 @@ package simulation
 import (
 	"math"
 	"sort"
+	"strconv"
 )
 
 // RunOptions configures a Monte Carlo batch.
@@ -14,34 +15,37 @@ type RunOptions struct {
 
 // RunResult holds aggregated simulation output.
 type RunResult struct {
-	HorizonMonths  int
-	SuccessCount   int
-	FailureCount   int
-	Summary        Summary
-	Paths          []PathSummary
-	QuantileSeries []QuantilePoint
-	Representative map[string]int // percentile label -> path_no
+	HorizonMonths      int
+	SuccessCount       int
+	FailureCount       int
+	Summary            Summary
+	Paths              []PathSummary
+	QuantileSeries     []QuantilePoint
+	RealQuantileSeries []QuantilePoint
+	Representative     map[string]int // percentile label -> path_no
 }
 
 // Summary is the persisted aggregate simulation result.
 type Summary struct {
-	SuccessProbability      float64            `json:"success_probability"`
-	FailureProbability      float64            `json:"failure_probability"`
-	SuccessWilsonLow        float64            `json:"success_wilson_low"`
-	SuccessWilsonHigh       float64            `json:"success_wilson_high"`
-	TerminalQuantiles       map[string]int64   `json:"terminal_quantiles"`
-	MonthlyWealthQuantiles  []QuantilePoint    `json:"monthly_wealth_quantiles"`
-	SuccessTerminal         []int64            `json:"success_terminal_distribution,omitempty"`
-	FailureTerminal         []int64            `json:"failure_terminal_distribution,omitempty"`
-	FailureYearQuantiles    map[string]float64 `json:"failure_year_quantiles,omitempty"`
-	MaxDrawdownQuantiles    map[string]float64 `json:"max_drawdown_quantiles,omitempty"`
-	SpendingP50Minor        int64              `json:"spending_p50_minor"`
-	TransactionCostP50Minor int64              `json:"transaction_cost_p50_minor"`
-	FailureReasons          map[string]int     `json:"failure_reasons"`
-	TruncationPathCount     int                `json:"truncation_path_count"`
-	TruncationPathRatio     float64            `json:"truncation_path_ratio"`
-	ModelWarnings           []string           `json:"model_warnings,omitempty"`
-	CorrelationDisclaimer   string             `json:"correlation_disclaimer"`
+	SuccessProbability         float64            `json:"success_probability"`
+	FailureProbability         float64            `json:"failure_probability"`
+	SuccessWilsonLow           float64            `json:"success_wilson_low"`
+	SuccessWilsonHigh          float64            `json:"success_wilson_high"`
+	TerminalQuantiles          map[string]int64   `json:"terminal_quantiles"`
+	RealTerminalQuantiles      map[string]int64   `json:"real_terminal_quantiles,omitempty"`
+	MonthlyWealthQuantiles     []QuantilePoint    `json:"monthly_wealth_quantiles"`
+	RealMonthlyWealthQuantiles []QuantilePoint    `json:"real_monthly_wealth_quantiles,omitempty"`
+	SuccessTerminal            []int64            `json:"success_terminal_distribution,omitempty"`
+	FailureTerminal            []int64            `json:"failure_terminal_distribution,omitempty"`
+	FailureYearQuantiles       map[string]float64 `json:"failure_year_quantiles,omitempty"`
+	MaxDrawdownQuantiles       map[string]float64 `json:"max_drawdown_quantiles,omitempty"`
+	SpendingP50Minor           int64              `json:"spending_p50_minor"`
+	TransactionCostP50Minor    int64              `json:"transaction_cost_p50_minor"`
+	FailureReasons             map[string]int     `json:"failure_reasons"`
+	TruncationPathCount        int                `json:"truncation_path_count"`
+	TruncationPathRatio        float64            `json:"truncation_path_ratio"`
+	ModelWarnings              []string           `json:"model_warnings,omitempty"`
+	CorrelationDisclaimer      string             `json:"correlation_disclaimer"`
 }
 
 // QuantilePoint is one month of wealth quantiles.
@@ -89,24 +93,30 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 	}
 
 	terminals := make([]float64, len(paths))
+	realTerminals := make([]float64, len(paths))
 	monthlyByPath := make([][]int64, len(paths))
+	realMonthlyByPath := make([][]int64, len(paths))
 	for i, p := range paths {
 		terminals[i] = float64(p.TerminalWealthMinor)
+		realTerminals[i] = float64(p.RealTerminalWealthMinor)
 		monthlyByPath[i] = p.MonthlyWealthMinor
+		realMonthlyByPath[i] = realWealthSeries(p.MonthlyWealthMinor, p.MonthlyCumInflation)
 	}
 
 	low, high := WilsonInterval(success, len(paths), 1.96)
 	summary := Summary{
-		SuccessProbability:     float64(success) / float64(len(paths)),
-		FailureProbability:     float64(len(paths)-success) / float64(len(paths)),
-		SuccessWilsonLow:       low,
-		SuccessWilsonHigh:      high,
-		TerminalQuantiles:      terminalQuantiles(terminals),
-		MonthlyWealthQuantiles: monthlyQuantileSeries(monthlyByPath),
-		FailureReasons:         failureReasonCounts(paths),
-		TruncationPathCount:    truncPaths,
-		TruncationPathRatio:    float64(truncPaths) / float64(len(paths)),
-		CorrelationDisclaimer:  "未使用基金间历史相关性，分散化结果可能偏乐观",
+		SuccessProbability:         float64(success) / float64(len(paths)),
+		FailureProbability:         float64(len(paths)-success) / float64(len(paths)),
+		SuccessWilsonLow:           low,
+		SuccessWilsonHigh:          high,
+		TerminalQuantiles:          terminalQuantiles(terminals),
+		RealTerminalQuantiles:      terminalQuantiles(realTerminals),
+		MonthlyWealthQuantiles:     monthlyQuantileSeries(monthlyByPath),
+		RealMonthlyWealthQuantiles: monthlyQuantileSeries(realMonthlyByPath),
+		FailureReasons:             failureReasonCounts(paths),
+		TruncationPathCount:        truncPaths,
+		TruncationPathRatio:        float64(truncPaths) / float64(len(paths)),
+		CorrelationDisclaimer:      "未使用基金间历史相关性，分散化结果可能偏乐观",
 	}
 	summary.SuccessTerminal, summary.FailureTerminal = splitTerminals(paths)
 	summary.FailureYearQuantiles = failureYearQuantiles(paths, in.Parameters.CurrentAge)
@@ -117,18 +127,73 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 		summary.ModelWarnings = append(summary.ModelWarnings, "超过 0.1% 的路径出现收益截断，请关注尾部风险")
 	}
 	summary.ModelWarnings = append(summary.ModelWarnings, collectDataWarnings(in)...)
+	applyCorrelationModelSummary(&summary, in)
 
 	rep := pickRepresentativePaths(paths, summary.TerminalQuantiles)
 
 	return RunResult{
-		HorizonMonths:  horizon,
-		SuccessCount:   success,
-		FailureCount:   len(paths) - success,
-		Summary:        summary,
-		Paths:          paths,
-		QuantileSeries: summary.MonthlyWealthQuantiles,
-		Representative: rep,
+		HorizonMonths:      horizon,
+		SuccessCount:       success,
+		FailureCount:       len(paths) - success,
+		Summary:            summary,
+		Paths:              paths,
+		QuantileSeries:     summary.MonthlyWealthQuantiles,
+		RealQuantileSeries: summary.RealMonthlyWealthQuantiles,
+		Representative:     rep,
 	}
+}
+
+// applyCorrelationModelSummary replaces the legacy independent-factor disclaimer
+// with an accurate description when the run uses the joint factor model, and
+// surfaces the frozen correlation/PSD-repair warnings (td/061 §3.5.2, §8.3).
+func applyCorrelationModelSummary(summary *Summary, in *InputSnapshot) {
+	if in.FactorModel == nil {
+		return
+	}
+	audit := in.FactorModel.Audit
+	priorOnly := len(audit.PriorOnlyPairs) > 0
+	if priorOnly {
+		summary.CorrelationDisclaimer = "资产间相关性主要来自假设集先验（历史共同月份不足），" +
+			"已使用联合厚尾因子模型，分散化结果偏保守"
+	} else {
+		summary.CorrelationDisclaimer = "已使用基金/FX 间相关性的联合厚尾因子模型，" +
+			"极端月度收益会共同发生"
+	}
+	for _, w := range audit.Warnings {
+		summary.ModelWarnings = append(summary.ModelWarnings, factorWarningText(w, audit.MaxRepairDelta))
+	}
+	if priorOnly {
+		summary.ModelWarnings = append(summary.ModelWarnings,
+			"部分资产相关性依赖先验，请在“模拟假设”核对相关性矩阵")
+	}
+}
+
+func factorWarningText(code string, repair float64) string {
+	switch code {
+	case "correlation_psd_repair_significant":
+		return "相关性矩阵 PSD 修复幅度较大（" +
+			strconvFloat(repair) + "），联合风险结果可能受影响"
+	default:
+		return code
+	}
+}
+
+func strconvFloat(v float64) string {
+	return strconv.FormatFloat(v, 'f', 4, 64)
+}
+
+// realWealthSeries deflates a path's nominal monthly wealth by its own realized
+// cumulative inflation, month by month, into start-of-plan purchasing power.
+func realWealthSeries(nominal []int64, cumInflation []float64) []int64 {
+	out := make([]int64, len(nominal))
+	for i, v := range nominal {
+		factor := 1.0
+		if i < len(cumInflation) {
+			factor = cumInflation[i]
+		}
+		out[i] = deflate(v, factor)
+	}
+	return out
 }
 
 func terminalQuantiles(vals []float64) map[string]int64 {

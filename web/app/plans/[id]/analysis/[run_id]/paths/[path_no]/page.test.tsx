@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 
@@ -16,6 +16,8 @@ const monthly = Array.from({ length: 240 }, (_, i) => ({
   transaction_cost: 100_00,
   drawdown: 0.01 * (i % 10),
   rebalanced: i % 12 === 0,
+  cum_inflation: 1 + i * 0.001,
+  real_total_wealth_minor: Math.round((1_000_000_00 - i * 1000_00) * 0.5),
 }));
 
 const yearly = Array.from({ length: 20 }, (_, i) => ({
@@ -29,8 +31,12 @@ const yearly = Array.from({ length: 20 }, (_, i) => ({
   end_wealth_minor: 900_000_00,
   year_end_drawdown: 0.05,
   max_intra_year_dd: 0.08,
+  annual_return: 0.0512,
   rebalanced: true,
   asset_weights: { equity: 0.7, bond: 0.3 },
+  cum_inflation: 1.2,
+  real_start_wealth_minor: 800_000_00,
+  real_end_wealth_minor: 450_000_00,
 }));
 
 const mockGetPathDetail = vi.hoisted(() => vi.fn());
@@ -68,7 +74,47 @@ describe("PathDetailPage", () => {
     expect(screen.getByText(/共 20 行/)).toBeInTheDocument();
     expect(screen.getByText("投资损益")).toBeInTheDocument();
     expect(screen.getByText("年内最大回撤")).toBeInTheDocument();
-    expect(screen.getByText("年末权重")).toBeInTheDocument();
+    // td/060 §2.3: 年末收益率 added next to the retained 年末回撤 column.
+    expect(screen.getByRole("columnheader", { name: "年末收益率" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /年末回撤/ })).toBeInTheDocument();
+    expect(screen.getAllByText("5.12%").length).toBeGreaterThan(0);
+    // td/060 §2.2: weights collapsed under 年末配置 / per-row 查看 controls.
+    expect(screen.getByRole("columnheader", { name: "年末配置" })).toBeInTheDocument();
+    expect(screen.queryByText("年末权重")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /查看 \d+ 年末资产配置/ })).toHaveLength(20);
+  });
+
+  it("toggles wealth columns between nominal and real purchasing power (td/061 §5.5)", async () => {
+    mockGetPathDetail.mockResolvedValue({
+      path_no: 0,
+      path_seed: "1",
+      succeeded: true,
+      monthly,
+      yearly,
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <PathDetailPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText(/月度 \(240\)/);
+    // Default nominal: terminal card shows last nominal wealth ¥76.10w.
+    expect(screen.getByRole("columnheader", { name: "资产（名义金额）" })).toBeInTheDocument();
+    expect(screen.getAllByText("¥76.10w").length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "起点购买力" }));
+    // Real: last real wealth = round(76,100,000 * 0.5) = 38,050,000 -> ¥38.05w.
+    expect(screen.getByRole("columnheader", { name: "资产（起点购买力）" })).toBeInTheDocument();
+    expect(screen.getAllByText("¥38.05w").length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /年度 \(20\)/ }));
+    expect(screen.getByRole("columnheader", { name: "年初资产（起点购买力）" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "期末资产（起点购买力）" })).toBeInTheDocument();
+    // Real year-end wealth 450,000,00 -> ¥45.00w (distinct from nominal ¥90.00w).
+    expect(screen.getAllByText("¥45.00w").length).toBeGreaterThan(0);
   });
 
   it("renders first/last monthly rows and all money in ¥xx.xxw format (td/056 §2.2/§3.1)", async () => {
@@ -96,7 +142,7 @@ describe("PathDetailPage", () => {
     expect(screen.queryByText(/¥[\d,]{4,}\.\d{2}(?!w)/)).toBeNull();
   });
 
-  it("renders yearly weights as 名称（代码） / 现金 / 未知资产, never holding IDs (td/056 §3.2)", async () => {
+  it("opens year-end weights via 查看 tooltip with graceful labels, never holding IDs (td/060 §2.2)", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -134,11 +180,102 @@ describe("PathDetailPage", () => {
     expect(await screen.findByText(/月度 \(240\)/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /年度 \(1\)/ }));
 
+    // Weights are not inline; they sit behind a labeled 查看 control.
+    expect(screen.queryByText(/沪深300ETF（510300）: 70\.00%/)).toBeNull();
+    const viewBtn = screen.getByRole("button", { name: "查看 2026 年末资产配置" });
+
+    // Hover opens the tooltip.
+    fireEvent.mouseEnter(viewBtn);
     expect(screen.getByText(/沪深300ETF（510300）: 70\.00%/)).toBeInTheDocument();
     expect(screen.getByText(/现金\/其他: 20\.00%/)).toBeInTheDocument();
     // Missing label degrades to 未知资产, never a holding UUID.
     expect(screen.getByText(/未知资产: 10\.00%/)).toBeInTheDocument();
     expect(screen.queryByText(/hold_/)).toBeNull();
+  });
+
+  it("year-end config control opens on keyboard focus and click (td/060 §2.2)", async () => {
+    mockGetPathDetail.mockResolvedValue({
+      path_no: 0,
+      path_seed: "1",
+      succeeded: true,
+      monthly,
+      yearly: [{ ...yearly[0], asset_weights: { hold_eq: 1 } }],
+      asset_labels: {
+        hold_eq: {
+          instrument_name: "沪深300ETF",
+          instrument_code: "510300",
+          asset_class: "equity",
+          is_cash: false,
+        },
+      },
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <PathDetailPage />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/月度 \(240\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /年度 \(1\)/ }));
+
+    const viewBtn = screen.getByRole("button", { name: "查看 2026 年末资产配置" });
+    // Keyboard focus opens it.
+    fireEvent.focus(viewBtn);
+    expect(screen.getByText(/沪深300ETF（510300）: 100\.00%/)).toBeInTheDocument();
+    // td/062 R3: a click actually toggles it closed, then open again.
+    fireEvent.click(viewBtn);
+    expect(screen.queryByText(/沪深300ETF（510300）: 100\.00%/)).toBeNull();
+    fireEvent.click(viewBtn);
+    expect(screen.getByText(/沪深300ETF（510300）: 100\.00%/)).toBeInTheDocument();
+  });
+
+  it("renders — for a null annual_return (td/062 R3)", async () => {
+    mockGetPathDetail.mockResolvedValue({
+      path_no: 0,
+      path_seed: "1",
+      succeeded: true,
+      monthly,
+      yearly: [{ ...yearly[0], annual_return: null }],
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <PathDetailPage />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/月度 \(240\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /年度 \(1\)/ }));
+    // No 5.12% return is shown; the cell falls back to —.
+    expect(screen.queryByText("5.12%")).toBeNull();
+    const rows = screen.getAllByRole("row");
+    const dataRow = rows[rows.length - 1]!;
+    expect(within(dataRow).getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("renders — for years without weights and creates no 查看 control (td/060 §2.2)", async () => {
+    mockGetPathDetail.mockResolvedValue({
+      path_no: 0,
+      path_seed: "1",
+      succeeded: true,
+      monthly,
+      yearly: [{ ...yearly[0], asset_weights: {} }],
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <PathDetailPage />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/月度 \(240\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /年度 \(1\)/ }));
+
+    expect(screen.queryByRole("button", { name: /年末资产配置/ })).toBeNull();
+    const rows = screen.getAllByRole("row");
+    const dataRow = rows[rows.length - 1]!;
+    expect(within(dataRow).getByText("—")).toBeInTheDocument();
   });
 
   it("shows empty state when monthly/yearly are empty (td/056 §3.1)", async () => {

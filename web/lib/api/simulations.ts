@@ -1,5 +1,12 @@
-import type { JobEvent, PathDetail, PathIndexRow, SimulationRun } from "@/types/api";
-import { apiGet, apiPost } from "./client";
+import type {
+  JobEvent,
+  PathDetail,
+  PathIndexRow,
+  ReturnOverride,
+  ScenarioComparison,
+  SimulationRun,
+} from "@/types/api";
+import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export function createSimulation(
   planId: string,
@@ -26,6 +33,36 @@ export function listPaths(runId: string): Promise<{ paths: PathIndexRow[] }> {
 
 export function getPathDetail(runId: string, pathNo: number): Promise<PathDetail> {
   return apiGet(`/api/v1/simulations/${runId}/paths/${pathNo}`);
+}
+
+export function getScenarioComparison(planId: string): Promise<ScenarioComparison> {
+  return apiGet(`/api/v1/plans/${planId}/scenario-comparison`);
+}
+
+export function getReturnOverrides(
+  planId: string,
+): Promise<{ overrides: ReturnOverride[] }> {
+  return apiGet(`/api/v1/plans/${planId}/return-overrides`);
+}
+
+export function setReturnOverride(
+  planId: string,
+  instrumentId: string,
+  body: {
+    forward_return: number | null;
+    annual_volatility: number | null;
+    reason: string;
+    expires_at: string;
+  },
+): Promise<ReturnOverride> {
+  return apiPut(`/api/v1/plans/${planId}/return-overrides/${instrumentId}`, body);
+}
+
+export function deleteReturnOverride(
+  planId: string,
+  instrumentId: string,
+): Promise<{ deleted: boolean }> {
+  return apiDelete(`/api/v1/plans/${planId}/return-overrides/${instrumentId}`);
 }
 
 export function getJob(jobId: string) {

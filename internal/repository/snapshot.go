@@ -57,7 +57,62 @@ func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap 
 		snap.SourceMode, snap.QualityStatus, snap.WarningsJSON, snap.SourceHash, snap.CreatedAt); err != nil {
 		return wrapSQL("insert simulation snapshot", err)
 	}
-	return r.replaceSnapshotYears(ctx, tx, snap.ID, snap.Years)
+	if err := r.replaceSnapshotYears(ctx, tx, snap.ID, snap.Years); err != nil {
+		return err
+	}
+	return r.replaceSnapshotMonths(ctx, tx, snap.ID, snap.Months)
+}
+
+func (r *SnapshotRepo) replaceSnapshotMonths(ctx context.Context, tx *sql.Tx, snapshotID string,
+	months []SnapshotMonth,
+) error {
+	run := func(q string, args ...any) error {
+		var e error
+		if tx != nil {
+			_, e = tx.ExecContext(ctx, q, args...)
+		} else {
+			_, e = r.db.ExecContext(ctx, q, args...)
+		}
+		return wrapSQL("exec snapshot sql", e)
+	}
+	if err := run(`DELETE FROM instrument_simulation_snapshot_months WHERE snapshot_id=?`, snapshotID); err != nil {
+		return wrapSQL("delete snapshot months", err)
+	}
+	for _, m := range months {
+		if err := run(`
+			INSERT INTO instrument_simulation_snapshot_months (
+				snapshot_id, year, month, log_return
+			) VALUES (?,?,?,?)`,
+			snapshotID, m.Year, m.Month, m.LogReturn); err != nil {
+			return fmt.Errorf("insert snapshot month %d-%02d: %w", m.Year, m.Month, err)
+		}
+	}
+	return nil
+}
+
+// ListSnapshotMonths returns the frozen monthly log-return series for a snapshot
+// (td/061 §4.1.6), ordered chronologically. It is loaded on demand (not by
+// GetByID) so only the joint factor model build pays for it.
+//
+//nolint:dupl // generic query/scan loop shared with other simple list readers
+func (r *SnapshotRepo) ListSnapshotMonths(ctx context.Context, snapshotID string) ([]SnapshotMonth, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT year, month, log_return
+		FROM instrument_simulation_snapshot_months
+		WHERE snapshot_id=? ORDER BY year, month`, snapshotID)
+	if err != nil {
+		return nil, wrapSQL("list snapshot months", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []SnapshotMonth
+	for rows.Next() {
+		var m SnapshotMonth
+		if err := rows.Scan(&m.Year, &m.Month, &m.LogReturn); err != nil {
+			return nil, wrapSQL("scan snapshot month", err)
+		}
+		out = append(out, m)
+	}
+	return out, wrapSQL("iterate snapshot months", rows.Err())
 }
 
 func (r *SnapshotRepo) replaceSnapshotYears(ctx context.Context, tx *sql.Tx, snapshotID string,
@@ -117,6 +172,9 @@ type SimulationSnapshot struct {
 	SourceHash            string         `json:"source_hash"`
 	CreatedAt             int64          `json:"created_at"`
 	Years                 []SnapshotYear `json:"years,omitempty"`
+	// Months is the frozen monthly log-return series; populated only when the
+	// caller explicitly loads it (joint factor model build), never by GetByID.
+	Months []SnapshotMonth `json:"months,omitempty"`
 }
 
 // SnapshotYear is one row in instrument_simulation_snapshot_years.
@@ -126,6 +184,13 @@ type SnapshotYear struct {
 	StartDate    string  `json:"start_date"`
 	EndDate      string  `json:"end_date"`
 	Observations int     `json:"observations"`
+}
+
+// SnapshotMonth is one row in instrument_simulation_snapshot_months.
+type SnapshotMonth struct {
+	Year      int     `json:"year"`
+	Month     int     `json:"month"`
+	LogReturn float64 `json:"log_return"`
 }
 
 func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapshot, error) {

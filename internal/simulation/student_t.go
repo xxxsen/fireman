@@ -15,9 +15,12 @@ type AssetReturnParams struct {
 	MonthlySigma float64
 }
 
-// ParamsFromAnnual derives monthly log-return parameters from annual metrics.
-func ParamsFromAnnual(modeledAnnualReturn, annualVolatility float64) AssetReturnParams {
-	annualLogMean := math.Log(1 + modeledAnnualReturn)
+// ParamsFromAnnual derives monthly log-return parameters from the forward annual
+// GEOMETRIC return and annual volatility. The monthly log drift is
+// ln(1+annualGeometricReturn)/12, so 12 months of unperturbed compounding
+// reproduce the annual geometric return exactly (no arithmetic-return mixing).
+func ParamsFromAnnual(annualGeometricReturn, annualVolatility float64) AssetReturnParams {
+	annualLogMean := math.Log(1 + annualGeometricReturn)
 	return AssetReturnParams{
 		MonthlyMu:    annualLogMean / 12,
 		MonthlySigma: annualVolatility / math.Sqrt(12),

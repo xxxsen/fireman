@@ -507,14 +507,8 @@ func (r *SimulationRunner) RunSimulation(
 		})
 	}
 
-	qRows := make([]repository.QuantileSeriesRow, len(result.QuantileSeries))
-	for i, q := range result.QuantileSeries {
-		qRows[i] = repository.QuantileSeriesRow{
-			RunID: runID, MonthOffset: q.MonthOffset,
-			P00Minor: q.P00Minor, P05Minor: q.P05Minor, P25Minor: q.P25Minor,
-			P50Minor: q.P50Minor, P75Minor: q.P75Minor, P95Minor: q.P95Minor,
-		}
-	}
+	qRows := quantileRows(runID, result.QuantileSeries)
+	realRows := quantileRows(runID, result.RealQuantileSeries)
 
 	if err := fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
 		if err := r.sims.Complete(ctx, tx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
@@ -526,9 +520,25 @@ func (r *SimulationRunner) RunSimulation(
 		if err := r.sims.ReplaceQuantileSeries(ctx, tx, runID, qRows); err != nil {
 			return fmt.Errorf("replace quantile series: %w", err)
 		}
+		if err := r.sims.ReplaceRealQuantileSeries(ctx, tx, runID, realRows); err != nil {
+			return fmt.Errorf("replace real quantile series: %w", err)
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("persist simulation run: %w", err)
 	}
 	return nil
+}
+
+// quantileRows maps an engine quantile series to repository rows for a run.
+func quantileRows(runID string, series []simulation.QuantilePoint) []repository.QuantileSeriesRow {
+	out := make([]repository.QuantileSeriesRow, len(series))
+	for i, q := range series {
+		out[i] = repository.QuantileSeriesRow{
+			RunID: runID, MonthOffset: q.MonthOffset,
+			P00Minor: q.P00Minor, P05Minor: q.P05Minor, P25Minor: q.P25Minor,
+			P50Minor: q.P50Minor, P75Minor: q.P75Minor, P95Minor: q.P95Minor,
+		}
+	}
+	return out
 }

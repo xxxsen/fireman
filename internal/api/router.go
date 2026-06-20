@@ -49,6 +49,7 @@ func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
 	deps.Services.registerScenarioRoutes(v1)
 	deps.Services.registerInstrumentRoutes(v1)
 	deps.Services.registerSimulationRoutes(v1)
+	deps.Services.registerAssumptionRoutes(v1)
 	deps.Services.registerAnalysisRoutes(v1)
 	deps.Services.registerJobRoutes(v1)
 	deps.Services.registerSystemRoutes(v1)

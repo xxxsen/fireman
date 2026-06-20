@@ -64,10 +64,39 @@ vi.mock("@/lib/api/plans", () => ({
         transaction_cost_rate: 0,
         simulation_runs: 10000,
         student_t_df: 7,
+        return_assumption_mode: "blended_prior",
+        assumption_selection_mode: "follow_global",
+        return_assumption_set_id: "",
+        return_assumption_set_version: 0,
+        return_assumption_scenario: "baseline",
         updated_at: 0,
       },
     }),
   updateParameters: (...args: unknown[]) => updateParameters(...args),
+}));
+
+vi.mock("@/lib/api/assumptions", () => ({
+  listAssumptionProfiles: () =>
+    Promise.resolve({
+      profiles: [
+        {
+          id: "system_cma_v1",
+          version: 1,
+          owner_scope: "system",
+          name: "系统默认（CMA v1）",
+          status: "active",
+          content_hash: "h",
+          created_at: 0,
+          updated_at: 0,
+        },
+      ],
+      preferences: {
+        default_profile_id: "system_cma_v1",
+        default_profile_version: 1,
+        default_scenario: "baseline",
+      },
+      scenarios: ["conservative", "baseline", "optimistic"],
+    }),
 }));
 
 const holdingsSumMinor = vi.hoisted(() => ({ value: 1_000_000_00 }));
@@ -275,6 +304,36 @@ describe("ParametersPage strategy enums", () => {
     };
     expect(req.parameters.withdrawal_type).toBe("fixed_portfolio");
     expect(req.parameters.inflation_mode).toBe("random_ar1");
+  });
+
+  it("requires confirmation before switching the return-assumption mode (td/061 §4.2.3)", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage showAllocation={false} showStale={false} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("收益率假设");
+    fireEvent.change(screen.getByLabelText("收益假设来源"), {
+      target: { value: "historical_cagr" },
+    });
+    expect(screen.getByText(/历史收益不代表未来收益/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(screen.getByText(/切换收益假设来源需先勾选确认/)).toBeInTheDocument();
+    expect(updateParameters).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /我确认切换收益假设来源/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(updateParameters).toHaveBeenCalledTimes(1));
+    const req = updateParameters.mock.calls[0]![1] as {
+      parameters: { return_assumption_mode: string };
+    };
+    expect(req.parameters.return_assumption_mode).toBe("historical_cagr");
   });
 
   it("renders the plan baseline help inline with its label (td/049 §5)", async () => {

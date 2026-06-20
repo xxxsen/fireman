@@ -10,10 +10,11 @@ import (
 
 // ConfigHashService computes configuration hashes for change detection.
 type ConfigHashService struct {
-	plans    *repository.PlanRepo
-	params   *repository.ParametersRepo
-	alloc    *repository.AllocationRepo
-	holdings *repository.HoldingsRepo
+	plans     *repository.PlanRepo
+	params    *repository.ParametersRepo
+	alloc     *repository.AllocationRepo
+	holdings  *repository.HoldingsRepo
+	overrides *repository.ReturnOverrideRepo
 }
 
 func NewConfigHashService(
@@ -21,8 +22,9 @@ func NewConfigHashService(
 	params *repository.ParametersRepo,
 	alloc *repository.AllocationRepo,
 	holdings *repository.HoldingsRepo,
+	overrides *repository.ReturnOverrideRepo,
 ) *ConfigHashService {
-	return &ConfigHashService{plans: plans, params: params, alloc: alloc, holdings: holdings}
+	return &ConfigHashService{plans: plans, params: params, alloc: alloc, holdings: holdings, overrides: overrides}
 }
 
 func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string, error) {
@@ -42,6 +44,10 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 	if err != nil {
 		return "", fmt.Errorf("list holdings: %w", err)
 	}
+	overrides, err := s.overrides.ListByPlan(ctx, planID)
+	if err != nil {
+		return "", fmt.Errorf("list return overrides: %w", err)
+	}
 
 	in := domain.ConfigHashInput{
 		PlanID:        planID,
@@ -51,7 +57,7 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 		Parameters:    parametersToMap(params),
 		AssetClass:    assetClassToMaps(alloc.AssetClassTargets),
 		RegionTargets: regionToMaps(alloc.RegionTargets),
-		Holdings:      holdingsToMaps(holds),
+		Holdings:      holdingsToMaps(holds, overrides),
 	}
 	hash, err := domain.ComputeConfigHash(in)
 	if err != nil {
@@ -86,6 +92,17 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		"transaction_cost_rate":       p.TransactionCostRate,
 		"simulation_runs":             p.SimulationRuns,
 		"student_t_df":                p.StudentTDf,
+		// td/061: the return-assumption selection is part of the plan config, so
+		// switching mode/profile/version/scenario marks existing runs stale and
+		// changes the input hash (§6.1.6, §6.2.4).
+		"return_assumption_mode":        p.ReturnAssumptionMode,
+		"assumption_selection_mode":     p.AssumptionSelectionMode,
+		"return_assumption_set_id":      p.ReturnAssumptionSetID,
+		"return_assumption_set_version": p.ReturnAssumptionSetVersion,
+		"return_assumption_scenario":    p.ReturnAssumptionScenario,
+	}
+	if p.CustomReturnAssumptionsJSON != "" {
+		m["custom_return_assumptions_json"] = p.CustomReturnAssumptionsJSON
 	}
 	if p.SelectedScenarioID != nil {
 		m["selected_scenario_id"] = *p.SelectedScenarioID
@@ -115,16 +132,32 @@ func regionToMaps(targets []repository.RegionTarget) []map[string]any {
 	return out
 }
 
-func holdingsToMaps(holds []repository.PlanHolding) []map[string]any {
+func holdingsToMaps(holds []repository.PlanHolding,
+	overrides []repository.PlanReturnOverride,
+) []map[string]any {
+	byInstrument := make(map[string]repository.PlanReturnOverride, len(overrides))
+	for _, o := range overrides {
+		byInstrument[o.InstrumentID] = o
+	}
 	out := make([]map[string]any, 0, len(holds))
 	for _, h := range holds {
-		out = append(out, map[string]any{
+		m := map[string]any{
 			"instrument_id": h.InstrumentID, "enabled": h.Enabled,
 			"weight_within_group":    h.WeightWithinGroup,
 			"current_amount_minor":   h.CurrentAmountMinor,
 			"simulation_snapshot_id": h.SimulationSnapshotID,
 			"sort_order":             h.SortOrder,
-		})
+		}
+		// Fold the asset-level override into the hash so editing it marks existing
+		// runs stale and changes the input hash (td/061 §4.1.5). Overrides for
+		// instruments not held don't affect simulation, so they're ignored here.
+		if o, ok := byInstrument[h.InstrumentID]; ok {
+			m["override_forward_return"] = o.ForwardReturn
+			m["override_annual_volatility"] = o.AnnualVolatility
+			m["override_reason"] = o.Reason
+			m["override_expires_at"] = o.ExpiresAt
+		}
+		out = append(out, m)
 	}
 	return out
 }

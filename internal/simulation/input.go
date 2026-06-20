@@ -8,8 +8,29 @@ import (
 	"sort"
 )
 
-// EngineVersion is bumped when simulation semantics change.
-const EngineVersion = "2.0.0"
+// EngineVersion is bumped when simulation semantics change. 3.0.0 introduces the
+// forward-return calibration and the joint (correlated, shared fat-tail) factor
+// model. 2.x snapshots continue to replay with the independent per-asset sampler
+// and their frozen ModeledAnnualReturn so old runs reproduce exactly (td/061).
+const EngineVersion = "3.0.0"
+
+// LegacyEngineVersion is the pre-td/061 independent-factor engine. Snapshots
+// frozen at this version must keep replaying with the independent sampler.
+const LegacyEngineVersion = "2.0.0"
+
+// Random factor model identifiers (InputSnapshot.RandomFactorModel).
+const (
+	FactorModelIndependent  = "independent_student_t"
+	FactorModelMultivariate = "multivariate_student_t"
+)
+
+// FactorRef maps one asset slot to its factor indices in the frozen FactorModel.
+// AssetFactorIndex is -1 for cash (no sampled return); FXFactorIndex is -1 when
+// the asset needs no separate FX factor (base-currency or CNY-priced QDII).
+type FactorRef struct {
+	AssetFactorIndex int `json:"asset_factor_index"`
+	FXFactorIndex    int `json:"fx_factor_index"`
+}
 
 // SnapshotYear is one complete year in a holding snapshot.
 type SnapshotYear struct {
@@ -22,36 +43,59 @@ type SnapshotYear struct {
 
 // SnapshotAsset is one simulated asset frozen at job creation.
 type SnapshotAsset struct {
-	HoldingID            string         `json:"holding_id"`
-	InstrumentID         string         `json:"instrument_id"`
-	InstrumentName       string         `json:"instrument_name,omitempty"`
-	InstrumentCode       string         `json:"instrument_code,omitempty"`
-	SnapshotID           string         `json:"snapshot_id"`
-	Currency             string         `json:"currency"`
-	AssetClass           string         `json:"asset_class"`
-	IsCash               bool           `json:"is_cash"`
-	InitialMinor         int64          `json:"initial_minor"`
-	TargetWeight         float64        `json:"target_weight"`
-	ModeledAnnualReturn  float64        `json:"modeled_annual_return"`
-	AnnualVolatility     float64        `json:"annual_volatility"`
-	MaxDrawdown          float64        `json:"max_drawdown"`
-	FeeTreatment         string         `json:"fee_treatment"`
-	ExpenseRatio         *float64       `json:"expense_ratio,omitempty"`
-	SourceHash           string         `json:"source_hash"`
-	Years                []SnapshotYear `json:"years"`
-	CompleteYearCount    int            `json:"complete_year_count"`
-	MonthlyReturnCount   int            `json:"monthly_return_count"`
-	HistoryDepth         string         `json:"history_depth"`
-	MetricsVersion       string         `json:"metrics_version"`
-	DataWarnings         []string       `json:"data_warnings,omitempty"`
-	FXSnapshotID         string         `json:"fx_snapshot_id,omitempty"`
-	FXModeledReturn      float64        `json:"fx_modeled_return,omitempty"`
-	FXAnnualVolatility   float64        `json:"fx_annual_volatility,omitempty"`
-	FXCompleteYearCount  int            `json:"fx_complete_year_count,omitempty"`
-	FXMonthlyReturnCount int            `json:"fx_monthly_return_count,omitempty"`
-	FXHistoryDepth       string         `json:"fx_history_depth,omitempty"`
-	FXMetricsVersion     string         `json:"fx_metrics_version,omitempty"`
-	FXDataWarnings       []string       `json:"fx_data_warnings,omitempty"`
+	HoldingID           string  `json:"holding_id"`
+	InstrumentID        string  `json:"instrument_id"`
+	InstrumentName      string  `json:"instrument_name,omitempty"`
+	InstrumentCode      string  `json:"instrument_code,omitempty"`
+	SnapshotID          string  `json:"snapshot_id"`
+	Currency            string  `json:"currency"`
+	AssetClass          string  `json:"asset_class"`
+	Region              string  `json:"region,omitempty"`
+	IsCash              bool    `json:"is_cash"`
+	InitialMinor        int64   `json:"initial_minor"`
+	TargetWeight        float64 `json:"target_weight"`
+	ModeledAnnualReturn float64 `json:"modeled_annual_return"`
+	AnnualVolatility    float64 `json:"annual_volatility"`
+	MaxDrawdown         float64 `json:"max_drawdown"`
+	// td/061 forward-return calibration audit fields. These are frozen at run
+	// creation so a run can always explain how its drift was derived. Historical
+	// facts (HistoricalAnnualGeometricReturn) and the value actually fed to the
+	// engine (ForwardAnnualGeometricReturn == ModeledAnnualReturn) are kept
+	// separate and never mixed.
+	HistoricalAnnualGeometricReturn float64        `json:"historical_annual_geometric_return,omitempty"`
+	ForwardAnnualGeometricReturn    float64        `json:"forward_annual_geometric_return,omitempty"`
+	ForwardLogReturn                float64        `json:"forward_log_return,omitempty"`
+	AnnualVolatilityUsed            float64        `json:"annual_volatility_used,omitempty"`
+	ReturnAssumptionSource          string         `json:"return_assumption_source,omitempty"`
+	ReturnAssumptionSetID           string         `json:"return_assumption_set_id,omitempty"`
+	ReturnAssumptionSetVersion      int            `json:"return_assumption_set_version,omitempty"`
+	ReturnAssumptionScenario        string         `json:"return_assumption_scenario,omitempty"`
+	ReturnSampleYears               int            `json:"return_sample_years,omitempty"`
+	ReturnHistoricalWeight          float64        `json:"return_historical_weight,omitempty"`
+	ReturnWarnings                  []string       `json:"return_warnings,omitempty"`
+	FeeTreatment                    string         `json:"fee_treatment"`
+	ExpenseRatio                    *float64       `json:"expense_ratio,omitempty"`
+	SourceHash                      string         `json:"source_hash"`
+	Years                           []SnapshotYear `json:"years"`
+	CompleteYearCount               int            `json:"complete_year_count"`
+	MonthlyReturnCount              int            `json:"monthly_return_count"`
+	HistoryDepth                    string         `json:"history_depth"`
+	MetricsVersion                  string         `json:"metrics_version"`
+	DataWarnings                    []string       `json:"data_warnings,omitempty"`
+	FXSnapshotID                    string         `json:"fx_snapshot_id,omitempty"`
+	FXModeledReturn                 float64        `json:"fx_modeled_return,omitempty"`
+	FXAnnualVolatility              float64        `json:"fx_annual_volatility,omitempty"`
+	FXCompleteYearCount             int            `json:"fx_complete_year_count,omitempty"`
+	FXMonthlyReturnCount            int            `json:"fx_monthly_return_count,omitempty"`
+	FXHistoryDepth                  string         `json:"fx_history_depth,omitempty"`
+	FXMetricsVersion                string         `json:"fx_metrics_version,omitempty"`
+	FXDataWarnings                  []string       `json:"fx_data_warnings,omitempty"`
+	// Months / FXMonths freeze the complete-year monthly log-return series (keyed
+	// "YYYY-MM") used to estimate historical correlations in the joint factor
+	// model (td/061 §3.5.1 / §4.1.6). Empty means the pair falls back to the
+	// profile correlation prior.
+	Months   map[string]float64 `json:"months,omitempty"`
+	FXMonths map[string]float64 `json:"fx_months,omitempty"`
 }
 
 // SnapshotParameters are plan FIRE parameters frozen for a run.
@@ -93,6 +137,10 @@ type InputSnapshot struct {
 	Assets             []SnapshotAsset    `json:"assets"`
 	ConfigHash         string             `json:"config_hash"`
 	MarketSnapshotHash string             `json:"market_snapshot_hash"`
+	// td/061 joint risk model. Present only for multivariate (3.0.0) runs;
+	// nil for legacy independent (2.x) snapshots so old runs replay unchanged.
+	FactorModel     *FactorModel `json:"factor_model,omitempty"`
+	AssetFactorRefs []FactorRef  `json:"asset_factor_refs,omitempty"`
 }
 
 // HorizonMonths returns the simulated month count.

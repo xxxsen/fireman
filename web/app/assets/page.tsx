@@ -8,7 +8,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   assetClassLabel,
   dataSourceLabel,
-  formatNullablePercent,
+  formatTrailingReturnsSummary,
   instrumentSimulationStatusLabel,
   instrumentStatusLabel,
   qualityStatusLabel,
@@ -161,16 +161,12 @@ function InstrumentRowActions({ inst }: { inst: Instrument }) {
   );
 }
 
-/** Mobile card line: `截至 YYYY-MM-DD · 近1年 x.xx% · 近3年 x.xx% · 近5年 x.xx%`. */
+/** Mobile card line: `截至 YYYY-MM-DD · 1年 x.xx% · 3年 x.xx% · 5年 x.xx%`. Reuses
+ * the shared trailing-return formatter so cards match the desktop 年化数据 column. */
 function trailingReturnsCardLine(inst: Instrument): string {
   const tr = inst.trailing_returns;
   const asOf = inst.data_as_of || tr?.as_of_date || "—";
-  return [
-    `截至 ${asOf}`,
-    `近1年 ${formatNullablePercent(tr?.one_year_annualized_return)}`,
-    `近3年 ${formatNullablePercent(tr?.three_year_annualized_return)}`,
-    `近5年 ${formatNullablePercent(tr?.five_year_annualized_return)}`,
-  ].join(" · ");
+  return `截至 ${asOf} · ${formatTrailingReturnsSummary(tr)}`;
 }
 
 function InstrumentCardBody({ inst }: { inst: Instrument }) {
@@ -367,9 +363,7 @@ export default function AssetsPage() {
                   <th className="px-3 py-2.5 font-medium">地区</th>
                   <th className="px-3 py-2.5 font-medium">数据状态</th>
                   <th className="px-3 py-2.5 font-medium">数据截至</th>
-                  <th className="px-3 py-2.5 font-medium text-right">近1年年化</th>
-                  <th className="px-3 py-2.5 font-medium text-right">近3年年化</th>
-                  <th className="px-3 py-2.5 font-medium text-right">近5年年化</th>
+                  <th className="px-3 py-2.5 font-medium">年化数据</th>
                   <th className="px-3 py-2.5 font-medium">数据来源</th>
                   <th className="px-3 py-2.5 font-medium">操作</th>
                 </tr>
@@ -402,14 +396,8 @@ export default function AssetsPage() {
                     <td className="px-3 py-2.5 text-xs text-ink-muted">
                       {inst.data_as_of || inst.trailing_returns?.as_of_date || "—"}
                     </td>
-                    <td className="px-3 py-2.5 text-right font-mono-numeric">
-                      {formatNullablePercent(inst.trailing_returns?.one_year_annualized_return)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono-numeric">
-                      {formatNullablePercent(inst.trailing_returns?.three_year_annualized_return)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono-numeric">
-                      {formatNullablePercent(inst.trailing_returns?.five_year_annualized_return)}
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono-numeric text-xs text-ink">
+                      {formatTrailingReturnsSummary(inst.trailing_returns)}
                     </td>
                     <td className="px-3 py-2.5 text-xs text-ink-muted">
                       {dataSourceLabel(inst.data_source_name)}

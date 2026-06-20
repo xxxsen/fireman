@@ -11,6 +11,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { queryErrorMessage } from "@/lib/query-error";
 import { WealthPathChart } from "@/components/charts/WealthPathChart";
+import { ScenarioComparisonCard } from "@/components/analysis/ScenarioComparisonCard";
 import {
   ParameterCurvesChart,
   SensitivityHeatmap,
@@ -43,6 +44,118 @@ import {
 import type { SimulationRun } from "@/types/api";
 
 type JobKind = "sim" | "stress" | "sensitivity";
+
+function caliberLabel(c: "nominal" | "real"): string {
+  return c === "real" ? "起点购买力" : "名义金额";
+}
+
+const RETURN_MODE_LABELS: Record<string, string> = {
+  blended_prior: "前瞻收益（历史向长期先验收缩）",
+  historical_cagr: "历史 CAGR（旧模式）",
+  custom: "自定义前瞻收益",
+};
+
+const FACTOR_MODEL_LABELS: Record<string, string> = {
+  multivariate_student_t: "联合厚尾因子模型（资产/FX 相关）",
+  independent_student_t: "独立因子模型（旧）",
+};
+
+function CaliberToggle({
+  value,
+  onChange,
+  hasReal,
+}: {
+  value: "nominal" | "real";
+  onChange: (v: "nominal" | "real") => void;
+  hasReal: boolean;
+}) {
+  if (!hasReal) {
+    return null;
+  }
+  return (
+    <div className="mt-4 flex items-center gap-2 text-sm" role="group" aria-label="金额口径">
+      <span className="text-ink-muted">金额口径</span>
+      {(["nominal", "real"] as const).map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          aria-pressed={value === opt}
+          onClick={() => onChange(opt)}
+          className={
+            value === opt
+              ? "rounded border border-brand bg-brand/10 px-2 py-1 font-medium text-brand-strong"
+              : "rounded border border-line px-2 py-1 text-ink-muted hover:text-ink"
+          }
+        >
+          {caliberLabel(opt)}
+        </button>
+      ))}
+      <span className="text-xs text-ink-muted">起点购买力 = 名义金额 ÷ 路径累计通胀</span>
+    </div>
+  );
+}
+
+function RunAssumptionCard({
+  assumption,
+}: {
+  assumption: NonNullable<SimulationRun["assumption"]>;
+}) {
+  const modeLabel = RETURN_MODE_LABELS[assumption.mode] ?? assumption.mode;
+  const factorLabel =
+    FACTOR_MODEL_LABELS[assumption.random_factor_model] ?? assumption.random_factor_model;
+  const riskAssets = assumption.assets.filter((a) => !a.is_cash);
+  return (
+    <section className="mt-4 rounded-lg border border-line bg-surface-muted/40 p-3 text-sm">
+      <h3 className="font-medium text-ink">本次模拟的收益假设</h3>
+      <p className="mt-1 text-xs text-ink-muted">
+        引擎 {assumption.engine_version} · {modeLabel}
+        {assumption.profile_id ? ` · ${assumption.profile_id}@${assumption.profile_version}` : ""}
+        {assumption.scenario ? ` · 情景 ${assumption.scenario}` : ""} · {factorLabel}
+      </p>
+      {assumption.correlation_prior_only && (
+        <p className="mt-1 text-xs text-warning">
+          相关性主要依赖先验（历史共同月份不足），分散化结果偏保守。
+        </p>
+      )}
+      {riskAssets.length > 0 && (
+        <div className="mt-2 overflow-x-auto">
+          <table className="min-w-full text-left text-xs">
+            <thead>
+              <tr className="text-ink-muted">
+                <th className="pr-3 py-1">资产</th>
+                <th className="pr-3 py-1">历史 CAGR</th>
+                <th className="pr-3 py-1">前瞻年化</th>
+                <th className="pr-3 py-1">历史权重</th>
+                <th className="pr-3 py-1">样本年数</th>
+                <th className="pr-3 py-1">波动率</th>
+              </tr>
+            </thead>
+            <tbody>
+              {riskAssets.map((a) => (
+                <tr key={a.holding_id} className="border-t">
+                  <td className="py-1 pr-3">
+                    {a.instrument_name || a.holding_id}
+                    {a.instrument_code ? `（${a.instrument_code}）` : ""}
+                  </td>
+                  <td className="py-1 pr-3">{formatPercent(a.historical_annual_geometric_return)}</td>
+                  <td className="py-1 pr-3 font-medium">
+                    {formatPercent(a.forward_annual_geometric_return)}
+                  </td>
+                  <td className="py-1 pr-3">{formatPercent(a.historical_weight)}</td>
+                  <td className="py-1 pr-3">{a.sample_years || "—"}</td>
+                  <td className="py-1 pr-3">{formatPercent(a.annual_volatility_used)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-2 text-xs text-ink-muted">
+        历史收益不代表未来；前瞻年化为历史与长期先验在对数空间的收缩结果，仅用于本次模拟。
+      </p>
+    </section>
+  );
+}
 
 function simulationOptionLabel(run: SimulationRun): string {
   const date = new Date(run.created_at).toLocaleString("zh-CN", {
@@ -346,6 +459,7 @@ export function AnalysisContent() {
   const [runsOverride, setRunsOverride] = useState<number | null>(null);
   const [jobErrors, setJobErrors] = useState<Partial<Record<JobKind, string>>>({});
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [caliber, setCaliber] = useState<"nominal" | "real">("nominal");
 
   const paramsQ = useQuery({
     queryKey: ["parameters", planId],
@@ -529,6 +643,16 @@ export function AnalysisContent() {
     pathsQ.data?.paths.filter((p) => p.representative_percentile) ?? [],
   );
 
+  const hasReal =
+    (latest?.summary_json?.real_terminal_quantiles &&
+      Object.keys(latest.summary_json.real_terminal_quantiles).length > 0) ||
+    (latest?.summary_json?.real_monthly_wealth_quantiles?.length ?? 0) > 0;
+  const effectiveCaliber: "nominal" | "real" = hasReal ? caliber : "nominal";
+  const chartSeries =
+    effectiveCaliber === "real"
+      ? latest?.summary_json?.real_monthly_wealth_quantiles
+      : latest?.summary_json?.monthly_wealth_quantiles;
+
   const jobBusy = !!activeJobId;
 
   const simPanelError =
@@ -686,19 +810,17 @@ export function AnalysisContent() {
               成功率 {formatPercent(latest.summary_json.success_probability)}
             </p>
           )}
-          {latest.summary_json?.terminal_quantiles && (
-            <dl className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-              {Object.entries(latest.summary_json.terminal_quantiles).map(([k, v]) => (
-                <div key={k}>
-                  <dt className="text-ink-muted">{k.toUpperCase()}</dt>
-                  <dd>{formatMoney(v)}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-          {latest.summary_json?.monthly_wealth_quantiles && (
+
+          {latest.assumption && <RunAssumptionCard assumption={latest.assumption} />}
+
+          <CaliberToggle value={caliber} onChange={setCaliber} hasReal={hasReal} />
+
+          {chartSeries && (
             <div className="mt-4">
-              <WealthPathChart series={latest.summary_json.monthly_wealth_quantiles} />
+              <p className="mb-1 text-xs text-ink-muted">
+                财富分位走势（{caliberLabel(effectiveCaliber)}，单位：元）
+              </p>
+              <WealthPathChart series={chartSeries} />
             </div>
           )}
           {((latest.summary_json?.model_warnings as string[] | undefined) ?? []).length > 0 && (
@@ -713,6 +835,9 @@ export function AnalysisContent() {
           {repPaths.length > 0 && (
             <div className="mt-4">
               <h3 className="text-sm font-medium text-ink-muted">代表路径</h3>
+              <p className="mt-1 text-xs text-ink-muted">
+                每项为期末资产最接近对应分位数的实际模拟路径，可点击查看完整过程。
+              </p>
               <ul className="mt-2 flex flex-wrap gap-2">
                 {repPaths.map((p) => (
                   <li key={p.path_no}>
@@ -733,6 +858,8 @@ export function AnalysisContent() {
               </ul>
             </div>
           )}
+
+          <ScenarioComparisonCard planId={planId} />
         </section>
       )}
 

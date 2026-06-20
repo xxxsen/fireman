@@ -53,6 +53,12 @@ export interface PlanParameters {
   transaction_cost_rate: number;
   simulation_runs: number;
   student_t_df: number;
+  return_assumption_mode: string;
+  assumption_selection_mode: string;
+  return_assumption_set_id: string;
+  return_assumption_set_version: number;
+  return_assumption_scenario: string;
+  custom_return_assumptions_json?: string;
   seed?: string | null;
   updated_at: number;
 }
@@ -397,6 +403,7 @@ export interface SimulationRun {
     instrument_id: string;
     complete_years: number[];
   }[];
+  assumption?: RunAssumption | null;
 }
 
 export interface SimulationSummary {
@@ -404,11 +411,40 @@ export interface SimulationSummary {
   success_wilson_low?: number;
   success_wilson_high?: number;
   terminal_quantiles?: Record<string, number>;
+  real_terminal_quantiles?: Record<string, number>;
   monthly_wealth_quantiles?: QuantilePoint[];
+  real_monthly_wealth_quantiles?: QuantilePoint[];
   failure_year_quantiles?: Record<string, number>;
   max_drawdown_quantiles?: Record<string, number>;
   model_warnings?: string[];
   correlation_disclaimer?: string;
+}
+
+/** RunAssumption is the frozen return-calibration + risk-model audit of a run. */
+export interface RunAssumption {
+  engine_version: string;
+  random_factor_model: string;
+  mode: string;
+  scenario: string;
+  profile_id: string;
+  profile_version: number;
+  correlation_prior_only: boolean;
+  max_repair_delta: number;
+  assets: RunAssetAssumption[];
+}
+
+export interface RunAssetAssumption {
+  holding_id: string;
+  instrument_name: string;
+  instrument_code: string;
+  is_cash: boolean;
+  historical_annual_geometric_return: number;
+  forward_annual_geometric_return: number;
+  annual_volatility_used: number;
+  source: string;
+  sample_years: number;
+  historical_weight: number;
+  warnings?: string[];
 }
 
 export interface QuantilePoint {
@@ -419,6 +455,105 @@ export interface QuantilePoint {
   p50_minor: number;
   p75_minor: number;
   p95_minor: number;
+}
+
+// ---- Simulation assumptions (td/061) ----
+
+export interface AssumptionProfileSummary {
+  id: string;
+  version: number;
+  owner_scope: "system" | "user";
+  name: string;
+  status: "draft" | "active" | "superseded";
+  content_hash: string;
+  source_note?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AssumptionPreferences {
+  default_profile_id: string;
+  default_profile_version: number;
+  default_scenario: string;
+}
+
+// Asset-level plan-specific override of the forward return / volatility
+// (td/061 §4.1.5). A null dimension means it is not overridden.
+export interface ReturnOverride {
+  instrument_id: string;
+  forward_return: number | null;
+  annual_volatility: number | null;
+  reason: string;
+  expires_at: string;
+  expired: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AssumptionProfilesResponse {
+  profiles: AssumptionProfileSummary[];
+  preferences: AssumptionPreferences;
+  scenarios: string[];
+}
+
+export interface AssumptionScenario {
+  return_shift_log: number;
+  return_shift_log_fx: number;
+  volatility_multiplier: number;
+}
+
+export interface AssumptionReturnPrior {
+  asset_class: string;
+  region: string;
+  valuation_currency: string;
+  annual_geometric_return: number;
+  annual_volatility_floor: number;
+  annual_volatility_ceiling: number;
+  source_url: string;
+  published_at: string;
+  reviewed_at: string;
+}
+
+export interface AssumptionFXPrior {
+  from_currency: string;
+  base_currency: string;
+  annual_geometric_return: number;
+  annual_volatility_floor: number;
+  annual_volatility_ceiling: number;
+  source_url: string;
+  published_at: string;
+  reviewed_at: string;
+}
+
+export interface AssumptionCorrelationPrior {
+  factor_a: string;
+  factor_b: string;
+  rho: number;
+}
+
+export interface AssumptionProfile {
+  id: string;
+  version: number;
+  owner_scope: "system" | "user";
+  name: string;
+  status: "draft" | "active" | "superseded";
+  prior_strength_years: number;
+  correlation_strength_months: number;
+  student_t_df: number;
+  scenarios: Record<string, AssumptionScenario>;
+  return_priors: AssumptionReturnPrior[];
+  fx_priors?: AssumptionFXPrior[];
+  correlation_priors?: AssumptionCorrelationPrior[];
+}
+
+export interface AssumptionValidation {
+  valid: boolean;
+  error?: string;
+  min_eigenvalue: number;
+  max_repair_delta: number;
+  psd_repair_heavy: boolean;
 }
 
 export interface PathIndexRow {
@@ -441,6 +576,8 @@ export interface PathMonthRecord {
   transaction_cost: number;
   drawdown: number;
   rebalanced: boolean;
+  cum_inflation: number;
+  real_total_wealth_minor: number;
 }
 
 export interface PathYearRecord {
@@ -454,8 +591,34 @@ export interface PathYearRecord {
   end_wealth_minor: number;
   year_end_drawdown: number;
   max_intra_year_dd: number;
+  annual_return: number | null;
   rebalanced: boolean;
   asset_weights?: Record<string, number>;
+  cum_inflation: number;
+  real_start_wealth_minor: number;
+  real_end_wealth_minor: number;
+}
+
+export interface ScenarioComparisonRow {
+  scenario: string;
+  forward_return: number;
+  volatility: number;
+  success_rate: number;
+  terminal_p00_minor: number;
+  terminal_p50_minor: number;
+  terminal_p95_minor: number;
+  real_terminal_p50_minor: number;
+  max_drawdown_p50: number;
+}
+
+export interface ScenarioComparison {
+  plan_id: string;
+  profile_id: string;
+  profile_version: number;
+  seed: string;
+  runs: number;
+  baseline_key: string;
+  scenarios: ScenarioComparisonRow[];
 }
 
 export interface PathAssetLabel {

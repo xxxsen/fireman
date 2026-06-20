@@ -16,7 +16,7 @@ func TestUpdateParameters_ApplyUnallocatedGapToCash(t *testing.T) {
 	alloc := repository.NewAllocationRepo(db)
 	scenario := repository.NewScenarioRepo(db)
 	holdings := repository.NewHoldingsRepo(db)
-	hash := NewConfigHashService(plans, params, alloc, holdings)
+	hash := NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
 	snapSvc := marketdata.NewSnapshotService(
 		repository.NewSnapshotRepo(db),
 		repository.NewInstrumentRepo(db),

@@ -28,7 +28,10 @@ func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters
 			withdrawal_type, withdrawal_rate, withdrawal_floor_ratio, withdrawal_ceiling_ratio,
 			withdrawal_tax_rate, taxable_withdrawal_ratio,
 			rebalance_frequency, rebalance_threshold, transaction_cost_rate,
-			simulation_runs, student_t_df, seed, updated_at
+			simulation_runs, student_t_df, seed,
+			return_assumption_mode, assumption_selection_mode, return_assumption_set_id,
+			return_assumption_set_version, return_assumption_scenario, custom_return_assumptions_json,
+			updated_at
 		FROM plan_parameters WHERE plan_id=?`, planID).Scan(
 		&p.PlanID, &p.CurrentAge, &p.RetirementAge, &p.EndAge,
 		&p.TotalAssetsMinor, &p.AnnualSavingsMinor, &p.AnnualSavingsGrowthRate,
@@ -37,7 +40,10 @@ func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters
 		&p.WithdrawalType, &p.WithdrawalRate, &p.WithdrawalFloorRatio, &p.WithdrawalCeilingRatio,
 		&p.WithdrawalTaxRate, &p.TaxableWithdrawalRatio,
 		&p.RebalanceFrequency, &p.RebalanceThreshold, &p.TransactionCostRate,
-		&p.SimulationRuns, &p.StudentTDf, &seed, &p.UpdatedAt,
+		&p.SimulationRuns, &p.StudentTDf, &seed,
+		&p.ReturnAssumptionMode, &p.AssumptionSelectionMode, &p.ReturnAssumptionSetID,
+		&p.ReturnAssumptionSetVersion, &p.ReturnAssumptionScenario, &p.CustomReturnAssumptionsJSON,
+		&p.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PlanParameters{}, ErrPlanNotFound
@@ -98,6 +104,7 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 	if p.Seed != nil {
 		seed = *p.Seed
 	}
+	p.applyAssumptionDefaults()
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO plan_parameters (
 			plan_id, current_age, retirement_age, end_age,
@@ -107,8 +114,11 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 			withdrawal_type, withdrawal_rate, withdrawal_floor_ratio, withdrawal_ceiling_ratio,
 			withdrawal_tax_rate, taxable_withdrawal_ratio,
 			rebalance_frequency, rebalance_threshold, transaction_cost_rate,
-			simulation_runs, student_t_df, seed, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			simulation_runs, student_t_df, seed,
+			return_assumption_mode, assumption_selection_mode, return_assumption_set_id,
+			return_assumption_set_version, return_assumption_scenario, custom_return_assumptions_json,
+			updated_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(plan_id) DO UPDATE SET
 			current_age=excluded.current_age, retirement_age=excluded.retirement_age, end_age=excluded.end_age,
 			total_assets_minor=excluded.total_assets_minor, annual_savings_minor=excluded.annual_savings_minor,
@@ -127,7 +137,14 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 			rebalance_frequency=excluded.rebalance_frequency, rebalance_threshold=excluded.rebalance_threshold,
 			transaction_cost_rate=excluded.transaction_cost_rate,
 			simulation_runs=excluded.simulation_runs, student_t_df=excluded.student_t_df,
-			seed=excluded.seed, updated_at=excluded.updated_at`,
+			seed=excluded.seed,
+			return_assumption_mode=excluded.return_assumption_mode,
+			assumption_selection_mode=excluded.assumption_selection_mode,
+			return_assumption_set_id=excluded.return_assumption_set_id,
+			return_assumption_set_version=excluded.return_assumption_set_version,
+			return_assumption_scenario=excluded.return_assumption_scenario,
+			custom_return_assumptions_json=excluded.custom_return_assumptions_json,
+			updated_at=excluded.updated_at`,
 		p.PlanID, p.CurrentAge, p.RetirementAge, p.EndAge,
 		p.TotalAssetsMinor, p.AnnualSavingsMinor, p.AnnualSavingsGrowthRate,
 		p.AnnualSpendingMinor, p.TerminalWealthFloorMinor, scenario,
@@ -135,8 +152,39 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 		p.WithdrawalType, p.WithdrawalRate, p.WithdrawalFloorRatio, p.WithdrawalCeilingRatio,
 		p.WithdrawalTaxRate, p.TaxableWithdrawalRatio,
 		p.RebalanceFrequency, p.RebalanceThreshold, p.TransactionCostRate,
-		p.SimulationRuns, p.StudentTDf, seed, p.UpdatedAt)
+		p.SimulationRuns, p.StudentTDf, seed,
+		p.ReturnAssumptionMode, p.AssumptionSelectionMode, p.ReturnAssumptionSetID,
+		p.ReturnAssumptionSetVersion, p.ReturnAssumptionScenario, p.CustomReturnAssumptionsJSON,
+		p.UpdatedAt)
 	return wrapSQL("upsert plan parameters", err)
+}
+
+// Assumption-selection defaults. New plans currently default to historical_cagr
+// so existing numerical behavior is preserved; the blended_prior/baseline flip
+// is gated behind the final td/061 rollout step once the joint factor engine and
+// regression report land (td/061 §7.5).
+const (
+	DefaultReturnAssumptionMode     = "historical_cagr"
+	DefaultAssumptionSelectionMode  = "follow_global"
+	DefaultReturnAssumptionScenario = "baseline"
+
+	// Return-assumption modes. ModeHistoricalCAGR is the legacy/compat default for
+	// migrated plans and direct fixtures; new plans use ModeBlendedPrior.
+	ModeHistoricalCAGR = "historical_cagr"
+	ModeBlendedPrior   = "blended_prior"
+	ModeCustom         = "custom"
+)
+
+func (p *PlanParameters) applyAssumptionDefaults() {
+	if p.ReturnAssumptionMode == "" {
+		p.ReturnAssumptionMode = DefaultReturnAssumptionMode
+	}
+	if p.AssumptionSelectionMode == "" {
+		p.AssumptionSelectionMode = DefaultAssumptionSelectionMode
+	}
+	if p.ReturnAssumptionScenario == "" {
+		p.ReturnAssumptionScenario = DefaultReturnAssumptionScenario
+	}
 }
 
 func (r *ParametersRepo) exec(tx *sql.Tx) dbExec {

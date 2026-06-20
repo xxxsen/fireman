@@ -37,6 +37,7 @@ func createTestPlan(t *testing.T, db *sql.DB) service.PlanDetail {
 			repository.NewParametersRepo(db),
 			repository.NewAllocationRepo(db),
 			repository.NewHoldingsRepo(db),
+			repository.NewReturnOverrideRepo(db),
 		),
 		marketdata.NewSnapshotService(
 			repository.NewSnapshotRepo(db),

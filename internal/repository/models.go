@@ -41,7 +41,15 @@ type PlanParameters struct {
 	SimulationRuns           int     `json:"simulation_runs"`
 	StudentTDf               int     `json:"student_t_df"`
 	Seed                     *int64  `json:"seed,omitempty"`
-	UpdatedAt                int64   `json:"updated_at"`
+	// td/061 return-assumption selection. These reference a global profile and
+	// scenario; they never duplicate the profile's numeric values.
+	ReturnAssumptionMode        string `json:"return_assumption_mode"`
+	AssumptionSelectionMode     string `json:"assumption_selection_mode"`
+	ReturnAssumptionSetID       string `json:"return_assumption_set_id"`
+	ReturnAssumptionSetVersion  int    `json:"return_assumption_set_version"`
+	ReturnAssumptionScenario    string `json:"return_assumption_scenario"`
+	CustomReturnAssumptionsJSON string `json:"custom_return_assumptions_json,omitempty"`
+	UpdatedAt                   int64  `json:"updated_at"`
 }
 
 // AssetClassTarget is a plan-level asset class weight.

@@ -268,6 +268,29 @@ export function formatNullablePercent(value: number | null | undefined): string 
   return formatPercent(value);
 }
 
+/**
+ * Compact, fixed-order trailing-return summary `1年 8.12% · 3年 6.41% · 5年 —`
+ * shared by the asset library desktop table cell and mobile cards so both render
+ * the same labels, order and empty-value text. Each window keeps its `N年` label
+ * (never bare percentages) and falls back to `—` when history is insufficient.
+ */
+export function formatTrailingReturnsSummary(
+  tr:
+    | {
+        one_year_annualized_return?: number | null;
+        three_year_annualized_return?: number | null;
+        five_year_annualized_return?: number | null;
+      }
+    | null
+    | undefined,
+): string {
+  return [
+    `1年 ${formatNullablePercent(tr?.one_year_annualized_return)}`,
+    `3年 ${formatNullablePercent(tr?.three_year_annualized_return)}`,
+    `5年 ${formatNullablePercent(tr?.five_year_annualized_return)}`,
+  ].join(" · ");
+}
+
 export function instrumentStatusLabel(status: string): string {
   const map: Record<string, string> = {
     pending_fetch: "抓取中",

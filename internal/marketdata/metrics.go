@@ -38,6 +38,7 @@ func ComputeMetrics(points []DataPoint, years []SimulationYear, pointType, sourc
 
 	monthly := BuildMonthlyReturns(points, years)
 	m.MonthlyReturnCount = len(monthly)
+	m.MonthlyReturns = monthly
 
 	m.CAGRStatus, m.HistoricalCAGR, m.ModeledAnnualReturn = computeCAGRMetrics(years)
 	m.VolatilityStatus, m.AnnualVolatility = computeVolatilityMetrics(monthly)

@@ -91,6 +91,7 @@ func createPlanWithValuationDate(t *testing.T, db *sql.DB, valuationDate string)
 			repository.NewParametersRepo(db),
 			repository.NewAllocationRepo(db),
 			repository.NewHoldingsRepo(db),
+			repository.NewReturnOverrideRepo(db),
 		),
 		marketdata.NewSnapshotService(
 			repository.NewSnapshotRepo(db),
