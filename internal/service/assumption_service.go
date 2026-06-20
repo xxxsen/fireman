@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/fireman/fireman/internal/assumptions"
 	"github.com/fireman/fireman/internal/repository"
@@ -113,9 +116,12 @@ func (s *AssumptionService) SaveDraft(
 		return assumptions.Profile{}, newErr("assumption_profile_read_only",
 			"system profile is read-only; copy it to a custom profile first", nil)
 	}
+	if err := validateProfileAudit(sourceNote, reviewedBy, reviewedAt); err != nil {
+		return assumptions.Profile{}, err
+	}
 	p.Status = assumptions.StatusDraft
-	if v := s.ValidateProfile(p); !v.Valid {
-		return assumptions.Profile{}, newErr("assumption_profile_invalid", v.Error, nil)
+	if err := s.assertActivatable(p); err != nil {
+		return assumptions.Profile{}, err
 	}
 	if err := s.repo.Save(ctx, p, sourceNote, reviewedBy, reviewedAt); err != nil {
 		return assumptions.Profile{}, wrapRepo("save assumption profile", err)
@@ -129,11 +135,30 @@ func (s *AssumptionService) Activate(ctx context.Context, id string, version int
 	if err != nil {
 		return err
 	}
-	if v := s.ValidateProfile(p); !v.Valid {
-		return newErr("assumption_profile_invalid", v.Error, nil)
+	if err := s.assertActivatable(p); err != nil {
+		return err
 	}
 	if err := s.repo.Activate(ctx, id, version); err != nil {
 		return wrapRepo("activate assumption profile", err)
+	}
+	return nil
+}
+
+// assertActivatable rejects a profile that cannot be safely saved or activated:
+// any structural validation failure, or a correlation matrix that needs a heavy
+// (> threshold) PSD repair. Both save and activate share this rule so a draft
+// that fails completeness/duplicate/PSD checks can neither be persisted nor
+// promoted (td/063 R3 §2, R4 §1).
+func (s *AssumptionService) assertActivatable(p assumptions.Profile) error {
+	v := s.ValidateProfile(p)
+	if !v.Valid {
+		return newErr("assumption_profile_invalid", v.Error, nil)
+	}
+	if v.PSDRepairHeavy {
+		return newErr("assumption_profile_invalid", fmt.Sprintf(
+			"correlation matrix needs a heavy PSD repair (max_repair_delta=%.4f > %.4f, "+
+				"min_eigenvalue=%.4f); revise correlation priors",
+			v.MaxRepairDelta, simulation.PSDRepairWarnThreshold, v.MinEigenvalue), nil)
 	}
 	return nil
 }
@@ -174,6 +199,22 @@ func (s *AssumptionService) SetPreferences(
 		return repository.AssumptionPreferences{}, wrapRepo("set assumption preferences", err)
 	}
 	return pref, nil
+}
+
+// validateProfileAudit enforces named, sourced, dated review metadata on every
+// saved profile version (td/063 N1): a non-empty source note, a named reviewer,
+// and an ISO (YYYY-MM-DD) review date.
+func validateProfileAudit(sourceNote, reviewedBy, reviewedAt string) error {
+	if strings.TrimSpace(sourceNote) == "" {
+		return newErr("assumption_profile_invalid", "source_note (CMA provenance) is required", nil)
+	}
+	if strings.TrimSpace(reviewedBy) == "" {
+		return newErr("assumption_profile_invalid", "reviewed_by (named reviewer) is required", nil)
+	}
+	if _, err := time.Parse("2006-01-02", reviewedAt); err != nil {
+		return newErr("assumption_profile_invalid", "reviewed_at must be an ISO date (YYYY-MM-DD)", nil)
+	}
+	return nil
 }
 
 func validScenario(s string) bool {

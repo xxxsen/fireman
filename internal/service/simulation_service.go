@@ -451,6 +451,16 @@ type RunAssetAssumptionView struct {
 	SampleYears                     int      `json:"sample_years"`
 	HistoricalWeight                float64  `json:"historical_weight"`
 	Warnings                        []string `json:"warnings,omitempty"`
+	// td/063 R2 FX forward-calibration audit (present only for cross-currency
+	// holdings). FXForwardReturn is the FX drift the engine consumes.
+	HasFX              bool     `json:"has_fx"`
+	FXForwardReturn    float64  `json:"fx_forward_return,omitempty"`
+	FXHistoricalReturn float64  `json:"fx_historical_return,omitempty"`
+	FXPriorReturn      float64  `json:"fx_prior_return,omitempty"`
+	FXAnnualVolatility float64  `json:"fx_annual_volatility,omitempty"`
+	FXHistoricalWeight float64  `json:"fx_historical_weight,omitempty"`
+	FXSource           string   `json:"fx_source,omitempty"`
+	FXWarnings         []string `json:"fx_warnings,omitempty"`
 }
 
 func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
@@ -468,7 +478,7 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 			view.ProfileID = a.ReturnAssumptionSetID
 			view.ProfileVersion = a.ReturnAssumptionSetVersion
 		}
-		view.Assets = append(view.Assets, RunAssetAssumptionView{
+		av := RunAssetAssumptionView{
 			HoldingID: a.HoldingID, InstrumentName: a.InstrumentName, InstrumentCode: a.InstrumentCode,
 			IsCash:                          a.IsCash,
 			HistoricalAnnualGeometricReturn: a.HistoricalAnnualGeometricReturn,
@@ -478,7 +488,18 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 			SampleYears:                     a.ReturnSampleYears,
 			HistoricalWeight:                a.ReturnHistoricalWeight,
 			Warnings:                        a.ReturnWarnings,
-		})
+		}
+		if a.FXSnapshotID != "" {
+			av.HasFX = true
+			av.FXForwardReturn = a.FXModeledReturn
+			av.FXHistoricalReturn = a.FXHistoricalReturn
+			av.FXPriorReturn = a.FXPriorReturn
+			av.FXAnnualVolatility = a.FXAnnualVolatility
+			av.FXHistoricalWeight = a.FXHistoricalWeight
+			av.FXSource = a.FXReturnSource
+			av.FXWarnings = a.FXReturnWarnings
+		}
+		view.Assets = append(view.Assets, av)
 	}
 	if snap.FactorModel != nil {
 		view.CorrelationPriorOnly = len(snap.FactorModel.Audit.PriorOnlyPairs) > 0
@@ -600,7 +621,10 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", err
 	}
 
-	in := buildInputSnapshotStruct(plan, params, *seed, configHash, assets, resolved)
+	in, err := buildInputSnapshotStruct(plan, params, *seed, configHash, assets, resolved)
+	if err != nil {
+		return nil, "", err
+	}
 	inputHash, err := simulation.HashInput(in)
 	if err != nil {
 		return nil, "", wrapRepo("hash simulation input", err)

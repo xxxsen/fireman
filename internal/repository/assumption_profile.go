@@ -65,7 +65,8 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 		return wrapSQL("begin system profile tx", err)
 	}
 	if err := insertProfileTx(ctx, tx, p, assumptions.OwnerSystem, assumptions.StatusActive,
-		"td/061 seed values pending named reviewer sign-off", "system-seed", "2026-06-20"); err != nil {
+		assumptions.SystemProfileSourceNote, assumptions.SystemProfileReviewedBy,
+		assumptions.SystemProfileReviewedAt); err != nil {
 		_ = tx.Rollback()
 		return err
 	}

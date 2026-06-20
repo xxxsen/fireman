@@ -49,11 +49,19 @@ func (s *SimulationService) ResolveAssumptionProfile(
 func (s *SimulationService) resolveProfileAndScenario(
 	ctx context.Context, params repository.PlanParameters, scenario string,
 ) (assumptions.Profile, string, error) {
-	if params.AssumptionSelectionMode == "pinned_profile" && params.ReturnAssumptionSetID != "" {
+	if params.AssumptionSelectionMode == SelectionPinnedProfile && params.ReturnAssumptionSetID != "" {
 		p, err := s.assumptions.Get(ctx, params.ReturnAssumptionSetID, params.ReturnAssumptionSetVersion)
 		if err != nil {
 			return assumptions.Profile{}, "", newErr("assumption_profile_not_found",
 				"pinned assumption profile is unavailable", map[string]any{
+					"profile_id": params.ReturnAssumptionSetID, "version": params.ReturnAssumptionSetVersion,
+				})
+		}
+		// A pinned profile must reference an active version: a draft/superseded pin
+		// must never enter a run (td/063 N2).
+		if p.Status != assumptions.StatusActive {
+			return assumptions.Profile{}, "", newErr("assumption_profile_not_active",
+				"pinned assumption profile must be an active version", map[string]any{
 					"profile_id": params.ReturnAssumptionSetID, "version": params.ReturnAssumptionSetVersion,
 				})
 		}

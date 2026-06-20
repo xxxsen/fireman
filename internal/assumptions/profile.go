@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Scenario names available in every profile. They only shift forward returns and
@@ -85,40 +87,57 @@ type CorrelationPrior struct {
 
 // Profile is a complete, version-locked assumption set.
 type Profile struct {
-	ID                        string              `json:"id"`
-	Version                   int                 `json:"version"`
-	OwnerScope                string              `json:"owner_scope"`
-	Name                      string              `json:"name"`
-	Status                    string              `json:"status"`
-	PriorStrengthYears        int                 `json:"prior_strength_years"`
-	CorrelationStrengthMonths int                 `json:"correlation_strength_months"`
-	StudentTDf                int                 `json:"student_t_df"`
-	Scenarios                 map[string]Scenario `json:"scenarios"`
-	ReturnPriors              []ReturnPrior       `json:"return_priors"`
-	FXPriors                  []FXPrior           `json:"fx_priors,omitempty"`
-	CorrelationPriors         []CorrelationPrior  `json:"correlation_priors,omitempty"`
+	ID                        string `json:"id"`
+	Version                   int    `json:"version"`
+	OwnerScope                string `json:"owner_scope"`
+	Name                      string `json:"name"`
+	Status                    string `json:"status"`
+	PriorStrengthYears        int    `json:"prior_strength_years"`
+	CorrelationStrengthMonths int    `json:"correlation_strength_months"`
+	StudentTDf                int    `json:"student_t_df"`
+	// ReturnFloor/ReturnCeil are the per-month simple-return truncation bounds the
+	// fat-tail sampler clamps to. They are part of the global profile (not a plan
+	// setting) so the tail behavior is versioned and auditable, and frozen into
+	// each run's InputSnapshot (td/063 R3). ReturnFloor must be in (-1, 0) and
+	// ReturnCeil > 0 with ReturnFloor < ReturnCeil.
+	ReturnFloor       float64             `json:"return_floor"`
+	ReturnCeil        float64             `json:"return_ceil"`
+	Scenarios         map[string]Scenario `json:"scenarios"`
+	ReturnPriors      []ReturnPrior       `json:"return_priors"`
+	FXPriors          []FXPrior           `json:"fx_priors,omitempty"`
+	CorrelationPriors []CorrelationPrior  `json:"correlation_priors,omitempty"`
 }
 
 var (
-	errProfileID            = errors.New("profile id is required")
-	errProfileVersion       = errors.New("profile version must be >= 1")
-	errProfileOwnerScope    = errors.New("owner_scope must be system or user")
-	errProfileStatus        = errors.New("status must be draft, active or superseded")
-	errPriorStrength        = errors.New("prior_strength_years must be > 0")
-	errCorrelationStrength  = errors.New("correlation_strength_months must be >= 0")
-	errStudentTDf           = errors.New("student_t_df must be an integer > 2")
-	errScenarioMissing      = errors.New("scenarios must define conservative, baseline and optimistic")
-	errScenarioVolMult      = errors.New("scenario volatility_multiplier must be > 0")
-	errReturnPriorKey       = errors.New("return prior requires asset_class, region and valuation_currency")
-	errReturnPriorReturn    = errors.New("return prior annual_geometric_return must be finite and > -100%")
-	errReturnPriorVol       = errors.New("return prior volatility bounds must satisfy 0 <= floor <= ceiling")
-	errReturnPriorAudit     = errors.New("return prior requires source_url, published_at and reviewed_at")
-	errReturnPriorDuplicate = errors.New("duplicate return prior for the same asset_class/region/currency")
-	errFXPriorKey           = errors.New("fx prior requires from_currency and base_currency")
-	errFXPriorAudit         = errors.New("fx prior requires source_url, published_at and reviewed_at")
-	errCorrelationRange     = errors.New("correlation rho must be in [-1, 1]")
-	errCorrelationFactor    = errors.New("correlation prior requires two distinct factors")
+	errProfileID                = errors.New("profile id is required")
+	errProfileVersion           = errors.New("profile version must be >= 1")
+	errProfileOwnerScope        = errors.New("owner_scope must be system or user")
+	errProfileStatus            = errors.New("status must be draft, active or superseded")
+	errPriorStrength            = errors.New("prior_strength_years must be > 0")
+	errCorrelationStrength      = errors.New("correlation_strength_months must be >= 0")
+	errStudentTDf               = errors.New("student_t_df must be an integer > 2")
+	errReturnTruncation         = errors.New("return truncation requires -1 < return_floor < 0 < return_ceil")
+	errScenarioMissing          = errors.New("scenarios must define conservative, baseline and optimistic")
+	errScenarioVolMult          = errors.New("scenario volatility_multiplier must be > 0")
+	errScenarioNotFinite        = errors.New("scenario shifts and volatility_multiplier must be finite")
+	errReturnPriorKey           = errors.New("return prior requires asset_class, region and valuation_currency")
+	errReturnPriorReturn        = errors.New("return prior annual_geometric_return must be finite and > -100%")
+	errReturnPriorVol           = errors.New("return prior volatility bounds must be finite with 0 <= floor <= ceiling")
+	errReturnPriorAudit         = errors.New("return prior needs https source_url and ISO (YYYY-MM-DD) dates")
+	errReturnPriorDuplicate     = errors.New("duplicate return prior for the same asset_class/region/currency")
+	errFXPriorKey               = errors.New("fx prior requires from_currency and base_currency")
+	errFXPriorAudit             = errors.New("fx prior needs https source_url and ISO (YYYY-MM-DD) dates")
+	errFXPriorDuplicate         = errors.New("duplicate fx prior for the same from/base currency pair")
+	errCorrelationRange         = errors.New("correlation rho must be finite and in [-1, 1]")
+	errCorrelationFactor        = errors.New("correlation prior requires two distinct factors")
+	errCorrelationDuplicate     = errors.New("duplicate correlation prior for the same factor pair")
+	errCorrelationUnknownFactor = errors.New("correlation prior references a factor with no asset/fx prior")
+	errCorrelationIncomplete    = errors.New("missing correlation prior for a required factor pair")
 )
+
+// cashAssetClass is the deterministic, non-random asset class that is excluded
+// from the random factor universe (td/061 §3.5 / td/063 R1/R4).
+const cashAssetClass = "cash"
 
 // Validate checks structural validity required before a profile may be persisted
 // or used to build a run. It does not perform the PSD/Cholesky repair (that is a
@@ -163,7 +182,19 @@ func (p *Profile) validateHeader() error {
 	if p.StudentTDf <= 2 {
 		return errStudentTDf
 	}
+	if !validReturnTruncation(p.ReturnFloor, p.ReturnCeil) {
+		return errReturnTruncation
+	}
 	return nil
+}
+
+// validReturnTruncation enforces a usable, finite truncation band: a loss floor
+// strictly between -100% and 0, a positive ceiling, and floor < ceil.
+func validReturnTruncation(floor, ceil float64) bool {
+	if math.IsNaN(floor) || math.IsInf(floor, 0) || math.IsNaN(ceil) || math.IsInf(ceil, 0) {
+		return false
+	}
+	return floor > -1 && floor < 0 && ceil > 0 && floor < ceil
 }
 
 func (p *Profile) validateScenarios() error {
@@ -171,6 +202,10 @@ func (p *Profile) validateScenarios() error {
 		s, ok := p.Scenarios[name]
 		if !ok {
 			return errScenarioMissing
+		}
+		if !finiteFloat(s.ReturnShiftLog) || !finiteFloat(s.ReturnShiftLogFX) ||
+			!finiteFloat(s.VolatilityMultiplier) {
+			return errScenarioNotFinite
 		}
 		if s.VolatilityMultiplier <= 0 {
 			return errScenarioVolMult
@@ -185,14 +220,14 @@ func (p *Profile) validateReturnPriors() error {
 		if rp.AssetClass == "" || rp.Region == "" || rp.ValuationCurrency == "" {
 			return errReturnPriorKey
 		}
-		if math.IsNaN(rp.AnnualGeometricReturn) || math.IsInf(rp.AnnualGeometricReturn, 0) ||
-			rp.AnnualGeometricReturn <= -1 {
+		if !finiteFloat(rp.AnnualGeometricReturn) || rp.AnnualGeometricReturn <= -1 {
 			return errReturnPriorReturn
 		}
-		if rp.AnnualVolatilityFloor < 0 || rp.AnnualVolatilityCeiling < rp.AnnualVolatilityFloor {
+		if !finiteFloat(rp.AnnualVolatilityFloor) || !finiteFloat(rp.AnnualVolatilityCeiling) ||
+			rp.AnnualVolatilityFloor < 0 || rp.AnnualVolatilityCeiling < rp.AnnualVolatilityFloor {
 			return errReturnPriorVol
 		}
-		if rp.SourceURL == "" || rp.PublishedAt == "" || rp.ReviewedAt == "" {
+		if !validAuditMeta(rp.SourceURL, rp.PublishedAt, rp.ReviewedAt) {
 			return errReturnPriorAudit
 		}
 		key := returnPriorKey(rp.AssetClass, rp.Region, rp.ValuationCurrency)
@@ -205,34 +240,149 @@ func (p *Profile) validateReturnPriors() error {
 }
 
 func (p *Profile) validateFXPriors() error {
+	seen := make(map[string]struct{}, len(p.FXPriors))
 	for _, fx := range p.FXPriors {
 		if fx.FromCurrency == "" || fx.BaseCurrency == "" {
 			return errFXPriorKey
 		}
-		if math.IsNaN(fx.AnnualGeometricReturn) || math.IsInf(fx.AnnualGeometricReturn, 0) ||
-			fx.AnnualGeometricReturn <= -1 {
+		if !finiteFloat(fx.AnnualGeometricReturn) || fx.AnnualGeometricReturn <= -1 {
 			return errReturnPriorReturn
 		}
-		if fx.AnnualVolatilityFloor < 0 || fx.AnnualVolatilityCeiling < fx.AnnualVolatilityFloor {
+		if !finiteFloat(fx.AnnualVolatilityFloor) || !finiteFloat(fx.AnnualVolatilityCeiling) ||
+			fx.AnnualVolatilityFloor < 0 || fx.AnnualVolatilityCeiling < fx.AnnualVolatilityFloor {
 			return errReturnPriorVol
 		}
-		if fx.SourceURL == "" || fx.PublishedAt == "" || fx.ReviewedAt == "" {
+		if !validAuditMeta(fx.SourceURL, fx.PublishedAt, fx.ReviewedAt) {
 			return errFXPriorAudit
+		}
+		key := FXFactorKey(fx.FromCurrency, fx.BaseCurrency)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("%w: %s", errFXPriorDuplicate, key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// finiteFloat reports whether x is a usable real number (not NaN or ±Inf).
+func finiteFloat(x float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0)
+}
+
+// validAuditMeta enforces auditable provenance on every prior (td/063 N1): a
+// non-empty https source URL and ISO (YYYY-MM-DD) published/reviewed dates so a
+// reviewer can open the source and the dates are machine-checkable.
+func validAuditMeta(sourceURL, publishedAt, reviewedAt string) bool {
+	if !strings.HasPrefix(sourceURL, "https://") || len(sourceURL) <= len("https://") {
+		return false
+	}
+	return isISODate(publishedAt) && isISODate(reviewedAt)
+}
+
+// isISODate validates a strict YYYY-MM-DD calendar date.
+func isISODate(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+// FactorUniverse is the canonical, sorted set of random factor keys implied by a
+// profile: one factor per distinct non-cash (asset_class, region) return prior
+// cell and one per FX prior pair. Deterministic cash is intentionally excluded
+// (td/061 §3.5 / td/063 R4). Multiple valuation currencies for the same
+// (asset_class, region) collapse to a single asset factor.
+func (p *Profile) FactorUniverse() []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(k string) {
+		if _, ok := seen[k]; !ok {
+			seen[k] = struct{}{}
+			out = append(out, k)
+		}
+	}
+	for _, rp := range p.ReturnPriors {
+		if rp.AssetClass == cashAssetClass {
+			continue
+		}
+		add(AssetFactorKey(rp.AssetClass, rp.Region))
+	}
+	for _, fx := range p.FXPriors {
+		add(FXFactorKey(fx.FromCurrency, fx.BaseCurrency))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validateCorrelationPriors enforces a complete, non-degenerate correlation
+// structure (td/063 R4): every prior must reference two distinct factors that
+// exist in the factor universe, rho must be finite and in [-1,1], no factor pair
+// may be specified twice (in either order), and every distinct pair of universe
+// factors must have exactly one prior. A missing pair would otherwise be silently
+// treated as rho=0 at run time, which td/061 explicitly forbids.
+func (p *Profile) validateCorrelationPriors() error {
+	keys := p.FactorUniverse()
+	universe := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		universe[k] = struct{}{}
+	}
+	seen, err := collectCorrelationPairs(p.CorrelationPriors, universe)
+	if err != nil {
+		return err
+	}
+	return validateCorrelationComplete(keys, seen)
+}
+
+// collectCorrelationPairs validates each prior individually and returns the set of
+// canonical pair keys, rejecting unknown factors and duplicates.
+func collectCorrelationPairs(
+	priors []CorrelationPrior, universe map[string]struct{},
+) (map[string]struct{}, error) {
+	seen := make(map[string]struct{}, len(priors))
+	for _, c := range priors {
+		if c.FactorA == "" || c.FactorB == "" || c.FactorA == c.FactorB {
+			return nil, errCorrelationFactor
+		}
+		if math.IsNaN(c.Rho) || math.IsInf(c.Rho, 0) || c.Rho < -1 || c.Rho > 1 {
+			return nil, errCorrelationRange
+		}
+		a, b := canonicalPair(c.FactorA, c.FactorB)
+		if _, ok := universe[a]; !ok {
+			return nil, fmt.Errorf("%w: %s", errCorrelationUnknownFactor, a)
+		}
+		if _, ok := universe[b]; !ok {
+			return nil, fmt.Errorf("%w: %s", errCorrelationUnknownFactor, b)
+		}
+		key := a + "|" + b
+		if _, dup := seen[key]; dup {
+			return nil, fmt.Errorf("%w: %s", errCorrelationDuplicate, key)
+		}
+		seen[key] = struct{}{}
+	}
+	return seen, nil
+}
+
+// validateCorrelationComplete requires exactly one prior for every distinct pair
+// of universe factors.
+func validateCorrelationComplete(keys []string, seen map[string]struct{}) error {
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			key := keys[i] + "|" + keys[j]
+			if _, ok := seen[key]; !ok {
+				return fmt.Errorf("%w: %s", errCorrelationIncomplete, key)
+			}
 		}
 	}
 	return nil
 }
 
-func (p *Profile) validateCorrelationPriors() error {
-	for _, c := range p.CorrelationPriors {
-		if c.FactorA == "" || c.FactorB == "" || c.FactorA == c.FactorB {
-			return errCorrelationFactor
-		}
-		if c.Rho < -1 || c.Rho > 1 {
-			return errCorrelationRange
-		}
+// canonicalPair orders two factor keys so a <= b.
+func canonicalPair(a, b string) (string, string) {
+	if a > b {
+		return b, a
 	}
-	return nil
+	return a, b
 }
 
 func returnPriorKey(assetClass, region, currency string) string {

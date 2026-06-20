@@ -8,6 +8,7 @@ const getAssumptionProfile = vi.hoisted(() => vi.fn());
 const saveAssumptionProfile = vi.hoisted(() => vi.fn());
 const activateAssumptionProfile = vi.hoisted(() => vi.fn());
 const setAssumptionPreferences = vi.hoisted(() => vi.fn());
+const validateAssumptionProfile = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/assumptions", () => ({
   listAssumptionProfiles: (...a: unknown[]) => listAssumptionProfiles(...a),
@@ -15,6 +16,7 @@ vi.mock("@/lib/api/assumptions", () => ({
   saveAssumptionProfile: (...a: unknown[]) => saveAssumptionProfile(...a),
   activateAssumptionProfile: (...a: unknown[]) => activateAssumptionProfile(...a),
   setAssumptionPreferences: (...a: unknown[]) => setAssumptionPreferences(...a),
+  validateAssumptionProfile: (...a: unknown[]) => validateAssumptionProfile(...a),
 }));
 
 import AssumptionsPage from "./page";
@@ -28,6 +30,8 @@ const systemProfile = {
   prior_strength_years: 20,
   correlation_strength_months: 36,
   student_t_df: 7,
+  return_floor: -0.95,
+  return_ceil: 2.0,
   scenarios: {
     conservative: { return_shift_log: -0.015, return_shift_log_fx: 0, volatility_multiplier: 1.15 },
     baseline: { return_shift_log: 0, return_shift_log_fx: 0, volatility_multiplier: 1 },
@@ -87,6 +91,12 @@ beforeEach(() => {
     profile: { ...systemProfile, id: "user_cma_x", owner_scope: "user", status: "draft" },
   });
   activateAssumptionProfile.mockResolvedValue({ activated: true });
+  validateAssumptionProfile.mockResolvedValue({
+    valid: true,
+    min_eigenvalue: 0.5,
+    max_repair_delta: 0,
+    psd_repair_heavy: false,
+  });
   setAssumptionPreferences.mockResolvedValue({
     preferences: {
       default_profile_id: "system_cma_v1",
@@ -108,15 +118,31 @@ describe("AssumptionsPage", () => {
     expect(await screen.findByText("相关性先验矩阵")).toBeInTheDocument();
   });
 
-  it("copies the system profile into a custom draft", async () => {
+  it("copies the system profile into an editable draft and saves it", async () => {
     renderPage();
     const copyBtn = await screen.findByRole("button", { name: "复制为自定义" });
     fireEvent.click(copyBtn);
+    // Editor opens (copy does not save immediately; td/063 R3).
+    expect(await screen.findByTestId("profile-editor")).toBeInTheDocument();
+    expect(saveAssumptionProfile).not.toHaveBeenCalled();
+    // Provide the now-required named reviewer, then save.
+    fireEvent.change(screen.getByTestId("editor-reviewed-by"), { target: { value: "审核人" } });
+    fireEvent.click(screen.getByTestId("editor-save"));
     await waitFor(() => expect(saveAssumptionProfile).toHaveBeenCalled());
     const arg = saveAssumptionProfile.mock.calls[0][0];
     expect(arg.profile.owner_scope).toBe("user");
     expect(arg.profile.status).toBe("draft");
     expect(arg.profile.id).not.toBe("system_cma_v1");
+    expect(arg.reviewed_by).toBe("审核人");
+  });
+
+  it("pre-validates a draft via the validate endpoint", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "复制为自定义" }));
+    await screen.findByTestId("profile-editor");
+    fireEvent.click(screen.getByRole("button", { name: "校验" }));
+    await waitFor(() => expect(validateAssumptionProfile).toHaveBeenCalled());
+    expect(await screen.findByText(/结构校验通过/)).toBeInTheDocument();
   });
 
   it("saves the global default selection", async () => {

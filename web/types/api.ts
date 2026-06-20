@@ -542,6 +542,8 @@ export interface AssumptionProfile {
   prior_strength_years: number;
   correlation_strength_months: number;
   student_t_df: number;
+  return_floor: number;
+  return_ceil: number;
   scenarios: Record<string, AssumptionScenario>;
   return_priors: AssumptionReturnPrior[];
   fx_priors?: AssumptionFXPrior[];

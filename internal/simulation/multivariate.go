@@ -14,9 +14,11 @@ import "math"
 // consumes the RNG in the exact same order as SampleStudentT (one normal for z,
 // then ν normals for the chi-square), so single-asset runs stay bit-compatible.
 //
-// The existing per-factor simple-return floor/ceil is applied independently; the
-// number of truncated factors is returned.
-func SampleMultivariateStudentT(rng *RNG, mu []float64, l [][]float64, df int) ([]float64, int) {
+// The frozen per-factor simple-return truncation band is applied independently;
+// the number of truncated factors is returned (td/063 R3).
+func SampleMultivariateStudentT(
+	rng *RNG, mu []float64, l [][]float64, df int, trunc TailTruncation,
+) ([]float64, int) {
 	n := len(mu)
 	z := make([]float64, n)
 	for i := 0; i < n; i++ {
@@ -32,14 +34,8 @@ func SampleMultivariateStudentT(rng *RNG, mu []float64, l [][]float64, df int) (
 		for j := 0; j <= i; j++ {
 			y += l[i][j] * z[j]
 		}
-		logRet := mu[i] + s*y
-		simple := math.Exp(logRet) - 1
-		switch {
-		case simple < ReturnFloor:
-			simple = ReturnFloor
-			truncations++
-		case simple > ReturnCeil:
-			simple = ReturnCeil
+		simple, clamped := trunc.clamp(math.Exp(mu[i]+s*y) - 1)
+		if clamped {
 			truncations++
 		}
 		out[i] = simple

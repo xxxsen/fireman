@@ -1,6 +1,9 @@
 package assumptions
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestSystemDefaultProfileValidates(t *testing.T) {
 	p := SystemDefaultProfile()
@@ -59,13 +62,36 @@ func TestProfileValidateFailures(t *testing.T) {
 			p.ReturnPriors[0].AnnualVolatilityCeiling = 0.01
 			p.ReturnPriors[0].AnnualVolatilityFloor = 0.2
 		},
-		"return below -100%": func(p *Profile) { p.ReturnPriors[0].AnnualGeometricReturn = -1.5 },
-		"low student t":      func(p *Profile) { p.StudentTDf = 2 },
-		"bad rho":            func(p *Profile) { p.CorrelationPriors[0].Rho = 1.5 },
-		"zero prior years":   func(p *Profile) { p.PriorStrengthYears = 0 },
+		"return below -100%":      func(p *Profile) { p.ReturnPriors[0].AnnualGeometricReturn = -1.5 },
+		"low student t":           func(p *Profile) { p.StudentTDf = 2 },
+		"return floor not loss":   func(p *Profile) { p.ReturnFloor = 0 },
+		"return floor below -1":   func(p *Profile) { p.ReturnFloor = -1.2 },
+		"return ceil not gain":    func(p *Profile) { p.ReturnCeil = 0 },
+		"return floor above ceil": func(p *Profile) { p.ReturnFloor, p.ReturnCeil = -0.1, -0.2 },
+		"bad rho":                 func(p *Profile) { p.CorrelationPriors[0].Rho = 1.5 },
+		"zero prior years":        func(p *Profile) { p.PriorStrengthYears = 0 },
 		"duplicate prior": func(p *Profile) {
 			p.ReturnPriors = append(p.ReturnPriors, p.ReturnPriors[0])
 		},
+		// td/063 N4: non-finite numerics must be rejected even when range checks pass.
+		"inf vol multiplier": func(p *Profile) {
+			s := p.Scenarios[ScenarioBaseline]
+			s.VolatilityMultiplier = math.Inf(1)
+			p.Scenarios[ScenarioBaseline] = s
+		},
+		"nan return shift": func(p *Profile) {
+			s := p.Scenarios[ScenarioOptimistic]
+			s.ReturnShiftLog = math.NaN()
+			p.Scenarios[ScenarioOptimistic] = s
+		},
+		"inf vol ceiling": func(p *Profile) { p.ReturnPriors[0].AnnualVolatilityCeiling = math.Inf(1) },
+		"duplicate fx prior": func(p *Profile) {
+			p.FXPriors = append(p.FXPriors, p.FXPriors[0])
+		},
+		// td/063 N1: provenance must be an https URL and ISO dates.
+		"non-https source":   func(p *Profile) { p.ReturnPriors[0].SourceURL = "http://x.test" },
+		"bad published date": func(p *Profile) { p.ReturnPriors[0].PublishedAt = "2026/06/20" },
+		"empty reviewed at":  func(p *Profile) { p.FXPriors[0].ReviewedAt = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

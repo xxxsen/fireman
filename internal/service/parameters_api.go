@@ -36,7 +36,17 @@ type PlanParametersAPI struct {
 	SimulationRuns           int     `json:"simulation_runs"`
 	StudentTDf               int     `json:"student_t_df"`
 	Seed                     *string `json:"seed,omitempty"`
-	UpdatedAt                int64   `json:"updated_at"`
+	// td/061 return-assumption selection. These must round-trip through the API so
+	// the wizard/parameters page can persist blended_prior + profile selection;
+	// otherwise the binding drops them and the plan silently reverts to
+	// historical_cagr (td/063 R0).
+	ReturnAssumptionMode        string `json:"return_assumption_mode"`
+	AssumptionSelectionMode     string `json:"assumption_selection_mode"`
+	ReturnAssumptionSetID       string `json:"return_assumption_set_id"`
+	ReturnAssumptionSetVersion  int    `json:"return_assumption_set_version"`
+	ReturnAssumptionScenario    string `json:"return_assumption_scenario"`
+	CustomReturnAssumptionsJSON string `json:"custom_return_assumptions_json"`
+	UpdatedAt                   int64  `json:"updated_at"`
 }
 
 // ParametersUpdateAPIRequest updates parameters via API DTOs.
@@ -59,7 +69,14 @@ func ParametersToAPI(p repository.PlanParameters) PlanParametersAPI {
 		WithdrawalTaxRate: p.WithdrawalTaxRate, TaxableWithdrawalRatio: p.TaxableWithdrawalRatio,
 		RebalanceFrequency: p.RebalanceFrequency, RebalanceThreshold: p.RebalanceThreshold,
 		TransactionCostRate: p.TransactionCostRate, SimulationRuns: p.SimulationRuns,
-		StudentTDf: p.StudentTDf, Seed: FormatSeedString(p.Seed), UpdatedAt: p.UpdatedAt,
+		StudentTDf: p.StudentTDf, Seed: FormatSeedString(p.Seed),
+		ReturnAssumptionMode:        p.ReturnAssumptionMode,
+		AssumptionSelectionMode:     p.AssumptionSelectionMode,
+		ReturnAssumptionSetID:       p.ReturnAssumptionSetID,
+		ReturnAssumptionSetVersion:  p.ReturnAssumptionSetVersion,
+		ReturnAssumptionScenario:    p.ReturnAssumptionScenario,
+		CustomReturnAssumptionsJSON: p.CustomReturnAssumptionsJSON,
+		UpdatedAt:                   p.UpdatedAt,
 	}
 }
 
@@ -80,7 +97,14 @@ func ParametersFromAPI(p PlanParametersAPI) (repository.PlanParameters, error) {
 		WithdrawalTaxRate: p.WithdrawalTaxRate, TaxableWithdrawalRatio: p.TaxableWithdrawalRatio,
 		RebalanceFrequency: p.RebalanceFrequency, RebalanceThreshold: p.RebalanceThreshold,
 		TransactionCostRate: p.TransactionCostRate, SimulationRuns: p.SimulationRuns,
-		StudentTDf: p.StudentTDf, Seed: seed, UpdatedAt: p.UpdatedAt,
+		StudentTDf: p.StudentTDf, Seed: seed,
+		ReturnAssumptionMode:        p.ReturnAssumptionMode,
+		AssumptionSelectionMode:     p.AssumptionSelectionMode,
+		ReturnAssumptionSetID:       p.ReturnAssumptionSetID,
+		ReturnAssumptionSetVersion:  p.ReturnAssumptionSetVersion,
+		ReturnAssumptionScenario:    p.ReturnAssumptionScenario,
+		CustomReturnAssumptionsJSON: p.CustomReturnAssumptionsJSON,
+		UpdatedAt:                   p.UpdatedAt,
 	}, nil
 }
 

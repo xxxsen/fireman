@@ -47,7 +47,13 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
 	}
 	params.SelectedScenarioID = &scenarioID
+	applyNewPlanAssumptionDefaults(&params)
 	if err := validateParameters(params); err != nil {
+		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
+	}
+	if err := validatePinnedProfileActive(
+		ctx, repository.NewAssumptionProfileRepo(s.sql), params,
+	); err != nil {
 		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
 	}
 
@@ -94,6 +100,23 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 		return PlanDetail{}, wrapRepo("create wizard tx", err)
 	}
 	return s.Get(ctx, planID)
+}
+
+// applyNewPlanAssumptionDefaults fills the return-assumption selection for a newly
+// created plan when the client omitted it. New plans use the forward-looking,
+// auditable blended_prior calibration following the user's global profile
+// (td/061 §4.2.3 / td/063 R0); the repository's historical_cagr default is only
+// for migration-era rows.
+func applyNewPlanAssumptionDefaults(p *repository.PlanParameters) {
+	if p.ReturnAssumptionMode == "" {
+		p.ReturnAssumptionMode = repository.ModeBlendedPrior
+	}
+	if p.AssumptionSelectionMode == "" {
+		p.AssumptionSelectionMode = SelectionFollowGlobal
+	}
+	if p.ReturnAssumptionScenario == "" {
+		p.ReturnAssumptionScenario = repository.DefaultReturnAssumptionScenario
+	}
 }
 
 // CountPlans returns the number of plans in the database.

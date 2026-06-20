@@ -1,8 +1,21 @@
 package service
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/fireman/fireman/internal/assumptions"
 	"github.com/fireman/fireman/internal/simulation"
+)
+
+var (
+	// errFactorCorrelationMissing is returned when a cross-type factor pair has no
+	// correlation prior in the resolved profile. The forward engine must block
+	// rather than silently assume ρ=0 (td/063 R4).
+	errFactorCorrelationMissing = errors.New("no correlation prior for factor pair")
+	// errFactorModelNotPSD is returned when the frozen covariance cannot be
+	// Cholesky-decomposed, so the joint sampler cannot be built (td/063 N3).
+	errFactorModelNotPSD = errors.New("factor model covariance is not positive semi-definite")
 )
 
 // factorBuild collects the per-factor inputs while walking the plan's assets.
@@ -22,11 +35,13 @@ type factorBuild struct {
 // months exist; two holdings of the same (asset_class, region) are forced to ρ=1
 // so identical exposures get no fake diversification (td/061 §3.5.1/§3.5.2).
 //
-// It returns nil when there is no risk factor (an all-cash plan), in which case
-// the caller keeps the legacy independent path.
+// It returns (nil, nil, nil) when there is no risk factor (an all-cash plan), in
+// which case the caller keeps the legacy independent path. It returns an error
+// when a required correlation prior is missing or the covariance is not PSD, so
+// the forward engine blocks instead of silently degrading (td/063 R4/N3).
 func buildFrozenFactorModel(
 	assets []simulation.SnapshotAsset, baseCurrency string, profile assumptions.Profile,
-) (*simulation.FactorModel, []simulation.FactorRef) {
+) (*simulation.FactorModel, []simulation.FactorRef, error) {
 	fb := factorBuild{}
 	refs := make([]simulation.FactorRef, len(assets))
 	fxIndexByCurrency := map[string]int{}
@@ -57,17 +72,20 @@ func buildFrozenFactorModel(
 		}
 	}
 	if len(fb.names) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	rRaw, pairMonths, lambda, priorOnly := fb.correlations(profile)
+	rRaw, pairMonths, lambda, priorOnly, err := fb.correlations(profile)
+	if err != nil {
+		return nil, nil, err
+	}
 	model, ok := simulation.AssembleFactorModelDetailed(
 		fb.names, fb.mu, fb.sigma, rRaw, pairMonths, lambda, priorOnly,
 	)
 	if !ok {
-		return nil, nil
+		return nil, nil, errFactorModelNotPSD
 	}
-	return &model, refs
+	return &model, refs, nil
 }
 
 func (fb *factorBuild) add(name, typeKey string, mu, sigma float64, months map[string]float64) {
@@ -83,7 +101,7 @@ func (fb *factorBuild) add(name, typeKey string, mu, sigma float64, months map[s
 // when at least MinCommonMonths overlap, otherwise the profile prior.
 func (fb *factorBuild) correlations(
 	profile assumptions.Profile,
-) ([][]float64, map[string]int, map[string]float64, []string) {
+) ([][]float64, map[string]int, map[string]float64, []string, error) {
 	priorLookup := correlationPriorLookup(profile)
 	strength := profile.CorrelationStrengthMonths
 	n := len(fb.names)
@@ -98,26 +116,31 @@ func (fb *factorBuild) correlations(
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
 			pk := simulation.PairKey(fb.names[i], fb.names[j])
-			rho := fb.pairCorrelation(i, j, priorLookup, strength, pk, pairMonths, lambda, &priorOnly)
+			rho, err := fb.pairCorrelation(i, j, priorLookup, strength, pk, pairMonths, lambda, &priorOnly)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
 			r[i][j] = rho
 			r[j][i] = rho
 		}
 	}
-	return r, pairMonths, lambda, priorOnly
+	return r, pairMonths, lambda, priorOnly, nil
 }
 
 func (fb *factorBuild) pairCorrelation(
 	i, j int, priorLookup func(a, b string) (float64, bool), strength int,
 	pk string, pairMonths map[string]int, lambda map[string]float64, priorOnly *[]string,
-) float64 {
+) (float64, error) {
 	if fb.typeKeys[i] == fb.typeKeys[j] {
 		// Identical exposures are the same risk factor: perfectly correlated.
 		lambda[pk] = 0
-		return 1
+		return 1, nil
 	}
 	prior, hasPrior := priorLookup(fb.typeKeys[i], fb.typeKeys[j])
 	if !hasPrior {
-		prior = 0
+		// A missing cross-type correlation prior must block the run, never silently
+		// become ρ=0 (td/063 R4).
+		return 0, fmt.Errorf("%w: %s|%s", errFactorCorrelationMissing, fb.typeKeys[i], fb.typeKeys[j])
 	}
 	rhoHist, m, histOK := simulation.PairwiseCorrelation(
 		simulation.FactorSpec{Months: fb.months[i]},
@@ -129,7 +152,7 @@ func (fb *factorBuild) pairCorrelation(
 	if isPriorOnly {
 		*priorOnly = append(*priorOnly, pk)
 	}
-	return rho
+	return rho, nil
 }
 
 func correlationPriorLookup(profile assumptions.Profile) func(a, b string) (float64, bool) {

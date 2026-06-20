@@ -52,8 +52,23 @@ func TestCalibrateAssetBlendedShrinksReturn(t *testing.T) {
 
 func TestCalibrateAssetBlendedMissingPriorErrors(t *testing.T) {
 	res := sysResolved(assumptions.SourceBlendedPrior, assumptions.ScenarioBaseline)
-	if _, err := calibrateAsset(res, "ins_us", "equity", "foreign", "USD", 0.10, 0.18, 10, nil); err == nil {
-		t.Fatal("expected error for unmapped USD prior under blended_prior")
+	// JPY has no native-currency prior in the system profile, so a JPY-valued
+	// asset under blended_prior must block rather than silently fall back.
+	if _, err := calibrateAsset(res, "ins_jp", "equity", "foreign", "JPY", 0.10, 0.18, 10, nil); err == nil {
+		t.Fatal("expected error for unmapped JPY prior under blended_prior")
+	}
+}
+
+func TestCalibrateAssetBlendedNativeUSDPrior(t *testing.T) {
+	res := sysResolved(assumptions.SourceBlendedPrior, assumptions.ScenarioBaseline)
+	// USD now has a native-currency prior (td/063 R2), so a USD-valued asset
+	// calibrates its local return without an FX/currency mismatch.
+	out, err := calibrateAsset(res, "ins_us", "equity", "foreign", "USD", 0.10, 0.18, 10, nil)
+	if err != nil {
+		t.Fatalf("native USD prior must calibrate, got %v", err)
+	}
+	if out.ForwardAnnualGeometricReturn <= 0 {
+		t.Fatalf("expected positive forward return, got %.6f", out.ForwardAnnualGeometricReturn)
 	}
 }
 

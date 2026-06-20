@@ -149,6 +149,9 @@ func (s *PlanService) Create(ctx context.Context, req CreatePlanRequest) (PlanDe
 	if err := validateParameters(params); err != nil {
 		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
 	}
+	if err := validatePinnedProfileActive(ctx, repository.NewAssumptionProfileRepo(s.sql), params); err != nil {
+		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
+	}
 
 	alloc, err := initialPlanAllocation(ctx, s, req.SelectedScenarioID)
 	if err != nil {
@@ -273,6 +276,11 @@ func (s *PlanService) UpdateParameters(ctx context.Context, planID string,
 	}
 	req.Parameters.PlanID = planID
 	if err := validateParameters(req.Parameters); err != nil {
+		return repository.PlanParameters{}, newErr("parameters_invalid", err.Error(), nil)
+	}
+	if err := validatePinnedProfileActive(
+		ctx, repository.NewAssumptionProfileRepo(s.sql), req.Parameters,
+	); err != nil {
 		return repository.PlanParameters{}, newErr("parameters_invalid", err.Error(), nil)
 	}
 

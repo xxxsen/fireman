@@ -766,20 +766,15 @@ export function ParametersContent({
               onChange={(e) => update("simulation_runs", Number(e.target.value))}
             />
           </label>
-          <label className="block text-sm">
+          <div className="block text-sm">
             <span className="flex items-center">
               Student-t 自由度
               <MetricHelp termKey="student_t_df" />
             </span>
-            <input
-              type="number"
-              min={5}
-              max={30}
-              className="mt-1 w-full rounded-md border px-3 py-2"
-              value={params.student_t_df}
-              onChange={(e) => update("student_t_df", Number(e.target.value))}
-            />
-          </label>
+            <p className="mt-1 rounded-md border border-dashed border-line bg-surface-muted px-3 py-2 text-ink-muted">
+              厚尾自由度与收益截断现由全局「模拟假设」profile 统一管理并在每次运行时冻结，计划级不再单独配置。
+            </p>
+          </div>
           <label className="block text-sm">
             随机种子（可选）
             <input
@@ -825,6 +820,10 @@ export function ParametersContent({
           }
           if (assumptionModeChanged && !assumptionModeConfirmed) {
             setSaveError("切换收益假设来源需先勾选确认。");
+            return;
+          }
+          if (params.withdrawal_floor_ratio >= params.withdrawal_ceiling_ratio) {
+            setSaveError("护栏下限比例需小于上限比例。");
             return;
           }
           saveMut.mutate();

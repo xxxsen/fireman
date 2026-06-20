@@ -21,7 +21,10 @@ func TestBuildFrozenFactorModelDomesticMix(t *testing.T) {
 		},
 		{HoldingID: "hc", AssetClass: "cash", Region: "domestic", Currency: "CNY", IsCash: true},
 	}
-	fm, refs := buildFrozenFactorModel(assets, "CNY", profile)
+	fm, refs, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if fm == nil {
 		t.Fatal("expected a factor model for risk assets")
 	}
@@ -55,7 +58,10 @@ func TestBuildFrozenFactorModelAddsFXFactor(t *testing.T) {
 			FXSnapshotID: "fxhash", FXModeledReturn: 0.0, FXAnnualVolatility: 0.06,
 		},
 	}
-	fm, refs := buildFrozenFactorModel(assets, "CNY", profile)
+	fm, refs, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if fm == nil {
 		t.Fatal("expected a factor model")
 	}
@@ -76,7 +82,10 @@ func TestBuildFrozenFactorModelAllCashReturnsNil(t *testing.T) {
 	assets := []simulation.SnapshotAsset{
 		{HoldingID: "hc", AssetClass: "cash", Region: "domestic", Currency: "CNY", IsCash: true},
 	}
-	fm, refs := buildFrozenFactorModel(assets, "CNY", profile)
+	fm, refs, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if fm != nil || refs != nil {
 		t.Fatalf("all-cash plan must keep the independent path, got fm=%v refs=%v", fm, refs)
 	}
@@ -99,7 +108,10 @@ func TestBuildFrozenFactorModelUsesFrozenHistoryForCrossType(t *testing.T) {
 			ModeledAnnualReturn: 0.03, AnnualVolatility: 0.05, Months: months,
 		},
 	}
-	fm, _ := buildFrozenFactorModel(assets, "CNY", profile)
+	fm, _, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if fm == nil {
 		t.Fatal("expected a factor model")
 	}
@@ -134,7 +146,10 @@ func TestBuildFrozenFactorModelSameTypeIsPerfectlyCorrelated(t *testing.T) {
 			ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18,
 		},
 	}
-	fm, _ := buildFrozenFactorModel(assets, "CNY", profile)
+	fm, _, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if fm == nil {
 		t.Fatal("expected a factor model")
 	}

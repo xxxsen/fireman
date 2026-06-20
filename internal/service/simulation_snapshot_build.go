@@ -157,7 +157,7 @@ func (s *SimulationService) buildOneSnapshotAsset(
 	if currency == plan.BaseCurrency {
 		return sa, nil
 	}
-	return s.enrichSnapshotAssetFX(ctx, plan, line, sa, currency, fxCache)
+	return s.enrichSnapshotAssetFX(ctx, plan, line, sa, currency, fxCache, resolved)
 }
 
 func toSimSnapshotYears(years []repository.SnapshotYear) []simulation.SnapshotYear {
@@ -236,40 +236,102 @@ func (s *SimulationService) enrichSnapshotAssetFX(
 	sa simulation.SnapshotAsset,
 	currency string,
 	fxCache map[string]marketdata.SnapshotMetrics,
+	resolved resolvedAssumption,
 ) (simulation.SnapshotAsset, error) {
-	fxMetrics, ok := fxCache[currency]
-	if !ok {
-		var err error
-		fxMetrics, err = s.fx.Metrics(ctx, currency, plan.BaseCurrency, plan.ValuationDate)
-		if err != nil {
-			return simulation.SnapshotAsset{}, newErr("fx_snapshot_missing", "FX data unavailable for foreign holding",
-				map[string]any{
-					"holding_id": line.HoldingID, "currency": currency, "error": err.Error(),
-				})
-		}
-		if fxMetrics.CompleteYearCount < 1 || !fxMetrics.SimulationEligible {
-			return simulation.SnapshotAsset{}, newErr(
-				"fx_insufficient_history",
-				"FX snapshot does not meet simulation eligibility",
-				map[string]any{
-					"holding_id": line.HoldingID, "currency": currency,
-					"complete_year_count":  fxMetrics.CompleteYearCount,
-					"monthly_return_count": fxMetrics.MonthlyReturnCount,
-				},
-			)
-		}
-		fxCache[currency] = fxMetrics
+	fxMetrics, err := s.fxMetricsCached(ctx, plan, line, currency, fxCache)
+	if err != nil {
+		return simulation.SnapshotAsset{}, err
 	}
+	hist := marketdata.MetricFloat(fxMetrics.ModeledAnnualReturn)
+	histVol := marketdata.MetricFloat(fxMetrics.AnnualVolatility)
 	sa.FXSnapshotID = fxMetrics.SourceHash
-	sa.FXModeledReturn = marketdata.MetricFloat(fxMetrics.ModeledAnnualReturn)
-	sa.FXAnnualVolatility = marketdata.MetricFloat(fxMetrics.AnnualVolatility)
+	sa.FXHistoricalReturn = hist
+	sa.FXModeledReturn = hist
+	sa.FXAnnualVolatility = histVol
 	sa.FXCompleteYearCount = fxMetrics.CompleteYearCount
 	sa.FXMonthlyReturnCount = fxMetrics.MonthlyReturnCount
 	sa.FXHistoryDepth = fxMetrics.HistoryDepth
 	sa.FXMetricsVersion = fxMetrics.MetricsVersion
 	sa.FXDataWarnings = fxMetrics.Warnings
 	sa.FXMonths = fxMonthSeriesToMap(fxMetrics.MonthlyReturns)
+	sa.FXReturnSource = resolved.Mode
+	if err := applyFXCalibration(&sa, resolved, currency, plan.BaseCurrency, hist, histVol, fxMetrics); err != nil {
+		return simulation.SnapshotAsset{}, newErr("assumption_unavailable",
+			"no forward FX assumption covers this currency pair; configure it in 模拟假设",
+			map[string]any{
+				"holding_id": line.HoldingID, "from_currency": currency,
+				"base_currency": plan.BaseCurrency, "mode": resolved.Mode, "error": err.Error(),
+			})
+	}
 	return sa, nil
+}
+
+func (s *SimulationService) fxMetricsCached(
+	ctx context.Context,
+	plan repository.Plan,
+	line domain.HoldingTargetLine,
+	currency string,
+	fxCache map[string]marketdata.SnapshotMetrics,
+) (marketdata.SnapshotMetrics, error) {
+	if fxMetrics, ok := fxCache[currency]; ok {
+		return fxMetrics, nil
+	}
+	fxMetrics, err := s.fx.Metrics(ctx, currency, plan.BaseCurrency, plan.ValuationDate)
+	if err != nil {
+		return marketdata.SnapshotMetrics{}, newErr("fx_snapshot_missing", "FX data unavailable for foreign holding",
+			map[string]any{
+				"holding_id": line.HoldingID, "currency": currency, "error": err.Error(),
+			})
+	}
+	if fxMetrics.CompleteYearCount < 1 || !fxMetrics.SimulationEligible {
+		return marketdata.SnapshotMetrics{}, newErr(
+			"fx_insufficient_history",
+			"FX snapshot does not meet simulation eligibility",
+			map[string]any{
+				"holding_id": line.HoldingID, "currency": currency,
+				"complete_year_count":  fxMetrics.CompleteYearCount,
+				"monthly_return_count": fxMetrics.MonthlyReturnCount,
+			},
+		)
+	}
+	fxCache[currency] = fxMetrics
+	return fxMetrics, nil
+}
+
+// applyFXCalibration replaces the raw historical FX drift with the forward,
+// profile-driven FX calibration for blended_prior and custom modes (custom only
+// overrides the asset's local return, never FX, so its FX still uses the prior).
+// historical_cagr keeps the historical FX drift so legacy runs are unchanged. A
+// missing FX prior under a forward mode is a hard error (td/063 R2).
+func applyFXCalibration(
+	sa *simulation.SnapshotAsset,
+	resolved resolvedAssumption,
+	from, base string,
+	hist, histVol float64,
+	fxMetrics marketdata.SnapshotMetrics,
+) error {
+	sa.FXReturnScenario = resolved.Scenario
+	if resolved.Mode == assumptions.SourceHistoricalCAGR {
+		return nil
+	}
+	cal, err := resolved.Profile.CalibrateFX(assumptions.FXCalibrationInput{
+		FromCurrency:                    from,
+		BaseCurrency:                    base,
+		HistoricalAnnualGeometricReturn: hist,
+		HistoricalAnnualVolatility:      histVol,
+		CompleteYearCount:               fxMetrics.CompleteYearCount,
+		Scenario:                        resolved.Scenario,
+	})
+	if err != nil {
+		return fmt.Errorf("calibrate forward FX %s->%s: %w", from, base, err)
+	}
+	sa.FXModeledReturn = cal.ForwardAnnualGeometricReturn
+	sa.FXAnnualVolatility = cal.AnnualVolatilityUsed
+	sa.FXPriorReturn = cal.PriorAnnualGeometricReturn
+	sa.FXHistoricalWeight = cal.HistoricalWeight
+	sa.FXReturnSource = cal.Source
+	sa.FXReturnWarnings = cal.Warnings
+	return nil
 }
 
 func fxMonthSeriesToMap(months []marketdata.MonthlyReturn) map[string]float64 {
@@ -299,7 +361,7 @@ func buildInputSnapshotStruct(
 	configHash string,
 	assets []simulation.SnapshotAsset,
 	resolved resolvedAssumption,
-) *simulation.InputSnapshot {
+) (*simulation.InputSnapshot, error) {
 	in := &simulation.InputSnapshot{
 		EngineVersion:     simulation.LegacyEngineVersion,
 		PlanID:            plan.ID,
@@ -323,16 +385,47 @@ func buildInputSnapshotStruct(
 		Assets: assets,
 	}
 	// Forward-looking modes (blended_prior / custom) run the joint, correlated
-	// engine; historical_cagr keeps the legacy independent path so migrated plans
-	// reproduce their old numbers exactly (td/061 §4.2).
+	// engine and apply the deterministic cash return; historical_cagr keeps the
+	// legacy independent path with implicit 0% cash so migrated plans reproduce
+	// their old numbers exactly (td/061 §4.2 / td/063 R1).
 	if resolved.Mode != assumptions.SourceHistoricalCAGR {
-		if fm, refs := buildFrozenFactorModel(assets, plan.BaseCurrency, resolved.Profile); fm != nil {
-			in.EngineVersion = simulation.EngineVersion
+		// A forward run is a 3.0.0 run even when it has no risk factor (an all-cash
+		// plan): cash must still grow at its frozen forward return.
+		in.EngineVersion = simulation.EngineVersion
+		in.DeterministicCashReturn = true
+		freezeTailRiskParams(in, resolved.Profile)
+		fm, refs, err := buildFrozenFactorModel(assets, plan.BaseCurrency, resolved.Profile)
+		if err != nil {
+			// The forward engine must block, never silently fall back to the
+			// independent 2.0.0 path (td/063 R4/N3).
+			return nil, newErr("assumption_unavailable",
+				"forward risk model could not be built; check the global assumption profile",
+				map[string]any{"error": err.Error()})
+		}
+		if fm != nil {
 			in.RandomFactorModel = simulation.FactorModelMultivariate
 			in.FactorModel = fm
 			in.AssetFactorRefs = refs
 		}
 	}
 	in.MarketSnapshotHash = simulation.MarketHashFromAssets(assets)
-	return in
+	return in, nil
+}
+
+// freezeTailRiskParams freezes the active profile's Student-t df and per-month
+// return truncation into the forward (3.0.0) snapshot so the sampler reads frozen
+// values, a plan can no longer change them, and changing the profile only affects
+// new runs (td/063 R3). Profiles predating these fields (zero/invalid bounds) fall
+// back to the engine defaults so a legacy profile can never collapse the band.
+func freezeTailRiskParams(in *simulation.InputSnapshot, profile assumptions.Profile) {
+	if profile.StudentTDf > 2 {
+		in.TailStudentTDf = profile.StudentTDf
+		in.Parameters.StudentTDf = profile.StudentTDf
+	}
+	floor, ceil := profile.ReturnFloor, profile.ReturnCeil
+	if !(ceil > 0 && floor > -1 && floor < 0 && floor < ceil) {
+		floor, ceil = simulation.ReturnFloor, simulation.ReturnCeil
+	}
+	in.TailReturnFloor = &floor
+	in.TailReturnCeil = &ceil
 }

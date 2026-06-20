@@ -9,6 +9,32 @@ const (
 	ReturnCeil  = 2.0
 )
 
+// TailTruncation bounds a single simulated monthly simple return. It is frozen
+// per run from the active profile (3.0.0) or from the legacy constants (2.x), so
+// the truncation is auditable and a plan can no longer change it (td/063 R3).
+type TailTruncation struct {
+	Floor float64
+	Ceil  float64
+}
+
+// LegacyTailTruncation is the pre-td/063 hard-coded band kept for 2.x replay and
+// for any snapshot that did not freeze profile bounds.
+func LegacyTailTruncation() TailTruncation {
+	return TailTruncation{Floor: ReturnFloor, Ceil: ReturnCeil}
+}
+
+// clamp truncates a simple return to the band and reports whether it was clamped.
+func (t TailTruncation) clamp(simple float64) (float64, bool) {
+	switch {
+	case simple < t.Floor:
+		return t.Floor, true
+	case simple > t.Ceil:
+		return t.Ceil, true
+	default:
+		return simple, false
+	}
+}
+
 // AssetReturnParams holds monthly Student-t parameters for one asset.
 type AssetReturnParams struct {
 	MonthlyMu    float64
@@ -27,8 +53,9 @@ func ParamsFromAnnual(annualGeometricReturn, annualVolatility float64) AssetRetu
 	}
 }
 
-// SampleStudentT draws one monthly simple return from an independent Student-t factor.
-func SampleStudentT(rng *RNG, p AssetReturnParams, df int) (float64, bool) {
+// SampleStudentT draws one monthly simple return from an independent Student-t
+// factor and truncates it to the frozen tail band (td/063 R3).
+func SampleStudentT(rng *RNG, p AssetReturnParams, df int, trunc TailTruncation) (float64, bool) {
 	if p.MonthlySigma == 0 {
 		return math.Exp(p.MonthlyMu) - 1, false
 	}
@@ -36,14 +63,7 @@ func SampleStudentT(rng *RNG, p AssetReturnParams, df int) (float64, bool) {
 	u := chiSquare(rng, df)
 	scale := math.Sqrt(float64(df-2) / u)
 	logRet := p.MonthlyMu + p.MonthlySigma*z*scale
-	simple := math.Exp(logRet) - 1
-	if simple < ReturnFloor {
-		return ReturnFloor, true
-	}
-	if simple > ReturnCeil {
-		return ReturnCeil, true
-	}
-	return simple, false
+	return trunc.clamp(math.Exp(logRet) - 1)
 }
 
 func chiSquare(rng *RNG, df int) float64 {

@@ -100,6 +100,8 @@ function validateAdvancedParams(a: AdvancedFireParams): string[] {
   if (!(a.withdrawal_floor_ratio > 0 && a.withdrawal_floor_ratio <= 1))
     errs.push("护栏下限比例需大于 0% 且不超过 100%。");
   if (!within(a.withdrawal_ceiling_ratio, 1, 2)) errs.push("护栏上限比例需在 100% 到 200% 之间。");
+  if (a.withdrawal_floor_ratio >= a.withdrawal_ceiling_ratio)
+    errs.push("护栏下限比例需小于上限比例。");
   if (!within(a.withdrawal_tax_rate, 0, 1)) errs.push("有效提取税率需在 0% 到 100% 之间。");
   if (!within(a.taxable_withdrawal_ratio, 0, 1)) errs.push("应税提取比例需在 0% 到 100% 之间。");
   if (a.withdrawal_tax_rate * a.taxable_withdrawal_ratio >= 1)

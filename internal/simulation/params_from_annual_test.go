@@ -15,7 +15,7 @@ func TestParamsFromAnnualCompoundsToGeometricReturn(t *testing.T) {
 			t.Fatalf("annual=%g: 12-month compound=%g, want %g", r, got, r)
 		}
 		// With zero volatility, SampleStudentT must return the deterministic drift.
-		simple, truncated := SampleStudentT(nil, p, 7)
+		simple, truncated := SampleStudentT(nil, p, 7, LegacyTailTruncation())
 		if truncated {
 			t.Fatalf("annual=%g: unexpected truncation with zero sigma", r)
 		}

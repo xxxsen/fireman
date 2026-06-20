@@ -63,7 +63,8 @@ func runPathMonths(
 		}
 
 		rebalanced := pathMonthRebalance(slots, month, p, &state.summary, &txCost)
-		state.truncCount += applyPathReturns(in, slots, rng, p, monthShock, hasShock)
+		state.truncCount += applyPathReturns(in, slots, rng, monthShock, hasShock)
+		applyCashReturns(in, slots, monthShock, hasShock)
 
 		infl.Advance(month)
 		endWealth := totalWealth(slots)
@@ -150,16 +151,15 @@ func applyPathReturns(
 	in *InputSnapshot,
 	slots []assetSlot,
 	rng *RNG,
-	p SnapshotParameters,
 	monthShock MonthShock,
 	hasShock bool,
 ) int {
 	if in.RandomFactorModel == FactorModelMultivariate && in.FactorModel != nil {
-		return applyPathReturnsJoint(in, slots, rng, p, monthShock, hasShock)
+		return applyPathReturnsJoint(in, slots, rng, monthShock, hasShock)
 	}
 	truncCount := 0
 	for i := range slots {
-		truncCount += applySlotReturn(in, slots, i, rng, p, monthShock, hasShock)
+		truncCount += applySlotReturn(in, slots, i, rng, monthShock, hasShock)
 	}
 	return truncCount
 }
@@ -171,7 +171,6 @@ func applyPathReturnsJoint(
 	in *InputSnapshot,
 	slots []assetSlot,
 	rng *RNG,
-	p SnapshotParameters,
 	monthShock MonthShock,
 	hasShock bool,
 ) int {
@@ -179,7 +178,9 @@ func applyPathReturnsJoint(
 	if hasShock {
 		mu = adjustedFactorMu(in, monthShock)
 	}
-	factorReturns, trunc := SampleMultivariateStudentT(rng, mu, in.FactorModel.L, p.StudentTDf)
+	factorReturns, trunc := SampleMultivariateStudentT(
+		rng, mu, in.FactorModel.L, in.EffectiveDf(), in.TailTruncationBounds(),
+	)
 	for i := range slots {
 		applySlotJointReturn(in, slots, i, factorReturns, monthShock, hasShock)
 	}
@@ -227,6 +228,7 @@ func applySlotJointReturn(
 // DriftDelta overlays (stress/sensitivity) in the same way the independent path
 // does, keeping volatility (and therefore L) unchanged.
 func adjustedFactorMu(in *InputSnapshot, monthShock MonthShock) []float64 {
+	floor := in.TailTruncationBounds().Floor
 	mu := append([]float64(nil), in.FactorModel.Mu...)
 	for i := range in.Assets {
 		shock, ok := monthShock.Assets[i]
@@ -238,8 +240,8 @@ func adjustedFactorMu(in *InputSnapshot, monthShock MonthShock) []float64 {
 			continue
 		}
 		annual := in.Assets[i].ModeledAnnualReturn + shock.DriftDelta
-		if annual < ReturnFloor {
-			annual = ReturnFloor
+		if annual < floor {
+			annual = floor
 		}
 		mu[ref.AssetFactorIndex] = math.Log(1+annual) / 12
 	}
@@ -251,26 +253,27 @@ func applySlotReturn(
 	slots []assetSlot,
 	i int,
 	rng *RNG,
-	p SnapshotParameters,
 	monthShock MonthShock,
 	hasShock bool,
 ) int {
 	if slots[i].isCash {
 		return 0
 	}
+	trunc := in.TailTruncationBounds()
+	df := in.EffectiveDf()
 	params := slots[i].returnParams
 	var assetShock AssetShock
 	if hasShock {
 		assetShock = monthShock.Assets[i]
 		if assetShock.DriftDelta != 0 {
 			annual := in.Assets[i].ModeledAnnualReturn + assetShock.DriftDelta
-			if annual < ReturnFloor {
-				annual = ReturnFloor
+			if annual < trunc.Floor {
+				annual = trunc.Floor
 			}
 			params = ParamsFromAnnual(annual, in.Assets[i].AnnualVolatility)
 		}
 	}
-	local, tr := SampleStudentT(rng, params, p.StudentTDf)
+	local, tr := SampleStudentT(rng, params, df, trunc)
 	truncCount := 0
 	if tr {
 		truncCount++
@@ -280,7 +283,7 @@ func applySlotReturn(
 	}
 	ret := local
 	if slots[i].useFX {
-		fx, tr2 := SampleStudentT(rng, slots[i].fxParams, p.StudentTDf)
+		fx, tr2 := SampleStudentT(rng, slots[i].fxParams, df, trunc)
 		if tr2 {
 			truncCount++
 		}
@@ -294,6 +297,45 @@ func applySlotReturn(
 		slots[i].balance = 0
 	}
 	return truncCount
+}
+
+// applyCashReturns grows every cash slot by its frozen deterministic monthly
+// return r_m = exp(ln(1+forward_annual)/12) - 1. Cash is intentionally non-random
+// and FX-free: it is excluded from the Student-t draw, the correlation matrix and
+// the FX factor (td/061 §3.5 / td/063 R1). Only forward (3.0.0) inputs set
+// DeterministicCashReturn; legacy 2.x snapshots keep cash at 0% so old runs replay
+// byte-for-byte. A cash-specific stress shock composes on the deterministic return
+// using the same AssetShock semantics as risk assets.
+func applyCashReturns(in *InputSnapshot, slots []assetSlot, monthShock MonthShock, hasShock bool) {
+	if !in.DeterministicCashReturn {
+		return
+	}
+	floor := in.TailTruncationBounds().Floor
+	for i := range slots {
+		if !slots[i].isCash {
+			continue
+		}
+		params := slots[i].returnParams
+		var assetShock AssetShock
+		if hasShock {
+			assetShock = monthShock.Assets[i]
+			if assetShock.DriftDelta != 0 && i < len(in.Assets) {
+				annual := in.Assets[i].ModeledAnnualReturn + assetShock.DriftDelta
+				if annual < floor {
+					annual = floor
+				}
+				params = ParamsFromAnnual(annual, 0)
+			}
+		}
+		r := math.Exp(params.MonthlyMu) - 1
+		if assetShock.ReturnMul != 0 {
+			r = (1+r)*(1+assetShock.ReturnMul) - 1
+		}
+		slots[i].balance *= (1 + r)
+		if slots[i].balance < 0 {
+			slots[i].balance = 0
+		}
+	}
 }
 
 func updatePeakDrawdown(endWealth, peak int64, maxDD float64) (int64, float64) {

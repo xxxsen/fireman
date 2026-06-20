@@ -14,8 +14,8 @@ func TestMultivariateSingleFactorMatchesLegacy(t *testing.T) {
 	l := [][]float64{{p.MonthlySigma}}
 	mu := []float64{p.MonthlyMu}
 	for i := 0; i < 1000; i++ {
-		want, _ := SampleStudentT(legacy, p, 7)
-		got, _ := SampleMultivariateStudentT(joint, mu, l, 7)
+		want, _ := SampleStudentT(legacy, p, 7, LegacyTailTruncation())
+		got, _ := SampleMultivariateStudentT(joint, mu, l, 7, LegacyTailTruncation())
 		if math.Abs(got[0]-want) > 1e-12 {
 			t.Fatalf("draw %d: joint %.12f != legacy %.12f", i, got[0], want)
 		}
@@ -36,7 +36,7 @@ func TestMultivariateSampleCovarianceMatchesSigma(t *testing.T) {
 	const n = 300000
 	var s11, s22, s12 float64
 	for i := 0; i < n; i++ {
-		out, _ := SampleMultivariateStudentT(rng, mu, l, 7)
+		out, _ := SampleMultivariateStudentT(rng, mu, l, 7, LegacyTailTruncation())
 		// Reconstruct the log returns (no truncation at this small sigma).
 		a := math.Log(1 + out[0])
 		b := math.Log(1 + out[1])
@@ -70,7 +70,7 @@ func TestMultivariateDiversificationByCorrelation(t *testing.T) {
 		const n = 200000
 		var sum float64
 		for i := 0; i < n; i++ {
-			out, _ := SampleMultivariateStudentT(rng, mu, l, 7)
+			out, _ := SampleMultivariateStudentT(rng, mu, l, 7, LegacyTailTruncation())
 			avg := (math.Log(1+out[0]) + math.Log(1+out[1])) / 2
 			sum += avg * avg
 		}

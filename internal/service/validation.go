@@ -1,9 +1,12 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/fireman/fireman/internal/assumptions"
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/repository"
 )
@@ -34,6 +37,28 @@ var (
 	errWithdrawalCeilingRange       = errors.New("withdrawal_ceiling_ratio must be in [1, 2]")
 	errWithdrawalTaxRateRange       = errors.New("withdrawal_tax_rate must be in [0, 1]")
 	errTaxableWithdrawalRange       = errors.New("taxable_withdrawal_ratio must be in [0, 1]")
+	errWithdrawalFloorCeiling       = errors.New("withdrawal_floor_ratio must be < withdrawal_ceiling_ratio")
+	errAssumptionModeInvalid        = errors.New(
+		"return_assumption_mode must be historical_cagr, blended_prior or custom",
+	)
+	errAssumptionSelectionInvalid = errors.New(
+		"assumption_selection_mode must be follow_global or pinned_profile",
+	)
+	errAssumptionScenarioInvalid = errors.New(
+		"return_assumption_scenario must be conservative, baseline or optimistic",
+	)
+	errAssumptionPinMissing = errors.New(
+		"pinned_profile selection requires return_assumption_set_id and version >= 1",
+	)
+	errAssumptionCustomJSON   = errors.New("custom_return_assumptions_json must be a JSON object of numbers")
+	errAssumptionPinNotFound  = errors.New("pinned assumption profile not found")
+	errAssumptionPinNotActive = errors.New("pinned assumption profile must be an active version")
+)
+
+// Assumption-selection enums shared by the parameters API and validator.
+const (
+	SelectionFollowGlobal  = "follow_global"
+	SelectionPinnedProfile = "pinned_profile"
 )
 
 func validateParameters(p repository.PlanParameters) error {
@@ -49,7 +74,69 @@ func validateParameters(p repository.PlanParameters) error {
 	if err := validateParameterModes(p); err != nil {
 		return err
 	}
+	if err := validateAssumptionSelection(p); err != nil {
+		return err
+	}
 	return validateParameterAdvanced(p)
+}
+
+// validateAssumptionSelection enforces the td/061 return-assumption selection
+// enums (td/063 R0). It is tolerant of empty values (those are normalised to the
+// per-context default before persistence) but rejects any non-empty value outside
+// the allowed set, an incomplete pin, or an unparseable custom map. The pin's
+// active status is checked separately because it requires a database lookup
+// (validatePinnedProfileActive).
+func validateAssumptionSelection(p repository.PlanParameters) error {
+	switch p.ReturnAssumptionMode {
+	case "", repository.ModeHistoricalCAGR, repository.ModeBlendedPrior, repository.ModeCustom:
+	default:
+		return errAssumptionModeInvalid
+	}
+	switch p.AssumptionSelectionMode {
+	case "", SelectionFollowGlobal, SelectionPinnedProfile:
+	default:
+		return errAssumptionSelectionInvalid
+	}
+	switch p.ReturnAssumptionScenario {
+	case "", assumptions.ScenarioConservative, assumptions.ScenarioBaseline, assumptions.ScenarioOptimistic:
+	default:
+		return errAssumptionScenarioInvalid
+	}
+	if p.AssumptionSelectionMode == SelectionPinnedProfile {
+		if p.ReturnAssumptionSetID == "" || p.ReturnAssumptionSetVersion < 1 {
+			return errAssumptionPinMissing
+		}
+	}
+	if p.CustomReturnAssumptionsJSON != "" {
+		var m map[string]float64
+		if err := json.Unmarshal([]byte(p.CustomReturnAssumptionsJSON), &m); err != nil {
+			return errAssumptionCustomJSON
+		}
+	}
+	return nil
+}
+
+// validatePinnedProfileActive enforces that a pinned profile selection references
+// an existing, active profile version (td/063 R0/N2). Plans pinning a
+// draft/superseded version are rejected at create/update/wizard time; already
+// frozen runs are unaffected because they snapshot the resolved profile.
+func validatePinnedProfileActive(
+	ctx context.Context, repo *repository.AssumptionProfileRepo, p repository.PlanParameters,
+) error {
+	if p.AssumptionSelectionMode != SelectionPinnedProfile {
+		return nil
+	}
+	prof, err := repo.Get(ctx, p.ReturnAssumptionSetID, p.ReturnAssumptionSetVersion)
+	if err != nil {
+		if errors.Is(err, repository.ErrAssumptionProfileNotFound) {
+			return errAssumptionPinNotFound
+		}
+		return fmt.Errorf("load pinned assumption profile: %w", err)
+	}
+	if prof.Status != assumptions.StatusActive {
+		return errAssumptionPinNotActive
+	}
+	return nil
 }
 
 // validateParameterAdvanced enforces the ranges and cross-field relationships for
@@ -89,6 +176,11 @@ func validateWithdrawalParams(p repository.PlanParameters) error {
 	}
 	if p.WithdrawalCeilingRatio < 1 || p.WithdrawalCeilingRatio > 2 {
 		return errWithdrawalCeilingRange
+	}
+	// Guardrail must keep a usable band: a floor at or above the ceiling leaves no
+	// room to flex spending and is an invalid plan (td/062 R2 / td/063 R5).
+	if p.WithdrawalFloorRatio >= p.WithdrawalCeilingRatio {
+		return errWithdrawalFloorCeiling
 	}
 	if p.WithdrawalTaxRate < 0 || p.WithdrawalTaxRate > 1 {
 		return errWithdrawalTaxRateRange

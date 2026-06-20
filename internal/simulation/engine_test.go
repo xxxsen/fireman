@@ -43,7 +43,7 @@ func TestStudentTMeanVariance(t *testing.T) {
 	sum := 0.0
 	sum2 := 0.0
 	for i := 0; i < n; i++ {
-		r, _ := SampleStudentT(rng, p, df)
+		r, _ := SampleStudentT(rng, p, df, LegacyTailTruncation())
 		sum += r
 		sum2 += r * r
 	}
@@ -66,8 +66,8 @@ func TestIndependentAssetFactors(t *testing.T) {
 	for i := 0; i < n; i++ {
 		rng1 := NewRNG(int64(i + 1))
 		rng2 := NewRNG(int64(i + 100000))
-		x[i], _ = SampleStudentT(rng1, p, 7)
-		y[i], _ = SampleStudentT(rng2, p, 7)
+		x[i], _ = SampleStudentT(rng1, p, 7, LegacyTailTruncation())
+		y[i], _ = SampleStudentT(rng2, p, 7, LegacyTailTruncation())
 	}
 	corr := pearson(x, y)
 	if math.Abs(corr) > 0.08 {

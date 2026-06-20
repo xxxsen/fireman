@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/fireman/fireman/internal/assumptions"
+	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
@@ -91,6 +93,92 @@ func TestAssumptionValidateRejectsBadProfile(t *testing.T) {
 	res := env["data"].(map[string]any)
 	if res["valid"].(bool) {
 		t.Fatalf("expected invalid profile, got %+v", res)
+	}
+}
+
+// td/063 R4 §1 / R3 §2: a draft whose correlation matrix needs a heavy PSD
+// repair can neither be saved nor activated. We copy the system profile and bend
+// three pairwise correlations into a non-PSD triangle, then assert both the save
+// and the (separately-seeded) activate path reject it.
+func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	r := NewRouter(context.Background(), Deps{DB: db})
+
+	getEnv := doJSON(t, r, http.MethodGet,
+		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1", nil, http.StatusOK)
+	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
+
+	bent := cloneProfile(profile)
+	bent["id"] = "user_cma_psd"
+	bent["version"] = 1
+	bent["owner_scope"] = "user"
+	bent["status"] = "draft"
+	bendCorrelationTriangle(t, bent)
+
+	// Validate endpoint surfaces the heavy repair but still parses structurally.
+	valEnv := doJSON(t, r, http.MethodPost,
+		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1/validate",
+		map[string]any{"profile": bent}, http.StatusOK)
+	val := valEnv["data"].(map[string]any)
+	if !val["psd_repair_heavy"].(bool) {
+		t.Fatalf("expected psd_repair_heavy=true, got %+v", val)
+	}
+
+	// Save must be rejected.
+	doRaw(t, r, http.MethodPost, "/api/v1/simulation-assumptions/profiles",
+		map[string]any{"profile": bent, "source_note": "x", "reviewed_by": "me", "reviewed_at": "2026-06-20"},
+		http.StatusBadRequest, "assumption_profile_invalid")
+
+	// And activate of a directly-seeded heavy-PSD draft must also be rejected.
+	repo := repository.NewAssumptionProfileRepo(db)
+	var heavy assumptions.Profile
+	b, _ := json.Marshal(bent)
+	if err := json.Unmarshal(b, &heavy); err != nil {
+		t.Fatalf("decode bent profile: %v", err)
+	}
+	if err := repo.Save(context.Background(), heavy, "x", "me", "2026-06-20"); err != nil {
+		t.Fatalf("seed heavy draft: %v", err)
+	}
+	doRaw(t, r, http.MethodPost,
+		"/api/v1/simulation-assumptions/profiles/user_cma_psd/1/activate",
+		nil, http.StatusBadRequest, "assumption_profile_invalid")
+}
+
+// bendCorrelationTriangle rewrites three pairwise correlations among domestic
+// equity and the two FX factors into a non-positive-semidefinite triangle.
+func bendCorrelationTriangle(t *testing.T, p map[string]any) {
+	t.Helper()
+	priors, ok := p["correlation_priors"].([]any)
+	if !ok {
+		t.Fatalf("profile missing correlation_priors: %+v", p["correlation_priors"])
+	}
+	const (
+		eqD   = "asset:equity:domestic"
+		fxUSD = "fx:USD:CNY"
+		fxHKD = "fx:HKD:CNY"
+	)
+	pairRho := func(a, b string) (float64, bool) {
+		switch {
+		case (a == eqD && b == fxUSD) || (a == fxUSD && b == eqD):
+			return 0.9, true
+		case (a == eqD && b == fxHKD) || (a == fxHKD && b == eqD):
+			return 0.9, true
+		case (a == fxUSD && b == fxHKD) || (a == fxHKD && b == fxUSD):
+			return -0.9, true
+		default:
+			return 0, false
+		}
+	}
+	changed := 0
+	for _, raw := range priors {
+		c := raw.(map[string]any)
+		if rho, ok := pairRho(c["factor_a"].(string), c["factor_b"].(string)); ok {
+			c["rho"] = rho
+			changed++
+		}
+	}
+	if changed != 3 {
+		t.Fatalf("expected to bend 3 correlation pairs, bent %d", changed)
 	}
 }
 

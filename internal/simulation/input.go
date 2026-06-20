@@ -90,6 +90,16 @@ type SnapshotAsset struct {
 	FXHistoryDepth                  string         `json:"fx_history_depth,omitempty"`
 	FXMetricsVersion                string         `json:"fx_metrics_version,omitempty"`
 	FXDataWarnings                  []string       `json:"fx_data_warnings,omitempty"`
+	// td/061 §3.4 / td/063 R2 forward FX calibration audit. FXModeledReturn is the
+	// value the engine consumes (the forward FX drift for blended_prior/custom, or
+	// the raw historical drift for historical_cagr). The fields below explain how
+	// it was derived; they are frozen so a run can always justify its FX drift.
+	FXHistoricalReturn float64  `json:"fx_historical_return,omitempty"`
+	FXPriorReturn      float64  `json:"fx_prior_return,omitempty"`
+	FXHistoricalWeight float64  `json:"fx_historical_weight,omitempty"`
+	FXReturnSource     string   `json:"fx_return_source,omitempty"`
+	FXReturnScenario   string   `json:"fx_return_scenario,omitempty"`
+	FXReturnWarnings   []string `json:"fx_return_warnings,omitempty"`
 	// Months / FXMonths freeze the complete-year monthly log-return series (keyed
 	// "YYYY-MM") used to estimate historical correlations in the joint factor
 	// model (td/061 §3.5.1 / §4.1.6). Empty means the pair falls back to the
@@ -141,6 +151,40 @@ type InputSnapshot struct {
 	// nil for legacy independent (2.x) snapshots so old runs replay unchanged.
 	FactorModel     *FactorModel `json:"factor_model,omitempty"`
 	AssetFactorRefs []FactorRef  `json:"asset_factor_refs,omitempty"`
+	// DeterministicCashReturn is set for forward (3.0.0) inputs so cash slots grow
+	// at their frozen, non-random monthly return instead of an implicit 0%
+	// (td/061 / td/063 R1). Legacy 2.x snapshots leave it false so cash stays at
+	// 0% and old runs replay byte-for-byte.
+	DeterministicCashReturn bool `json:"deterministic_cash_return,omitempty"`
+	// td/063 R3 frozen tail-risk parameters. For forward (3.0.0) runs these are
+	// taken from the active profile so the Student-t df and the per-month return
+	// truncation are versioned/auditable and a plan can no longer change them; the
+	// joint and independent samplers read these frozen values only. Legacy (2.x)
+	// snapshots leave them zero/nil and fall back to Parameters.StudentTDf and the
+	// ReturnFloor/ReturnCeil constants, so old runs replay byte-for-byte.
+	TailStudentTDf  int      `json:"tail_student_t_df,omitempty"`
+	TailReturnFloor *float64 `json:"tail_return_floor,omitempty"`
+	TailReturnCeil  *float64 `json:"tail_return_ceil,omitempty"`
+}
+
+// EffectiveDf returns the frozen Student-t degrees of freedom for sampling: the
+// profile-frozen value for forward (3.0.0) runs, or the legacy plan parameter for
+// 2.x snapshots (td/063 R3).
+func (in *InputSnapshot) EffectiveDf() int {
+	if in.TailStudentTDf > 0 {
+		return in.TailStudentTDf
+	}
+	return in.Parameters.StudentTDf
+}
+
+// TailTruncationBounds returns the frozen per-month simple-return truncation. It
+// uses the profile-frozen bounds for forward runs and the legacy constants for
+// 2.x snapshots, so historical replays keep their exact clamp (td/063 R3).
+func (in *InputSnapshot) TailTruncationBounds() TailTruncation {
+	if in.TailReturnFloor != nil && in.TailReturnCeil != nil {
+		return TailTruncation{Floor: *in.TailReturnFloor, Ceil: *in.TailReturnCeil}
+	}
+	return LegacyTailTruncation()
 }
 
 // HorizonMonths returns the simulated month count.
