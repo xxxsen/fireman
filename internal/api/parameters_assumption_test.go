@@ -35,6 +35,17 @@ func getPlanVersion(t *testing.T, baseURL, planID string) int {
 	return int(env["data"].(map[string]any)["config_version"].(float64))
 }
 
+// getPlanConfigHash reads the current config_hash of a plan.
+func getPlanConfigHash(t *testing.T, baseURL, planID string) string {
+	t.Helper()
+	resp, err := http.DefaultClient.Get(baseURL + "/api/v1/plans/" + planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := decodeEnvelope(t, mustRead(t, resp))
+	return env["data"].(map[string]any)["config_hash"].(string)
+}
+
 // putPlanParams sends a parameters update with the current config version.
 func putPlanParams(t *testing.T, baseURL, planID string, params map[string]any) (int, string) {
 	t.Helper()
@@ -94,6 +105,40 @@ func TestPlanParametersAssumptionRoundTrip(t *testing.T) {
 	}
 	if got["return_assumption_mode"] != "blended_prior" {
 		t.Fatalf("mode lost on unrelated update: %+v", got)
+	}
+}
+
+// TestStudentTDfReadOnlyOnForwardPlan covers td/064 N6: the plan-level
+// student_t_df is a read-only legacy field on forward plans. Sending a new value
+// must neither change the persisted value nor the config hash (so existing runs
+// are not marked stale for a field with no forward modeling effect).
+func TestStudentTDfReadOnlyOnForwardPlan(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	if err := repository.NewAssumptionProfileRepo(db).EnsureSystemDefault(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	planID := seedSimulationReadyPlan(t, db)
+
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	defer srv.Close()
+
+	hashBefore := getPlanConfigHash(t, srv.URL, planID)
+	params := getPlanParams(t, srv.URL, planID)
+	if int(params["student_t_df"].(float64)) != repository.DefaultStudentTDf {
+		t.Fatalf("new forward plan df = %v, want %d", params["student_t_df"], repository.DefaultStudentTDf)
+	}
+
+	params["student_t_df"] = 25
+	if status, body := putPlanParams(t, srv.URL, planID, params); status != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", status, body)
+	}
+
+	after := getPlanParams(t, srv.URL, planID)
+	if int(after["student_t_df"].(float64)) != repository.DefaultStudentTDf {
+		t.Fatalf("student_t_df must be read-only, got %v", after["student_t_df"])
+	}
+	if got := getPlanConfigHash(t, srv.URL, planID); got != hashBefore {
+		t.Fatalf("read-only student_t_df update must not change config hash: before=%s after=%s", hashBefore, got)
 	}
 }
 

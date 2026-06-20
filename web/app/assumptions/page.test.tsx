@@ -22,10 +22,10 @@ vi.mock("@/lib/api/assumptions", () => ({
 import AssumptionsPage from "./page";
 
 const systemProfile = {
-  id: "system_cma_v1",
+  id: "system_cma_v2",
   version: 1,
   owner_scope: "system" as const,
-  name: "系统默认（CMA v1）",
+  name: "系统默认（CMA v2）",
   status: "active" as const,
   prior_strength_years: 20,
   correlation_strength_months: 36,
@@ -69,10 +69,10 @@ beforeEach(() => {
   listAssumptionProfiles.mockResolvedValue({
     profiles: [
       {
-        id: "system_cma_v1",
+        id: "system_cma_v2",
         version: 1,
         owner_scope: "system",
-        name: "系统默认（CMA v1）",
+        name: "系统默认（CMA v2）",
         status: "active",
         content_hash: "abc",
         created_at: 0,
@@ -80,7 +80,7 @@ beforeEach(() => {
       },
     ],
     preferences: {
-      default_profile_id: "system_cma_v1",
+      default_profile_id: "system_cma_v2",
       default_profile_version: 1,
       default_scenario: "baseline",
     },
@@ -99,7 +99,7 @@ beforeEach(() => {
   });
   setAssumptionPreferences.mockResolvedValue({
     preferences: {
-      default_profile_id: "system_cma_v1",
+      default_profile_id: "system_cma_v2",
       default_profile_version: 1,
       default_scenario: "conservative",
     },
@@ -111,7 +111,7 @@ describe("AssumptionsPage", () => {
     renderPage();
     expect(await screen.findByRole("heading", { name: "模拟假设" })).toBeInTheDocument();
     // system profile listed
-    expect(await screen.findByText("系统默认（CMA v1）")).toBeInTheDocument();
+    expect(await screen.findByText("系统默认（CMA v2）")).toBeInTheDocument();
     // detail: return prior + correlation matrix rendered
     await waitFor(() => expect(getAssumptionProfile).toHaveBeenCalled());
     expect(await screen.findByText("收益先验（费用后·基准币种·名义几何）")).toBeInTheDocument();
@@ -132,7 +132,7 @@ describe("AssumptionsPage", () => {
     const arg = saveAssumptionProfile.mock.calls[0][0];
     expect(arg.profile.owner_scope).toBe("user");
     expect(arg.profile.status).toBe("draft");
-    expect(arg.profile.id).not.toBe("system_cma_v1");
+    expect(arg.profile.id).not.toBe("system_cma_v2");
     expect(arg.reviewed_by).toBe("审核人");
   });
 

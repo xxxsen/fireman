@@ -133,11 +133,35 @@ var (
 	errCorrelationDuplicate     = errors.New("duplicate correlation prior for the same factor pair")
 	errCorrelationUnknownFactor = errors.New("correlation prior references a factor with no asset/fx prior")
 	errCorrelationIncomplete    = errors.New("missing correlation prior for a required factor pair")
+	errCoverageMissingAsset     = errors.New("missing required base-currency return prior")
+	errCoverageMissingFX        = errors.New("native-currency asset prior has no matching fx prior")
 )
 
 // cashAssetClass is the deterministic, non-random asset class that is excluded
 // from the random factor universe (td/061 §3.5 / td/063 R1/R4).
 const cashAssetClass = "cash"
+
+// BaseCoverageCurrency is the home/base currency every active or global profile
+// must fully cover so a supported plan never silently fails to calibrate at run
+// time (td/064 R7).
+const BaseCoverageCurrency = "CNY"
+
+// requiredAssetCell is one (asset_class, region) cell that must have a base
+// currency return prior in every profile.
+type requiredAssetCell struct{ AssetClass, Region string }
+
+// RequiredGlobalCoverage is the single source of truth for the minimum
+// asset-class coverage the product supports today (td/064 R7). A profile that
+// does not define a base currency prior for every cell here — or that adds a
+// native-currency (non-base) asset prior without the matching FX prior — cannot
+// be saved or activated.
+var RequiredGlobalCoverage = []requiredAssetCell{
+	{AssetClass: "equity", Region: "domestic"},
+	{AssetClass: "equity", Region: "foreign"},
+	{AssetClass: "bond", Region: "domestic"},
+	{AssetClass: "bond", Region: "foreign"},
+	{AssetClass: cashAssetClass, Region: "domestic"},
+}
 
 // Validate checks structural validity required before a profile may be persisted
 // or used to build a run. It does not perform the PSD/Cholesky repair (that is a
@@ -155,7 +179,36 @@ func (p *Profile) Validate() error {
 	if err := p.validateFXPriors(); err != nil {
 		return err
 	}
+	if err := p.validateCoverage(); err != nil {
+		return err
+	}
 	return p.validateCorrelationPriors()
+}
+
+// validateCoverage enforces the minimum global coverage gate (td/064 R7): every
+// RequiredGlobalCoverage cell must have a base-currency (CNY) return prior, and
+// every non-cash asset prior priced in a non-base currency must have the matching
+// (currency, base) FX prior. Errors carry the missing canonical key so the editor
+// can locate the gap. It runs before the correlation completeness check so an
+// empty or under-covered profile fails with a coverage error rather than a
+// confusing missing-pair error.
+func (p *Profile) validateCoverage() error {
+	for _, cell := range RequiredGlobalCoverage {
+		if _, ok := p.LookupReturnPrior(cell.AssetClass, cell.Region, BaseCoverageCurrency); !ok {
+			return fmt.Errorf("%w: %s/%s/%s",
+				errCoverageMissingAsset, cell.AssetClass, cell.Region, BaseCoverageCurrency)
+		}
+	}
+	for _, rp := range p.ReturnPriors {
+		if rp.AssetClass == cashAssetClass || rp.ValuationCurrency == BaseCoverageCurrency {
+			continue
+		}
+		if _, ok := p.LookupFXPrior(rp.ValuationCurrency, BaseCoverageCurrency); !ok {
+			return fmt.Errorf("%w: %s", errCoverageMissingFX,
+				FXFactorKey(rp.ValuationCurrency, BaseCoverageCurrency))
+		}
+	}
+	return nil
 }
 
 func (p *Profile) validateHeader() error {

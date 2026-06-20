@@ -51,23 +51,24 @@ func TestProfileRejectsCorrelationForNonUniverseFactor(t *testing.T) {
 	}
 }
 
-// TestNativeCurrencyPriorsShareAssetFactor verifies that a native-currency
-// foreign equity prior collapses into the same equity:foreign factor as the CNY
-// one, so the correlation universe (and its completeness requirement) is unchanged
-// (td/063 R2/R4). A GBP prior (not already in the system profile, and with no FX
-// prior) must not introduce a new asset factor.
+// TestNativeCurrencyPriorsShareAssetFactor verifies that native-currency foreign
+// equity priors collapse into the same equity:foreign factor as the CNY one, so
+// the correlation universe (and its completeness requirement) is unchanged
+// (td/063 R2/R4). The system profile already prices equity:foreign in CNY, USD
+// and HKD, so the factor must appear exactly once.
 func TestNativeCurrencyPriorsShareAssetFactor(t *testing.T) {
 	p := SystemDefaultProfile()
-	before := len(p.FactorUniverse())
-	p.ReturnPriors = append(p.ReturnPriors, ReturnPrior{
-		AssetClass: "equity", Region: "foreign", ValuationCurrency: "GBP",
-		AnnualGeometricReturn: 0.065, AnnualVolatilityFloor: 0.12, AnnualVolatilityCeiling: 0.40,
-		SourceURL: "https://example.com", PublishedAt: "2026-06-20", ReviewedAt: "2026-06-20",
-	})
-	if got := len(p.FactorUniverse()); got != before {
-		t.Fatalf("native-currency prior must not add a factor: before=%d after=%d", before, got)
+	eqF := AssetFactorKey("equity", "foreign")
+	count := 0
+	for _, k := range p.FactorUniverse() {
+		if k == eqF {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("equity:foreign must collapse to a single factor, got %d (%v)", count, p.FactorUniverse())
 	}
 	if err := p.Validate(); err != nil {
-		t.Fatalf("profile with native-currency prior must stay valid: %v", err)
+		t.Fatalf("profile with native-currency priors must stay valid: %v", err)
 	}
 }

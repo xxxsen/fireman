@@ -28,17 +28,17 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 		t.Fatalf("expected 1 system profile, got %d", len(profiles))
 	}
 	sys := profiles[0].(map[string]any)
-	if sys["id"] != "system_cma_v1" || sys["owner_scope"] != "system" {
+	if sys["id"] != "system_cma_v2" || sys["owner_scope"] != "system" {
 		t.Fatalf("unexpected system profile: %+v", sys)
 	}
 	pref := data["preferences"].(map[string]any)
-	if pref["default_profile_id"] != "system_cma_v1" {
+	if pref["default_profile_id"] != "system_cma_v2" {
 		t.Fatalf("preferences should default to system profile, got %+v", pref)
 	}
 
 	// Get full system profile.
 	getEnv := doJSON(t, r, http.MethodGet,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1", nil, http.StatusOK)
 	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
 
 	// Attempt to overwrite the system id/owner -> rejected as read-only.
@@ -81,14 +81,14 @@ func TestAssumptionValidateRejectsBadProfile(t *testing.T) {
 	r := NewRouter(context.Background(), Deps{DB: db})
 
 	getEnv := doJSON(t, r, http.MethodGet,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1", nil, http.StatusOK)
 	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
 
 	// A profile missing scenarios must fail validation.
 	bad := cloneProfile(profile)
 	delete(bad, "scenarios")
 	env := doJSON(t, r, http.MethodPost,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1/validate",
+		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1/validate",
 		map[string]any{"profile": bad}, http.StatusOK)
 	res := env["data"].(map[string]any)
 	if res["valid"].(bool) {
@@ -105,7 +105,7 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 	r := NewRouter(context.Background(), Deps{DB: db})
 
 	getEnv := doJSON(t, r, http.MethodGet,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1", nil, http.StatusOK)
+		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1", nil, http.StatusOK)
 	profile := getEnv["data"].(map[string]any)["profile"].(map[string]any)
 
 	bent := cloneProfile(profile)
@@ -117,7 +117,7 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 
 	// Validate endpoint surfaces the heavy repair but still parses structurally.
 	valEnv := doJSON(t, r, http.MethodPost,
-		"/api/v1/simulation-assumptions/profiles/system_cma_v1/1/validate",
+		"/api/v1/simulation-assumptions/profiles/system_cma_v2/1/validate",
 		map[string]any{"profile": bent}, http.StatusOK)
 	val := valEnv["data"].(map[string]any)
 	if !val["psd_repair_heavy"].(bool) {

@@ -46,8 +46,12 @@ type AssumptionPreferences struct {
 	DefaultScenario       string `json:"default_scenario"`
 }
 
-// EnsureSystemDefault inserts the read-only system profile (system_cma_v1@1) when
-// it is absent. It is idempotent and safe to call on every startup.
+// EnsureSystemDefault performs the idempotent system-profile upgrade (td/064 R6).
+// It publishes the current system default (system_cma_v2@1) as a NEW immutable
+// identity without ever updating or deleting the legacy system_cma_v1@1, then
+// atomically repoints the global default preference from v1 to v2 only when it
+// still points at v1 (user custom defaults and explicit pins are untouched).
+// Safe to call on every startup and on every read path.
 func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 	p := assumptions.SystemDefaultProfile()
 	var exists int
@@ -58,6 +62,9 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 		return wrapSQL("probe system assumption profile", err)
 	}
 	if exists > 0 {
+		// Already upgraded. The one-time v1->v2 default migration ran inside the
+		// upgrade transaction below, so there is nothing to do on subsequent calls
+		// (and re-running it would fight a user who deliberately re-selects v1).
 		return nil
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -70,10 +77,39 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 		_ = tx.Rollback()
 		return err
 	}
+	if err := r.migrateDefaultToCurrentSystem(ctx, tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return wrapSQL("commit system profile", err)
 	}
 	return nil
+}
+
+// migrateDefaultToCurrentSystem atomically repoints the single global default
+// preference from the legacy system_cma_v1@1 to the current system default
+// (system_cma_v2@1 / baseline) ONLY when it currently points at the legacy
+// identity. A preference row pointing at a user-chosen custom profile is left
+// untouched, and a missing preference row resolves to the current default via
+// GetPreferences's fallback (td/064 R6).
+func (r *AssumptionProfileRepo) migrateDefaultToCurrentSystem(ctx context.Context, tx *sql.Tx) error {
+	exec := r.exec(tx)
+	_, err := exec.ExecContext(ctx,
+		`UPDATE simulation_assumption_preferences
+		 SET default_profile_id=?, default_profile_version=?, default_scenario=?, updated_at=?
+		 WHERE id=1 AND default_profile_id=? AND default_profile_version=?`,
+		assumptions.SystemProfileID, assumptions.SystemProfileVersion,
+		assumptions.ScenarioBaseline, time.Now().UnixMilli(),
+		assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion)
+	return wrapSQL("migrate default assumption preference", err)
+}
+
+func (r *AssumptionProfileRepo) exec(tx *sql.Tx) dbExec {
+	if tx != nil {
+		return tx
+	}
+	return r.db
 }
 
 // Get returns a single profile id@version decoded from its canonical JSON. The

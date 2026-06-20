@@ -173,6 +173,12 @@ const (
 	ModeHistoricalCAGR = "historical_cagr"
 	ModeBlendedPrior   = "blended_prior"
 	ModeCustom         = "custom"
+
+	// DefaultStudentTDf is the server-assigned Student-t df for new plans. The
+	// plan-level df is a legacy field used only to replay 2.x snapshots; forward
+	// (blended_prior/custom) runs freeze the global profile's df instead, so the
+	// plan value is never client-writable (td/064 N6).
+	DefaultStudentTDf = 7
 )
 
 func (p *PlanParameters) applyAssumptionDefaults() {

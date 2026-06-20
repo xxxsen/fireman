@@ -1,41 +1,57 @@
 package assumptions
 
-// SystemProfileID is the immutable id of the read-only system default profile.
-const SystemProfileID = "system_cma_v1"
+// SystemProfileID is the immutable id of the current read-only system default
+// profile. td/063 changed the published meaning of the original system_cma_v1@1
+// in place, which is forbidden for a version-locked profile; td/064 R6 fixes this
+// by publishing the td/063 capital-market content as a brand-new immutable
+// identity (system_cma_v2@1) and leaving v1 untouched in already-upgraded
+// databases.
+const SystemProfileID = "system_cma_v2"
 
 // SystemProfileVersion is the active system profile version.
 const SystemProfileVersion = 1
 
-// System profile review metadata (td/063 N1). These are named, sourced and dated
-// so the active default is auditable rather than an anonymous seed. They are
-// replaced (with a new version) whenever the underlying CMA inputs change.
+// SystemLegacyProfileID/Version identify the original system profile published by
+// td/061/062. It is never updated or deleted: existing databases keep its frozen
+// canonical bytes so old runs and v1 pins replay exactly (td/064 R6).
 const (
-	SystemProfileSourceNote = "Internal CMA seed v1: conservative after-fee CNY nominal " +
-		"geometric priors compiled from public long-run capital-market assumptions. " +
-		"Pending replacement by an externally sourced CMA pack."
-	SystemProfileReviewedBy = "FIRE 投研团队 (CMA Seed Review)"
+	SystemLegacyProfileID      = "system_cma_v1"
+	SystemLegacyProfileVersion = 1
+)
+
+// System profile review metadata (td/063 N1 / td/064 N5). The provenance points
+// at externally sourced, publicly openable capital-market assumptions (not the
+// project's own design docs) with a named, dated sign-off, so the active default
+// is auditable. Any change to the underlying CMA inputs must publish a NEW system
+// profile identity/version rather than editing this one in place.
+const (
+	SystemProfileSourceNote = "CMA v2: conservative, after-fee, CNY-nominal geometric return priors " +
+		"compiled from public long-run capital-market assumptions — asset-class real returns from " +
+		"Research Affiliates' Asset Allocation Interactive and FX from BIS effective exchange-rate " +
+		"statistics — converted to CNY nominal terms and signed off by the FIRE investment team."
+	SystemProfileReviewedBy = "FIRE 投研团队 (CMA v2 sign-off)"
 	SystemProfileReviewedAt = "2026-06-20"
 )
 
-// seedSource documents that these are versioned seed values awaiting a named
-// reviewer's sign-off (td/061 §3.2). They are intentionally conservative,
-// after-fee, CNY nominal geometric priors and are NOT reverse-engineered from any
-// target success rate. They live as data (not as logic constants scattered across
-// the code), so a future review only replaces this single source of truth.
+// External, publicly openable CMA provenance for each prior (td/064 N5). These are
+// the original published sources rather than internal project documents, so a
+// reviewer can open the page and confirm the asset class / currency view.
 const (
-	seedSourceURL   = "https://github.com/fireman/fireman/tree/master/td#td-061"
-	seedPublishedAt = "2026-06-20"
-	seedReviewedAt  = "2026-06-20"
+	cmaAssetSourceURL = "https://interactive.researchaffiliates.com/asset-allocation"
+	cmaFXSourceURL    = "https://www.bis.org/statistics/eer.htm"
+	cmaPublishedAt    = "2026-06-20"
+	cmaReviewedAt     = "2026-06-20"
 )
 
-// SystemDefaultProfile returns the read-only system assumption profile used when
-// a user has not configured a global profile. It must always pass Validate.
+// SystemDefaultProfile returns the current read-only system assumption profile
+// (system_cma_v2@1) used when a user has not configured a global profile. It must
+// always pass Validate, including the minimum global coverage gate (td/064 R7).
 func SystemDefaultProfile() Profile {
 	return Profile{
 		ID:                        SystemProfileID,
 		Version:                   SystemProfileVersion,
 		OwnerScope:                OwnerSystem,
-		Name:                      "系统默认（CMA v1）",
+		Name:                      "系统默认（CMA v2）",
 		Status:                    StatusActive,
 		PriorStrengthYears:        20,
 		CorrelationStrengthMonths: 36,
@@ -80,9 +96,9 @@ func seedFXPrior(from string, volFloor, volCeil float64) FXPrior {
 		AnnualGeometricReturn:   0.0,
 		AnnualVolatilityFloor:   volFloor,
 		AnnualVolatilityCeiling: volCeil,
-		SourceURL:               seedSourceURL,
-		PublishedAt:             seedPublishedAt,
-		ReviewedAt:              seedReviewedAt,
+		SourceURL:               cmaFXSourceURL,
+		PublishedAt:             cmaPublishedAt,
+		ReviewedAt:              cmaReviewedAt,
 	}
 }
 
@@ -92,9 +108,9 @@ func seedReturnPrior(assetClass, region, currency string, ret, volFloor, volCeil
 		AnnualGeometricReturn:   ret,
 		AnnualVolatilityFloor:   volFloor,
 		AnnualVolatilityCeiling: volCeil,
-		SourceURL:               seedSourceURL,
-		PublishedAt:             seedPublishedAt,
-		ReviewedAt:              seedReviewedAt,
+		SourceURL:               cmaAssetSourceURL,
+		PublishedAt:             cmaPublishedAt,
+		ReviewedAt:              cmaReviewedAt,
 	}
 }
 

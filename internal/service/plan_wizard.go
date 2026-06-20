@@ -48,6 +48,10 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 	}
 	params.SelectedScenarioID = &scenarioID
 	applyNewPlanAssumptionDefaults(&params)
+	// student_t_df is a legacy 2.x-only field and is not client-writable; forward
+	// runs freeze the global profile's df (td/064 N6). Force the server default so
+	// a wizard request can never set it.
+	params.StudentTDf = repository.DefaultStudentTDf
 	if err := validateParameters(params); err != nil {
 		return PlanDetail{}, newErr("parameters_invalid", err.Error(), nil)
 	}

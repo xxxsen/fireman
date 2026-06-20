@@ -91,7 +91,6 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		"rebalance_threshold":         p.RebalanceThreshold,
 		"transaction_cost_rate":       p.TransactionCostRate,
 		"simulation_runs":             p.SimulationRuns,
-		"student_t_df":                p.StudentTDf,
 		// td/061: the return-assumption selection is part of the plan config, so
 		// switching mode/profile/version/scenario marks existing runs stale and
 		// changes the input hash (§6.1.6, §6.2.4).
@@ -100,6 +99,14 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		"return_assumption_set_id":      p.ReturnAssumptionSetID,
 		"return_assumption_set_version": p.ReturnAssumptionSetVersion,
 		"return_assumption_scenario":    p.ReturnAssumptionScenario,
+	}
+	// student_t_df is a legacy 2.x-only field. Forward (blended_prior/custom) runs
+	// freeze the global profile's df, so the plan value has no effect on a forward
+	// run and must not be part of its config identity; including it would let an
+	// irrelevant field mark forward runs stale (td/064 N6). historical_cagr replay
+	// configs still depend on the plan df, so they keep it in the hash.
+	if p.ReturnAssumptionMode == "" || p.ReturnAssumptionMode == repository.ModeHistoricalCAGR {
+		m["student_t_df"] = p.StudentTDf
 	}
 	if p.CustomReturnAssumptionsJSON != "" {
 		m["custom_return_assumptions_json"] = p.CustomReturnAssumptionsJSON

@@ -326,7 +326,7 @@ function PreferencesCard({
     <section className="rounded-lg border border-line bg-surface p-4">
       <h2 className="font-medium text-ink">全局默认</h2>
       <p className="mt-1 text-xs text-ink-muted">
-        新建计划默认使用此处选择的 profile 与情景；未配置时使用系统 system_cma_v1。
+        新建计划默认使用此处选择的 profile 与情景；未配置时使用系统 system_cma_v2。
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-4">
         <label className="text-sm text-ink">
@@ -767,7 +767,7 @@ function ReturnPriorEditor({
   return (
     <div className="overflow-x-auto">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-ink-muted">收益先验</h3>
+        <h3 className="text-sm font-medium text-ink-muted">收益先验（CNY 基础条目必填，不可删除）</h3>
         <Button variant="ghost" className="px-2 py-1" onClick={add}>
           + 新增
         </Button>
@@ -818,15 +818,39 @@ function ReturnPriorEditor({
                 <TextField label="" value={r.reviewed_at} width="w-24" onChange={(v) => update(i, { reviewed_at: v })} />
               </td>
               <td className="py-1 pr-2">
-                <Button variant="ghost" className="px-2 py-1" onClick={() => remove(i)}>
-                  删除
-                </Button>
+                {isRequiredBaseReturnPrior(r) ? (
+                  <span className="text-ink-muted" title="产品支持的 CNY 基础资产条目，不可删除">
+                    必填
+                  </span>
+                ) : (
+                  <Button variant="ghost" className="px-2 py-1" onClick={() => remove(i)}>
+                    删除
+                  </Button>
+                )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+// REQUIRED_BASE_RETURN_CELLS mirrors the backend RequiredGlobalCoverage (td/064
+// R7): these CNY base-currency cells must exist in every active/global profile,
+// so the editor forbids deleting them.
+const REQUIRED_BASE_RETURN_CELLS: ReadonlyArray<readonly [string, string]> = [
+  ["equity", "domestic"],
+  ["equity", "foreign"],
+  ["bond", "domestic"],
+  ["bond", "foreign"],
+  ["cash", "domestic"],
+];
+
+function isRequiredBaseReturnPrior(r: AssumptionReturnPrior): boolean {
+  return (
+    r.valuation_currency === "CNY" &&
+    REQUIRED_BASE_RETURN_CELLS.some(([c, region]) => c === r.asset_class && region === r.region)
   );
 }
 

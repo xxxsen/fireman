@@ -56,6 +56,40 @@ func TestConfigHashChangesWithAssumptionSelection(t *testing.T) {
 	}
 }
 
+// td/064 N6: student_t_df is a legacy 2.x-only field. Forward (blended_prior/
+// custom) runs freeze the global profile's df, so changing the plan df must not
+// change a forward run's config hash; historical_cagr replay still depends on it.
+func TestConfigHashStudentTDfLegacySemantics(t *testing.T) {
+	hashOf := func(p repository.PlanParameters) string {
+		h, err := domain.ComputeConfigHash(domain.ConfigHashInput{
+			PlanID:     p.PlanID,
+			Parameters: parametersToMap(p),
+		})
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		return h
+	}
+
+	forward := repository.PlanParameters{
+		PlanID: "plan_1", ReturnAssumptionMode: repository.ModeBlendedPrior, StudentTDf: 7,
+	}
+	forwardOther := forward
+	forwardOther.StudentTDf = 25
+	if hashOf(forward) != hashOf(forwardOther) {
+		t.Fatal("changing student_t_df must NOT change a forward config hash")
+	}
+
+	hist := repository.PlanParameters{
+		PlanID: "plan_1", ReturnAssumptionMode: repository.ModeHistoricalCAGR, StudentTDf: 7,
+	}
+	histOther := hist
+	histOther.StudentTDf = 25
+	if hashOf(hist) == hashOf(histOther) {
+		t.Fatal("changing student_t_df must change a historical_cagr config hash")
+	}
+}
+
 // td/061 §4.1.5: an asset-level override is part of the plan config, so adding or
 // editing one (for a held instrument) must change the config hash that marks
 // existing runs stale.
