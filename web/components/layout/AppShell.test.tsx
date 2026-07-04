@@ -30,7 +30,7 @@ describe("AppShell", () => {
     }
   });
 
-  it("includes 场景配置 navigation entry", () => {
+  it("includes 配置模板 navigation entry", () => {
     mockPathname.mockReturnValue("/scenarios");
     render(
       <AppShell>
@@ -38,7 +38,7 @@ describe("AppShell", () => {
       </AppShell>,
     );
 
-    expect(screen.getAllByRole("link", { name: "场景配置" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: "配置模板" }).length).toBeGreaterThan(0);
   });
 
   it("keeps the desktop sidebar sticky with its own scroll", () => {

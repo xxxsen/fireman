@@ -11,6 +11,7 @@ import { Alert } from "@/components/ui/Alert";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { PlanPageHeader } from "@/components/layout/PlanPageHeader";
 import { getPlan } from "@/lib/api/plans";
 import {
   buyRebalanceExecution,
@@ -218,7 +219,7 @@ export default function RebalanceExecutionWorkspacePage() {
         message="无法加载调仓执行工作区。请确认后端服务可用后重试。"
         onRetry={() => void detail.refetch()}
         backHref={`/plans/${planId}/rebalance`}
-        backLabel="返回持仓预览"
+        backLabel="返回调仓工作台"
         technicalDetail={queryErrorMessage(detail.error)}
       />
     );
@@ -232,43 +233,43 @@ export default function RebalanceExecutionWorkspacePage() {
   const events = detail.data.events ?? [];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-ink">
-            {plan.data?.name ?? "计划"} · 调仓执行
-          </h1>
-          <p className="mt-1 text-sm text-ink-muted">
+    <div className="content-enter space-y-6">
+      <PlanPageHeader
+        title="调仓执行"
+        description={
+          <>
             {statusLabel(execution.status)} · {new Date(execution.created_at).toLocaleDateString("zh-CN")} 创建 ·
             已完成 {stats.done_line_count}/{stats.line_count} 个资产
             {stats.skipped_line_count ? ` · 跳过 ${stats.skipped_line_count} 个` : ""} · 现金池 {formatMoney(execution.cash_pool_minor)}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button href={`/plans/${planId}/rebalance`} variant="secondary">
-            返回持仓预览
-          </Button>
-          {!readonly && (
-            <>
-              <Button
-                disabled={completeMut.isPending}
-                data-testid="complete-execution"
-                onClick={() => setCompleteOpen(true)}
-              >
-                完成执行并写回持仓
-              </Button>
-              <Button
-                variant="danger"
-                disabled={cancelMut.isPending}
-                data-testid="cancel-execution"
-                onClick={() => setCancelOpen(true)}
-              >
-                放弃调仓
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button href={`/plans/${planId}/rebalance`} variant="secondary">
+              返回调仓工作台
+            </Button>
+            {!readonly && (
+              <>
+                <Button
+                  disabled={completeMut.isPending}
+                  data-testid="complete-execution"
+                  onClick={() => setCompleteOpen(true)}
+                >
+                  完成调仓并更新持仓
+                </Button>
+                <Button
+                  variant="danger"
+                  disabled={cancelMut.isPending}
+                  data-testid="cancel-execution"
+                  onClick={() => setCancelOpen(true)}
+                >
+                  放弃调仓
+                </Button>
+              </>
+            )}
+          </>
+        }
+      />
 
       {error && <Alert variant="danger">{error}</Alert>}
 
@@ -332,7 +333,7 @@ export default function RebalanceExecutionWorkspacePage() {
 
       <section className="rounded-lg border border-line">
         <h2 className="border-b border-line px-4 py-3 font-medium text-ink">资产执行清单</h2>
-        <div className="overflow-x-auto">
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm">
             <thead className="bg-surface-muted text-left text-ink-muted">
               <tr>
@@ -407,6 +408,71 @@ export default function RebalanceExecutionWorkspacePage() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile cards */}
+        <div className="divide-y divide-line md:hidden" data-testid="execution-line-cards">
+          {visibleLines.map((line) => {
+            const actionable =
+              !readonly &&
+              line.execution_status !== "done" &&
+              line.execution_status !== "skipped";
+            return (
+              <div key={line.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-2">
+                  <Link
+                    href={`/assets/${line.instrument_id}`}
+                    className="font-medium text-brand underline-offset-2 hover:underline"
+                  >
+                    {line.instrument_name ?? line.instrument_code}
+                  </Link>
+                  <span className="shrink-0 text-sm text-ink-muted">
+                    {rebalanceActionLabel(line.action_direction)} · {lineStatusLabel(line.execution_status)}
+                  </span>
+                </div>
+                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-ink-muted">应调金额</dt>
+                  <dd className="text-right text-ink">{formatSignedDelta(line.target_delta_minor)}</dd>
+                  <dt className="text-ink-muted">已执行</dt>
+                  <dd className="text-right text-ink">{formatSignedDelta(line.executed_delta_minor)}</dd>
+                  <dt className="text-ink-muted">剩余待执行</dt>
+                  <dd className="text-right font-medium text-ink">
+                    {formatSignedDelta(line.remaining_delta_minor)}
+                  </dd>
+                </dl>
+                {actionable && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {line.action_direction === "decrease" && (
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        onClick={() => openTradeModal("sell", line)}
+                      >
+                        卖出到现金池
+                      </Button>
+                    )}
+                    {line.action_direction === "increase" && (
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        onClick={() => openTradeModal("buy", line)}
+                      >
+                        从现金池买入
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="lg"
+                      disabled={skipMut.isPending}
+                      onClick={() => setSkipTarget(line)}
+                    >
+                      标记跳过
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -511,9 +577,9 @@ export default function RebalanceExecutionWorkspacePage() {
 
       <ConfirmDialog
         open={completeOpen}
-        title="完成执行并写回持仓"
-        description="确认将执行结果写回正式持仓？此操作不可撤销。"
-        confirmLabel="完成并写回"
+        title="完成调仓并更新持仓"
+        description="确认按执行结果更新正式持仓？此操作不可撤销。"
+        confirmLabel="完成并更新持仓"
         pending={completeMut.isPending}
         onConfirm={() => completeMut.mutate()}
         onClose={() => setCompleteOpen(false)}
@@ -522,7 +588,7 @@ export default function RebalanceExecutionWorkspacePage() {
       <ConfirmDialog
         open={cancelOpen}
         title="放弃调仓执行"
-        description="确认放弃本次调仓执行？已登记的动作不会写回持仓。"
+        description="确认放弃本次调仓执行？已登记的动作不会更新到正式持仓。"
         confirmLabel="放弃调仓"
         variant="danger"
         pending={cancelMut.isPending}

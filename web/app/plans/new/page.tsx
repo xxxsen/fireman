@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
+import { Button } from "@/components/ui/Button";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { PercentInput } from "@/components/ui/PercentInput";
+import { Stepper } from "@/components/ui/Stepper";
 import { createPlanWizard } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
 import { createSimulation } from "@/lib/api/simulations";
@@ -338,7 +341,7 @@ export default function NewPlanWizardPage() {
   // pruned by scenario/region. Returns false (with an error set) to block.
   const leaveGoalStep = (): boolean => {
     if (!scenarioId) {
-      setError("请选择资产配置场景。");
+      setError("请选择配置模板。");
       return false;
     }
     if (!regionTargetChecks.every((c) => c.passed)) {
@@ -386,34 +389,25 @@ export default function NewPlanWizardPage() {
     }
     const sum = selectedInstruments.reduce((a, s) => a + s.amount, 0);
     if (sum > totalAssets + 100) {
-      setError("持仓合计不能超过总资产，请调整金额。");
+      setError("持仓合计不能超过基准规模，请调整金额。");
       return false;
     }
     return true;
   };
 
   return (
-    <div className="mx-auto w-full max-w-[96rem]">
-      <Link href="/" className="text-sm underline">
-        ← 计划列表
-      </Link>
-      <h1 className="mt-4 text-2xl font-semibold">新建计划向导</h1>
-      <ol className="mt-4 flex gap-2 text-sm">
-        {STEPS.map((label, i) => (
-          <li
-            key={label}
-            className={`rounded-full px-3 py-1 ${
-              i === step ? "bg-brand text-white" : "bg-surface-muted text-ink-muted"
-            }`}
-          >
-            {i + 1}. {label}
-          </li>
-        ))}
-      </ol>
+    <div className="content-enter mx-auto w-full max-w-[96rem]">
+      <PageHeader
+        backHref="/"
+        backLabel="计划列表"
+        title="新建计划向导"
+        className="mb-0"
+      />
+      <Stepper steps={STEPS} current={step} className="mt-4" />
 
       <div
         data-testid="wizard-step-card"
-        className="mt-8 w-full space-y-4 rounded-lg border p-6"
+        className="mt-8 w-full space-y-4 rounded-lg border border-line p-6"
       >
         {step === GOAL_STEP && (
           <div className="max-w-6xl space-y-8">
@@ -422,7 +416,7 @@ export default function NewPlanWizardPage() {
               <label className="block text-sm">
                 计划名称
                 <input
-                  className="mt-1 w-full min-w-0 max-w-3xl rounded-md border px-3 py-2"
+                  className="input-base mt-1 max-w-3xl"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
@@ -437,7 +431,7 @@ export default function NewPlanWizardPage() {
                     当前年龄
                     <input
                       type="number"
-                      className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                      className="input-base mt-1"
                       value={currentAge}
                       onChange={(e) => setCurrentAge(Number(e.target.value))}
                     />
@@ -446,7 +440,7 @@ export default function NewPlanWizardPage() {
                     退休年龄
                     <input
                       type="number"
-                      className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                      className="input-base mt-1"
                       value={retirementAge}
                       onChange={(e) => setRetirementAge(Number(e.target.value))}
                     />
@@ -457,13 +451,13 @@ export default function NewPlanWizardPage() {
                       <input
                         type="number"
                         min={1}
-                        className="w-full min-w-0 rounded-md border px-3 py-2"
+                        className="input-base"
                         value={fireDurationYears}
                         onChange={(e) => setFireDurationYears(Number(e.target.value))}
                         aria-label="预计 FIRE 时长（年）"
                       />
                       <select
-                        className="w-full min-w-0 rounded-md border px-3 py-2 text-xs text-ink-muted"
+                        className="input-base text-xs text-ink-muted"
                         aria-label="常用 FIRE 时长预设"
                         value={
                           FIRE_DURATION_PRESETS.includes(
@@ -488,7 +482,17 @@ export default function NewPlanWizardPage() {
                 </div>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                <MoneyInput label="当前总资产" valueMinor={totalAssets} onChange={setTotalAssets} plain />
+                <MoneyInput
+                  label={
+                    <span className="flex items-center">
+                      基准规模
+                      <MetricHelp termKey="configured_total_assets" />
+                    </span>
+                  }
+                  valueMinor={totalAssets}
+                  onChange={setTotalAssets}
+                  plain
+                />
                 <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
                 <label className="block text-sm">
                   <span className="mb-1 flex items-center gap-1">
@@ -503,9 +507,9 @@ export default function NewPlanWizardPage() {
             <section className="space-y-4">
               <h2 className="text-sm font-semibold text-ink">目标配置</h2>
               <label className="block max-w-3xl text-sm">
-                选择场景
+                配置模板
                 <select
-                  className="mt-1 w-full min-w-0 rounded-md border px-3 py-2"
+                  className="input-base mt-1"
                   value={scenarioId}
                   onChange={(e) => setScenarioId(e.target.value)}
                 >
@@ -519,7 +523,7 @@ export default function NewPlanWizardPage() {
                 </select>
               </label>
               <p className="max-w-3xl text-sm text-ink-muted">
-                权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「参数」页修改。
+                权益与债券的国内/国外比例在此设定，将写入计划目标；创建后仍可在「计划设置」中修改。
               </p>
               {selectedScenario && regionTargetChecks.length > 0 && (
                 <div className="space-y-3">
@@ -586,21 +590,21 @@ export default function NewPlanWizardPage() {
                 data-testid="wizard-removed-by-targets"
               >
                 <span>因地区目标调整，已移除：{removedByTargets.join("、")}</span>
-                <button
-                  type="button"
-                  className="shrink-0 underline"
+                <Button
+                  variant="ghost"
+                  className="shrink-0 px-2 py-1 text-xs underline"
                   aria-label="关闭已移除提示"
                   onClick={() => setRemovedByTargets([])}
                 >
                   知道了
-                </button>
+                </Button>
               </div>
             )}
             <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
               <div className="space-y-2">
                 <p className="text-sm text-ink-muted">
                   按大类分标签页搜索并添加标的；组内占比将自动均分，手动调整后其余标的自动补齐。未配置资金默认计入
-                  现金/其他。预期资金 = 总资产 × 大类权重 × 地区权重 × 组内占比。
+                  现金/其他。预期资金 = 基准规模 × 大类权重 × 地区权重 × 组内占比。
                 </p>
                 <Link href="/assets/import" className="inline-block text-sm underline">
                   需要新标的？从 AKShare 录入
@@ -620,7 +624,7 @@ export default function NewPlanWizardPage() {
                   {(holdingsSum / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
                 </p>
                 <p className="text-xs text-ink-muted">
-                  总资产 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
+                  基准规模 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
                 </p>
                 {assetGap > 100 && (
                   <p className="text-xs text-ink-muted">
@@ -641,6 +645,8 @@ export default function NewPlanWizardPage() {
                       key={assetClass}
                       type="button"
                       role="tab"
+                      id={`holding-tab-${assetClass}`}
+                      aria-controls={`holding-panel-${assetClass}`}
                       aria-selected={effectiveHoldingTab === assetClass}
                       className={`px-4 py-2 text-sm font-medium ${
                         effectiveHoldingTab === assetClass
@@ -679,7 +685,8 @@ export default function NewPlanWizardPage() {
                         key={assetClass}
                         className="mt-4 rounded-lg border border-line p-4"
                         role="tabpanel"
-                        aria-label={`${assetClassLabel(assetClass)}选标`}
+                        id={`holding-panel-${assetClass}`}
+                        aria-labelledby={`holding-tab-${assetClass}`}
                       >
                         {!splitBoth ? (
                           <AssetClassHoldingPicker
@@ -749,7 +756,7 @@ export default function NewPlanWizardPage() {
             {selectedScenario && (
               <>
                 <p className="mt-3 text-sm text-ink-muted">
-                  场景「{selectedScenario.name}」目标：
+                  配置模板「{selectedScenario.name}」目标：
                   {selectedScenario.weights
                     .map((w) => `${assetClassLabel(w.asset_class)} ${formatPercent(w.weight)}`)
                     .join(" / ")}
@@ -789,18 +796,55 @@ export default function NewPlanWizardPage() {
                 >
                   {portfolioReview.message}
                 </p>
-                <div className="overflow-x-auto rounded-lg border">
+                <div className="space-y-3 md:hidden" data-testid="wizard-review-cards">
+                  {WIZARD_ASSET_CLASS_ORDER.filter((ac) =>
+                    portfolioReview.rows.some((row) => row.assetClass === ac),
+                  ).map((ac) => {
+                    const rows = portfolioReview.rows.filter((row) => row.assetClass === ac);
+                    return (
+                      <div key={ac} className="rounded-lg border border-line p-3">
+                        <p className="text-sm font-medium text-ink">{assetClassLabel(ac)}</p>
+                        <ul className="mt-2 space-y-2">
+                          {rows.map((row) => (
+                            <li
+                              key={row.key}
+                              className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-sm"
+                            >
+                              <span className="col-span-2 truncate">
+                                {row.instrumentName}
+                                <span className="ml-1 text-xs text-ink-muted">
+                                  {row.instrumentCode} · {row.regionLabel}
+                                </span>
+                              </span>
+                              <span className="text-xs text-ink-muted">
+                                目标 {formatPercent(row.portfolioTargetWeight)}
+                              </span>
+                              <span className="text-right text-xs text-ink-muted">
+                                已投入 {formatMoney(row.currentAmountMinor)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                  <p className="text-right text-sm font-medium">
+                    全组合目标合计 {formatPercent(portfolioReview.portfolioSum)}
+                  </p>
+                </div>
+                <div className="hidden overflow-x-auto rounded-lg border border-line md:block">
                   <table className="min-w-full text-sm">
+                    <caption className="sr-only">组合确认明细</caption>
                     <thead className="bg-surface-muted text-left">
                       <tr>
-                        <th className="px-3 py-2 font-medium">方向</th>
-                        <th className="px-3 py-2 font-medium">资产名称</th>
-                        <th className="px-3 py-2 font-medium">编号</th>
-                        <th className="px-3 py-2 font-medium text-right">组内占比</th>
-                        <th className="px-3 py-2 font-medium text-right">全组合目标</th>
-                        <th className="px-3 py-2 font-medium">国别</th>
-                        <th className="px-3 py-2 font-medium text-right">已投入</th>
-                        <th className="px-3 py-2 font-medium text-right">待投入/减配</th>
+                        <th scope="col" className="px-3 py-2 font-medium">方向</th>
+                        <th scope="col" className="px-3 py-2 font-medium">资产名称</th>
+                        <th scope="col" className="px-3 py-2 font-medium">编号</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">组内占比</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">全组合目标</th>
+                        <th scope="col" className="px-3 py-2 font-medium">国别</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">已投入</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">待投入/减配</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -840,7 +884,7 @@ export default function NewPlanWizardPage() {
                   <p className="text-sm text-warning">
                     建议：返回「建立持仓」补充
                     {portfolioReview.missingClasses.map((m) => m.label).join("、")}
-                    类资产；若暂时无法配置，可先调整场景或稍后在计划内完善持仓。
+                    类资产；若暂时无法配置，可先调整配置模板或稍后在计划内完善持仓。
                   </p>
                 )}
               </div>
@@ -867,7 +911,7 @@ export default function NewPlanWizardPage() {
                 </p>
               ))}
             {assetGap < -100 && (
-              <p className="text-sm text-danger">持仓合计超过总资产，请返回上一步调整。</p>
+              <p className="text-sm text-danger">持仓合计超过基准规模，请返回上一步调整。</p>
             )}
             <label className="mt-4 flex items-center gap-2 text-sm">
               <input
@@ -878,30 +922,31 @@ export default function NewPlanWizardPage() {
               创建后运行 FIRE 模拟（{DEFAULT_RUNS.toLocaleString()} 次）
               <MetricHelp termKey="fire_simulation_optional" />
             </label>
-            {error && <p className="text-sm text-danger">{error}</p>}
           </>
         )}
       </div>
 
-      {error && step < CONFIRM_STEP && (
+      {error && (
         <p className="mt-4 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
 
       <div className="mt-6 flex w-full justify-between">
-        <button
-          type="button"
-          className="rounded-md border px-4 py-2 text-sm"
+        <Button
+          variant="secondary"
+          size="lg"
           disabled={step === GOAL_STEP}
-          onClick={() => setStep((s) => s - 1)}
+          onClick={() => {
+            setError(null);
+            setStep((s) => s - 1);
+          }}
         >
           上一步
-        </button>
+        </Button>
         {step < CONFIRM_STEP ? (
-          <button
-            type="button"
-            className="rounded-md bg-brand px-4 py-2 text-sm text-white"
+          <Button
+            size="lg"
             onClick={() => {
               setError(null);
               if (step === GOAL_STEP && !leaveGoalStep()) return;
@@ -910,19 +955,18 @@ export default function NewPlanWizardPage() {
             }}
           >
             下一步
-          </button>
+          </Button>
         ) : (
-          <button
-            type="button"
-            className="rounded-md bg-brand px-4 py-2 text-sm text-white disabled:opacity-50"
+          <Button
+            size="lg"
+            pending={finishMut.isPending}
             disabled={
               !groupWeightChecks.every((g) => g.passed) ||
               !portfolioReview?.passed ||
               selectedInstruments.length === 0 ||
               !scenarioId ||
               assetGap < -100 ||
-              advancedBlocked ||
-              finishMut.isPending
+              advancedBlocked
             }
             title={
               portfolioReview && !portfolioReview.passed
@@ -932,7 +976,7 @@ export default function NewPlanWizardPage() {
             onClick={() => finishMut.mutate()}
           >
             {runSimulation ? "创建并运行模拟" : "创建计划"}
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -961,16 +1005,26 @@ function AdvancedFireParamsSection({
   highInflationConfirmed: boolean;
   onHighInflationConfirmChange: (value: boolean) => void;
 }) {
+  const hasIssues = errors.length > 0;
   return (
-    <details className="rounded-md border border-line p-3" data-testid="wizard-advanced-params">
+    <details
+      className="rounded-md border border-line p-3"
+      data-testid="wizard-advanced-params"
+      open={hasIssues || undefined}
+    >
       <summary className="cursor-pointer text-sm font-medium">
         高级 FIRE 参数（{isDefault ? "使用默认值" : "已自定义"}）
+        {hasIssues && (
+          <span className="ml-2 rounded-full bg-danger/10 px-2 py-0.5 text-xs text-danger">
+            {errors.length} 项待修正
+          </span>
+        )}
       </summary>
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <label className="block text-sm">
           通胀模式
           <select
-            className="mt-1 w-full rounded-md border px-3 py-2"
+            className="input-base mt-1"
             value={advanced.inflation_mode}
             onChange={(e) => onChange("inflation_mode", e.target.value)}
           >
@@ -1012,7 +1066,7 @@ function AdvancedFireParamsSection({
                 step={0.01}
                 min={0}
                 max={1}
-                className="mt-1 w-full rounded-md border px-3 py-2"
+                className="input-base mt-1"
                 value={advanced.inflation_phi}
                 onChange={(e) => onChange("inflation_phi", Number(e.target.value))}
               />
@@ -1022,7 +1076,7 @@ function AdvancedFireParamsSection({
         <label className="block text-sm">
           提取策略
           <select
-            className="mt-1 w-full rounded-md border px-3 py-2"
+            className="input-base mt-1"
             value={advanced.withdrawal_type}
             onChange={(e) => onChange("withdrawal_type", e.target.value)}
           >

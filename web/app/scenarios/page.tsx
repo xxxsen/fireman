@@ -124,18 +124,18 @@ export function ScenariosPageContent() {
 
   const header = (
     <PageHeader
-      title="场景配置"
-      description="管理跨计划复用的场景模板；在计划设置中切换当前计划使用的模板。"
+      title="配置模板"
+      description="管理跨计划复用的资产配置模板（大类目标权重）；在计划设置中切换当前计划使用的模板。"
       status={
         isFetching && !isLoading ? <LoadingState label="刷新中…" className="text-xs" /> : undefined
       }
       primaryAction={{
-        label: "新建场景",
+        label: "新建配置模板",
         onClick: () => {
           setFormError(null);
           setEditing({
             id: "new_" + Date.now(),
-            name: "新场景",
+            name: "新配置模板",
             description: "",
             is_builtin: false,
             plan_count: 0,
@@ -157,7 +157,7 @@ export function ScenariosPageContent() {
     return (
       <div className="content-enter">
         {header}
-        <LoadingState label="加载场景…" />
+        <LoadingState label="加载配置模板…" />
       </div>
     );
   }
@@ -167,7 +167,7 @@ export function ScenariosPageContent() {
       <div className="content-enter">
         {header}
         <ErrorState
-          message="无法加载场景模板。请确认后端服务可用后重试。"
+          message="无法加载配置模板。请确认后端服务可用后重试。"
           onRetry={() => void refetch()}
           backHref="/"
           technicalDetail={queryErrorMessage(error)}
@@ -184,8 +184,8 @@ export function ScenariosPageContent() {
 
       {!scenarios.length ? (
         <EmptyState
-          title="暂无场景模板"
-          description="新建场景模板后，可在计划设置中为各计划选用。"
+          title="暂无配置模板"
+          description="新建配置模板后，可在计划设置中为各计划选用。"
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
@@ -212,8 +212,8 @@ export function ScenariosPageContent() {
                     <Button
                       variant="ghost"
                       className="px-2 py-1"
-                      aria-label="复制场景"
-                      title="复制场景"
+                      aria-label="复制配置模板"
+                      title="复制配置模板"
                       onClick={() => {
                         setFormError(null);
                         setEditing({
@@ -234,8 +234,8 @@ export function ScenariosPageContent() {
                       <Button
                         variant="ghost"
                         className="px-2 py-1"
-                        aria-label="编辑场景"
-                        title="编辑场景"
+                        aria-label="编辑配置模板"
+                        title="编辑配置模板"
                         onClick={() => {
                           setFormError(null);
                           setEditing({
@@ -254,8 +254,8 @@ export function ScenariosPageContent() {
                       <Button
                         variant="danger"
                         className="px-2 py-1"
-                        aria-label="删除场景"
-                        title="删除场景"
+                        aria-label="删除配置模板"
+                        title="删除配置模板"
                         onClick={() => {
                           setDeleteError(null);
                           setDeleteTarget(scn);
@@ -298,7 +298,7 @@ export function ScenariosPageContent() {
           if (saveMut.isPending) return;
           setEditing(null);
         }}
-        title="编辑场景"
+        title="编辑配置模板"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
             <Button
@@ -309,7 +309,7 @@ export function ScenariosPageContent() {
               取消
             </Button>
             <Button pending={saveMut.isPending} onClick={saveScenario}>
-              保存场景
+              保存配置模板
             </Button>
           </div>
         }
@@ -342,7 +342,7 @@ export function ScenariosPageContent() {
               </div>
             ))}
             <p className="mt-3 text-xs text-ink-muted">
-              场景模板只决定大类目标权重；国内/国外配比在各计划的设置中维护。
+              配置模板只决定大类目标权重；国内/国外配比在各计划的设置中维护。
             </p>
             {formError && (
               <p className="mt-4 text-sm text-danger" role="alert">
@@ -355,13 +355,13 @@ export function ScenariosPageContent() {
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        title="删除场景"
+        title="删除配置模板"
         description={
           deleteTarget
-            ? `确定删除场景「${deleteTarget.name}」？此操作不可撤销。`
+            ? `确定删除配置模板「${deleteTarget.name}」？此操作不可撤销。`
             : undefined
         }
-        confirmLabel="删除场景"
+        confirmLabel="删除配置模板"
         variant="danger"
         pending={deleteMut.isPending}
         error={deleteError}

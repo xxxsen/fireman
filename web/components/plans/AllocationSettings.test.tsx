@@ -97,11 +97,11 @@ function renderContent() {
 describe("PlanTargetsContent", () => {
   it("shows read-only asset weights and an inline scenarios link", async () => {
     renderContent();
-    expect(await screen.findByText("当前计划目标配置")).toBeInTheDocument();
+    expect(await screen.findByText("目标配置")).toBeInTheDocument();
     expect(screen.getByText("大类目标权重（只读）")).toBeInTheDocument();
     expect(screen.getByText("本计划国内/国外配比")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "前往场景配置" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "场景配置" })).toHaveAttribute("href", "/scenarios");
+    expect(screen.getByRole("link", { name: "配置模板" })).toHaveAttribute("href", "/scenarios");
   });
 
   it("shows save bar only after scenario selection changes", async () => {
@@ -114,7 +114,7 @@ describe("PlanTargetsContent", () => {
     });
     expect(screen.getByText("有未保存的修改")).toBeInTheDocument();
     expect(screen.getByTestId("plan-targets-preview-note")).toHaveTextContent(
-      /大类目标权重随所选场景预览/,
+      /大类目标权重随所选配置模板预览/,
     );
   });
 

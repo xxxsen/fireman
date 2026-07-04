@@ -2,8 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import { PlanTabs } from "./PlanTabs";
 
+const mockPathname = vi.fn(() => "/plans/plan_1/rebalance");
+
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/plans/plan_1/rebalance",
+  usePathname: () => mockPathname(),
 }));
 
 describe("PlanTabs", () => {
@@ -15,11 +17,11 @@ describe("PlanTabs", () => {
       "href",
       "/plans/plan_1/overview",
     );
-    expect(screen.getByRole("link", { name: "持仓预览" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "调仓工作台" })).toHaveAttribute(
       "href",
       "/plans/plan_1/rebalance",
     );
-    expect(screen.getByRole("link", { name: "持仓预览" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "调仓工作台" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -27,6 +29,16 @@ describe("PlanTabs", () => {
     expect(screen.getByRole("link", { name: "计划设置" })).toHaveAttribute(
       "href",
       "/plans/plan_1/settings",
+    );
+  });
+
+  it("highlights 调仓工作台 on the asset-refresh sub flow", () => {
+    mockPathname.mockReturnValue("/plans/plan_1/asset-refresh");
+    render(<PlanTabs planId="plan_1" />);
+
+    expect(screen.getByRole("link", { name: "调仓工作台" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
   });
 });

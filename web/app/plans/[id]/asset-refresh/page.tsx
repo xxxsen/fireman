@@ -4,9 +4,12 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/Button";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { Dialog } from "@/components/ui/Dialog";
+import { Stepper } from "@/components/ui/Stepper";
+import { PlanPageHeader } from "@/components/layout/PlanPageHeader";
 import { getHoldings, getTargets } from "@/lib/api/holdings";
 import { getActiveRebalanceExecution } from "@/lib/api/rebalance-executions";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
@@ -38,7 +41,7 @@ import { LoadingState } from "@/components/ui/LoadingState";
 import { queryErrorMessage } from "@/lib/query-error";
 import type { Instrument } from "@/types/api";
 
-const STEPS = ["说明", "配置确认", "录入当前资产", "确认提交"] as const;
+const STEPS = ["确认范围", "录入当前资产", "确认提交"] as const;
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
 function isSelectableInstrument(inst: Instrument): boolean {
@@ -53,7 +56,6 @@ export default function AssetRefreshPage() {
   const [holdingsDraft, setHoldingsDraft] = useState<AssetRefreshHolding[] | null>(null);
   const [totalOverride, setTotalOverride] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -150,31 +152,24 @@ export default function AssetRefreshPage() {
   );
 
   const initialScenarioId = parameters.data?.parameters.selected_scenario_id ?? "";
-  const currentScenarioId = selectedScenarioId ?? initialScenarioId;
 
-  const hasChanges = useMemo(() => {
-    const scenarioChanged =
-      !!currentScenarioId && currentScenarioId !== initialScenarioId;
-    const holdingsChanged = holdings.data
-      ? hasAssetRefreshDraftChanges(holdings.data.holdings, draftHoldings, totalAssets)
-      : false;
-    return scenarioChanged || holdingsChanged;
-  }, [currentScenarioId, initialScenarioId, holdings.data, draftHoldings, totalAssets]);
+  const hasChanges = useMemo(
+    () =>
+      holdings.data
+        ? hasAssetRefreshDraftChanges(holdings.data.holdings, draftHoldings, totalAssets)
+        : false,
+    [holdings.data, draftHoldings, totalAssets],
+  );
 
-  const previewScenario = useMemo(() => {
-    if (!currentScenarioId) return undefined;
-    return scenarios.data?.scenarios.find((scenario) => scenario.id === currentScenarioId);
-  }, [currentScenarioId, scenarios.data]);
-
+  // The wizard shows the plan's config template read-only; changing the
+  // template is a plan-settings responsibility, not part of holdings entry.
   const selectedScenario = useMemo(() => {
     if (!initialScenarioId) return undefined;
     return scenarios.data?.scenarios.find((scenario) => scenario.id === initialScenarioId);
   }, [initialScenarioId, scenarios.data]);
 
-  const previewAssetTargets =
-    previewScenario?.weights ?? targets.data?.asset_class_targets ?? [];
-  const previewRegionTargets =
-    previewScenario?.region_targets ?? targets.data?.region_targets ?? [];
+  const previewAssetTargets = targets.data?.asset_class_targets ?? [];
+  const previewRegionTargets = targets.data?.region_targets ?? [];
 
   const groupedHoldings = useMemo(() => {
     const byClass = new Map<string, Map<string, AssetRefreshHolding[]>>();
@@ -218,10 +213,6 @@ export default function AssetRefreshPage() {
       )
       .slice(0, 20);
   }, [filter, instruments.data, selectedInstrumentIds]);
-
-  const switchScenario = (nextScenarioId: string) => {
-    setSelectedScenarioId(nextScenarioId);
-  };
 
   const updateDraft = (next: AssetRefreshHolding[]) => {
     setHoldingsDraft(next);
@@ -274,10 +265,6 @@ export default function AssetRefreshPage() {
         throw new Error(groupWeightValidation.message ?? "组内配比校验失败");
       }
 
-      const scenarioChanged =
-        !!currentScenarioId && currentScenarioId !== initialScenarioId;
-      const configChanged = structureChanged || scenarioChanged;
-
       return submitAssetRefresh(
         planId,
         buildAssetRefreshBody(
@@ -285,8 +272,8 @@ export default function AssetRefreshPage() {
           draftHoldings,
           totalAssets,
           true,
-          configChanged,
-          scenarioChanged ? currentScenarioId : null,
+          structureChanged,
+          null,
         ),
       );
     },
@@ -314,7 +301,7 @@ export default function AssetRefreshPage() {
   ) {
     return (
       <ErrorState
-        message="无法加载资产变更数据。请确认后端服务可用后重试。"
+        message="无法加载持仓校正数据。请确认后端服务可用后重试。"
         onRetry={() => {
           if (plan.isError) void plan.refetch();
           if (holdings.isError) void holdings.refetch();
@@ -346,19 +333,19 @@ export default function AssetRefreshPage() {
     !targets.data ||
     !instruments.data
   ) {
-    return <LoadingState label="加载资产变更…" />;
+    return <LoadingState label="加载持仓校正…" />;
   }
 
   if (activeExecution.data?.execution) {
     const executionId = activeExecution.data.execution.id;
     return (
-      <div className="space-y-4">
-        <h1 className="text-xl font-semibold">资产变更</h1>
+      <div className="content-enter space-y-4">
+        <h1 className="text-xl font-semibold">持仓校正</h1>
         <div
           className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning"
           data-testid="asset-refresh-blocked"
         >
-          调仓执行进行中，完成或放弃后才可使用资产变更。
+          调仓执行进行中，完成或放弃后才可进行持仓校正。
           <Link
             href={`/plans/${planId}/rebalance/executions/${executionId}`}
             className="ml-2 font-medium underline"
@@ -367,7 +354,7 @@ export default function AssetRefreshPage() {
           </Link>
         </div>
         <Link href={`/plans/${planId}/rebalance`} className="text-sm underline">
-          返回持仓预览
+          返回调仓工作台
         </Link>
       </div>
     );
@@ -380,97 +367,51 @@ export default function AssetRefreshPage() {
     })),
   );
   const structureOnly = hasChanges && beforeTotal === totalAssets && changeCount > 0;
-  const scenarioName = previewScenario?.name ?? selectedScenario?.name ?? "—";
+  const scenarioName = selectedScenario?.name ?? "—";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 pb-16">
-      <div>
-        <h1 className="text-xl font-semibold">资产变更</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          录入当前计划下的真实持仓结构与金额，提交后更新持仓事实并同步计划总资产。
-        </p>
-      </div>
+    <div className="content-enter mx-auto max-w-3xl space-y-6 pb-16">
+      <PlanPageHeader
+        title="持仓校正"
+        description="按券商账户实际情况更新真实持仓结构与金额，提交后更新持仓事实并同步计划基准规模。"
+      />
 
-      <ol className="flex flex-wrap gap-2 text-sm" data-testid="asset-refresh-steps">
-        {STEPS.map((label, index) => (
-          <li
-            key={label}
-            className={`rounded-full px-3 py-1 ${
-              index === step ? "bg-brand text-white" : "bg-surface-muted text-ink-muted"
-            }`}
-          >
-            {index + 1}. {label}
-          </li>
-        ))}
-      </ol>
+      <Stepper steps={STEPS} current={step} />
 
       {error && (
-        <div className="rounded-md border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
+        <div className="rounded-md border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">
           {error}
         </div>
       )}
 
-      {step === 0 && (
-        <section className="space-y-4 rounded-lg border border-line p-4">
-          <div className="space-y-2 text-sm text-ink">
-            <p>此流程用于维护当前计划下的真实持仓结构，包括：</p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>新增或移除资产标的</li>
-              <li>修改各资产当前金额与组内配置</li>
-              <li>提交后覆盖当前计划内的持仓事实</li>
-              <li>提交后计划总资产将同步为最新持仓合计</li>
-            </ul>
-            <p>
-              如需修改场景模板本身，请前往{" "}
-              <Link href="/scenarios" className="underline">
-                场景配置
-              </Link>
-              ，而不是在此流程中修改。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white"
-              onClick={() => setStep(1)}
-            >
-              下一步
-            </button>
-            <Link
-              href={`/plans/${planId}/rebalance`}
-              className="inline-flex min-h-11 items-center rounded-md border border-line px-4 text-sm"
-            >
-              返回持仓预览
-            </Link>
-          </div>
-        </section>
-      )}
-
-      {step === 1 && targets.data && (
-        <section className="space-y-4 rounded-lg border border-line p-4">
-          <h2 className="font-medium">配置确认</h2>
-          <p className="text-sm text-ink-muted">
-            当前计划：<strong>{plan.data.name}</strong>
+      {step === 0 && targets.data && (
+        <section className="space-y-4 rounded-lg border border-line p-6">
+          <h2 className="font-medium">确认范围</h2>
+          <p className="text-sm text-ink">
+            此流程用于维护当前计划下的真实持仓：新增或移除标的、更新各资产当前金额与组内配比；提交后覆盖持仓事实，计划基准规模同步为最新持仓合计。
           </p>
-          <label className="block text-sm">
-            FIRE 方案
-            <select
-              className="mt-1 w-full rounded-md border px-3 py-2"
-              value={currentScenarioId}
-              onChange={(e) => switchScenario(e.target.value)}
-              data-testid="asset-refresh-scenario-select"
-            >
-              <option value="">—</option>
-              {(scenarios.data?.scenarios ?? []).map((scenario) => (
-                <option key={scenario.id} value={scenario.id}>
-                  {scenario.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="text-sm text-ink-muted">
-            当前选择的 FIRE 方案 / 场景模板：<strong>{scenarioName}</strong>
-          </p>
+          <dl className="grid gap-2 text-sm text-ink sm:grid-cols-2">
+            <div>
+              <dt className="text-ink-muted">当前计划</dt>
+              <dd className="font-medium">{plan.data.name}</dd>
+            </div>
+            <div>
+              <dt className="text-ink-muted">配置模板（只读）</dt>
+              <dd className="font-medium" data-testid="asset-refresh-scenario-name">
+                {scenarioName}
+                <Link
+                  href={`/plans/${planId}/settings?section=plan-targets`}
+                  className="ml-2 text-sm font-normal text-brand underline underline-offset-2"
+                >
+                  前往计划设置修改
+                </Link>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-ink-muted">当前标的</dt>
+              <dd className="font-medium">{draftHoldings.length} 个</dd>
+            </div>
+          </dl>
           <div>
             <h3 className="text-sm font-medium">大类目标（只读）</h3>
             <ul className="mt-2 text-sm text-ink">
@@ -501,48 +442,41 @@ export default function AssetRefreshPage() {
               </div>
             );
           })}
-          <p className="text-sm text-ink-muted">
-            当前标的 {draftHoldings.length} 个
-          </p>
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-line px-4 text-sm"
-              onClick={() => setStep(0)}
-            >
-              上一步
-            </button>
-            <button
-              type="button"
-              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white"
-              onClick={() => setStep(2)}
-            >
+            <Button size="lg" onClick={() => setStep(1)}>
               下一步
-            </button>
+            </Button>
+            <Button
+              variant="secondary"
+              size="lg"
+              href={`/plans/${planId}/rebalance`}
+            >
+              返回调仓工作台
+            </Button>
           </div>
         </section>
       )}
 
-      {step === 2 && (
-        <section className="space-y-4 rounded-lg border border-line p-4">
+      {step === 1 && (
+        <section className="space-y-4 rounded-lg border border-line p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-medium">录入当前资产</h2>
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-line px-4 text-sm"
+            <Button
+              variant="secondary"
+              size="lg"
               data-testid="asset-refresh-add-instrument"
               onClick={() => setDialogOpen(true)}
             >
               添加标的
-            </button>
+            </Button>
           </div>
           {groupedHoldings.map(({ assetClass, regions }) => (
             <div key={assetClass} className="rounded-md border border-line">
-              <h3 className="border-b bg-surface-muted px-3 py-2 text-sm font-medium">
+              <h3 className="border-b border-line bg-surface-muted px-3 py-2 text-sm font-medium">
                 {assetClassLabel(assetClass)}
               </h3>
               {regions.map(({ region, rows: regionRows }) => (
-                <div key={`${assetClass}:${region}`} className="border-t">
+                <div key={`${assetClass}:${region}`} className="border-t border-line">
                   <h4 className="bg-surface-muted/80 px-3 py-1.5 text-xs font-medium text-ink-muted">
                     {regionLabel(region)}
                   </h4>
@@ -550,17 +484,17 @@ export default function AssetRefreshPage() {
                     <table className="min-w-full text-sm">
                       <thead>
                         <tr className="text-left text-ink-muted">
-                          <th className="px-3 py-2">标的</th>
-                          <th className="px-3 py-2">分类</th>
-                          <th className="px-3 py-2">国别</th>
-                          <th className="px-3 py-2">组内配比</th>
-                          <th className="px-3 py-2">当前金额</th>
-                          <th className="px-3 py-2">操作</th>
+                          <th scope="col" className="px-3 py-2">标的</th>
+                          <th scope="col" className="px-3 py-2">分类</th>
+                          <th scope="col" className="px-3 py-2">国别</th>
+                          <th scope="col" className="px-3 py-2">组内配比</th>
+                          <th scope="col" className="px-3 py-2">当前金额</th>
+                          <th scope="col" className="px-3 py-2">操作</th>
                         </tr>
                       </thead>
                       <tbody>
                         {regionRows.map((row) => (
-                          <tr key={row.instrument_id} className="border-t">
+                          <tr key={row.instrument_id} className="border-t border-line">
                             <td className="px-3 py-2">
                               <span className="font-medium">{row.label}</span>
                               <span className="block text-xs text-ink-muted">{row.code}</span>
@@ -586,13 +520,13 @@ export default function AssetRefreshPage() {
                             </td>
                             <td className="px-3 py-2">
                               {!row.is_system ? (
-                                <button
-                                  type="button"
-                                  className="text-xs text-danger underline"
+                                <Button
+                                  variant="ghost"
+                                  className="px-2 py-1 text-xs text-danger"
                                   onClick={() => removeHolding(row)}
                                 >
                                   移除
-                                </button>
+                                </Button>
                               ) : (
                                 <span className="text-xs text-ink-muted">—</span>
                               )}
@@ -607,7 +541,7 @@ export default function AssetRefreshPage() {
             </div>
           ))}
           <div>
-            <span className="mb-1 block text-sm text-ink-muted">资产总值</span>
+            <span className="mb-1 block text-sm text-ink-muted">计划基准规模（提交后同步）</span>
             <div className="flex items-center gap-3">
               <MoneyInput
                 plain
@@ -615,48 +549,42 @@ export default function AssetRefreshPage() {
                 currency={plan.data.base_currency}
                 onChange={setTotalOverride}
               />
-              <button
-                type="button"
-                className="min-h-11 shrink-0 rounded-md border border-line px-4 text-sm text-ink"
+              <Button
+                variant="secondary"
+                size="lg"
+                className="shrink-0"
                 onClick={() => setTotalOverride(sumMinor)}
               >
                 使用分项合计 {formatMoney(sumMinor, plan.data.base_currency)}
-              </button>
+              </Button>
             </div>
           </div>
           {sumMinor === totalAssets && (
-            <p className="text-sm text-ink-muted">分项合计与资产总值一致。</p>
+            <p className="text-sm text-ink-muted">分项合计与基准规模一致。</p>
           )}
-          {!validation.ok && (
-            <p className="text-sm text-danger">{validation.message}</p>
-          )}
-          {!groupWeightValidation.ok && (
-            <p className="text-sm text-danger" data-testid="asset-refresh-group-weight-error">
-              {groupWeightValidation.message}
-            </p>
-          )}
+          <div role="alert" className="space-y-1">
+            {!validation.ok && (
+              <p className="text-sm text-danger">{validation.message}</p>
+            )}
+            {!groupWeightValidation.ok && (
+              <p className="text-sm text-danger" data-testid="asset-refresh-group-weight-error">
+                {groupWeightValidation.message}
+              </p>
+            )}
+          </div>
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-line px-4 text-sm"
-              onClick={() => setStep(1)}
-            >
+            <Button variant="secondary" size="lg" onClick={() => setStep(0)}>
               上一步
-            </button>
-            <button
-              type="button"
-              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white disabled:opacity-50"
-              disabled={!canProceedFromEntry}
-              onClick={() => setStep(3)}
-            >
+            </Button>
+            <Button size="lg" disabled={!canProceedFromEntry} onClick={() => setStep(2)}>
               下一步
-            </button>
+            </Button>
           </div>
         </section>
       )}
 
-      {step === 3 && (
-        <section className="space-y-4 rounded-lg border border-line p-4">
+      {step === 2 && (
+        <section className="space-y-4 rounded-lg border border-line p-6">
           <h2 className="font-medium">确认提交</h2>
           <dl className="grid gap-2 text-sm text-ink sm:grid-cols-2">
             <div>
@@ -679,7 +607,7 @@ export default function AssetRefreshPage() {
             <p className="text-sm text-ink">
               变更前合计 {formatMoney(beforeTotal, plan.data.base_currency)}，变更后合计{" "}
               {formatMoney(totalAssets, plan.data.base_currency)}。
-              本次变更未改变资产总值，仅更新了持仓结构或资产分配。
+              本次变更未改变基准规模，仅更新了持仓结构或资产分配。
             </p>
           ) : (
             <p className="text-sm text-ink">
@@ -704,24 +632,20 @@ export default function AssetRefreshPage() {
               </p>
             ))}
           <p className="text-sm text-ink-muted">
-            提交后，当前计划总资产将同步更新为最新持仓合计。
+            提交后，当前计划基准规模将同步更新为最新持仓合计。
           </p>
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              className="min-h-11 rounded-md border border-line px-4 text-sm"
-              onClick={() => setStep(2)}
-            >
+            <Button variant="secondary" size="lg" onClick={() => setStep(1)}>
               上一步
-            </button>
-            <button
-              type="button"
-              className="min-h-11 rounded-md bg-brand px-4 text-sm text-white disabled:opacity-50"
-              disabled={submit.isPending || !hasChanges}
+            </Button>
+            <Button
+              size="lg"
+              pending={submit.isPending}
+              disabled={!hasChanges}
               onClick={() => submit.mutate()}
             >
-              提交资产变更
-            </button>
+              提交持仓校正
+            </Button>
           </div>
         </section>
       )}
@@ -733,7 +657,7 @@ export default function AssetRefreshPage() {
         className="max-w-md"
       >
         <input
-          className="w-full rounded-md border px-3 py-2 text-sm"
+          className="input-base text-sm"
           placeholder="按代码、名称过滤"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
@@ -742,7 +666,7 @@ export default function AssetRefreshPage() {
         <Link href="/assets/import" className="mt-2 block text-sm underline">
           资料库中不存在？从 AKShare 录入
         </Link>
-        <ul className="mt-4 divide-y" data-testid="asset-refresh-instrument-results">
+        <ul className="mt-4 divide-y divide-line" data-testid="asset-refresh-instrument-results">
           {filteredInstruments.map((instrument) => (
             <li key={instrument.id}>
               <button

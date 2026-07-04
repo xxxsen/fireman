@@ -66,14 +66,14 @@ vi.mock("@/lib/api/allocation", () => ({
 describe("ScenariosPage", () => {
   it("renders global scenario management", () => {
     render(<ScenariosPage />);
-    expect(screen.getByRole("heading", { name: "场景配置" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "配置模板" })).toBeInTheDocument();
     expect(screen.getByText("均衡")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新建场景" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建配置模板" })).toBeInTheDocument();
   });
 
   it("edits only asset-class weights (no region inputs) in scenario modal", () => {
     render(<ScenariosPage />);
-    fireEvent.click(screen.getByRole("button", { name: "编辑场景" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置模板" }));
     expect(screen.getByText("大类权重")).toBeInTheDocument();
     expect(screen.queryByText("地区组内权重")).not.toBeInTheDocument();
     // Only the three asset-class weight inputs remain; region inputs are removed.
@@ -85,9 +85,9 @@ describe("ScenariosPage", () => {
     // builtin badge appears inline with the title
     expect(screen.getByText("内置")).toBeInTheDocument();
     // builtin (plan_count 2) has copy but no delete; custom (plan_count 0) has all three
-    expect(screen.getAllByRole("button", { name: "复制场景" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "编辑场景" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "删除场景" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "复制配置模板" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "编辑配置模板" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "删除配置模板" })).toHaveLength(1);
   });
 
   it("shows reference text only when plan_count > 0 and hides normal weight pass text", () => {

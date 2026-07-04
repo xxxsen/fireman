@@ -148,7 +148,7 @@ function renderWizard() {
 }
 
 function getScenarioSelect() {
-  return screen.getByRole("combobox", { name: "选择场景" });
+  return screen.getByRole("combobox", { name: "配置模板" });
 }
 
 // Scenario + region targets now live on the merged 计划目标 step (step 0).
@@ -393,7 +393,7 @@ describe("NewPlanWizardPage", () => {
   it("blocks leaving 计划目标 until a scenario is chosen (td/060 §3.1)", async () => {
     renderWizard();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    expect(await screen.findByText("请选择资产配置场景。")).toBeInTheDocument();
+    expect(await screen.findByText("请选择配置模板。")).toBeInTheDocument();
     expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
   });
 

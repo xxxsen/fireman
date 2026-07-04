@@ -4,6 +4,12 @@ import Link from "next/link";
 import { cn } from "@/lib/cn";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonSize = "md" | "lg";
+
+const SIZE_CLASSES: Record<ButtonSize, string> = {
+  md: "min-h-10 px-4 py-2",
+  lg: "min-h-11 px-5 py-2.5",
+};
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
@@ -17,10 +23,11 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
 };
 
 const BASE =
-  "inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:cursor-not-allowed";
+  "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:cursor-not-allowed";
 
 type ButtonCommon = {
   variant?: ButtonVariant;
+  size?: ButtonSize;
   pending?: boolean;
   className?: string;
   children: React.ReactNode;
@@ -40,12 +47,13 @@ export type ButtonProps = ButtonAsButton | ButtonAsLink;
 export function Button(props: ButtonProps) {
   const {
     variant = "primary",
+    size = "md",
     pending = false,
     className,
     children,
     ...rest
   } = props;
-  const classes = cn(BASE, VARIANT_CLASSES[variant], className);
+  const classes = cn(BASE, SIZE_CLASSES[size], VARIANT_CLASSES[variant], className);
   const label = pending ? "处理中…" : children;
 
   if ("href" in props && props.href) {

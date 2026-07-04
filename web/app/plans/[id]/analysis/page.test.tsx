@@ -145,8 +145,13 @@ vi.mock("@/lib/api/analysis", () => ({
 }));
 
 vi.mock("@/hooks/useJobStatus", () => ({
+  // The page runs one useJobStatus hook per job kind (sim/stress/sensitivity).
+  // Only the hook that currently holds a job id gets its callbacks captured, so
+  // tests fire terminal callbacks against the panel that actually started a job.
   useJobStatus: (jobId: string | null, options?: typeof jobStatusCallbacks) => {
-    jobStatusCallbacks = options ?? {};
+    if (jobId) {
+      jobStatusCallbacks = options ?? {};
+    }
     return useJobStatusMock(jobId, options);
   },
 }));
@@ -257,7 +262,9 @@ describe("AnalysisPage zero success", () => {
 
   it("clears active job and keeps error after failed terminal state", async () => {
     useJobStatusMock.mockImplementation((jobId, options) => {
-      jobStatusCallbacks = options ?? {};
+      if (jobId) {
+        jobStatusCallbacks = options ?? {};
+      }
       if (jobId === "job_sim_busy") {
         return { job: { status: "failed" }, progress: 0, error: "模拟引擎错误" };
       }
@@ -284,7 +291,9 @@ describe("AnalysisPage zero success", () => {
 
   it("shows stress failure only in stress panel and retries stress test", async () => {
     useJobStatusMock.mockImplementation((jobId, options) => {
-      jobStatusCallbacks = options ?? {};
+      if (jobId) {
+        jobStatusCallbacks = options ?? {};
+      }
       if (jobId === "job_stress") {
         return { job: { status: "failed" }, progress: 0, error: "压力测试失败" };
       }
@@ -313,7 +322,9 @@ describe("AnalysisPage zero success", () => {
 
   it("shows sensitivity failure only in sensitivity panel and retries sensitivity test", async () => {
     useJobStatusMock.mockImplementation((jobId, options) => {
-      jobStatusCallbacks = options ?? {};
+      if (jobId) {
+        jobStatusCallbacks = options ?? {};
+      }
       if (jobId === "job_sens") {
         return { job: { status: "failed" }, progress: 0, error: "敏感性测试失败" };
       }

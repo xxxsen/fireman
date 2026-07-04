@@ -18,7 +18,7 @@ import { getAllocation, listScenarios, updateAllocation } from "@/lib/api/alloca
 import { listAssumptionProfiles } from "@/lib/api/assumptions";
 import { ApiError } from "@/lib/api/client";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { LoadingState } from "@/components/ui/LoadingState";
+import { PageSkeleton } from "@/components/ui/Skeleton";
 import { queryErrorMessage } from "@/lib/query-error";
 import { assetClassLabel, formatMoney, historyDepthLabel, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
@@ -225,7 +225,7 @@ export function ParametersContent({
     !allocationQ.data ||
     !holdingsQ.data
   ) {
-    return <LoadingState label="加载参数…" />;
+    return <PageSkeleton label="加载参数…" />;
   }
 
   const gapBlocking = Math.abs(gap) > 100 && gap < 0;
@@ -244,12 +244,15 @@ export function ParametersContent({
     <div className="space-y-6 pb-20">
       {showStale && stale && <StaleBanner />}
       <section className="rounded-lg border border-line p-4">
-        <h2 className="text-lg font-medium">计划信息</h2>
+        <h2 className="text-lg font-medium">基本信息</h2>
+        <p className="mt-1 text-sm text-ink-muted">
+          计划名称与 FIRE 时间线；资产大类与地区的目标权重请在「目标配置」分区调整。
+        </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
             计划名称
             <input
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={planName}
               onChange={(e) => setLocalPlanName(e.target.value)}
               data-testid="plan-name-input"
@@ -257,13 +260,13 @@ export function ParametersContent({
           </label>
           <label className="block text-sm">
             估值日期
-            <input className="mt-1 w-full rounded-md border px-3 py-2" value={planQ.data?.valuation_date ?? ""} disabled />
+            <input className="input-base mt-1" value={planQ.data?.valuation_date ?? ""} disabled />
           </label>
           <label className="block text-sm">
             当前年龄
             <input
               type="number"
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.current_age}
               onChange={(e) => update("current_age", Number(e.target.value))}
             />
@@ -272,7 +275,7 @@ export function ParametersContent({
             计划退休年龄
             <input
               type="number"
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.retirement_age}
               onChange={(e) => update("retirement_age", Number(e.target.value))}
             />
@@ -281,7 +284,7 @@ export function ParametersContent({
             规划终止年龄
             <input
               type="number"
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.end_age}
               onChange={(e) => update("end_age", Number(e.target.value))}
             />
@@ -351,9 +354,9 @@ export function ParametersContent({
       {showAllocation && <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">资产配置</h2>
         <label className="mt-4 block text-sm">
-          场景选择
+          配置模板
           <select
-            className="mt-1 w-full rounded-md border px-3 py-2"
+            className="input-base mt-1"
             value={params.selected_scenario_id ?? ""}
             onChange={(e) => update("selected_scenario_id", e.target.value || null)}
           >
@@ -426,7 +429,7 @@ export function ParametersContent({
           <label className="block text-sm">
             提取策略
             <select
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.withdrawal_type}
               onChange={(e) => update("withdrawal_type", e.target.value)}
             >
@@ -438,7 +441,7 @@ export function ParametersContent({
           <label className="block text-sm">
             通胀模式
             <select
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.inflation_mode}
               onChange={(e) => update("inflation_mode", e.target.value)}
             >
@@ -470,7 +473,7 @@ export function ParametersContent({
                   step={0.01}
                   min={0}
                   max={1}
-                  className="mt-1 w-full rounded-md border px-3 py-2"
+                  className="input-base mt-1"
                   value={params.inflation_phi}
                   onChange={(e) => update("inflation_phi", Number(e.target.value))}
                 />
@@ -528,7 +531,7 @@ export function ParametersContent({
           <label className="block text-sm">
             检查频率
             <select
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.rebalance_frequency}
               onChange={(e) => update("rebalance_frequency", e.target.value)}
             >
@@ -556,15 +559,16 @@ export function ParametersContent({
         <h2 className="text-lg font-medium">持仓模拟数据</h2>
         <div className="mt-3 overflow-x-auto text-sm">
           <table className="min-w-full text-left">
+            <caption className="sr-only">持仓模拟数据快照</caption>
             <thead className="text-ink-muted">
               <tr>
-                <th className="pr-4 py-1">标的</th>
-                <th className="pr-4 py-1">历史深度</th>
-                <th className="pr-4 py-1">完整年度数</th>
-                <th className="pr-4 py-1">月度样本</th>
-                <th className="pr-4 py-1">快照生成时间</th>
-                <th className="pr-4 py-1">指标版本</th>
-                <th className="pr-4 py-1">快照提示</th>
+                <th scope="col" className="pr-4 py-1">标的</th>
+                <th scope="col" className="pr-4 py-1">历史深度</th>
+                <th scope="col" className="pr-4 py-1">完整年度数</th>
+                <th scope="col" className="pr-4 py-1">月度样本</th>
+                <th scope="col" className="pr-4 py-1">快照生成时间</th>
+                <th scope="col" className="pr-4 py-1">指标版本</th>
+                <th scope="col" className="pr-4 py-1">快照提示</th>
               </tr>
             </thead>
             <tbody>
@@ -609,7 +613,7 @@ export function ParametersContent({
           <label className="block text-sm">
             收益假设来源
             <select
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.return_assumption_mode}
               onChange={(e) => update("return_assumption_mode", e.target.value)}
             >
@@ -622,9 +626,9 @@ export function ParametersContent({
           </label>
           {params.return_assumption_mode === "blended_prior" && (
             <label className="block text-sm">
-              情景
+              假设情景
               <select
-                className="mt-1 w-full rounded-md border px-3 py-2"
+                className="input-base mt-1"
                 value={params.return_assumption_scenario}
                 onChange={(e) => update("return_assumption_scenario", e.target.value)}
               >
@@ -640,7 +644,7 @@ export function ParametersContent({
             <label className="block text-sm">
               假设集
               <select
-                className="mt-1 w-full rounded-md border px-3 py-2"
+                className="input-base mt-1"
                 value={params.assumption_selection_mode}
                 onChange={(e) => {
                   const mode = e.target.value;
@@ -691,7 +695,7 @@ export function ParametersContent({
               <label className="block text-sm">
                 指定假设集版本
                 <select
-                  className="mt-1 w-full rounded-md border px-3 py-2"
+                  className="input-base mt-1"
                   value={`${params.return_assumption_set_id}@${params.return_assumption_set_version}`}
                   onChange={(e) => {
                     const [id, ver] = e.target.value.split("@");
@@ -720,7 +724,7 @@ export function ParametersContent({
           assumptionProfilesQ.data && (
             <p className="mt-2 text-xs text-ink-muted">
               当前全局默认：{assumptionProfilesQ.data.preferences.default_profile_id}@
-              {assumptionProfilesQ.data.preferences.default_profile_version}（情景{" "}
+              {assumptionProfilesQ.data.preferences.default_profile_version}（假设情景{" "}
               {assumptionProfilesQ.data.preferences.default_scenario}）。可在「模拟假设」修改。
             </p>
           )}
@@ -761,7 +765,7 @@ export function ParametersContent({
               type="number"
               min={1000}
               max={100000}
-              className="mt-1 w-full rounded-md border px-3 py-2"
+              className="input-base mt-1"
               value={params.simulation_runs}
               onChange={(e) => update("simulation_runs", Number(e.target.value))}
             />
@@ -781,7 +785,7 @@ export function ParametersContent({
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"
-              className="mt-1 w-full rounded-md border px-3 py-2 font-mono"
+              className="input-base mt-1 font-mono"
               value={params.seed ?? ""}
               onChange={(e) => {
                 const next = normalizeSeedInput(e.target.value);

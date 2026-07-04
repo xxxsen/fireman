@@ -10,5 +10,5 @@ export default function PlanScenariosRedirectPage() {
     router.replace("/scenarios");
   }, [router]);
 
-  return <p className="text-ink-muted">正在前往场景配置…</p>;
+  return <p className="text-ink-muted">正在前往配置模板…</p>;
 }

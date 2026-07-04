@@ -2,7 +2,7 @@
 
 - 更新：2026-06-14
 
-> 本文记录第一阶段“组合优先”UI 收拢思路。当前正式页面职责与用户路径请优先参考 [008-计划设置、持仓预览与资产变更](./008-plan-settings-holdings-preview.md)。
+> 本文记录第一阶段“组合优先”UI 收拢思路。当前正式页面职责与用户路径请优先参考 [008-计划设置、调仓工作台与持仓校正](./008-plan-settings-holdings-preview.md) 与 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 
 ## 主导航
 
@@ -11,8 +11,8 @@
 | 路由 | 用途 |
 | --- | --- |
 | `/plans/{id}/overview` | 查看总资产、持仓合计、大类/地区配置、主要偏离与关键入口 |
-| `/plans/{id}/rebalance` | 作为“持仓预览”查看当前持仓、目标结构，并进入资产变更或调仓计划 |
-| `/plans/{id}/settings` | 切换当前计划使用的 FIRE 方案、编辑计划参数、运行模拟 |
+| `/plans/{id}/rebalance` | 作为“调仓工作台”查看当前持仓、目标结构，并进入持仓校正、调仓计划或调仓执行 |
+| `/plans/{id}/settings` | 切换当前计划使用的配置模板、编辑计划参数、运行模拟 |
 
 旧 `holdings`、`scenarios`、`dashboard`、`targets`、`instruments`、`parameters`、`analysis`
 入口保留兼容跳转。
@@ -21,8 +21,8 @@
 
 ```text
 组合总览
-  → 持仓预览
-  → 资产变更
+  → 调仓工作台
+  → 持仓校正
   → 调仓计划
   →（可选）计划设置 / FIRE 模拟
 ```
@@ -34,9 +34,10 @@ FIRE 模拟不再阻断计划创建。向导默认只创建计划，用户可在
 
 本阶段文档中的以下旧说法已不再代表当前正式实现：
 
-- `调仓工作台` 现已更名为 `持仓预览`
+- `/plans/{id}/rebalance` 的正式标签为 `调仓工作台`
+- `/plans/{id}/asset-refresh` 的正式用户文案为 `持仓校正`
 - 独立 `持仓管理` 页已下线并重定向
-- `场景配置` 已从计划页内拆到全局 `/scenarios`
+- `配置模板` 已从计划页内拆到全局 `/scenarios`
 
 ## 数据扩展
 

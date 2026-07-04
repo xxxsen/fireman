@@ -10,7 +10,7 @@ import { MetricHelp } from "@/components/ui/MetricHelp";
 import { Alert } from "@/components/ui/Alert";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { LoadingState } from "@/components/ui/LoadingState";
+import { PageSkeleton } from "@/components/ui/Skeleton";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { getDashboard } from "@/lib/api/dashboard";
 import { formatMoney, formatMoneyScaled, formatPercent } from "@/lib/format";
@@ -53,7 +53,7 @@ export default function OverviewPage() {
   const pendingJob = useJobStatus(pendingJobId);
 
   if (isLoading && !data) {
-    return <LoadingState label="加载组合总览…" />;
+    return <PageSkeleton label="加载组合总览…" />;
   }
   if (isError && !data) {
     return (
@@ -75,10 +75,12 @@ export default function OverviewPage() {
     ? `/plans/${planId}/rebalance/executions/${activeExecution.id}`
     : `/plans/${planId}/rebalance`;
 
-  const simulationRunning =
-    Boolean(pendingJobId) && pendingJob.job?.status !== "succeeded";
-  const simulationSucceeded =
-    Boolean(pendingJobId) && pendingJob.job?.status === "succeeded";
+  // Explicit job-status branches: pending/running → info, failed → warning,
+  // succeeded → success, canceled → silent.
+  const jobStatus = pendingJobId ? pendingJob.job?.status ?? "pending" : null;
+  const simulationRunning = jobStatus === "pending" || jobStatus === "running";
+  const simulationSucceeded = jobStatus === "succeeded";
+  const simulationFailed = jobStatus === "failed";
 
   // Fold same-screen notices to a single highest-priority banner:
   // blocking error > warning > in-progress > success.
@@ -91,7 +93,7 @@ export default function OverviewPage() {
           href={`/plans/${planId}/settings?section=plan-targets`}
           className="ml-2 font-medium underline underline-offset-2"
         >
-          检查计划目标配置
+          检查目标配置
         </Link>
       </Alert>
     );
@@ -101,6 +103,15 @@ export default function OverviewPage() {
         计划已创建，但 FIRE 模拟未能启动。
         <Link href={simulationSettingsHref} className="ml-2 font-medium underline underline-offset-2">
           前往计划设置重新运行
+        </Link>
+      </Alert>
+    );
+  } else if (simulationFailed) {
+    topBanner = (
+      <Alert variant="warning">
+        FIRE 模拟运行失败{pendingJob.error ? `：${pendingJob.error}` : "。"}
+        <Link href={simulationSettingsHref} className="ml-2 font-medium underline underline-offset-2">
+          前往计划设置重试
         </Link>
       </Alert>
     );
@@ -183,7 +194,7 @@ export default function OverviewPage() {
         <EmptyState
           title="持仓尚未配置"
           description="录入账户真实资产后即可查看大类配置、地区分布与调仓建议。"
-          action={{ label: "资产变更", href: `/plans/${planId}/asset-refresh` }}
+          action={{ label: "持仓校正", href: `/plans/${planId}/asset-refresh` }}
         />
       ) : (
         <>

@@ -18,6 +18,17 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
+  // Lock background scroll while the dialog is open so long pages cannot
+  // scroll behind the overlay; restore the previous value on close/unmount.
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
 

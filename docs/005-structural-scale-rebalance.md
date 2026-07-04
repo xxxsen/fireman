@@ -1,8 +1,8 @@
-# 结构偏差与规模偏差分拆（持仓预览）
+# 结构偏差与规模偏差分拆（调仓工作台）
 
 - 更新：2026-06-14
 
-> 本文保留“结构偏差 / 规模偏差分拆”的核心算法与展示语义。页面命名和用户路径已在后续迭代中更新，当前正式信息架构请参考 [008-计划设置、持仓预览与资产变更](./008-plan-settings-holdings-preview.md)。
+> 本文保留“结构偏差 / 规模偏差分拆”的核心算法与展示语义。页面命名和用户路径已在后续迭代中更新，当前正式信息架构请参考 [008-计划设置、调仓工作台与持仓校正](./008-plan-settings-holdings-preview.md) 与 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 
 ## 问题
 
@@ -31,16 +31,16 @@
 
 ## 前端变更
 
-### 持仓预览 `/plans/{id}/rebalance`
+### 调仓工作台 `/plans/{id}/rebalance`
 
-1. **规模状态条**（`|scale_gap| > 1 元`）：规模超出/缺口文案 + 去资产变更 + 暂不处理。
+1. **规模状态条**（`|scale_gap| > 1 元`）：规模超出/缺口文案 + 去持仓校正 + 暂不处理。
 2. **结构偏差汇总表**：现状占比、结构还差、建议均基于 `structural_*`。
 3. 空状态：无持仓 / 结构与规模均一致 / 结构无建议但规模有偏。
 
 ### 联动页面
 
 - **组合总览**：规模超出/缺口/一致；偏离列表按结构排序。
-- **资产变更**：承担真实持仓结构与金额的统一编辑入口。
+- **持仓校正**：承担真实持仓结构与金额的统一编辑入口。
 - **计划设置**：「计划基准规模」标签与持仓差额提示。
 
 ## 验收场景（摘要）
@@ -59,15 +59,15 @@
 
 ---
 
-## 资产变更与调仓计划
+## 持仓校正与调仓计划
 
-用户路径与提交流程摘要见 [007-asset-refresh-rebalance-plan.md](./007-asset-refresh-rebalance-plan.md) 与 [008-计划设置、持仓预览与资产变更](./008-plan-settings-holdings-preview.md)。
+用户路径与提交流程摘要见 [007-asset-refresh-rebalance-plan.md](./007-asset-refresh-rebalance-plan.md)、[008-计划设置、调仓工作台与持仓校正](./008-plan-settings-holdings-preview.md) 与 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 
-### 资产变更 `/plans/{id}/asset-refresh`
+### 持仓校正 `/plans/{id}/asset-refresh`
 
-- 多步向导：说明 → 配置确认 → 录入当前资产 → 确认提交
+- 多步向导：确认范围 → 录入当前资产 → 确认提交
 - `POST /api/v1/plans/{id}/asset-refresh`：**单事务**更新 holdings，可选同步 `total_assets_minor`，写入 `asset_refresh_events` audit
-- 入口：持仓预览、组合总览（规模偏差带 `?reason=scale`）、规模状态条
+- 入口：调仓工作台、组合总览（规模偏差带 `?reason=scale`）、规模状态条
 
 ### 调仓计划草稿
 
@@ -75,8 +75,4 @@
 - 每 plan 至多一条 `status=draft`（部分唯一索引）
 - 创建时冻结 structural 基准；编辑期不重算 frozen 目标/还差
 - 分阶段暂存、撤销、资金池；commit 与 holdings 更新同事务
-- 页面：`/plans/{id}/rebalance/plan/{draftId}`；持仓预览「创建/继续调仓计划」
-
-### 说明
-
-本文中的“调仓工作台”均对应当前实现中的“持仓预览”。
+- 页面：`/plans/{id}/rebalance/plan/{draftId}`；调仓工作台「创建/继续调仓计划」

@@ -161,7 +161,6 @@ function renderPage() {
 async function goToEntryStep() {
   renderPage();
   fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
-  fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
   await screen.findByText("录入当前资产");
 }
 
@@ -191,8 +190,8 @@ describe("AssetRefreshPage", () => {
     renderPage();
 
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
-    expect(screen.queryByText("1. 说明")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "提交资产变更" })).not.toBeInTheDocument();
+    expect(screen.queryByText("1. 确认范围")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交持仓校正" })).not.toBeInTheDocument();
   });
 
   it("blocks asset refresh when an active execution is in progress", async () => {
@@ -215,7 +214,7 @@ describe("AssetRefreshPage", () => {
     renderPage();
 
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
-    expect(screen.queryByText("1. 说明")).not.toBeInTheDocument();
+    expect(screen.queryByText("1. 确认范围")).not.toBeInTheDocument();
   });
 
   it("shows error state when instruments load fails", async () => {
@@ -226,39 +225,33 @@ describe("AssetRefreshPage", () => {
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
   });
 
-  it("shows wizard steps and intro copy", async () => {
+  it("shows the 3-step wizard with scope confirmation copy", async () => {
     renderPage();
-    expect(await screen.findByText("资产变更")).toBeInTheDocument();
-    expect(screen.getByText("1. 说明")).toBeInTheDocument();
-    expect(screen.getByText(/维护当前计划下的真实持仓结构/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "持仓校正" })).toBeInTheDocument();
+    expect(screen.getByText("1. 确认范围")).toBeInTheDocument();
+    expect(screen.getByText("2. 录入当前资产")).toBeInTheDocument();
+    expect(screen.getByText("3. 确认提交")).toBeInTheDocument();
+    expect(screen.getByText(/维护当前计划下的真实持仓/)).toBeInTheDocument();
+    expect(screen.getByText("测试计划")).toBeInTheDocument();
   });
 
-  it("supports step navigation and FIRE scenario switching without changing plan route", async () => {
+  it("shows the config template read-only with a settings link instead of a scenario select", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
-
-    expect(await screen.findByText("配置确认")).toBeInTheDocument();
-    expect(screen.getByText("当前计划：")).toBeInTheDocument();
-    expect(screen.getByText("测试计划")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByTestId("asset-refresh-scenario-select"), {
-      target: { value: "scn_2" },
-    });
+    expect(await screen.findByTestId("asset-refresh-scenario-name")).toHaveTextContent("均衡");
+    expect(screen.queryByTestId("asset-refresh-scenario-select")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往计划设置修改" })).toHaveAttribute(
+      "href",
+      "/plans/plan_1/settings?section=plan-targets",
+    );
     expect(replace).not.toHaveBeenCalled();
-    expect(await screen.findByText(/债券\s*100%/)).toBeInTheDocument();
-    expect(await screen.findByText(/债券 · 地区组内目标/)).toBeInTheDocument();
-    expect(await screen.findByText(/国内\s*100%/)).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    expect(await screen.findByText("录入当前资产")).toBeInTheDocument();
+  it("navigates from scope confirmation to entry and back", async () => {
+    await goToEntryStep();
     expect(screen.getAllByText("权益").length).toBeGreaterThan(0);
     expect(screen.getAllByText("国内").length).toBeGreaterThan(0);
-  });
-
-  it("navigates back from entry step to config confirmation", async () => {
-    await goToEntryStep();
     fireEvent.click(screen.getByRole("button", { name: "上一步" }));
-    expect(await screen.findByText("配置确认")).toBeInTheDocument();
+    expect(await screen.findByText("确认范围")).toBeInTheDocument();
   });
 
   it("shows inline money unit on entry step", async () => {
@@ -289,7 +282,7 @@ describe("AssetRefreshPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /基金B/ }));
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交持仓校正" }));
 
     await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
 
@@ -302,6 +295,8 @@ describe("AssetRefreshPage", () => {
         expect.objectContaining({ instrument_id: "i2" }),
       ]),
     });
+    // The wizard no longer switches config templates, so no scenario_id is sent.
+    expect(submitAssetRefresh.mock.calls[0]?.[1]).not.toHaveProperty("scenario_id");
     expect(push).toHaveBeenCalledWith("/plans/plan_1/rebalance?asset_refreshed=1");
   });
 
@@ -313,7 +308,7 @@ describe("AssetRefreshPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(await screen.findByTestId("asset-refresh-change-count")).toHaveTextContent("2 项");
-    fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交持仓校正" }));
 
     await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
     expect(submitAssetRefresh.mock.calls[0]?.[1]).toMatchObject({
@@ -321,9 +316,8 @@ describe("AssetRefreshPage", () => {
     });
   });
 
-  it("shows region group targets from selected scenario on config step", async () => {
+  it("shows read-only plan targets on the scope confirmation step", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
 
     expect(await screen.findByText("权益 · 地区组内目标（只读）")).toBeInTheDocument();
     expect(screen.getByText(/国内\s*70%/)).toBeInTheDocument();
@@ -345,28 +339,10 @@ describe("AssetRefreshPage", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
-    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
 
     expect(await screen.findByTestId("asset-refresh-change-count")).toHaveTextContent("0");
     expect(screen.getByTestId("asset-refresh-no-changes")).toHaveTextContent("本次未修改任何资产");
     expect(screen.queryByText(/仅更新了持仓结构或资产分配/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "提交资产变更" })).toBeDisabled();
-  });
-
-  it("includes scenario_id in single asset refresh request when scenario changed", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
-    fireEvent.change(await screen.findByTestId("asset-refresh-scenario-select"), {
-      target: { value: "scn_2" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
-    fireEvent.click(await screen.findByRole("button", { name: "提交资产变更" }));
-
-    await waitFor(() => expect(submitAssetRefresh).toHaveBeenCalledTimes(1));
-    expect(submitAssetRefresh.mock.calls[0]?.[1]).toMatchObject({
-      scenario_id: "scn_2",
-      config_changed: true,
-    });
+    expect(screen.getByRole("button", { name: "提交持仓校正" })).toBeDisabled();
   });
 });

@@ -9,7 +9,7 @@ const NAV = [
   { href: "/", label: "计划" },
   { href: "/assets", label: "资产资料库" },
   { href: "/assumptions", label: "模拟假设" },
-  { href: "/scenarios", label: "场景配置" },
+  { href: "/scenarios", label: "配置模板" },
   { href: "/settings", label: "设置" },
 ] as const;
 

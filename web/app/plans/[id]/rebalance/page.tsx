@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CurrentWeightCell, TargetWeightCell } from "@/components/plans/TargetWeightCell";
 import { InlineTooltip } from "@/components/ui/InlineTooltip";
 import type { RebalanceWorkspaceRow } from "@/lib/allocation-summary";
@@ -13,11 +13,17 @@ import {
   createRebalanceExecution,
   getActiveRebalanceExecution,
 } from "@/lib/api/rebalance-executions";
+import {
+  createRebalanceDraft,
+  getActiveRebalanceDraft,
+} from "@/lib/api/rebalance-drafts";
 import { assetClassLabel, formatMoney, regionLabel } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { LoadingState } from "@/components/ui/LoadingState";
+import { PageSkeleton } from "@/components/ui/Skeleton";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import { queryErrorMessage } from "@/lib/query-error";
 
 function lineStatusHint(status: string, remainingMinor: number): string | null {
@@ -33,6 +39,8 @@ function lineStatusHint(status: string, remainingMinor: number): string | null {
   }
 }
 
+type PendingCreate = "draft" | "execution" | null;
+
 export default function RebalancePage() {
   const planId = useParams().id as string;
   const router = useRouter();
@@ -40,6 +48,7 @@ export default function RebalancePage() {
   const searchParams = useSearchParams();
   const assetRefreshed = searchParams.get("asset_refreshed") === "1";
   const executionCompleted = searchParams.get("execution_completed") === "1";
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate>(null);
 
   const targets = useQuery({
     queryKey: ["targets", planId],
@@ -53,12 +62,26 @@ export default function RebalancePage() {
     queryKey: ["rebalance-execution-active", planId],
     queryFn: () => getActiveRebalanceExecution(planId),
   });
+  const activeDraft = useQuery({
+    queryKey: ["rebalance-draft-active", planId],
+    queryFn: () => getActiveRebalanceDraft(planId),
+  });
 
   const createExecution = useMutation({
     mutationFn: () => createRebalanceExecution(planId),
     onSuccess: (detail) => {
+      setPendingCreate(null);
       void queryClient.invalidateQueries({ queryKey: ["rebalance-execution-active", planId] });
       router.push(`/plans/${planId}/rebalance/executions/${detail.execution.id}`);
+    },
+  });
+
+  const createDraft = useMutation({
+    mutationFn: () => createRebalanceDraft(planId),
+    onSuccess: (detail) => {
+      setPendingCreate(null);
+      void queryClient.invalidateQueries({ queryKey: ["rebalance-draft-active", planId] });
+      router.push(`/plans/${planId}/rebalance/plan/${detail.draft.id}`);
     },
   });
 
@@ -66,6 +89,8 @@ export default function RebalancePage() {
   const hasEnabledHoldings = (summary?.holdings_total_minor ?? 0) > 0;
   const active = activeExecution.data;
   const executionInProgress = !!active?.execution;
+  const draft = activeDraft.data;
+  const draftInProgress = !!draft?.draft;
 
   const executionLineByInstrument = useMemo(() => {
     const map = new Map<string, { status: string; remaining_delta_minor: number }>();
@@ -89,7 +114,7 @@ export default function RebalancePage() {
   ) {
     return (
       <ErrorState
-        message="无法加载持仓预览。请确认后端服务可用后重试。"
+        message="无法加载调仓工作台。请确认后端服务可用后重试。"
         onRetry={() => {
           if (targets.isError) void targets.refetch();
           if (rebalance.isError) void rebalance.refetch();
@@ -111,7 +136,7 @@ export default function RebalancePage() {
     !targets.data ||
     !rebalance.data
   ) {
-    return <LoadingState label="加载持仓预览…" />;
+    return <PageSkeleton label="加载调仓工作台…" />;
   }
 
   const dimensionLabel = (row: RebalanceWorkspaceRow) => {
@@ -140,15 +165,17 @@ export default function RebalancePage() {
     );
   };
 
+  const gapAmountLabel = (row: RebalanceWorkspaceRow) =>
+    row.gap_amount_minor >= 0
+      ? `待投入 ${formatMoney(row.gap_amount_minor)}`
+      : `待减配 ${formatMoney(Math.abs(row.gap_amount_minor))}`;
+
   const gapAmountCell = (row: RebalanceWorkspaceRow) => {
     if (row.gap_amount_minor === 0) {
       return <span className="text-ink-muted">—</span>;
     }
 
-    const formatted =
-      row.gap_amount_minor >= 0
-        ? `待投入 ${formatMoney(row.gap_amount_minor)}`
-        : `待减配 ${formatMoney(Math.abs(row.gap_amount_minor))}`;
+    const formatted = gapAmountLabel(row);
     const content = (
       <span
         className={`font-medium ${
@@ -174,10 +201,95 @@ export default function RebalancePage() {
     ? `/plans/${planId}/rebalance/executions/${active!.execution.id}`
     : `/plans/${planId}/rebalance/executions`;
 
+  const holdingCardRow = (row: RebalanceWorkspaceRow) => {
+    const execLine =
+      row.level === "holding" && row.instrument_id
+        ? executionLineByInstrument.get(row.instrument_id)
+        : undefined;
+    const execHint = execLine
+      ? lineStatusHint(execLine.status, execLine.remaining_delta_minor)
+      : null;
+    return (
+      <div key={row.key} className="px-4 py-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            {row.instrument_id ? (
+              <Link
+                href={`/assets/${row.instrument_id}`}
+                className="font-medium text-brand underline-offset-2 hover:underline"
+              >
+                {row.label}
+              </Link>
+            ) : (
+              <span className="font-medium text-ink">{row.label}</span>
+            )}
+            {row.instrument_code && (
+              <span className="block text-xs text-ink-muted">{row.instrument_code}</span>
+            )}
+            {execHint && (
+              <span className="mt-1 block text-xs text-info" data-testid="execution-line-hint">
+                {execHint}
+              </span>
+            )}
+          </div>
+          <div className="shrink-0 text-right text-sm">{gapAmountCell(row)}</div>
+        </div>
+        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          <dt className="text-ink-muted">目标金额</dt>
+          <dd className="text-right text-ink">{formatMoney(row.target_amount_minor)}</dd>
+          <dt className="text-ink-muted">当前金额</dt>
+          <dd className="text-right text-ink">{formatMoney(row.current_amount_minor)}</dd>
+        </dl>
+      </div>
+    );
+  };
+
+  // Mobile cards: one card per asset class; region rows become sub-headers and
+  // holding rows render as compact key-value blocks (same data as the table).
+  const mobileCards = () => {
+    const cards: React.ReactNode[] = [];
+    let currentCard: { header: RebalanceWorkspaceRow; children: React.ReactNode[] } | null = null;
+    const flush = () => {
+      if (!currentCard) return;
+      const header = currentCard.header;
+      cards.push(
+        <article key={header.key} className="rounded-lg border border-line bg-surface">
+          <div className="flex items-center justify-between gap-2 border-b border-line bg-surface-muted px-4 py-2.5">
+            <span className="font-medium text-ink">{assetClassLabel(header.asset_class)}</span>
+            <span className="text-xs text-ink-muted">
+              {header.gap_amount_minor === 0 ? "无偏差" : gapAmountLabel(header)}
+            </span>
+          </div>
+          <div className="divide-y divide-line">{currentCard.children}</div>
+        </article>,
+      );
+      currentCard = null;
+    };
+    for (const row of workspaceRows) {
+      if (row.level === "asset_class") {
+        flush();
+        currentCard = { header: row, children: [] };
+        continue;
+      }
+      if (!currentCard) continue;
+      if (row.level === "region") {
+        currentCard.children.push(
+          <p key={row.key} className="bg-surface-muted/60 px-4 py-1.5 text-xs text-ink-muted">
+            {regionLabel(row.region ?? "")}
+          </p>,
+        );
+        continue;
+      }
+      currentCard.children.push(holdingCardRow(row));
+    }
+    flush();
+    return cards;
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="content-enter space-y-6">
       {assetRefreshed && (
-        <Alert variant="success">资产变更已提交，持仓预览已更新。</Alert>
+        <Alert variant="success">持仓校正已提交，调仓工作台已更新。</Alert>
       )}
       {executionCompleted && (
         <Alert variant="success">调仓执行已完成，持仓已同步更新。</Alert>
@@ -193,20 +305,20 @@ export default function RebalancePage() {
             href={`/plans/${planId}/settings?section=plan-targets`}
             className="ml-2 font-medium underline"
           >
-            检查计划目标配置
+            检查目标配置
           </Link>
         </Alert>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-ink">持仓预览</h1>
+          <h1 className="text-xl font-semibold text-ink">调仓工作台</h1>
           <p className="mt-1 text-sm text-ink-muted">
-            对比当前持仓与目标结构；本页仅展示差异，不直接编辑持仓。
+            对比当前持仓与目标结构；可在此更新真实持仓（持仓校正）、生成调仓计划或登记调仓执行。
           </p>
           {executionInProgress && (
             <p className="mt-2 text-sm text-warning" data-testid="execution-blocking-hint">
-              当前有进行中的调仓执行。请先完成或放弃调仓，再进行资产变更。
+              当前有进行中的调仓执行。请先完成或放弃调仓，再进行持仓校正或创建调仓计划。
             </p>
           )}
           {executionInProgress && active && (
@@ -216,16 +328,23 @@ export default function RebalancePage() {
               {formatMoney(active.execution.cash_pool_minor)}
             </p>
           )}
+          {!executionInProgress && draftInProgress && draft && (
+            <p className="mt-2 text-sm text-info" data-testid="draft-in-progress-hint">
+              有进行中的调仓计划（创建于{" "}
+              {new Date(draft.draft.created_at).toLocaleDateString("zh-CN")}
+              ），可继续编辑或在计划内放弃。
+            </p>
+          )}
         </div>
         {hasEnabledHoldings && (
           <div className="flex flex-wrap gap-2">
             {executionInProgress ? (
               <span
-                className="inline-flex min-h-11 cursor-not-allowed items-center rounded-md border border-line bg-surface-muted px-4 text-sm font-medium text-ink-muted"
+                className="inline-flex min-h-10 cursor-not-allowed items-center rounded-md border border-line bg-surface-muted px-4 text-sm font-medium text-ink-muted"
                 data-testid="asset-refresh-primary-disabled"
                 aria-disabled="true"
               >
-                资产变更
+                持仓校正
               </span>
             ) : (
               <Button
@@ -233,7 +352,31 @@ export default function RebalancePage() {
                 variant="secondary"
                 data-testid="asset-refresh-primary"
               >
-                资产变更
+                持仓校正
+              </Button>
+            )}
+            {executionInProgress ? (
+              <span
+                className="inline-flex min-h-10 cursor-not-allowed items-center rounded-md border border-line bg-surface-muted px-4 text-sm font-medium text-ink-muted"
+                data-testid="create-rebalance-plan-disabled"
+                aria-disabled="true"
+              >
+                创建调仓计划
+              </span>
+            ) : draftInProgress && draft ? (
+              <Button
+                href={`/plans/${planId}/rebalance/plan/${draft.draft.id}`}
+                data-testid="continue-rebalance-plan"
+              >
+                继续调仓计划
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                data-testid="create-rebalance-plan"
+                onClick={() => setPendingCreate("draft")}
+              >
+                创建调仓计划
               </Button>
             )}
             {executionInProgress ? (
@@ -245,9 +388,9 @@ export default function RebalancePage() {
               </Button>
             ) : (
               <Button
+                variant={draftInProgress ? "secondary" : "primary"}
                 data-testid="start-rebalance-execution"
-                disabled={createExecution.isPending}
-                onClick={() => createExecution.mutate()}
+                onClick={() => setPendingCreate("execution")}
               >
                 调仓执行
               </Button>
@@ -256,26 +399,27 @@ export default function RebalancePage() {
         )}
       </div>
 
-      {createExecution.error && (
-        <Alert variant="danger">{queryErrorMessage(createExecution.error, "创建调仓执行失败")}</Alert>
-      )}
-
       {!hasEnabledHoldings ? (
         <section className="rounded-lg border border-dashed border-line p-8 text-center">
           <h2 className="font-medium text-ink">尚未录入持仓</h2>
-          <p className="mt-2 text-sm text-ink-muted">请先通过资产变更录入当前真实持仓。</p>
+          <p className="mt-2 text-sm text-ink-muted">请先通过持仓校正录入当前真实持仓。</p>
           <Button
             href={`/plans/${planId}/asset-refresh`}
             className="mt-4"
             data-testid="asset-refresh-primary"
           >
-            资产变更
+            持仓校正
           </Button>
         </section>
       ) : (
         <section>
-          <h2 className="font-medium text-ink">结构偏差汇总</h2>
-          <div className="mt-3 overflow-x-auto rounded-lg border border-line">
+          <h2 className="flex items-center font-medium text-ink">
+            结构偏差汇总
+            <MetricHelp termKey="gap_color_semantics" />
+          </h2>
+
+          {/* Desktop table */}
+          <div className="mt-3 hidden overflow-x-auto rounded-lg border border-line md:block">
             <table className="min-w-full text-sm">
               <thead className="bg-surface-muted text-ink-muted">
                 <tr>
@@ -351,8 +495,49 @@ export default function RebalancePage() {
               </tbody>
             </table>
           </div>
+
+          {/* Mobile cards */}
+          <div className="mt-3 space-y-3 md:hidden" data-testid="rebalance-summary-cards">
+            {mobileCards()}
+          </div>
         </section>
       )}
+
+      <ConfirmDialog
+        open={pendingCreate === "draft"}
+        title="创建调仓计划"
+        description="将基于当前持仓与目标结构生成参考调仓方案（草稿）。草稿不会直接修改持仓，提交前可随时放弃。"
+        confirmLabel="创建调仓计划"
+        pending={createDraft.isPending}
+        error={
+          createDraft.error
+            ? queryErrorMessage(createDraft.error, "创建调仓计划失败")
+            : null
+        }
+        onConfirm={() => createDraft.mutate()}
+        onClose={() => {
+          setPendingCreate(null);
+          createDraft.reset();
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingCreate === "execution"}
+        title="创建调仓执行"
+        description="将创建一笔调仓执行单，用于分多日登记真实的卖出与买入。执行进行中将暂时无法进行持仓校正，完成或放弃后恢复。"
+        confirmLabel="创建调仓执行"
+        pending={createExecution.isPending}
+        error={
+          createExecution.error
+            ? queryErrorMessage(createExecution.error, "创建调仓执行失败")
+            : null
+        }
+        onConfirm={() => createExecution.mutate()}
+        onClose={() => {
+          setPendingCreate(null);
+          createExecution.reset();
+        }}
+      />
     </div>
   );
 }

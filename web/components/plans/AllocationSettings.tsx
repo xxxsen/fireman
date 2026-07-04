@@ -84,7 +84,7 @@ export function PlanTargetsContent() {
       if (!plan.data) throw new Error("计划尚未加载");
       let version = plan.data.config_version;
       if (scenarioDirty) {
-        if (!currentScenarioId) throw new Error("请选择一个场景模板");
+        if (!currentScenarioId) throw new Error("请选择一个配置模板");
         const res = await applyScenario(planId, {
           scenario_id: currentScenarioId,
           config_version: version,
@@ -120,14 +120,15 @@ export function PlanTargetsContent() {
   return (
     <section className="space-y-5 rounded-lg border border-line p-4 pb-20">
       <div>
-        <h2 className="text-lg font-medium">当前计划目标配置</h2>
+        <h2 className="text-lg font-medium">目标配置</h2>
         <p className="mt-1 text-sm text-ink-muted">
-          场景模板决定大类目标权重；国内/国外配比是本计划自己的设置，切换模板不会改变它。
+          配置模板决定大类目标权重；国内/国外配比是本计划自己的设置，切换模板不会改变它。年龄、储蓄等
+          FIRE 假设请在「FIRE 参数」分区调整。
         </p>
         <label className="mt-3 block text-sm">
-          场景模板
+          配置模板
           <select
-            className="mt-1 w-full rounded-md border px-3 py-2"
+            className="input-base mt-1"
             value={currentScenarioId}
             onChange={(event) => setSelectedScenarioId(event.target.value)}
             data-testid="plan-targets-scenario-select"
@@ -142,17 +143,17 @@ export function PlanTargetsContent() {
         </label>
         {scenarioDirty && (
           <p className="mt-2 text-sm text-warning" data-testid="plan-targets-preview-note">
-            大类目标权重随所选场景预览；保存后将应用新模板的大类权重，地区配比保持不变。
+            大类目标权重随所选配置模板预览；保存后将应用新模板的大类权重，地区配比保持不变。
           </p>
         )}
         <p className="mt-3 text-sm text-ink-muted">
-          要修改场景结构，请前往{" "}
+          要修改模板结构，请前往{" "}
           <Link
             href="/scenarios"
             className="font-medium text-brand underline underline-offset-2"
             data-testid="plan-targets-scenarios-link"
           >
-            场景配置
+            配置模板
           </Link>
         </p>
       </div>
@@ -210,7 +211,7 @@ export function PlanTargetsContent() {
         error={saveError}
         onSave={() => {
           if (scenarioDirty && !currentScenarioId) {
-            setSaveError("请选择一个场景模板。");
+            setSaveError("请选择一个配置模板。");
             return;
           }
           if (regionDirty && regionChecks.some((c) => !c.passed)) {

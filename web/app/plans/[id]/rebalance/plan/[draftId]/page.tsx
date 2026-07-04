@@ -13,6 +13,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { PlanPageHeader } from "@/components/layout/PlanPageHeader";
 import { getHoldings } from "@/lib/api/holdings";
 import {
   cancelRebalanceDraft,
@@ -233,7 +234,7 @@ export default function RebalancePlanPage() {
           if (holdings.isError) void holdings.refetch();
         }}
         backHref={`/plans/${planId}/rebalance`}
-        backLabel="返回持仓预览"
+        backLabel="返回调仓工作台"
         technicalDetail={queryErrorMessage(plan.error ?? draft.error ?? holdings.error)}
       />
     );
@@ -260,7 +261,7 @@ export default function RebalancePlanPage() {
           href={`/plans/${planId}/rebalance`}
           className="text-brand underline-offset-2 hover:underline"
         >
-          返回持仓预览
+          返回调仓工作台
         </Link>
       </div>
     );
@@ -272,23 +273,23 @@ export default function RebalancePlanPage() {
   const planTarget = plan.data;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-ink">
-            {planTarget.name} · 调仓计划
-          </h1>
-          <p className="mt-1 text-sm text-ink-muted">
+    <div className="content-enter space-y-6">
+      <PlanPageHeader
+        title="调仓计划"
+        description={
+          <>
             状态：进行中 · 基准持仓合计{" "}
             {formatMoney(draft.data.draft.baseline_holdings_total_minor, planTarget.base_currency)}
             · {actionableLines.length} 个标的待调整
             <MetricHelp termKey="rebalance_plan_draft" />
-          </p>
-        </div>
-        <Button variant="danger" className="px-3 py-1.5" onClick={() => setCancelOpen(true)}>
-          放弃计划
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <Button variant="danger" onClick={() => setCancelOpen(true)}>
+            放弃计划
+          </Button>
+        }
+      />
 
       {error && <Alert variant="danger">{error}</Alert>}
       {toast && <Alert variant="success">{toast}</Alert>}
@@ -623,9 +624,9 @@ export default function RebalancePlanPage() {
               <p className="text-warning">
                 计划中尚无现金持仓。请先到{" "}
                 <Link href={`/plans/${planId}/rebalance`} className="underline">
-                  持仓预览
+                  调仓工作台
                 </Link>{" "}
-                通过资产变更添加 CNY 现金，或选择接受组合规模下降。
+                通过持仓校正添加 CNY 现金，或选择接受组合规模下降。
               </p>
             )}
             <label className="flex items-start gap-2">

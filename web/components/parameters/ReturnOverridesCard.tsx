@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/Button";
 import { getHoldings } from "@/lib/api/holdings";
 import {
   deleteReturnOverride,
@@ -193,7 +194,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
                     <td className="py-1 text-right">
                       <button
                         type="button"
-                        className="text-accent hover:underline"
+                        className="text-brand hover:underline"
                         onClick={() => editExisting(o)}
                       >
                         编辑
@@ -217,7 +218,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
               <label className="block text-sm">
                 标的
                 <select
-                  className="mt-1 w-full rounded-md border px-3 py-2"
+                  className="input-base mt-1"
                   value={draft.instrumentId}
                   onChange={(e) => setDraft({ ...draft, instrumentId: e.target.value })}
                 >
@@ -233,7 +234,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
                 到期日期
                 <input
                   type="date"
-                  className="mt-1 w-full rounded-md border px-3 py-2"
+                  className="input-base mt-1"
                   value={draft.expiresAt}
                   onChange={(e) => setDraft({ ...draft, expiresAt: e.target.value })}
                 />
@@ -251,7 +252,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
                   type="text"
                   inputMode="decimal"
                   disabled={!draft.overrideReturn}
-                  className="mt-1 w-full rounded-md border px-3 py-2 font-mono-numeric"
+                  className="input-base mt-1 font-mono-numeric"
                   value={draft.forwardReturnPct}
                   onChange={(e) => setDraft({ ...draft, forwardReturnPct: e.target.value })}
                 />
@@ -269,7 +270,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
                   type="text"
                   inputMode="decimal"
                   disabled={!draft.overrideVol}
-                  className="mt-1 w-full rounded-md border px-3 py-2 font-mono-numeric"
+                  className="input-base mt-1 font-mono-numeric"
                   value={draft.volPct}
                   onChange={(e) => setDraft({ ...draft, volPct: e.target.value })}
                 />
@@ -279,7 +280,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
               覆盖原因
               <input
                 type="text"
-                className="mt-1 w-full rounded-md border px-3 py-2"
+                className="input-base mt-1"
                 placeholder="例如：持有至到期，锁定到期收益率 3.2%"
                 value={draft.reason}
                 onChange={(e) => setDraft({ ...draft, reason: e.target.value })}
@@ -287,25 +288,19 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
             </label>
             {formError && <p className="mt-2 text-sm text-danger">{formError}</p>}
             <div className="mt-3 flex items-center gap-3">
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={saveMut.isPending}
-                onClick={submit}
-              >
-                {saveMut.isPending ? "保存中…" : "保存覆盖"}
-              </button>
+              <Button pending={saveMut.isPending} onClick={submit}>
+                保存覆盖
+              </Button>
               {(draft.instrumentId || draft.reason) && (
-                <button
-                  type="button"
-                  className="text-sm text-ink-muted hover:underline"
+                <Button
+                  variant="ghost"
                   onClick={() => {
                     setDraft(emptyDraft);
                     setFormError(null);
                   }}
                 >
                   取消
-                </button>
+                </Button>
               )}
             </div>
           </div>

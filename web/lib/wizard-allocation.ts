@@ -450,7 +450,7 @@ export function buildWizardPortfolioReview(input: {
     message += `已配置：${configuredSummary}。`;
   }
   if (!passed) {
-    message += "请返回上一步补充对应方向标的，或调整场景配置。";
+    message += "请返回上一步补充对应方向标的，或调整配置模板。";
   }
 
   return {

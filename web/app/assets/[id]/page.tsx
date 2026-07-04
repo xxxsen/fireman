@@ -638,16 +638,15 @@ export default function AssetDetailPage() {
         <section className="mt-6 rounded-lg border border-line bg-surface p-4 text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-medium text-ink">收益曲线</h2>
-            <div className="flex flex-wrap gap-1" role="tablist" aria-label="收益曲线区间">
+            <div className="flex flex-wrap gap-1" role="group" aria-label="收益曲线区间">
               {RETURN_SERIES_RANGES.map(({ key, label }) => (
                 <button
                   key={key}
                   type="button"
-                  role="tab"
-                  aria-selected={seriesRange === key}
+                  aria-pressed={seriesRange === key}
                   className={`rounded-full px-3 py-1 text-xs transition-colors ${
                     seriesRange === key
-                      ? "bg-brand text-white"
+                      ? "bg-brand text-surface"
                       : "bg-surface-muted text-ink-muted hover:text-ink"
                   }`}
                   onClick={() => setSeriesRange(key)}

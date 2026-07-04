@@ -178,7 +178,7 @@ describe("RebalancePlanPage", () => {
     expect(cashRow).toHaveTextContent("¥60,000.00");
   });
 
-  it("links to holdings preview instead of legacy rebalance workspace copy", async () => {
+  it("links back to the rebalance workspace with unified copy", async () => {
     getRebalanceDraft.mockResolvedValueOnce({
       draft: {
         id: "rbd_1",
@@ -204,8 +204,8 @@ describe("RebalancePlanPage", () => {
     );
 
     expect(await screen.findByText(/此调仓计划已提交/)).toBeInTheDocument();
-    expect(screen.queryByText("返回调仓工作台")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "返回持仓预览" })).toHaveAttribute(
+    expect(screen.queryByText("返回持仓预览")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回调仓工作台" })).toHaveAttribute(
       "href",
       "/plans/plan_1/rebalance",
     );

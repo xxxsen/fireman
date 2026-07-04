@@ -112,7 +112,7 @@ function renderPage() {
   );
 }
 
-describe("RebalancePage (持仓预览)", () => {
+describe("RebalancePage (调仓工作台)", () => {
   beforeEach(() => {
     mockSearchParams.set(new URLSearchParams());
     getActiveRebalanceExecution.mockResolvedValue(null);
@@ -136,7 +136,7 @@ describe("RebalancePage (持仓预览)", () => {
   it("shows dual primary actions: asset refresh and rebalance execution", async () => {
     renderPage();
 
-    expect(await screen.findByRole("heading", { name: "持仓预览" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "调仓工作台" })).toBeInTheDocument();
     expect(screen.getByTestId("asset-refresh-primary")).toHaveAttribute(
       "href",
       "/plans/plan_1/asset-refresh",
@@ -181,6 +181,6 @@ describe("RebalancePage (持仓预览)", () => {
   it("shows asset refreshed banner from query param", async () => {
     mockSearchParams.set(new URLSearchParams("asset_refreshed=1"));
     renderPage();
-    expect(await screen.findByText("资产变更已提交，持仓预览已更新。")).toBeInTheDocument();
+    expect(await screen.findByText("持仓校正已提交，调仓工作台已更新。")).toBeInTheDocument();
   });
 });

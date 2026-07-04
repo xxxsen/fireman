@@ -160,6 +160,9 @@ describe("buildWizardPortfolioReview", () => {
     expect(review.missingClasses[0]?.assetClass).toBe("bond");
     expect(review.message).toContain("还缺少");
     expect(review.message).toContain("债券");
+    // Batch D 术语统一：提示应引导用户调整「配置模板」而非旧称「场景配置」。
+    expect(review.message).toContain("调整配置模板");
+    expect(review.message).not.toContain("场景");
     expect(review.rows).toHaveLength(2);
   });
 

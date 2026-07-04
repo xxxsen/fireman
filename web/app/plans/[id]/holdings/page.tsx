@@ -15,5 +15,5 @@ export default function HoldingsRedirectPage() {
     );
   }, [planId, router, searchParams]);
 
-  return <p className="text-ink-muted">正在前往持仓预览…</p>;
+  return <p className="text-ink-muted">正在前往调仓工作台…</p>;
 }

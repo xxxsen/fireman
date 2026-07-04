@@ -371,9 +371,9 @@ describe("AssetDetailPage layout and return curve", () => {
     expect(screen.queryByText(/24 小时/)).not.toBeInTheDocument();
 
     expect(screen.getByText("收益曲线")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "近3天" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "近1天" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "近3月" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "近3天" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "近1天" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "近3月" })).toBeInTheDocument();
     expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
   });
 
@@ -392,11 +392,11 @@ describe("AssetDetailPage layout and return curve", () => {
     expect(notice.textContent).not.toContain("强制");
   });
 
-  it("switches return curve range when a tab is clicked", async () => {
+  it("switches return curve range when a range button is clicked", async () => {
     const { getReturnSeries } = await import("@/lib/api/instruments");
     renderPage();
     await screen.findByTestId("return-series-chart");
-    fireEvent.click(screen.getByRole("tab", { name: "近1年" }));
+    fireEvent.click(screen.getByRole("button", { name: "近1年" }));
     await waitFor(() =>
       expect(getReturnSeries).toHaveBeenCalledWith("ins_test", "1y"),
     );

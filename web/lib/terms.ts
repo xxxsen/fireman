@@ -62,7 +62,13 @@ export const TERMS: Record<string, string> = {
   annual_savings_wizard:
     "指 FIRE 之前，你每年预计还能新增积攒多少资金。",
   asset_refresh_vs_rebalance_plan:
-    "资产变更=刷新事实基准；调仓计划=按冻结建议调整持仓，编辑时不重算其他行目标",
+    "持仓校正=刷新事实基准；调仓计划=按冻结建议调整持仓，编辑时不重算其他行目标",
+  config_template:
+    "跨计划复用的资产大类目标权重模板（权益/债券/现金），在计划设置中选用；与模拟收益无关",
+  assumption_scenario:
+    "收益假设的三档情景（保守/基准/乐观），只影响 FIRE 模拟中的收益先验，不改变目标配置；与「配置模板」「压力场景」是三个互不相关的概念",
+  gap_color_semantics:
+    "「还差/待投入」（绿色）表示按目标结构还需买入的缺口，不代表盈利；「超出/待减配」（红色）表示超配需减仓，不代表亏损",
   rebalance_plan_draft:
     "进行中的调仓计划，分阶段保存，完成后才写入正式持仓",
   rebalance_fund_pool:
@@ -76,7 +82,7 @@ export const TERMS: Record<string, string> = {
   frozen_structural_gap:
     "调仓计划创建时确定的结构还差，编辑过程中不变",
   current_amount_vs_target:
-    "当前金额为您的真实持仓；目标金额由场景与权重自动计算。交易后请在此更新当前金额",
+    "当前金额为您的真实持仓；目标金额由配置模板与权重自动计算。交易后请在此更新当前金额",
   fire_simulation_optional:
     "基于当前配置与历史数据估算长期退休路径成功率；不运行模拟也可正常管理持仓与调仓",
   fire_params_for_simulation:
@@ -103,7 +109,70 @@ export const TERMS: Record<string, string> = {
     "最大回撤：所选完整年度窗口中，从历史峰值到其后低点的最大跌幅，以正数幅度展示。仅基于当前纳入模拟的完整年度与清洗后行情",
 };
 
+/** Short Chinese display names per term, used for accessible help labels. */
+export const TERM_LABELS: Record<string, string> = {
+  fire_success_rate: "FIRE 成功率",
+  p_quantiles: "终值分位数",
+  max_drawdown: "最大回撤",
+  annual_return: "年化收益",
+  annual_volatility: "年化波动率",
+  rebalance_threshold: "调仓阈值",
+  weight_within_group: "组内占比",
+  simulation_snapshot_sync: "模拟快照同步",
+  portfolio_weight: "全组合权重",
+  fee_included: "费率口径",
+  stress_test: "压力测试",
+  sensitivity_test: "敏感性测试",
+  unallocated_gap: "规模缺口",
+  holdings_sum: "持仓合计",
+  holdings_market_value: "持仓市值",
+  invested_minor: "已投资金",
+  configured_total_assets: "计划基准规模",
+  scale_gap_over: "规模超出",
+  scale_gap_under: "规模缺口",
+  structural_gap_row: "结构还差",
+  plan_scale_gap_row: "计划规模差",
+  structural_rebalance: "结构调仓",
+  actionable_rebalance: "需调仓标的",
+  asset_class_allocation: "大类配置",
+  region_allocation: "地区配置",
+  deviation_amount: "偏差金额",
+  rebalance_mode_full: "全组合对齐",
+  rebalance_mode_new_cash: "新增资金模式",
+  asset_refresh: "持仓校正",
+  annual_savings_wizard: "年储蓄",
+  asset_refresh_vs_rebalance_plan: "持仓校正与调仓计划",
+  rebalance_plan_draft: "调仓计划草稿",
+  rebalance_fund_pool: "调仓资金池",
+  rebalance_reference_package: "参考调仓方案",
+  apply_recommended_one_line: "应用推荐金额",
+  unallocated_sweep_to_cash: "未分配资金转现金",
+  frozen_structural_gap: "冻结结构还差",
+  current_amount_vs_target: "当前金额与目标金额",
+  fire_simulation_optional: "FIRE 模拟",
+  fire_params_for_simulation: "FIRE 模拟参数",
+  portfolio_gap_row: "汇总结构还差",
+  target_weight_portfolio: "全组合目标占比",
+  target_weight_within_asset_class: "大类内目标配比",
+  current_weight_portfolio: "全组合当前占比",
+  current_weight_within_asset_class: "大类内当前配比",
+  result_stale: "结果过期",
+  simulation_runs: "模拟次数",
+  student_t_df: "Student-t 自由度",
+  metric_cagr: "CAGR",
+  metric_annual_volatility: "年化波动率",
+  metric_max_drawdown: "最大回撤",
+  config_template: "配置模板",
+  assumption_scenario: "假设情景",
+  gap_color_semantics: "还差与超出的颜色含义",
+};
+
 export function helpForTerm(key?: string): string | undefined {
   if (!key) return undefined;
   return TERMS[key];
+}
+
+export function labelForTerm(key?: string): string | undefined {
+  if (!key) return undefined;
+  return TERM_LABELS[key];
 }

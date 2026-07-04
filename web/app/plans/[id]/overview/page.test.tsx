@@ -18,8 +18,12 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => mockOverviewSearchParams.get(),
 }));
 
+const mockJobState = vi.hoisted(() => ({
+  value: { job: null as { status: string } | null, progress: 0, error: null as string | null },
+}));
+
 vi.mock("@/hooks/useJobStatus", () => ({
-  useJobStatus: () => ({ job: null, progress: 0, error: null }),
+  useJobStatus: () => mockJobState.value,
 }));
 
 vi.mock("@/components/charts/AllocationBarChart", () => ({
@@ -80,6 +84,7 @@ function renderPage() {
 describe("OverviewPage", () => {
   beforeEach(() => {
     mockOverviewSearchParams.set(new URLSearchParams());
+    mockJobState.value = { job: null, progress: 0, error: null };
     mockDashboard.data = {
       ...mockDashboard.data,
       active_rebalance_execution: undefined,
@@ -125,5 +130,33 @@ describe("OverviewPage", () => {
     await screen.findByText("已投资金");
     expect(screen.queryByRole("link", { name: "刷新" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "持仓预览" })).not.toBeInTheDocument();
+  });
+
+  it("shows a running banner while the tracked simulation job is in progress", async () => {
+    mockOverviewSearchParams.set(new URLSearchParams("job_id=job_1"));
+    mockJobState.value = { job: { status: "running" }, progress: 0.4, error: null };
+    renderPage();
+
+    expect(await screen.findByText(/FIRE 模拟正在后台运行：40%/)).toBeInTheDocument();
+  });
+
+  it("shows a failure banner with the error when the tracked simulation job failed", async () => {
+    mockOverviewSearchParams.set(new URLSearchParams("job_id=job_1"));
+    mockJobState.value = { job: { status: "failed" }, progress: 0, error: "引擎崩溃" };
+    renderPage();
+
+    expect(await screen.findByText(/FIRE 模拟运行失败：引擎崩溃/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往计划设置重试" })).toBeInTheDocument();
+    expect(screen.queryByText(/正在后台运行/)).not.toBeInTheDocument();
+  });
+
+  it("stays silent when the tracked simulation job was canceled", async () => {
+    mockOverviewSearchParams.set(new URLSearchParams("job_id=job_1"));
+    mockJobState.value = { job: { status: "canceled" }, progress: 0, error: null };
+    renderPage();
+
+    await screen.findByText("已投资金");
+    expect(screen.queryByText(/正在后台运行/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/FIRE 模拟运行失败/)).not.toBeInTheDocument();
   });
 });

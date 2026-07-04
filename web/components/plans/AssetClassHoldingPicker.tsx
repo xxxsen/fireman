@@ -302,7 +302,7 @@ export function AssetClassHoldingPicker({
         </ul>
       )}
       <input
-        className={`${subTitle || selected.length > 0 ? "mt-2" : "mt-3"} w-full rounded-md border px-3 py-2 text-sm`}
+        className={`input-base ${subTitle || selected.length > 0 ? "mt-2" : "mt-3"}`}
         placeholder={`搜索${assetClassLabel(assetClass)}标的（代码或名称）`}
         value={filter}
         role="combobox"
@@ -328,10 +328,10 @@ export function AssetClassHoldingPicker({
           role="listbox"
           // Fixed viewport of exactly 10 standard rows (10 × 3rem); content scrolls
           // inside so paging never resizes the dropdown or shifts surrounding UI.
-          className="mt-2 h-[30rem] overflow-y-auto rounded-md border"
+          className="mt-2 h-[30rem] overflow-y-auto rounded-md border border-line"
           data-testid="wizard-library-results"
         >
-          <ul className="divide-y text-sm">
+          <ul className="divide-y divide-line text-sm">
             {libraryResults.map((inst) => {
               const addable = canAddToPlan(inst);
               return (
@@ -377,7 +377,7 @@ export function AssetClassHoldingPicker({
       {open && externalCandidates.length > 0 && (
         <ul
           role="listbox"
-          className="mt-2 max-h-40 overflow-y-auto rounded-md border border-dashed border-line divide-y text-sm"
+          className="mt-2 max-h-40 overflow-y-auto rounded-md border border-dashed border-line divide-y divide-line text-sm"
           data-testid="wizard-external-results"
         >
           {externalCandidates.map((candidate) => (

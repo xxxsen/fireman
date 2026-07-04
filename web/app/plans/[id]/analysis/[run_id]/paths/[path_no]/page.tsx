@@ -259,7 +259,7 @@ export default function PathDetailPage() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="content-enter space-y-4">
       <Link
         href={settingsHref}
         className="inline-flex text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
