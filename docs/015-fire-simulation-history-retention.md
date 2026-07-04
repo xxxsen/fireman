@@ -1,4 +1,4 @@
-# FIRE 模拟历史保留与附属分析绑定（td/050 实现）
+# FIRE 模拟历史保留与附属分析绑定
 
 ## 1. analysis_results 增加 simulation_run_id
 - `migrations/0014_analysis_results_simulation_run.sql`（增量迁移，遵循 `docs/013` 顺序迁移策略）：`analysis_results` 增加 `simulation_run_id TEXT NOT NULL DEFAULT ''` 列，并建立 `(simulation_run_id, type, created_at DESC)` 索引。历史行 `simulation_run_id=''` 视为未归属/legacy，直至被裁剪。

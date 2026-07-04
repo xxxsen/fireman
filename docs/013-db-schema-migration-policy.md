@@ -1,6 +1,6 @@
 # 数据库 Schema 与 Migration 规范
 
-> 来源：`td/047-td046-implementation-review.md` 后续整改。当前项目未上线，旧本地库可删除后由 migrations 重建；业务 schema 的唯一来源是 `migrations/`。
+> 当前项目未上线，旧本地库可删除后由 migrations 重建；业务 schema 的唯一来源是 `migrations/`。
 
 ## 原则
 

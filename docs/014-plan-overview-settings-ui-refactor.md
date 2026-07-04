@@ -1,4 +1,4 @@
-# 组合总览与计划设置 UI 改造（td/049 实现）
+# 组合总览与计划设置 UI 改造
 
 ## 1. 总览 Tooltip 跟随鼠标
 - `lib/tooltip-position.ts` 新增 `computeCursorTooltipPosition`：默认显示在鼠标右下方偏移 12px，越界时翻转到左侧 / 上方并夹紧到视口内。

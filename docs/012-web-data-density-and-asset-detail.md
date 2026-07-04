@@ -1,6 +1,5 @@
 # 012 · Web 数据密度与资产详情重排
 
-> 设计来源：`td/045-web-ux-data-density-and-asset-detail-refactor.md`、`td/053-asset-library-and-wizard-ui-refactor.md`、`td/056-fire-simulation-library-and-wizard-ui-fixes.md`、`td/057-td056-implementation-review.md`、`td/058-td057-implementation-review.md`（均已完整实施并稳定）。
 > 本文自洽描述页面宽度与数据密度、资产选择分页、资产资料库分类与刷新、金额单位与配置 tooltip、资产详情重排、场景卡片权限等统一约定。除资料库分类的受控编辑与新增 `GET /api/v1/instruments/:id/return-series`、扩展 `GET /api/v1/instruments` 的分页/搜索、Dashboard allocation bar 明细外，不改变任何金额 / 权重 / 调仓 / 模拟计算口径。
 
 ## 1. 新建计划向导与页面容器宽度

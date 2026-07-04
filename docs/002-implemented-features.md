@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0005） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0019） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -40,7 +40,7 @@
 - **step 2 按大类分组**：权益/债券/现金容器、大类内搜索、预期资金公式、大类组内权重 100%、场景切换 prune
 - **step 1/2 支持地区目标**：权益/债券国内外配比、按 `region` 分区选标、`region_targets` 写入计划
 
-详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md) 与 [006-wizard-region-domestic-foreign-allocation.md](./006-wizard-region-domestic-foreign-allocation.md)。
+详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md)、[006-wizard-region-domestic-foreign-allocation.md](./006-wizard-region-domestic-foreign-allocation.md) 与 [019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md)。
 
 ---
 
@@ -54,7 +54,7 @@
 | 模拟快照 | 纳入日最近最多 20 个完整自然年度；`source_hash` 审计 |
 | 系统标的 | 系统现金、USDCNY/HKDCNY 汇率（migration 0003） |
 | 数据过期提示 | 距最近交易日 >7 自然日返回 stale 警告 |
-| Refresh | 24h 节流；源切换或 force 时全量替换 |
+| Refresh | 手工刷新立即执行；源切换时全量替换 |
 
 ### 3.1 中国场内代码规范
 
@@ -72,7 +72,7 @@
 - 启动后台预热；`POST /v1/metadata/refresh` 手动强制刷新
 - `fund_name_em` 专用 60s 超时，不受 5s resolve deadline 限制
 
-详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md) 与 [001-asset-import.md](./001-asset-import.md)。
+详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md)、[001-asset-import.md](./001-asset-import.md) 与 [017-market-data-quality-and-return-metrics.md](./017-market-data-quality-and-return-metrics.md)。
 
 ---
 
@@ -104,7 +104,7 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| Student-t 独立因子 | 按标的完整年度估计参数 |
+| 多元 Student-t 因子 | 按冻结月度因子、相关矩阵和 profile 厚尾参数抽样 |
 | Seed 复现 | 根 seed + 路径号派生；非负 int64 契约 |
 | 结果同事务 | 汇总、路径索引、分位序列同一 SQLite 事务提交 |
 | 路径详情 | 按 seed 重算单条路径；列表与详情 seed 一致 |
@@ -112,8 +112,9 @@
 | Job + Worker | 异步 `simulation` job，进度与 SSE/轮询 |
 | 参数过期 | 计划参数变更后旧模拟 run 标记 stale |
 | 版本化模拟假设 | CNY 基准的 CMA v3 profile、历史 profile 回放、canonical/evidence hash provenance、固定 seed P50 回归 |
+| 前瞻收益校准 | 历史收益向长期先验收缩，支持资产级 override、FX 因子和真实购买力序列 |
 
-详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md)。
+详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md) 与 [019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md)。
 
 ---
 
@@ -124,6 +125,8 @@
 | `/plans/new` | 四步计划向导；模拟可选且不阻塞进入计划 |
 | `/plans/{id}/overview` | 组合总览、大类/地区配置、偏离摘要、折叠式可选模拟 |
 | `/plans/{id}/rebalance` | 持仓预览；查看当前持仓、目标结构、结构偏差，并进入资产变更或调仓计划 |
+| `/plans/{id}/rebalance/executions` | 多日调仓执行列表 |
+| `/plans/{id}/rebalance/executions/{executionId}` | 调仓执行工作区：登记卖出、买入、备注、完成或取消 |
 | `/plans/{id}/settings` | 切换当前计划使用的 FIRE 方案、编辑计划参数、运行模拟 |
 | `/assets` | 全局资产资料库 |
 | `/assets/import` | AKShare 解析 → 选类 → 异步抓取 |
@@ -135,6 +138,8 @@
 旧计划内页面 URL 保留兼容重定向。详见
 [004-portfolio-first-ui.md](./004-portfolio-first-ui.md) 与
 [008-plan-settings-holdings-preview.md](./008-plan-settings-holdings-preview.md)。
+
+调仓计划与执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 
 ---
 
