@@ -301,6 +301,7 @@ export function instrumentStatusLabel(status: string): string {
 }
 
 const DATA_SOURCE_MAP: Record<string, string> = {
+  "tickflow.klines:1d": "TickFlow · 日K",
   "ak.fund_etf_hist_em": "东方财富 · ETF 日线",
   "ak.stock_zh_a_hist_tx": "腾讯财经 · 前复权",
   "ak.fund_etf_hist_sina": "新浪财经 · ETF",
@@ -323,6 +324,8 @@ const DATA_SOURCE_MAP: Record<string, string> = {
  */
 export function dataSourceLabel(sourceName: string | undefined | null): string {
   if (!sourceName) return "—";
+  const exact = DATA_SOURCE_MAP[sourceName.trim()];
+  if (exact) return exact;
   const colon = sourceName.indexOf(":");
   const id = colon >= 0 ? sourceName.slice(0, colon).trim() : sourceName.trim();
   const suffix = colon >= 0 ? sourceName.slice(colon + 1).trim() : "";

@@ -21,6 +21,7 @@ from .classification import (
     detect_cn_mutual_fund_source_kind,
 )
 from .cn_code import (
+    cn_exchange_code_from_explicit_or_heuristic,
     eastmoney_symbol_from_canonical,
     prefixed_symbol_from_canonical,
     resolve_cn_etf_fetch_code,
@@ -28,6 +29,12 @@ from .cn_code import (
 from .fallback import try_sources
 from .names import lookup_cn_mutual_fund_name_readonly, name_from_dataframe
 from .symbols import hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
+from .tickflow import (
+    TICKFLOW_KLINES_SOURCE,
+    tickflow_allowed_for_request,
+    tickflow_symbol,
+    try_tickflow_klines,
+)
 
 
 @dataclass(frozen=True)
@@ -103,6 +110,33 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     em_adjust = _cn_stock_em_adjust(policy)
     tx_adjust = tx_adjust_policy(policy)
     sina_adjust = sina_adjust_policy(policy)
+
+    if tickflow_allowed_for_request(req):
+        parsed_identity = cn_exchange_code_from_explicit_or_heuristic(canonical)
+        if parsed_identity is None:
+            logger.info(
+                "tickflow klines skip: source_code=%s instrument_type=%s fallback_reason=exchange_identity_unresolved",
+                req.source_code,
+                req.instrument_type,
+            )
+        else:
+            tf_df = try_tickflow_klines(
+                req,
+                tickflow_symbol(parsed_identity.eastmoney_symbol, parsed_identity.exchange),
+                start,
+                end,
+            )
+            if tf_df is not None:
+                name = (req.resolved_name or "").strip() or canonical
+                return AdapterResult(
+                    df=tf_df,
+                    source_name=TICKFLOW_KLINES_SOURCE,
+                    name=name,
+                    asset_class="equity",
+                    currency="CNY",
+                    point_type="adjusted_close",
+                    region="domestic",
+                )
 
     sources: list[tuple[str, UpstreamCall]] = [
         (
@@ -182,6 +216,27 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
     em_adjust = _cn_em_adjust(adjust)
     tx_adjust = tx_adjust_policy(adjust)
+
+    # TickFlow priority fetch (td/074): the central gate limits this to resolved
+    # etf/index_etf kinds under the configured adjust policy; LOF and unknown
+    # kinds always stay on the AKShare chain below.
+    if tickflow_allowed_for_request(req):
+        tf_df = try_tickflow_klines(
+            req,
+            tickflow_symbol(parsed.eastmoney_symbol, parsed.exchange),
+            start,
+            end,
+        )
+        if tf_df is not None:
+            return AdapterResult(
+                df=tf_df,
+                source_name=TICKFLOW_KLINES_SOURCE,
+                name=_fetch_display_name(req.resolved_name, em_symbol, tf_df),
+                asset_class="equity",
+                currency="CNY",
+                point_type="adjusted_close",
+                region="domestic",
+            )
 
     etf_hist = (
         "ak.fund_etf_hist_em",

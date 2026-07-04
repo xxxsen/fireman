@@ -28,6 +28,6 @@ packages = ["fireman_market_provider"]
 testpaths = ["tests"]
 addopts = "-q -m 'not live'"
 markers = [
-    "live: hits real AKShare network; run with FIREMAN_LIVE_AKSHARE=1",
+    "live: hits real upstream network (AKShare/TickFlow); run with FIREMAN_LIVE_AKSHARE=1 / FIREMAN_LIVE_TICKFLOW=1",
     "subprocess: runs call_with_timeout via real spawn subprocess",
 ]

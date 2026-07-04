@@ -246,6 +246,20 @@ def heuristic_cn_stock_from_bare(bare: str) -> CNExchangeCode | None:
     return build_from_market_id(digits, _prefix_to_market_id(prefix))
 
 
+def cn_exchange_code_from_explicit_or_heuristic(code: str) -> CNExchangeCode | None:
+    """Parse exchange identity without upstream calls: explicit prefix wins, else heuristics.
+
+    Used by fetch-only priority sources (TickFlow) that need a ``CODE.EXCHANGE``
+    symbol but must not add network round-trips or guess when identity is unclear.
+    """
+    prefix, bare = _split_prefixed(code)
+    if len(bare) != 6 or not bare.isdigit():
+        return None
+    if prefix is not None:
+        return build_from_market_id(bare, _prefix_to_market_id(prefix))
+    return heuristic_cn_stock_from_bare(bare)
+
+
 def heuristic_cn_etf_from_bare(bare: str) -> CNExchangeCode | None:
     """Best-effort ETF exchange from code prefix rules (no upstream calls)."""
     return heuristic_cn_stock_from_bare(bare)

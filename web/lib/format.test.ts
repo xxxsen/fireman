@@ -143,6 +143,10 @@ describe("dataSourceLabel", () => {
     expect(dataSourceLabel("ak.fund_open_fund_info_em")).toBe("东方财富 · 公募基金");
   });
 
+  it("maps the TickFlow daily kline source (td/074)", () => {
+    expect(dataSourceLabel("tickflow.klines:1d")).toBe("TickFlow · 日K");
+  });
+
   it("never exposes raw adapter ids for unknown sources", () => {
     expect(dataSourceLabel("ak.custom_source")).toBe("行情数据");
     expect(dataSourceLabel("ak.custom_source:某字段")).toBe("行情数据 · 某字段");
