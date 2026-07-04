@@ -56,7 +56,6 @@ type Worker struct {
 	sims              *repository.SimulationRepo
 	runner            Runner
 	analysis          AnalysisRunnerIface
-	instrumentFetch   *InstrumentFetchRunner
 	events            *EventHub
 	logger            *slog.Logger
 	interval          time.Duration
@@ -70,7 +69,6 @@ func NewWorker(
 	sims *repository.SimulationRepo,
 	runner Runner,
 	analysis AnalysisRunnerIface,
-	instrumentFetch *InstrumentFetchRunner,
 	events *EventHub,
 	logger *slog.Logger,
 	maintenance func() bool,
@@ -80,7 +78,7 @@ func NewWorker(
 	}
 	return &Worker{
 		db: db, jobs: jobs, sims: sims, runner: runner, analysis: analysis,
-		instrumentFetch: instrumentFetch, events: events, logger: logger, maintenance: maintenance,
+		events: events, logger: logger, maintenance: maintenance,
 		interval: 500 * time.Millisecond,
 	}
 }
@@ -230,9 +228,6 @@ func (w *Worker) reconcileStale(ctx context.Context) {
 
 func (w *Worker) execute(ctx context.Context, job repository.Job) {
 	switch job.Type {
-	case repository.JobTypeInstrumentFetch:
-		w.executeInstrumentFetch(ctx, job)
-		return
 	case repository.JobTypeStress:
 		w.executeStress(ctx, job)
 		return
@@ -356,28 +351,6 @@ func (w *Worker) executeSensitivity(ctx context.Context, job repository.Job) {
 	)
 }
 
-func (w *Worker) executeInstrumentFetch(ctx context.Context, job repository.Job) {
-	if w.instrumentFetch == nil {
-		w.fail(ctx, job.ID, "runner_missing", "instrument fetch runner not configured")
-		return
-	}
-	cancelCheck := w.cancelCheck(ctx, job.ID)
-	progress := w.jobProgress(ctx, job.ID)
-	if err := w.instrumentFetch.Run(ctx, job, cancelCheck, progress); err != nil {
-		if w.handleInstrumentFetchError(ctx, job.ID, cancelCheck, err) {
-			return
-		}
-		code, msg := "fetch_failed", err.Error()
-		if c, ok := errorCode(err); ok {
-			code = c
-			msg = c
-		}
-		w.fail(ctx, job.ID, code, msg)
-		return
-	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
-}
-
 func (w *Worker) cancelCheck(ctx context.Context, jobID string) func() bool {
 	return func() bool {
 		checkCtx := ctx
@@ -412,33 +385,6 @@ func (w *Worker) handleRunError(
 	}
 	if cancelCheck() {
 		w.finish(ctx, jobID, repository.JobStatusCanceled, "canceled by user", runID)
-		return true
-	}
-	return false
-}
-
-func (w *Worker) handleInstrumentFetchError(
-	ctx context.Context,
-	jobID string,
-	cancelCheck func() bool,
-	err error,
-) bool {
-	if errors.Is(err, ErrFetchCanceled) {
-		w.events.Publish(Event{
-			JobID: jobID, Status: repository.JobStatusCanceled,
-			ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
-		})
-		return true
-	}
-	if ctx.Err() != nil && !cancelCheck() {
-		return true
-	}
-	if cancelCheck() {
-		w.finish(ctx, jobID, repository.JobStatusCanceled, "instrument fetch canceled by user", "")
-		w.events.Publish(Event{
-			JobID: jobID, Status: repository.JobStatusCanceled,
-			ErrorCode: "fetch_canceled", ErrorMessage: "instrument fetch canceled by user",
-		})
 		return true
 	}
 	return false

@@ -1,27 +1,14 @@
 package marketdata
 
-// FetchRequest is the market-provider fetch request body.
-type FetchRequest struct {
-	Market         string  `json:"market"`
-	InstrumentType string  `json:"instrument_type"`
-	SourceCode     string  `json:"source_code"`
-	StartDate      *string `json:"start_date"`
-	EndDate        string  `json:"end_date"`
-	AdjustPolicy   string  `json:"adjust_policy"`
-	ResolvedName   string  `json:"resolved_name,omitempty"`
-	// InstrumentKind carries the resolved identity (etf/index_etf/lof/stock/...)
-	// so the sidecar selects an identity-consistent history source instead of
-	// blindly falling back across ETF/LOF/stock sources for the same bare code.
-	InstrumentKind string `json:"instrument_kind,omitempty"`
-}
-
 // HistoricalPoint is one cleaned daily observation.
 type HistoricalPoint struct {
 	Date  string  `json:"date"`
 	Value float64 `json:"value"`
 }
 
-// FetchData is the sidecar data payload.
+// FetchData is the normalized history payload produced by the sidecar worker
+// (td/078: uploaded as a resource and consumed by Go post-process; formerly
+// the synchronous /v1/instruments/fetch response body).
 type FetchData struct {
 	Provider               string            `json:"provider"`
 	ProviderSymbol         string            `json:"provider_symbol"`
@@ -35,51 +22,6 @@ type FetchData struct {
 	SourceName             string            `json:"source_name"`
 	SourceQuality          string            `json:"source_quality"`
 	SourceKind             string            `json:"source_kind,omitempty"`
-}
-
-// FetchResponse is the sidecar envelope.
-type FetchResponse struct {
-	Code    int       `json:"code"`
-	Message string    `json:"message"`
-	Data    FetchData `json:"data"`
-}
-
-// ResolveRequest is the market-provider resolve request body.
-type ResolveRequest struct {
-	Market         string `json:"market"`
-	InstrumentType string `json:"instrument_type"`
-	Code           string `json:"code"`
-}
-
-// ResolveCandidate is one resolved instrument option.
-type ResolveCandidate struct {
-	Code           string `json:"code"`
-	ProviderSymbol string `json:"provider_symbol"`
-	Name           string `json:"name"`
-	Exchange       string `json:"exchange"`
-	InstrumentKind string `json:"instrument_kind"`
-	CandidateID    string `json:"candidate_id"`
-}
-
-// ResolveData is the resolve payload.
-type ResolveData struct {
-	Ambiguous  bool               `json:"ambiguous"`
-	Resolved   *ResolveCandidate  `json:"resolved,omitempty"`
-	Candidates []ResolveCandidate `json:"candidates,omitempty"`
-}
-
-// ResolveResponse is the sidecar resolve envelope.
-type ResolveResponse struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    ResolveData `json:"data"`
-}
-
-// errorEnvelope is the structured failure body returned by the sidecar.
-type errorEnvelope struct {
-	Code      int    `json:"code"`
-	ErrorCode string `json:"error_code"`
-	Message   string `json:"message"`
 }
 
 // DataPoint is a persisted market observation.

@@ -5,17 +5,13 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pandas as pd
-from fastapi.testclient import TestClient
 
-from fireman_market_provider import create_app
 from fireman_market_provider.adapters.names import reset_name_caches
 
-
-def _client() -> TestClient:
-    return TestClient(create_app())
+from .fetch_compat import fetch
 
 
-def _fetch(kind: str | None) -> "TestClient":
+def _fetch(kind: str | None):
     payload = {
         "market": "CN",
         "instrument_type": "cn_exchange_fund",
@@ -25,7 +21,7 @@ def _fetch(kind: str | None) -> "TestClient":
     }
     if kind is not None:
         payload["instrument_kind"] = kind
-    return _client().post("/v1/instruments/fetch", json=payload)
+    return fetch(payload)
 
 
 def test_etf_kind_never_falls_back_to_lof_source() -> None:

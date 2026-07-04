@@ -13,7 +13,7 @@ import (
 
 func TestSystemBackupDownload(t *testing.T) {
 	db, dbPath := testutil.OpenTestDBPath(t)
-	services := NewServices(db, dbPath, "", nil)
+	services := NewServices(db, dbPath, nil)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, DBPath: dbPath, Services: services}))
 	defer srv.Close()
 
@@ -57,7 +57,7 @@ func TestSystemBackupDownload(t *testing.T) {
 func TestPlanExportEndpoints(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
 	defer srv.Close()
 
 	for _, path := range []string{

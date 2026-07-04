@@ -1,222 +1,198 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import ImportAssetPage from "./page";
+// @vitest-environment jsdom
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MarketAsset } from "@/lib/api/market-assets";
 
-const resolveImportMock = vi.fn();
-const importAsyncMock = vi.fn();
+const listMarketAssetsMock = vi.hoisted(() => vi.fn());
+const getMarketAssetDetailMock = vi.hoisted(() => vi.fn());
+const importFromMarketAssetMock = vi.hoisted(() => vi.fn());
+const routerPushMock = vi.hoisted(() => vi.fn());
+const searchParamsGetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: routerPushMock }),
+  useSearchParams: () => ({ get: searchParamsGetMock }),
 }));
 
-vi.mock("@/lib/api/instruments", () => ({
-  resolveImport: (...args: unknown[]) => resolveImportMock(...args),
-  importAsync: (...args: unknown[]) => importAsyncMock(...args),
-  candidateIdentity: (candidate: {
-    candidate_id?: string;
-    ticket_id?: string;
-    code: string;
-    provider_symbol: string;
-    instrument_kind: string;
-    exchange: string;
-  }) =>
-    candidate.candidate_id ??
-    candidate.ticket_id ??
-    `${candidate.code}|${candidate.provider_symbol}|${candidate.instrument_kind}|${candidate.exchange}`,
-  isSameCandidate: (
-    a: { candidate_id?: string; ticket_id?: string; code: string; provider_symbol: string; instrument_kind: string; exchange: string } | null,
-    b: { candidate_id?: string; ticket_id?: string; code: string; provider_symbol: string; instrument_kind: string; exchange: string } | null,
-  ) => {
-    if (!a || !b) return false;
-    const id = (c: typeof a) =>
-      c.candidate_id ??
-      c.ticket_id ??
-      `${c.code}|${c.provider_symbol}|${c.instrument_kind}|${c.exchange}`;
-    return id(a) === id(b);
-  },
+vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
+  listMarketAssets: (...args: unknown[]) => listMarketAssetsMock(...args),
+  getMarketAssetDetail: (...args: unknown[]) => getMarketAssetDetailMock(...args),
+  importFromMarketAsset: (...args: unknown[]) => importFromMarketAssetMock(...args),
 }));
+
+import ImportAssetPage from "./page";
+
+const ASSET: MarketAsset = {
+  asset_key: "cn:cn_exchange_fund:sh:510300",
+  market: "CN",
+  instrument_type: "cn_exchange_fund",
+  region_code: "sh",
+  symbol: "510300",
+  name: "沪深300ETF",
+  exchange: "SH",
+  instrument_kind: "etf",
+  currency: "CNY",
+  active: true,
+  listing_status: "active",
+  last_seen_at: 0,
+  source_name: "ak.fund_etf_spot_em",
+  source_as_of: "",
+  refreshed_at: 0,
+  created_at: 0,
+  updated_at: 0,
+};
+
+function renderPage() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ImportAssetPage />
+    </QueryClientProvider>,
+  );
+}
+
+async function chooseCandidate() {
+  fireEvent.change(screen.getByTestId("import-search-input"), { target: { value: "510300" } });
+  fireEvent.click(await screen.findByTestId(`import-candidate-${ASSET.asset_key}`));
+  await screen.findByTestId("confirm-import");
+}
 
 describe("ImportAssetPage", () => {
-  it("exposes CN, HK and US markets", () => {
-    render(<ImportAssetPage />);
-    expect(screen.getByRole("option", { name: "中国市场" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "香港市场" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "美国市场" })).toBeInTheDocument();
+  beforeEach(() => {
+    listMarketAssetsMock.mockReset();
+    getMarketAssetDetailMock.mockReset();
+    importFromMarketAssetMock.mockReset();
+    routerPushMock.mockReset();
+    searchParamsGetMock.mockReset();
+    searchParamsGetMock.mockReturnValue(null);
+    listMarketAssetsMock.mockResolvedValue({ assets: [ASSET], syncs: [], total: 1 });
   });
 
-  it("only exposes market, type and code inputs in search stage", () => {
-    render(<ImportAssetPage />);
-    expect(screen.getByRole("heading", { name: "1. 解析标的" })).toBeInTheDocument();
-    expect(screen.getByText("市场")).toBeInTheDocument();
-    expect(screen.getByText("标的类型")).toBeInTheDocument();
-    expect(screen.getByText("代码")).toBeInTheDocument();
-  });
-
-  it("shows disambiguate stage when resolve is ambiguous", async () => {
-    resolveImportMock.mockResolvedValueOnce({
-      ambiguous: true,
-      candidates: [
-        {
-          code: "sh000510",
-          provider_symbol: "sh000510",
-          name: "中证A500",
-          exchange: "SH",
-          instrument_kind: "index_etf",
-          candidate_id: "tkt_etf",
-          is_importable: true,
-          ticket_id: "tkt_etf",
-        },
-        {
-          code: "sz000510",
-          provider_symbol: "sz000510",
-          name: "新金路",
-          exchange: "SZ",
-          instrument_kind: "stock",
-          candidate_id: "sz000510|sz000510|stock|SZ",
-          is_importable: false,
-        },
-      ],
+  it("searches the local directory and lists candidates", async () => {
+    renderPage();
+    fireEvent.change(screen.getByTestId("import-search-input"), {
+      target: { value: "510300" },
     });
-    render(<ImportAssetPage />);
-    fireEvent.change(screen.getByPlaceholderText(/510300/), { target: { value: "000510" } });
-    fireEvent.click(screen.getByTestId("resolve-button"));
-    expect(await screen.findByText("2. 选择真实标的")).toBeInTheDocument();
-    expect(screen.getByText("sh000510")).toBeInTheDocument();
-    expect(screen.getByText("sz000510")).toBeInTheDocument();
-    expect(screen.getByTestId("candidate-tkt_etf")).toHaveAttribute("data-compatible", "true");
-    expect(screen.getByTestId("candidate-sz000510|sz000510|stock|SZ")).toHaveAttribute(
-      "data-compatible",
-      "false",
+    expect(
+      await screen.findByTestId(`import-candidate-${ASSET.asset_key}`),
+    ).toHaveTextContent("沪深300ETF");
+    await waitFor(() =>
+      expect(listMarketAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ q: "510300", limit: 20 }),
+      ),
     );
-    expect(screen.getByTestId("candidate-sz000510|sz000510|stock|SZ").querySelector("input")).toBeDisabled();
   });
 
-  it("disables etf candidates when instrument type is cn_exchange_stock", async () => {
-    resolveImportMock.mockResolvedValueOnce({
-      ambiguous: true,
-      candidates: [
-        {
-          code: "sh000510",
-          provider_symbol: "sh000510",
-          name: "中证A500",
-          exchange: "SH",
-          instrument_kind: "index_etf",
-          candidate_id: "sh000510|sh000510|index_etf|SH",
-          is_importable: false,
-        },
-        {
-          code: "sz000510",
-          provider_symbol: "sz000510",
-          name: "新金路",
-          exchange: "SZ",
-          instrument_kind: "stock",
-          candidate_id: "tkt_stock",
-          is_importable: true,
-          ticket_id: "tkt_stock",
-        },
-      ],
+  it("shows the directory hint when the local search has no hits", async () => {
+    listMarketAssetsMock.mockResolvedValue({ assets: [], syncs: [], total: 0 });
+    renderPage();
+    fireEvent.change(screen.getByTestId("import-search-input"), {
+      target: { value: "999999" },
     });
-    render(<ImportAssetPage />);
-    const selects = screen.getAllByRole("combobox");
-    fireEvent.change(selects[1], { target: { value: "cn_exchange_stock" } });
-    fireEvent.change(screen.getByPlaceholderText(/600519/), { target: { value: "000510" } });
-    fireEvent.click(screen.getByTestId("resolve-button"));
-    expect(await screen.findByText("2. 选择真实标的")).toBeInTheDocument();
-    expect(screen.getByTestId("candidate-sh000510|sh000510|index_etf|SH")).toHaveAttribute(
-      "data-compatible",
-      "false",
-    );
-    expect(screen.getByTestId("candidate-tkt_stock")).toHaveAttribute("data-compatible", "true");
-    expect(screen.getByTestId("candidate-sh000510|sh000510|index_etf|SH").querySelector("input")).toBeDisabled();
+    expect(
+      await screen.findByText(/未在本地资产目录中找到匹配资产/),
+    ).toBeInTheDocument();
   });
 
-  it("goes to confirm on unambiguous resolve", async () => {
-    resolveImportMock.mockResolvedValueOnce({
-      ambiguous: false,
-      resolved: {
-        code: "sh510300",
-        provider_symbol: "sh510300",
-        name: "沪深300ETF",
-        exchange: "SH",
-        instrument_kind: "etf",
-        candidate_id: "tkt_test",
-        ticket_id: "tkt_test",
-      },
-    });
-    render(<ImportAssetPage />);
-    fireEvent.change(screen.getByPlaceholderText(/510300/), { target: { value: "510300" } });
-    fireEvent.click(screen.getByTestId("resolve-button"));
-    expect(await screen.findByText("3. 确认并开始抓取")).toBeInTheDocument();
-    expect(screen.getByText("沪深300ETF")).toBeInTheDocument();
+  it("requires asset class and region before importing", async () => {
+    renderPage();
+    await chooseCandidate();
+
+    const confirm = screen.getByTestId("confirm-import");
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("asset-class-select"), { target: { value: "equity" } });
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("region-select"), { target: { value: "domestic" } });
+    expect(confirm).toBeEnabled();
   });
 
-  it("selects ETF vs LOF precisely when code is duplicated", async () => {
-    resolveImportMock.mockResolvedValueOnce({
-      ambiguous: true,
-      candidates: [
-        {
-          code: "sz150001",
-          provider_symbol: "sz150001",
-          name: "测试ETF",
-          exchange: "SZ",
-          instrument_kind: "etf",
-          candidate_id: "tkt_etf",
-          is_importable: true,
-          ticket_id: "tkt_etf",
-        },
-        {
-          code: "sz150001",
-          provider_symbol: "sz150001",
-          name: "测试LOF",
-          exchange: "SZ",
-          instrument_kind: "lof",
-          candidate_id: "tkt_lof",
-          is_importable: true,
-          ticket_id: "tkt_lof",
-        },
-      ],
-    });
-    importAsyncMock.mockResolvedValueOnce({
-      instrument_id: "ins_test",
-      job_id: "job_test",
-      status: "pending_fetch",
-    });
-
-    render(<ImportAssetPage />);
-    fireEvent.change(screen.getByPlaceholderText(/510300/), { target: { value: "150001" } });
-    fireEvent.click(screen.getByTestId("resolve-button"));
-    expect(await screen.findByText("2. 选择真实标的")).toBeInTheDocument();
-
-    const etfRow = screen.getByTestId("candidate-tkt_etf");
-    const lofRow = screen.getByTestId("candidate-tkt_lof");
-    expect(etfRow).toBeInTheDocument();
-    expect(lofRow).toBeInTheDocument();
-    expect(screen.getAllByText("sz150001")).toHaveLength(2);
-
-    const etfRadio = etfRow.querySelector("input") as HTMLInputElement;
-    const lofRadio = lofRow.querySelector("input") as HTMLInputElement;
-    expect(etfRadio.checked).toBe(false);
-    expect(lofRadio.checked).toBe(false);
-
-    fireEvent.click(etfRadio);
-    expect(etfRadio.checked).toBe(true);
-    expect(lofRadio.checked).toBe(false);
-
-    fireEvent.click(lofRadio);
-    expect(etfRadio.checked).toBe(false);
-    expect(lofRadio.checked).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    expect(await screen.findByText("3. 确认并开始抓取")).toBeInTheDocument();
-    expect(screen.getByText("测试LOF")).toBeInTheDocument();
+  it("imports the selected asset and navigates to the new instrument", async () => {
+    importFromMarketAssetMock.mockResolvedValue({ id: "ins_new" });
+    renderPage();
+    await chooseCandidate();
 
     fireEvent.change(screen.getByTestId("asset-class-select"), { target: { value: "equity" } });
     fireEvent.change(screen.getByTestId("region-select"), { target: { value: "domestic" } });
     fireEvent.click(screen.getByTestId("confirm-import"));
-    expect(importAsyncMock).toHaveBeenCalledWith({
-      ticket_id: "tkt_lof",
-      asset_class: "equity",
-      region: "domestic",
+
+    await waitFor(() =>
+      expect(importFromMarketAssetMock).toHaveBeenCalledWith({
+        asset_key: ASSET.asset_key,
+        asset_class: "equity",
+        region: "domestic",
+      }),
+    );
+    await waitFor(() => expect(routerPushMock).toHaveBeenCalledWith("/assets/ins_new"));
+  });
+
+  it("guides to the market asset detail page when history is empty", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    importFromMarketAssetMock.mockRejectedValue(
+      new ApiError("market_asset_history_empty", "history empty"),
+    );
+    renderPage();
+    await chooseCandidate();
+
+    fireEvent.change(screen.getByTestId("asset-class-select"), { target: { value: "equity" } });
+    fireEvent.change(screen.getByTestId("region-select"), { target: { value: "domestic" } });
+    fireEvent.click(screen.getByTestId("confirm-import"));
+
+    expect(await screen.findByTestId("import-error")).toHaveTextContent(
+      "该资产还没有本地历史数据",
+    );
+    expect(screen.getByTestId("go-sync-history")).toHaveAttribute(
+      "href",
+      `/assets/market/${encodeURIComponent(ASSET.asset_key)}`,
+    );
+    expect(routerPushMock).not.toHaveBeenCalled();
+  });
+
+  it("links to the existing instrument when the asset was already imported", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    importFromMarketAssetMock.mockRejectedValue(
+      new ApiError("instrument_already_exists", "exists", { instrument_id: "ins_dup" }),
+    );
+    renderPage();
+    await chooseCandidate();
+
+    fireEvent.change(screen.getByTestId("asset-class-select"), { target: { value: "equity" } });
+    fireEvent.change(screen.getByTestId("region-select"), { target: { value: "domestic" } });
+    fireEvent.click(screen.getByTestId("confirm-import"));
+
+    expect(await screen.findByTestId("import-error")).toHaveTextContent("已录入资产库");
+    expect(screen.getByRole("link", { name: "查看已录入的标的" })).toHaveAttribute(
+      "href",
+      "/assets/ins_dup",
+    );
+  });
+
+  it("preselects the asset when arriving with an asset_key query param", async () => {
+    searchParamsGetMock.mockImplementation((key: string) =>
+      key === "asset_key" ? ASSET.asset_key : null,
+    );
+    getMarketAssetDetailMock.mockResolvedValue({
+      asset: ASSET,
+      history: {},
+      points: [],
+      annual_returns: [],
     });
+    renderPage();
+
+    expect(await screen.findByTestId("confirm-import")).toBeInTheDocument();
+    expect(getMarketAssetDetailMock).toHaveBeenCalledWith(ASSET.asset_key);
+    expect(screen.getByText("沪深300ETF")).toBeInTheDocument();
+  });
+
+  it("returns to the search stage via 重新选择", async () => {
+    renderPage();
+    await chooseCandidate();
+
+    fireEvent.click(screen.getByRole("button", { name: "重新选择" }));
+    expect(screen.getByTestId("import-search-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("confirm-import")).not.toBeInTheDocument();
   });
 });

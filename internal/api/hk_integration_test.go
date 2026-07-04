@@ -19,46 +19,24 @@ import (
 
 func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {
 	t.Helper()
-	provider := mockHKProviderServer(t)
-	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client()
 }
 
-func importActiveHKInstrument(t *testing.T, client *http.Client, baseURL string) string {
+func importHKInstrument(t *testing.T, db *sql.DB, client *http.Client, baseURL string) string {
 	t.Helper()
-	id := resolveAndImportAsync(t, client, baseURL, "HK", "hk_stock", "00700")
-	waitForInstrumentActive(t, client, baseURL, id)
-	return id
+	seedMarketAssetWithHistory(t, db, hkStockAssetSeed())
+	inst := importMarketAsset(t, client, baseURL, "hk:hk_stock:00700")
+	return inst["id"].(string)
 }
 
-func TestHKInstrumentImportPreviewAndImportIntegration(t *testing.T) {
+func TestHKInstrumentImportIntegration(t *testing.T) {
 	srv, db, client := setupHKIntegration(t)
-	_ = db
 
-	payload, _ := json.Marshal(map[string]any{
-		"market": "HK", "instrument_type": "hk_stock", "code": "700",
-	})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/import/preview", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("preview status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	previewEnv := decodeEnvelope(t, readBody(t, resp))
-	preview := previewEnv["data"].(map[string]any)
-	resolve := preview["resolve"].(map[string]any)
-	resolved := resolve["resolved"].(map[string]any)
-	if preview["deprecated"] != true {
-		t.Fatal("expected deprecated preview")
-	}
-
-	instID := importActiveHKInstrument(t, client, srv.URL)
-	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + instID)
+	instID := importHKInstrument(t, db, client, srv.URL)
+	resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +47,8 @@ func TestHKInstrumentImportPreviewAndImportIntegration(t *testing.T) {
 	if inst["region"] != "foreign" {
 		t.Fatalf("imported region=%v want foreign", inst["region"])
 	}
-	if resolved["code"] != "00700" {
-		t.Fatalf("preview code=%v want 00700", resolved["code"])
+	if inst["code"] != "00700" {
+		t.Fatalf("imported code=%v want 00700", inst["code"])
 	}
 
 	var pointCount int
@@ -79,7 +57,7 @@ func TestHKInstrumentImportPreviewAndImportIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if pointCount == 0 {
-		t.Fatal("expected full history saved for HK import")
+		t.Fatal("expected full history projected for HK import")
 	}
 
 	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + instID + "/annual-returns")
@@ -95,7 +73,7 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 	srv, db, client := setupHKIntegration(t)
 	seedHKDCNYMarketData(t, db)
 
-	instID := importActiveHKInstrument(t, client, srv.URL)
+	instID := importHKInstrument(t, db, client, srv.URL)
 
 	plan := createPlanWithValuationDate(t, db, "2026-06-09")
 	version := setForeignEquityAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
@@ -114,10 +92,10 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 		t.Fatalf("holding snapshot status=%d body=%s", resp.StatusCode, readBody(t, resp))
 	}
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)

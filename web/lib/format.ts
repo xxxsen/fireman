@@ -168,7 +168,38 @@ export function formatDateFromMs(ts?: number | null): string {
   return d.toLocaleDateString("zh-CN");
 }
 
+/**
+ * Format a millisecond epoch timestamp as a localized date+time, for task and
+ * sync freshness displays. Returns "—" for empty/invalid values.
+ */
+export function formatDateTimeFromMs(ts?: number | null): string {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export { formatPercent };
+
+export function instrumentTypeLabel(t: string | undefined | null): string {
+  if (!t) return "—";
+  const map: Record<string, string> = {
+    cn_exchange_fund: "场内 ETF / LOF",
+    cn_exchange_stock: "A 股",
+    cn_mutual_fund: "公募基金",
+    hk_etf: "香港 ETF",
+    hk_stock: "港股",
+    us_etf: "美国 ETF",
+    us_stock: "美国股票",
+  };
+  return map[t] ?? t;
+}
 
 export function assetClassLabel(ac: string): string {
   const map: Record<string, string> = {

@@ -10,16 +10,16 @@ func TestDefaultParametersCurrentAge(t *testing.T) {
 	}
 }
 
-func TestCheckInstrumentImportAsyncFieldsAllowsAssetClass(t *testing.T) {
-	body := []byte(`{"ticket_id":"tkt_test","asset_class":"bond","region":"domestic"}`)
-	if err := CheckInstrumentImportAsyncFields(body); err != nil {
+func TestCheckInstrumentImportFieldsAllowsAssetClass(t *testing.T) {
+	body := []byte(`{"asset_key":"cn:cn_exchange_fund:sh:510300","asset_class":"bond","region":"domestic"}`)
+	if err := CheckInstrumentImportFields(body); err != nil {
 		t.Fatalf("expected asset_class and region allowed: %v", err)
 	}
 }
 
-func TestCheckInstrumentImportAsyncFieldsRejectsName(t *testing.T) {
-	body := []byte(`{"ticket_id":"tkt_test","asset_class":"bond","region":"foreign","name":"override"}`)
-	if err := CheckInstrumentImportAsyncFields(body); err == nil {
+func TestCheckInstrumentImportFieldsRejectsName(t *testing.T) {
+	body := []byte(`{"asset_key":"cn:cn_exchange_fund:sh:510300","asset_class":"bond","region":"foreign","name":"override"}`)
+	if err := CheckInstrumentImportFields(body); err == nil {
 		t.Fatal("expected name to be rejected")
 	}
 }

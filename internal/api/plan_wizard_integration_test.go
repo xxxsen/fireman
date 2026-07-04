@@ -59,18 +59,11 @@ func postWizard(t *testing.T, client *http.Client, baseURL string, body map[stri
 	return resp, readBody(t, resp)
 }
 
-func importInstrumentCode(t *testing.T, client *http.Client, baseURL, code string) string {
-	t.Helper()
-	id := resolveAndImportAsync(t, client, baseURL, "CN", "cn_exchange_fund", code)
-	waitForInstrumentActive(t, client, baseURL, id)
-	return id
-}
-
 func TestPlanWizardSuccessIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, client, srv.URL, "510500")
+	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
+	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
 	if _, err := db.ExecContext(context.Background(),
 		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
 		t.Fatal(err)
@@ -172,8 +165,8 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, client, srv.URL, "510500")
+	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
+	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
 	if _, err := db.ExecContext(context.Background(),
 		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
 		t.Fatal(err)
@@ -245,8 +238,8 @@ func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
 func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, client, srv.URL, "510500")
+	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
+	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
 	if _, err := db.ExecContext(context.Background(),
 		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
 		t.Fatal(err)
@@ -329,9 +322,9 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquityDomestic := importInstrumentCode(t, client, srv.URL, "510300")
-	instEquityForeign := importInstrumentCode(t, client, srv.URL, "510500")
-	instBond := importInstrumentCode(t, client, srv.URL, "159915")
+	instEquityDomestic := importInstrumentCode(t, db, client, srv.URL, "510300")
+	instEquityForeign := importInstrumentCode(t, db, client, srv.URL, "510500")
+	instBond := importInstrumentCode(t, db, client, srv.URL, "159915")
 	if _, err := db.ExecContext(context.Background(),
 		`UPDATE instruments SET region='foreign' WHERE id=?`, instEquityForeign); err != nil {
 		t.Fatal(err)
@@ -400,8 +393,8 @@ func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, client, srv.URL, "510500")
+	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
+	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
 	if _, err := db.ExecContext(context.Background(),
 		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
 		t.Fatal(err)
@@ -466,7 +459,7 @@ func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 
 func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
-	inst := importInstrumentCode(t, client, srv.URL, "510300")
+	inst := importInstrumentCode(t, db, client, srv.URL, "510300")
 
 	cases := []struct {
 		name string

@@ -15,8 +15,6 @@ mkdir -p "$PID_DIR"
 ROOT_HASH="$(printf '%s' "$ROOT" | cksum | awk '{print $1}')"
 PID_FILE="${FIREMAN_DEV_PID_FILE:-$PID_DIR/fireman-dev-$ROOT_HASH.pids}"
 
-export MARKET_PROVIDER_RESOLVE_DEADLINE="${MARKET_PROVIDER_RESOLVE_DEADLINE:-70}"
-
 pids=()
 
 proc_start_time() {
@@ -86,23 +84,22 @@ cleanup_previous
 : >"$PID_FILE"
 trap cleanup INT TERM EXIT
 
-echo "[fireman] starting market-provider on :18081"
+echo "[fireman] starting backend with config=$CONFIG_PATH"
+(
+  cd "$ROOT"
+  go run ./cmd/fireman run --config="$CONFIG_PATH"
+) &
+record_pid "$!" "backend"
+
+echo "[fireman] starting market-provider worker on :18081"
 (
   cd "$PROVIDER_DIR"
-  MARKET_PROVIDER_RESOLVE_TIMEOUT="${MARKET_PROVIDER_RESOLVE_TIMEOUT:-60}" \
+  FIREMAN_DB_PATH="${FIREMAN_DB_PATH:-$DEV_DATA_DIR/fireman.db}" \
+  FIREMAN_INTERNAL_API_URL="${FIREMAN_INTERNAL_API_URL:-http://127.0.0.1:8081}" \
   MARKET_PROVIDER_FETCH_TIMEOUT="${MARKET_PROVIDER_FETCH_TIMEOUT:-240}" \
   uv run uvicorn fireman_market_provider.app:app --host 0.0.0.0 --port 18081 --reload
 ) &
 record_pid "$!" "market-provider"
-
-echo "[fireman] starting backend with config=$CONFIG_PATH"
-(
-  cd "$ROOT"
-  MARKET_PROVIDER_RESOLVE_TIMEOUT="${MARKET_PROVIDER_RESOLVE_TIMEOUT:-90}" \
-  MARKET_PROVIDER_FETCH_TIMEOUT="${MARKET_PROVIDER_FETCH_TIMEOUT:-300}" \
-  go run ./cmd/fireman run --config="$CONFIG_PATH"
-) &
-record_pid "$!" "backend"
 
 echo "[fireman] starting web on :3000"
 ( cd "$WEB_DIR" && npm run dev ) &

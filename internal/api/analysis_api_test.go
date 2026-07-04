@@ -20,10 +20,10 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, nil,
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner,
 		services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -124,10 +124,10 @@ func TestAttachedAnalysisListByRunRejectsForeignRun(t *testing.T) {
 	planA := createTestPlan(t, db).ID
 	planB := seedSimulationReadyPlan(t, db)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, nil,
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner,
 		services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,7 +204,7 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 	runID := seedSimulationRun(t, db, planID)
-	services := buildServices(db, "")
+	services := buildServices(db)
 	ctx := context.Background()
 
 	jobsRepo := repository.NewJobRepo(db)
@@ -258,7 +258,7 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 	runID := seedSimulationRun(t, db, planID)
-	services := buildServices(db, "")
+	services := buildServices(db)
 	ctx := context.Background()
 
 	jobsRepo := repository.NewJobRepo(db)
@@ -306,7 +306,7 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 func TestStressTestRequiresSimulationRun(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
-	services := buildServices(db, "")
+	services := buildServices(db)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 

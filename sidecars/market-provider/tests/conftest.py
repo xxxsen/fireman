@@ -2,7 +2,18 @@
 
 import pytest
 
-from fireman_market_provider.timeout_util import UpstreamCall, dispatch_upstream_call
+from fireman_market_provider.timeout_util import (
+    UpstreamCall,
+    clear_test_dispatch,
+    dispatch_upstream_call,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_dispatch_overrides() -> None:
+    """Prevent register_test_dispatch overrides from leaking across tests."""
+    yield
+    clear_test_dispatch()
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +32,9 @@ def _inline_upstream_calls_for_mocked_tests(request: pytest.FixtureRequest, monk
         "fireman_market_provider.adapters.registry.call_with_timeout",
         "fireman_market_provider.adapters.names.call_with_timeout",
         "fireman_market_provider.adapters.cn_code.call_with_timeout",
-        "fireman_market_provider.adapters.resolve.call_with_timeout",
+        "fireman_market_provider.worker.executors.directory.call_with_timeout",
+        "fireman_market_provider.worker.executors.history.call_with_timeout",
+        "fireman_market_provider.worker.executors.fx.call_with_timeout",
     ]
     for target in targets:
         monkeypatch.setattr(target, _inline)

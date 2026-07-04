@@ -56,7 +56,7 @@ func TestListServesProjectionWithoutPerRowReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewInstrumentService(db, instRepo, repository.NewMarketDataRepo(db), nil, nil, nil, nil)
+	svc := NewInstrumentService(db, instRepo, repository.NewMarketDataRepo(db), nil, nil)
 	items, err := svc.List(ctx, "")
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestSearchServesProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewInstrumentService(db, instRepo, repository.NewMarketDataRepo(db), nil, nil, nil, nil)
+	svc := NewInstrumentService(db, instRepo, repository.NewMarketDataRepo(db), nil, nil)
 	view, err := svc.Search(ctx, repository.InstrumentSearchOptions{ExcludeSystem: true, Limit: 10})
 	if err != nil {
 		t.Fatal(err)

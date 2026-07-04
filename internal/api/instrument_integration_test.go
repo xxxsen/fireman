@@ -12,68 +12,37 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-func startInstrumentFetchWorker(t *testing.T, db *sql.DB, providerURL string) context.CancelFunc {
-	t.Helper()
-	fetchProvider := marketdata.NewProviderClient(providerURL).FetchClient()
-	fetchRunner := jobs.NewInstrumentFetchRunner(
-		db,
-		repository.NewJobRepo(db),
-		repository.NewInstrumentRepo(db),
-		repository.NewMarketDataRepo(db),
-		repository.NewAnnualReturnsRepo(db),
-		fetchProvider,
-	)
-	worker := jobs.NewWorker(
-		db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
-		jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db)),
-		nil, fetchRunner, jobs.NewEventHub(), nil, nil,
-	)
-	ctx, cancel := context.WithCancel(context.Background())
-	go worker.Start(ctx, 1)
-	t.Cleanup(cancel)
-	return cancel
-}
-
-func waitForInstrumentActive(t *testing.T, client *http.Client, baseURL, instrumentID string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(baseURL + "/api/v1/instruments/" + instrumentID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
-		if inst["status"] == "active" {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("instrument %s did not become active", instrumentID)
-}
-
 func setupInstrumentIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {
 	t.Helper()
-	provider := mockProviderServer(t)
-	t.Cleanup(provider.Close)
 	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
 	t.Cleanup(srv.Close)
 	return srv, db, srv.Client()
 }
 
-func importFixtureInstrument(t *testing.T, client *http.Client, baseURL string) string {
+// importFixtureInstrument seeds the 510300 market asset with fixture history
+// and imports it synchronously (td/078: import projects already-synced points,
+// no fetch job is involved).
+func importFixtureInstrument(t *testing.T, db *sql.DB, client *http.Client, baseURL string) string {
 	t.Helper()
-	id := resolveAndImportAsync(t, client, baseURL, "CN", "cn_exchange_fund", "510300")
-	waitForInstrumentActive(t, client, baseURL, id)
-	return id
+	return importInstrumentCode(t, db, client, baseURL, "510300")
+}
+
+func importInstrumentCode(t *testing.T, db *sql.DB, client *http.Client, baseURL, code string) string {
+	t.Helper()
+	seed := cnETFAssetSeed()
+	seed.AssetKey = "cn:cn_exchange_fund:sh:" + code
+	seed.Symbol = code
+	seed.Name = "测试ETF" + code
+	seedMarketAssetWithHistory(t, db, seed)
+	inst := importMarketAsset(t, client, baseURL, seed.AssetKey)
+	return inst["id"].(string)
 }
 
 func createPlanWithValuationDate(t *testing.T, db *sql.DB, valuationDate string) service.PlanDetail {
@@ -182,7 +151,7 @@ func addEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, pl
 func TestInstrumentDeleteIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/instruments/"+instID, nil)
 	resp, err := client.Do(req)
@@ -203,7 +172,7 @@ func TestInstrumentDeleteIntegration(t *testing.T) {
 	}
 	assertErrorCode(t, readBody(t, resp), "instrument_not_deletable")
 
-	instID = importFixtureInstrument(t, client, srv.URL)
+	instID = importFixtureInstrument(t, db, client, srv.URL)
 	plan := createPlanWithValuationDate(t, db, "2026-06-09")
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
 	_, _ = addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
@@ -219,43 +188,12 @@ func TestInstrumentDeleteIntegration(t *testing.T) {
 	assertErrorCode(t, readBody(t, resp), "instrument_in_use")
 }
 
-// TestInstrumentRefreshNotThrottledIntegration verifies that manual library
-// refresh is always immediate, so two consecutive refreshes both succeed and the
-// throttle error never surfaces.
-func TestInstrumentRefreshNotThrottledIntegration(t *testing.T) {
-	srv, db, client := setupInstrumentIntegration(t)
-
-	instID := importFixtureInstrument(t, client, srv.URL)
-	oldFetched := time.Now().Add(-25 * time.Hour).UnixMilli()
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE market_data_points SET fetched_at=? WHERE instrument_id=?`, oldFetched, instID); err != nil {
-		t.Fatal(err)
-	}
-
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("first refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-
-	resp, err = client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("second consecutive refresh should not be throttled, status=%d body=%s",
-			resp.StatusCode, readBody(t, resp))
-	}
-}
-
 // TestInstrumentClassificationFreezeIntegration verifies that editing the
 // library classification does not retro-actively change an existing plan's frozen
 // holding classification, even when that plan saves a structural holdings update.
 func TestInstrumentClassificationFreezeIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 
 	plan := createPlanWithValuationDate(t, db, "2026-06-09")
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
@@ -339,165 +277,6 @@ func saveEquityHoldingAmount(
 	_ = readBody(t, resp)
 }
 
-func TestInstrumentForceRefreshReplacesStaleHistoryIntegration(t *testing.T) {
-	fetchCount := 0
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/instruments/resolve":
-			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.ResolveData{
-					Ambiguous: false,
-					Resolved: &marketdata.ResolveCandidate{
-						Code: "sh510300", ProviderSymbol: "sh510300",
-						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
-					},
-				},
-			})
-			return
-		case "/v1/instruments/fetch":
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		fetchCount++
-		var req struct {
-			StartDate *string `json:"start_date"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		source := "ak.stock_zh_a_hist_tx"
-		points := []marketdata.HistoricalPoint{
-			{Date: "2023-12-29", Value: 1.0},
-			{Date: "2024-12-31", Value: 1.2},
-			{Date: "2025-12-31", Value: 1.5},
-		}
-		if fetchCount == 1 {
-			source = "test_fixture"
-			points = buildFixturePoints()
-		} else if req.StartDate == nil {
-			source = "full_refresh_source"
-		}
-		resp := marketdata.FetchResponse{
-			Code: 0, Message: "success",
-			Data: marketdata.FetchData{
-				Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
-				AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
-				ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
-				Points: points, SourceName: source, SourceQuality: "full",
-			},
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	t.Cleanup(provider.Close)
-
-	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
-	t.Cleanup(srv.Close)
-	client := srv.Client()
-
-	instID := importFixtureInstrument(t, client, srv.URL)
-	if _, err := db.ExecContext(context.Background(), `
-		UPDATE market_data_points SET source_name='ak.fund_etf_hist_sina', value=0.5
-		WHERE instrument_id=? AND trade_date='2017-12-31'`, instID); err != nil {
-		t.Fatal(err)
-	}
-
-	var oldValue float64
-	if err := db.QueryRowContext(context.Background(), `
-		SELECT value FROM market_data_points WHERE instrument_id=? AND trade_date='2017-12-31'`,
-		instID).Scan(&oldValue); err != nil {
-		t.Fatal(err)
-	}
-	if oldValue != 0.5 {
-		t.Fatalf("expected seeded sina value 0.5, got %v", oldValue)
-	}
-
-	oldFetched := time.Now().Add(-25 * time.Hour).UnixMilli()
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE market_data_points SET fetched_at=? WHERE instrument_id=?`, oldFetched, instID); err != nil {
-		t.Fatal(err)
-	}
-
-	body, _ := json.Marshal(map[string]any{"force": true})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("force refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-
-	var count int
-	if err := db.QueryRowContext(context.Background(), `
-		SELECT COUNT(*) FROM market_data_points WHERE instrument_id=?`, instID).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 3 {
-		t.Fatalf("expected 3 points after full replace, got %d", count)
-	}
-
-	var sourceName string
-	var legacyValue float64
-	err = db.QueryRowContext(context.Background(), `
-		SELECT source_name FROM market_data_points WHERE instrument_id=? LIMIT 1`, instID).Scan(&sourceName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sourceName != "full_refresh_source" {
-		t.Fatalf("expected full refresh source, got %q", sourceName)
-	}
-	err = db.QueryRowContext(context.Background(), `
-		SELECT value FROM market_data_points WHERE instrument_id=? AND trade_date='2017-12-31'`, instID).Scan(&legacyValue)
-	if err != sql.ErrNoRows {
-		t.Fatalf("expected legacy sina date removed, err=%v value=%v", err, legacyValue)
-	}
-}
-
-func emptyFullReplaceProvider(t *testing.T) *httptest.Server {
-	t.Helper()
-	fetchCount := 0
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/instruments/resolve":
-			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.ResolveData{
-					Ambiguous: false,
-					Resolved: &marketdata.ResolveCandidate{
-						Code: "sh510300", ProviderSymbol: "sh510300",
-						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
-					},
-				},
-			})
-			return
-		case "/v1/instruments/fetch":
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		fetchCount++
-		points := buildFixturePoints()
-		source := "test_fixture"
-		if fetchCount > 1 {
-			// Upstream succeeds but returns no observations on the forced refresh.
-			points = nil
-			source = "empty_source"
-		}
-		_ = json.NewEncoder(w).Encode(marketdata.FetchResponse{
-			Code: 0, Message: "success",
-			Data: marketdata.FetchData{
-				Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
-				AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
-				ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
-				Points: points, SourceName: source, SourceQuality: "full",
-			},
-		})
-	}))
-	t.Cleanup(provider.Close)
-	return provider
-}
-
 func countInstrumentRows(t *testing.T, db *sql.DB, table, instrumentID string) int {
 	t.Helper()
 	var n int
@@ -530,152 +309,12 @@ func getInstrumentFromList(t *testing.T, client *http.Client, baseURL, instrumen
 	return nil
 }
 
-// TestInstrumentForceRefreshEmptyClearsProjectionIntegration verifies that a
-// full replace whose upstream returns empty points clears market data, annual
-// returns AND the list projection in the same transaction, so the library can
-// never show a stale data_as_of / trailing return / eligibility for an asset
-// whose history was just wiped.
-func TestInstrumentForceRefreshEmptyClearsProjectionIntegration(t *testing.T) {
-	provider := emptyFullReplaceProvider(t)
-
-	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
-	t.Cleanup(srv.Close)
-	client := srv.Client()
-
-	instID := importFixtureInstrument(t, client, srv.URL)
-
-	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 1 {
-		t.Fatalf("expected projection row after import, got %d", got)
-	}
-
-	body, _ := json.Marshal(map[string]any{"force": true})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("force refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-
-	for _, table := range []string{"market_data_points", "instrument_annual_returns", "instrument_library_metrics"} {
-		if got := countInstrumentRows(t, db, table, instID); got != 0 {
-			t.Fatalf("%s still has %d rows after empty full replace", table, got)
-		}
-	}
-
-	inst := getInstrumentFromList(t, client, srv.URL, instID)
-	if v, ok := inst["data_as_of"]; ok && v != nil && v != "" {
-		t.Fatalf("data_as_of should be cleared, got %v", v)
-	}
-	if inst["trailing_returns"] != nil {
-		t.Fatalf("trailing_returns should be nil after wipe, got %v", inst["trailing_returns"])
-	}
-	if elig, _ := inst["simulation_eligible"].(bool); elig {
-		t.Fatalf("simulation_eligible should be false after wipe")
-	}
-}
-
-// TestInstrumentRefreshProjectionFailureRollsBackIntegration covers
-// transaction atomicity: if the projection sync SQL fails, the whole refresh
-// rolls back, leaving the previous market data, annual returns and projection
-// untouched.
-func TestInstrumentRefreshProjectionFailureRollsBackIntegration(t *testing.T) {
-	provider := emptyFullReplaceProvider(t)
-
-	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
-	t.Cleanup(srv.Close)
-	client := srv.Client()
-
-	instID := importFixtureInstrument(t, client, srv.URL)
-	beforePoints := countInstrumentRows(t, db, "market_data_points", instID)
-	beforeAnnual := countInstrumentRows(t, db, "instrument_annual_returns", instID)
-	if beforePoints == 0 || countInstrumentRows(t, db, "instrument_library_metrics", instID) != 1 {
-		t.Fatalf("fixture must seed market data and a projection")
-	}
-
-	// Force the projection delete (empty full replace path) to abort.
-	if _, err := db.ExecContext(context.Background(), `
-		CREATE TRIGGER test_fail_library_metrics_delete
-		BEFORE DELETE ON instrument_library_metrics
-		BEGIN
-			SELECT RAISE(ABORT, 'injected library metrics failure');
-		END`); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS test_fail_library_metrics_delete`)
-	})
-
-	body, _ := json.Marshal(map[string]any{"force": true})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("expected refresh to fail when projection sync aborts, got 200 body=%s", readBody(t, resp))
-	}
-
-	if got := countInstrumentRows(t, db, "market_data_points", instID); got != beforePoints {
-		t.Fatalf("market_data_points changed despite rollback: before=%d after=%d", beforePoints, got)
-	}
-	if got := countInstrumentRows(t, db, "instrument_annual_returns", instID); got != beforeAnnual {
-		t.Fatalf("instrument_annual_returns changed despite rollback: before=%d after=%d", beforeAnnual, got)
-	}
-	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 1 {
-		t.Fatalf("projection changed despite rollback, rows=%d", got)
-	}
-}
-
-// TestInstrumentSourceChangeEmptyClearsProjectionIntegration covers the
-// acceptance variant where fullReplace is triggered by a source switch (not
-// force): an empty upstream payload still clears history, annual returns and the
-// projection together.
-func TestInstrumentSourceChangeEmptyClearsProjectionIntegration(t *testing.T) {
-	provider := emptyFullReplaceProvider(t)
-
-	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
-	t.Cleanup(srv.Close)
-	client := srv.Client()
-
-	instID := importFixtureInstrument(t, client, srv.URL)
-	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 1 {
-		t.Fatalf("expected projection row after import, got %d", got)
-	}
-
-	// Non-force refresh: the second fetch returns empty points under a different
-	// source ("empty_source" != "test_fixture"), so ShouldFullReplaceOnRefresh
-	// triggers a full replace that ends with empty history.
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-
-	for _, table := range []string{"market_data_points", "instrument_annual_returns", "instrument_library_metrics"} {
-		if got := countInstrumentRows(t, db, table, instID); got != 0 {
-			t.Fatalf("%s still has %d rows after source-change empty replace", table, got)
-		}
-	}
-	inst := getInstrumentFromList(t, client, srv.URL, instID)
-	if inst["trailing_returns"] != nil {
-		t.Fatalf("trailing_returns should be nil after wipe, got %v", inst["trailing_returns"])
-	}
-}
-
-// TestInstrumentImportProjectionFailureRollsBackIntegration covers
-// transaction atomicity on the import/fetch (job) path: if the projection
-// upsert SQL fails, the whole fetch transaction rolls back (no market data) and
-// the instrument is marked fetch_failed.
+// TestInstrumentImportProjectionFailureRollsBackIntegration covers transaction
+// atomicity of the synchronous market-asset import: if the projection upsert
+// SQL fails, the whole import rolls back and no instrument row survives.
 func TestInstrumentImportProjectionFailureRollsBackIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
+	seedMarketAssetWithHistory(t, db, cnETFAssetSeed())
 
 	if _, err := db.ExecContext(context.Background(), `
 		CREATE TRIGGER test_fail_library_metrics_insert
@@ -689,30 +328,31 @@ func TestInstrumentImportProjectionFailureRollsBackIntegration(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS test_fail_library_metrics_insert`)
 	})
 
-	instID := resolveAndImportAsync(t, client, srv.URL, "CN", "cn_exchange_fund", "510300")
+	body, _ := json.Marshal(map[string]any{"asset_key": "cn:cn_exchange_fund:sh:510300"})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("expected import to fail when projection insert aborts, got 200 body=%s", readBody(t, resp))
+	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	var status string
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
-		status, _ = inst["status"].(string)
-		if status == "fetch_failed" {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	var instCount int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM instruments WHERE code='510300'`).Scan(&instCount); err != nil {
+		t.Fatal(err)
 	}
-	if status != "fetch_failed" {
-		t.Fatalf("expected fetch_failed after projection insert abort, got %q", status)
+	if instCount != 0 {
+		t.Fatalf("instrument row must roll back on projection failure, got %d", instCount)
 	}
-	if got := countInstrumentRows(t, db, "market_data_points", instID); got != 0 {
-		t.Fatalf("market_data_points must roll back on projection failure, got %d", got)
+	var pointCount int
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM market_data_points
+		WHERE instrument_id NOT LIKE 'system_%'`).Scan(&pointCount); err != nil {
+		t.Fatal(err)
 	}
-	if got := countInstrumentRows(t, db, "instrument_library_metrics", instID); got != 0 {
-		t.Fatalf("no projection should exist after rollback, got %d", got)
+	if pointCount != 0 {
+		t.Fatalf("market_data_points must roll back on projection failure, got %d", pointCount)
 	}
 }
 
@@ -720,7 +360,7 @@ func TestHoldingSnapshotOnCreateIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
 	valuationDate := "2025-06-01"
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 	plan := createPlanWithValuationDate(t, db, valuationDate)
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
 	holdingID, _ := addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
@@ -744,7 +384,7 @@ func TestSyncHoldingSnapshotUsesSyncDateIntegration(t *testing.T) {
 
 	valuationDate := "2025-06-01"
 	syncDate := time.Now().Format("2006-01-02")
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 	plan := createPlanWithValuationDate(t, db, valuationDate)
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
 	holdingID, version := addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
@@ -774,7 +414,7 @@ func TestSyncHoldingSnapshotRollbackOnHoldingUpdateFailureIntegration(t *testing
 	srv, db, client := setupInstrumentIntegration(t)
 
 	valuationDate := "2025-06-01"
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 	plan := createPlanWithValuationDate(t, db, valuationDate)
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
 	holdingID, version := addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
@@ -825,8 +465,8 @@ func TestSyncHoldingSnapshotRollbackOnHoldingUpdateFailureIntegration(t *testing
 }
 
 func TestInstrumentDetailReturnsEmptyArraysIntegration(t *testing.T) {
-	srv, _, client := setupInstrumentIntegration(t)
-	instID := importFixtureInstrument(t, client, srv.URL)
+	srv, db, client := setupInstrumentIntegration(t)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 
 	resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID + "/detail")
 	if err != nil {
@@ -852,8 +492,8 @@ func TestInstrumentDetailReturnsEmptyArraysIntegration(t *testing.T) {
 }
 
 func TestInstrumentDataSourceNameIntegration(t *testing.T) {
-	srv, _, client := setupInstrumentIntegration(t)
-	instID := importFixtureInstrument(t, client, srv.URL)
+	srv, db, client := setupInstrumentIntegration(t)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 
 	resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID)
 	if err != nil {
@@ -872,7 +512,7 @@ func TestInstrumentDataSourceNameIntegration(t *testing.T) {
 func TestInstrumentDataStaleWarningIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 	staleDate := time.Now().AddDate(0, 0, -10).Format("2006-01-02")
 	now := time.Now().UnixMilli()
 	if _, err := db.ExecContext(context.Background(), `DELETE FROM market_data_points WHERE instrument_id=?`,
@@ -900,77 +540,6 @@ func TestInstrumentDataStaleWarningIntegration(t *testing.T) {
 	}
 	if inst["stale_warning"] != "数据可能过期" {
 		t.Fatalf("expected stale_warning, got %+v", inst["stale_warning"])
-	}
-}
-
-func TestInstrumentRefreshSourceConflictKeepsExistingData(t *testing.T) {
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/instruments/fetch":
-			_ = json.NewEncoder(w).Encode(marketdata.FetchResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.FetchData{
-					Provider: "akshare", ProviderSymbol: "000001", Name: "华夏成长混合",
-					AssetClass: "cash", Currency: "CNY", PointType: "nav",
-					ExpenseRatioStatus:     "unavailable",
-					ExpenseRatioComponents: map[string]any{"region": "domestic"},
-					Points:                 []marketdata.HistoricalPoint{{Date: "2024-12-31", Value: 1.0}},
-					SourceName:             "ak.fund_money_fund_info_em", SourceQuality: "full", SourceKind: "money_fund",
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(provider.Close)
-
-	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
-	t.Cleanup(srv.Close)
-	client := srv.Client()
-
-	instID := "ins_source_conflict_test"
-	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO instruments (
-			id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system, expense_ratio, expense_ratio_status,
-			fee_treatment, status, created_at, updated_at
-		) VALUES (?, '000001', '华夏成长混合', 'CN', 'cn_mutual_fund', 'equity', 'domestic', 'CNY',
-			'akshare', '000001', 'none', 0, NULL, 'unavailable', 'embedded', 'active', ?, ?)`,
-		instID, now, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO market_data_points (instrument_id, trade_date, value, point_type, source_name, fetched_at)
-		VALUES (?, '2024-12-31', 2.5, 'nav', 'ak.fund_open_fund_info_em:单位净值走势', ?)`,
-		instID, now); err != nil {
-		t.Fatal(err)
-	}
-
-	body, _ := json.Marshal(map[string]any{"force": true})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/"+instID+"/refresh", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	respBody := readBody(t, resp)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("refresh status=%d body=%s", resp.StatusCode, respBody)
-	}
-	assertErrorCode(t, respBody, "market_data_source_type_conflict")
-
-	var value float64
-	var sourceName string
-	if err := db.QueryRowContext(context.Background(), `
-		SELECT value, source_name FROM market_data_points WHERE instrument_id=? AND trade_date='2024-12-31'`,
-		instID).Scan(&value, &sourceName); err != nil {
-		t.Fatal(err)
-	}
-	if value != 2.5 {
-		t.Fatalf("expected old value preserved, got %v", value)
-	}
-	if sourceName != "ak.fund_open_fund_info_em:单位净值走势" {
-		t.Fatalf("expected old source preserved, got %q", sourceName)
 	}
 }
 
@@ -1014,7 +583,7 @@ func TestHistoricalSnapshotDTOContractIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
 	valuationDate := "2025-06-01"
-	instID := importFixtureInstrument(t, client, srv.URL)
+	instID := importFixtureInstrument(t, db, client, srv.URL)
 	plan := createPlanWithValuationDate(t, db, valuationDate)
 	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
 	holdingID, version := addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
@@ -1087,124 +656,5 @@ func TestHistoricalSnapshotDTOContractIntegration(t *testing.T) {
 	}
 	if !foundWarnings {
 		t.Fatal("expected at least one snapshot with non-empty warnings array")
-	}
-}
-
-func TestHoldingSnapshotFrozenAfterInstrumentRefreshIntegration(t *testing.T) {
-	fetchCount := 0
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/instruments/resolve":
-			_ = json.NewEncoder(w).Encode(marketdata.ResolveResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.ResolveData{
-					Ambiguous: false,
-					Resolved: &marketdata.ResolveCandidate{
-						Code: "sh510300", ProviderSymbol: "sh510300",
-						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
-					},
-				},
-			})
-			return
-		case "/v1/instruments/fetch":
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		fetchCount++
-		var req struct {
-			StartDate *string `json:"start_date"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		source := "ak.stock_zh_a_hist_tx"
-		points := []marketdata.HistoricalPoint{
-			{Date: "2023-12-29", Value: 1.0},
-			{Date: "2024-12-31", Value: 1.2},
-			{Date: "2025-12-31", Value: 1.5},
-		}
-		if fetchCount == 1 {
-			source = "test_fixture"
-			points = buildFixturePoints()
-		} else if req.StartDate == nil {
-			source = "short_refresh_source"
-		}
-		resp := marketdata.FetchResponse{
-			Code: 0, Message: "success",
-			Data: marketdata.FetchData{
-				Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
-				AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
-				ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
-				Points: points, SourceName: source, SourceQuality: "full",
-			},
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	t.Cleanup(provider.Close)
-
-	db := testutil.OpenTestDB(t)
-	startInstrumentFetchWorker(t, db, provider.URL)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, provider.URL)}))
-	t.Cleanup(srv.Close)
-	client := srv.Client()
-
-	valuationDate := "2025-06-01"
-	instID := importFixtureInstrument(t, client, srv.URL)
-	plan := createPlanWithValuationDate(t, db, valuationDate)
-	version := setEquityOnlyAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
-	_, _ = addEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
-
-	frozen := getPlanHoldingsSnapshotFields(t, client, srv.URL, plan.ID)
-	if frozen.CompleteYearCount < 2 {
-		t.Fatalf("expected multi-year frozen snapshot from fixture, got %+v", frozen)
-	}
-
-	oldFetched := time.Now().Add(-25 * time.Hour).UnixMilli()
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE market_data_points SET fetched_at=? WHERE instrument_id=?`, oldFetched, instID); err != nil {
-		t.Fatal(err)
-	}
-
-	body, _ := json.Marshal(map[string]any{"force": true})
-	resp, err := client.Post(
-		srv.URL+"/api/v1/instruments/"+instID+"/refresh",
-		"application/json", bytes.NewReader(body),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("force refresh status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-
-	detailResp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID + "/detail")
-	if err != nil {
-		t.Fatal(err)
-	}
-	detailEnv := decodeEnvelope(t, readBody(t, detailResp))
-	detail := detailEnv["data"].(map[string]any)
-	window := detail["simulation_window"].(map[string]any)
-	if got := int(window["complete_year_count"].(float64)); got >= frozen.CompleteYearCount {
-		t.Fatalf("expected library metrics to shrink after refresh, library=%d frozen=%d",
-			got, frozen.CompleteYearCount)
-	}
-
-	afterRefresh := getPlanHoldingsSnapshotFields(t, client, srv.URL, plan.ID)
-	if afterRefresh.CompleteYearCount != frozen.CompleteYearCount {
-		t.Fatalf("complete_year_count changed: before=%d after=%d",
-			frozen.CompleteYearCount, afterRefresh.CompleteYearCount)
-	}
-	if afterRefresh.HistoryDepth != frozen.HistoryDepth {
-		t.Fatalf("history_depth changed: before=%q after=%q", frozen.HistoryDepth, afterRefresh.HistoryDepth)
-	}
-	if afterRefresh.MetricsVersion != frozen.MetricsVersion {
-		t.Fatalf("metrics_version changed: before=%q after=%q", frozen.MetricsVersion, afterRefresh.MetricsVersion)
-	}
-	if len(afterRefresh.Warnings) != len(frozen.Warnings) {
-		t.Fatalf("warnings length changed: before=%v after=%v", frozen.Warnings, afterRefresh.Warnings)
-	}
-	for i := range frozen.Warnings {
-		if afterRefresh.Warnings[i] != frozen.Warnings[i] {
-			t.Fatalf("warnings[%d] changed: before=%q after=%q", i, frozen.Warnings[i], afterRefresh.Warnings[i])
-		}
 	}
 }

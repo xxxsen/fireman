@@ -24,12 +24,12 @@ import (
 func setupFullStackIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client, string) {
 	t.Helper()
 	db, dbPath := testutil.OpenTestDBPath(t)
-	services := NewServices(db, dbPath, "", nil)
+	services := NewServices(db, dbPath, nil)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
 	worker := jobs.NewWorker(
 		db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
-		runner, analysisRunner, nil, services.EventHub, nil, nil,
+		runner, analysisRunner, services.EventHub, nil, nil,
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

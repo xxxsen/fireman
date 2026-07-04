@@ -76,7 +76,7 @@ func TestPlanParametersAssumptionRoundTrip(t *testing.T) {
 	// PUT does not trip the unallocated-gap guard.
 	planID := seedSimulationReadyPlan(t, db)
 
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
 	defer srv.Close()
 
 	got := getPlanParams(t, srv.URL, planID)
@@ -119,7 +119,7 @@ func TestStudentTDfReadOnlyOnForwardPlan(t *testing.T) {
 	}
 	planID := seedSimulationReadyPlan(t, db)
 
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
 	defer srv.Close()
 
 	hashBefore := getPlanConfigHash(t, srv.URL, planID)
@@ -162,7 +162,7 @@ func TestPlanParametersAssumptionRejections(t *testing.T) {
 
 	plan := createTestPlan(t, db)
 	planID := plan.ID
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
 	defer srv.Close()
 
 	cases := []struct {

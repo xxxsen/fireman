@@ -1,28 +1,16 @@
-"""Contract tests for the unified structured error envelope."""
+"""Contract tests for the provider error taxonomy used by the worker."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
-import pandas as pd
-import pytest
-from fastapi.testclient import TestClient
-
-from fireman_market_provider import create_app
-from fireman_market_provider.adapters.names import reset_name_caches
 from fireman_market_provider.provider_errors import (
     ERROR_HTTP_STATUS,
     ProviderError,
     provider_error_from_exception,
 )
 
-
-def _client() -> TestClient:
-    return TestClient(create_app())
-
-
-def _empty_spot() -> pd.DataFrame:
-    return pd.DataFrame({"代码": [], "名称": []})
+from .fetch_compat import fetch
 
 
 def test_error_http_status_map_is_closed_enum() -> None:
@@ -55,97 +43,51 @@ def _assert_error_envelope(body: dict, error_code: str) -> None:
     assert body["data"] is None
 
 
-def test_resolve_not_found_returns_structured_envelope() -> None:
-    reset_name_caches()
-    with patch("akshare.fund_etf_spot_em", return_value=_empty_spot()), patch(
-        "akshare.fund_lof_spot_em", return_value=_empty_spot()
-    ), patch("akshare.stock_zh_a_spot_em", return_value=_empty_spot()), patch(
-        "fireman_market_provider.adapters.resolve.lookup_cn_mutual_fund_name_readonly", return_value=None
-    ), patch(
-        "fireman_market_provider.adapters.resolve.resolve_cn_mutual_fund_name", return_value=None
-    ):
-        response = _client().post(
-            "/v1/instruments/resolve",
-            json={"market": "CN", "instrument_type": "cn_exchange_fund", "code": "999999"},
-        )
-    assert response.status_code == 404
-    _assert_error_envelope(response.json(), "instrument_not_found")
-
-
-def test_resolve_timeout_returns_structured_envelope() -> None:
-    reset_name_caches()
-    with patch("akshare.fund_etf_spot_em", side_effect=TimeoutError("slow")), patch(
-        "akshare.fund_lof_spot_em", side_effect=TimeoutError("slow")
-    ), patch("akshare.stock_zh_a_spot_em", side_effect=TimeoutError("slow")):
-        response = _client().post(
-            "/v1/instruments/resolve",
-            json={"market": "CN", "instrument_type": "cn_exchange_fund", "code": "510300"},
-        )
-    assert response.status_code == 504
-    _assert_error_envelope(response.json(), "market_provider_timeout")
-
-
-def test_fetch_all_sources_fail_returns_structured_envelope() -> None:
-    """fetch failures must use the HTTP error channel, never 200+code=1+empty data."""
+def test_fetch_all_sources_fail_classified_unavailable() -> None:
     with patch(
         "fireman_market_provider.adapters.registry.try_sources",
         side_effect=RuntimeError("all sources down"),
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch(
+            {
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
-            },
+            }
         )
     assert response.status_code == 503
-    body = response.json()
-    _assert_error_envelope(body, "market_provider_unavailable")
-    # Must not carry misleading default data (no empty equity/CNY payload).
-    assert body["data"] is None
+    _assert_error_envelope(response.json(), "market_provider_unavailable")
 
 
-def test_fetch_timeout_returns_structured_envelope() -> None:
+def test_fetch_timeout_classified_timeout() -> None:
     with patch(
         "fireman_market_provider.adapters.registry.try_sources",
         side_effect=TimeoutError("upstream slow"),
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch(
+            {
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
-            },
+            }
         )
     assert response.status_code == 504
     _assert_error_envelope(response.json(), "market_provider_timeout")
 
 
-@pytest.mark.parametrize("target", ["bogus_target"])
-def test_metadata_refresh_unsupported_target(target: str) -> None:
-    response = _client().post("/v1/metadata/refresh", json={"target": target})
-    # Body-validation failures join the unified structured error contract.
+def test_fetch_rejects_unknown_fields() -> None:
+    response = fetch(
+        {
+            "market": "CN",
+            "instrument_type": "cn_exchange_fund",
+            "source_code": "510300",
+            "end_date": "2026-06-09",
+            "expense_ratio": 0.5,
+        }
+    )
     assert response.status_code == 422
     _assert_error_envelope(response.json(), "invalid_request")
-
-
-def test_request_validation_errors_share_one_envelope() -> None:
-    """resolve/fetch/metadata body-validation failures all yield the same envelope."""
-    client = _client()
-    requests = [
-        ("/v1/instruments/resolve", {"market": "CN"}),  # missing code/instrument_type
-        ("/v1/instruments/fetch", {"market": "CN", "bogus": 1}),  # unknown + missing fields
-        ("/v1/metadata/refresh", {"target": "nope"}),  # value outside Literal enum
-    ]
-    for path, body in requests:
-        response = client.post(path, json=body)
-        assert response.status_code == 422, path
-        envelope = response.json()
-        _assert_error_envelope(envelope, "invalid_request")
-        assert set(envelope.keys()) == {"code", "error_code", "message", "data"}, path

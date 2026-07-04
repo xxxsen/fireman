@@ -14,7 +14,6 @@ import (
 var (
 	errRegionTargetMissingClass     = errors.New("region_targets missing asset_class")
 	errRegionTargetsSum             = errors.New("region targets must sum to 100%")
-	errResolutionTicketRepo         = errors.New("resolution ticket repo not configured")
 	errAgesMustBePositive           = errors.New("ages must be positive")
 	errAgeOrderingInvalid           = errors.New("must satisfy 0 < current_age <= retirement_age < end_age <= 120")
 	errAssetsSpendingPositive       = errors.New("total_assets and annual_spending must be > 0")

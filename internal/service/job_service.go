@@ -3,11 +3,9 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"time"
 
-	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 )
@@ -58,11 +56,7 @@ func (s *JobService) Cancel(ctx context.Context, jobID string) (repository.Job, 
 			map[string]any{"status": job.Status},
 		)
 	case repository.JobStatusQueued:
-		if job.Type == repository.JobTypeInstrumentFetch {
-			if err := s.cancelQueuedInstrumentFetch(ctx, job); err != nil {
-				return repository.Job{}, wrapRepo("cancel queued instrument fetch", err)
-			}
-		} else if err := s.jobs.CancelQueued(ctx, jobID); err != nil {
+		if err := s.jobs.CancelQueued(ctx, jobID); err != nil {
 			if errors.Is(err, repository.ErrJobNotFound) {
 				return repository.Job{}, newErr("job_not_found", "job not found", nil)
 			}
@@ -87,24 +81,6 @@ func (s *JobService) Cancel(ctx context.Context, jobID string) (repository.Job, 
 		ProgressCurrent: job.ProgressCurrent, ProgressTotal: job.ProgressTotal,
 	})
 	return job, nil
-}
-
-func (s *JobService) cancelQueuedInstrumentFetch(ctx context.Context, job repository.Job) error {
-	var payload repository.InstrumentFetchPayload
-	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
-		return err
-	}
-	return wrapRepo("cancel queued instrument fetch tx", fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.jobs.CancelQueuedWithError(ctx, tx, job.ID, "fetch_canceled",
-			"instrument fetch canceled by user"); err != nil {
-			return wrapRepo("cancel queued fetch job", err)
-		}
-		if payload.InstrumentID == "" {
-			return nil
-		}
-		return wrapRepo("mark instrument fetch failed", s.instRepo.UpdateStatusTx(ctx, tx, payload.InstrumentID,
-			"fetch_failed"))
-	}))
 }
 
 func (s *JobService) EventsHub() *jobs.EventHub {

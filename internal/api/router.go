@@ -18,12 +18,11 @@ import (
 
 // Deps groups the dependencies the HTTP layer needs.
 type Deps struct {
-	DB                *sql.DB
-	DBPath            string
-	Logger            *slog.Logger
-	MarketProviderURL string
-	Services          Services
-	Worker            *jobs.Worker
+	DB       *sql.DB
+	DBPath   string
+	Logger   *slog.Logger
+	Services Services
+	Worker   *jobs.Worker
 }
 
 // NewRouter builds the Gin engine and registers routes.
@@ -33,7 +32,7 @@ func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
 		deps.Logger = slog.Default()
 	}
 	if deps.Services.Plans == nil {
-		deps.Services = NewServices(deps.DB, deps.DBPath, deps.MarketProviderURL, nil)
+		deps.Services = NewServices(deps.DB, deps.DBPath, nil)
 	}
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -48,6 +47,7 @@ func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
 	deps.Services.registerPlanRoutes(v1)
 	deps.Services.registerScenarioRoutes(v1)
 	deps.Services.registerInstrumentRoutes(v1)
+	deps.Services.registerMarketAssetRoutes(v1)
 	deps.Services.registerSimulationRoutes(v1)
 	deps.Services.registerAssumptionRoutes(v1)
 	deps.Services.registerAnalysisRoutes(v1)

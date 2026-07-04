@@ -11,8 +11,9 @@ import (
 var (
 	errConfigPathRequired  = errors.New("config path is required")
 	errAddrEmpty           = errors.New("addr must not be empty")
+	errInternalAddrEmpty   = errors.New("internal_addr must not be empty")
 	errDBPathEmpty         = errors.New("db_path must not be empty")
-	errMarketProviderEmpty = errors.New("market_provider_url must not be empty")
+	errResourceDBPathEmpty = errors.New("resource_db_path must not be empty")
 	errTimezoneEmpty       = errors.New("timezone must not be empty")
 	errLogLevelEmpty       = errors.New("log_level must not be empty")
 	errWorkerConcurrency   = errors.New("worker_concurrency must be >= 1")
@@ -20,9 +21,13 @@ var (
 
 // Config holds runtime settings loaded from a JSON config file.
 type Config struct {
-	Addr              string `json:"addr"`
+	Addr string `json:"addr"`
+	// InternalAddr serves the sidecar-facing internal API (resource upload,
+	// task post-process). It must never be published outside the docker
+	// network.
+	InternalAddr      string `json:"internal_addr"`
 	DBPath            string `json:"db_path"`
-	MarketProviderURL string `json:"market_provider_url"`
+	ResourceDBPath    string `json:"resource_db_path"`
 	Timezone          string `json:"timezone"`
 	LogLevel          string `json:"log_level"`
 	WorkerConcurrency int    `json:"worker_concurrency"`
@@ -30,8 +35,9 @@ type Config struct {
 
 const (
 	defaultAddr              = ":8080"
+	defaultInternalAddr      = ":8081"
 	defaultDBPath            = "/data/fireman.db"
-	defaultMarketProviderURL = "http://market-provider:18081"
+	defaultResourceDBPath    = "/data/fireman_resource.db"
 	defaultTimezone          = "Asia/Shanghai"
 	defaultLogLevel          = "info"
 	defaultWorkerConcurrency = 1
@@ -41,8 +47,9 @@ const (
 func Default() Config {
 	return Config{
 		Addr:              defaultAddr,
+		InternalAddr:      defaultInternalAddr,
 		DBPath:            defaultDBPath,
-		MarketProviderURL: defaultMarketProviderURL,
+		ResourceDBPath:    defaultResourceDBPath,
 		Timezone:          defaultTimezone,
 		LogLevel:          defaultLogLevel,
 		WorkerConcurrency: defaultWorkerConcurrency,
@@ -71,11 +78,14 @@ func validate(cfg Config) (Config, error) {
 	if strings.TrimSpace(cfg.Addr) == "" {
 		return Config{}, errAddrEmpty
 	}
+	if strings.TrimSpace(cfg.InternalAddr) == "" {
+		return Config{}, errInternalAddrEmpty
+	}
 	if strings.TrimSpace(cfg.DBPath) == "" {
 		return Config{}, errDBPathEmpty
 	}
-	if strings.TrimSpace(cfg.MarketProviderURL) == "" {
-		return Config{}, errMarketProviderEmpty
+	if strings.TrimSpace(cfg.ResourceDBPath) == "" {
+		return Config{}, errResourceDBPathEmpty
 	}
 	if strings.TrimSpace(cfg.Timezone) == "" {
 		return Config{}, errTimezoneEmpty

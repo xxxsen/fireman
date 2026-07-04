@@ -3,14 +3,10 @@
 from unittest.mock import patch
 
 import pandas as pd
-from fastapi.testclient import TestClient
 
-from fireman_market_provider import create_app
 from fireman_market_provider.adapters.names import reset_name_caches
 
-
-def _client() -> TestClient:
-    return TestClient(create_app())
+from .fetch_compat import fetch
 
 
 def test_fetch_hk_stock_mocked() -> None:
@@ -18,9 +14,7 @@ def test_fetch_hk_stock_mocked() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [300.0, 305.0]})
     spot = pd.DataFrame({"代码": ["00700"], "名称": ["腾讯控股"]})
     with patch("akshare.stock_hk_hist", return_value=df), patch("akshare.stock_hk_spot_em", return_value=spot):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "HK",
                 "instrument_type": "hk_stock",
                 "source_code": "00700",
@@ -43,9 +37,7 @@ def test_fetch_hk_stock_normalizes_code_and_name() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [300.0]})
     spot = pd.DataFrame({"代码": ["00700"], "名称": ["腾讯控股"]})
     with patch("akshare.stock_hk_hist", return_value=df), patch("akshare.stock_hk_spot_em", return_value=spot):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "HK",
                 "instrument_type": "hk_stock",
                 "source_code": "700",
@@ -71,9 +63,7 @@ def test_fetch_hk_stock_none_adjust_maps_to_empty_string() -> None:
         return df
 
     with patch("akshare.stock_hk_hist", side_effect=_hist), patch("akshare.stock_hk_spot_em", return_value=spot):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "HK",
                 "instrument_type": "hk_stock",
                 "source_code": "700",
@@ -91,9 +81,7 @@ def test_fetch_hk_etf_mocked() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [20.0]})
     spot = pd.DataFrame({"代码": ["02800"], "名称": ["盈富基金"]})
     with patch("akshare.stock_hk_hist", return_value=df), patch("akshare.stock_hk_spot_em", return_value=spot):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "HK",
                 "instrument_type": "hk_etf",
                 "source_code": "02800",
@@ -119,7 +107,6 @@ def test_fetch_cn_exchange_fund_mocked() -> None:
         return df
 
     with patch("akshare.fund_etf_hist_em", side_effect=_etf_hist):
-        client = _client()
         payload = {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
@@ -128,7 +115,7 @@ def test_fetch_cn_exchange_fund_mocked() -> None:
             "end_date": "2026-06-09",
             "adjust_policy": "qfq",
         }
-        response = client.post("/v1/instruments/fetch", json=payload)
+        response = fetch(payload)
         assert response.status_code == 200
         body = response.json()
         assert body["code"] == 0
@@ -141,7 +128,6 @@ def test_fetch_cn_exchange_fund_mocked() -> None:
 def test_fetch_cn_exchange_fund_resolves_display_name() -> None:
     df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [1.0, 1.1]})
     with patch("akshare.fund_etf_hist_em", return_value=df):
-        client = _client()
         payload = {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
@@ -151,7 +137,7 @@ def test_fetch_cn_exchange_fund_resolves_display_name() -> None:
             "end_date": "2026-06-09",
             "adjust_policy": "qfq",
         }
-        response = client.post("/v1/instruments/fetch", json=payload)
+        response = fetch(payload)
         assert response.status_code == 200
         body = response.json()
         assert body["data"]["name"] == "沪深300ETF华泰柏瑞"
@@ -172,10 +158,7 @@ def test_fetch_fallback_second_source() -> None:
         "akshare.fund_etf_hist_sina",
         side_effect=AssertionError("sina should not run when tx succeeds"),
     ):
-        client = _client()
-        response = client.post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "510300",
@@ -202,9 +185,7 @@ def test_fetch_cn_stock_fallback_tx() -> None:
     with patch("akshare.stock_zh_a_hist", side_effect=RuntimeError("em blocked")), patch(
         "akshare.stock_zh_a_hist_tx", return_value=df
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "600519",
@@ -234,9 +215,7 @@ def test_fetch_cn_stock_fallback_sina() -> None:
     with patch("akshare.stock_zh_a_hist", side_effect=RuntimeError("em blocked")), patch(
         "akshare.stock_zh_a_hist_tx", side_effect=RuntimeError("tx blocked")
     ), patch("akshare.stock_zh_a_daily", return_value=df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "000001",
@@ -257,9 +236,7 @@ def test_fetch_cn_exchange_fund_qfq_skips_sina() -> None:
         "akshare.fund_etf_hist_sina",
         side_effect=AssertionError("sina must be skipped for qfq cn_exchange_fund"),
     ), patch("akshare.fund_lof_hist_em", return_value=df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "510300",
@@ -277,9 +254,7 @@ def test_fetch_cn_exchange_fund_third_source() -> None:
         "akshare.stock_zh_a_hist_tx", side_effect=RuntimeError("tx blocked")
     ), patch("akshare.fund_etf_hist_sina", side_effect=RuntimeError("sina blocked")
     ), patch("akshare.fund_lof_hist_em", return_value=df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "510300",
@@ -309,9 +284,7 @@ def test_fetch_mutual_fund_money_fallback() -> None:
     ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
         "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_mutual_fund",
                 "source_code": "000009",
@@ -344,9 +317,7 @@ def test_fetch_mutual_fund_hybrid_open_success() -> None:
     ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
         "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_mutual_fund",
                 "source_code": "000001",
@@ -378,9 +349,7 @@ def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
     ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
         "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_mutual_fund",
                 "source_code": "000001",
@@ -419,9 +388,7 @@ def test_fetch_mutual_fund_skips_name_upstream_calls() -> None:
     ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
         "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_mutual_fund",
                 "source_code": "000009",
@@ -438,10 +405,7 @@ def test_fetch_mutual_fund_skips_name_upstream_calls() -> None:
 def test_fetch_timeout_returns_provider_error_envelope() -> None:
     with patch("fireman_market_provider.adapters.fallback.call_with_timeout") as mock_timeout:
         mock_timeout.side_effect = TimeoutError()
-        client = _client()
-        response = client.post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "510300",
@@ -466,10 +430,7 @@ def test_mutual_fund_unsupported_classification() -> None:
     ), patch("akshare.fund_financial_fund_info_em", side_effect=RuntimeError("skip")), patch(
         "akshare.fund_lof_hist_em", side_effect=RuntimeError("skip")
     ):
-        client = _client()
-        response = client.post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_mutual_fund",
                 "source_code": "000001",

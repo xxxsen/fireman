@@ -1,6 +1,6 @@
 """Optional live AKShare smoke test — not run in default CI.
 
-Run explicitly: uv run pytest -m live
+Run explicitly: FIREMAN_LIVE_AKSHARE=1 uv run pytest -m live
 
 Regression funds (see tests/test_fetch_regression.py):
 - 510300: cn_exchange_fund, bare code + adjust none
@@ -10,26 +10,23 @@ Regression funds (see tests/test_fetch_regression.py):
 import os
 
 import pytest
-from fastapi.testclient import TestClient
 
-from fireman_market_provider import create_app
+from .fetch_compat import fetch
 
 pytestmark = pytest.mark.live
 
 
 @pytest.mark.skipif(os.getenv("FIREMAN_LIVE_AKSHARE") != "1", reason="set FIREMAN_LIVE_AKSHARE=1 to run")
 def test_live_cn_etf_smoke() -> None:
-    client = TestClient(create_app())
-    response = client.post(
-        "/v1/instruments/fetch",
-        json={
+    response = fetch(
+        {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
             "source_code": "510300",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "adjust_policy": "none",
-        },
+        }
     )
     assert response.status_code == 200
     body = response.json()
@@ -40,17 +37,15 @@ def test_live_cn_etf_smoke() -> None:
 
 @pytest.mark.skipif(os.getenv("FIREMAN_LIVE_AKSHARE") != "1", reason="set FIREMAN_LIVE_AKSHARE=1 to run")
 def test_live_cn_mutual_fund_000001_smoke() -> None:
-    client = TestClient(create_app())
-    response = client.post(
-        "/v1/instruments/fetch",
-        json={
+    response = fetch(
+        {
             "market": "CN",
             "instrument_type": "cn_mutual_fund",
             "source_code": "000001",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "adjust_policy": "none",
-        },
+        }
     )
     assert response.status_code == 200
     body = response.json()

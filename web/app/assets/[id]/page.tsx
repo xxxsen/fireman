@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
-import { Dialog } from "@/components/ui/Dialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
@@ -13,17 +12,13 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import {
   deleteInstrument,
-  getFetchStatus,
   getInstrumentDetail,
   getReturnSeries,
-  refreshInstrument,
-  retryFetch,
   updateInstrumentClassification,
   type ReturnSeriesRange,
 } from "@/lib/api/instruments";
 import { ReturnSeriesChart } from "@/components/charts/ReturnSeriesChart";
 import { ApiError } from "@/lib/api/client";
-import { useJobStatus } from "@/hooks/useJobStatus";
 import { queryErrorMessage } from "@/lib/query-error";
 import {
   annualCompletenessLabel,
@@ -35,7 +30,6 @@ import {
   formatNullablePercent,
   formatPercent,
   historyDepthLabel,
-  instrumentStatusLabel,
   metricStatusLabel,
   pointTypeLabel,
   qualityStatusLabel,
@@ -54,24 +48,6 @@ const RETURN_SERIES_RANGES: { key: ReturnSeriesRange; label: string }[] = [
   { key: "all", label: "全部" },
 ];
 
-function refreshFeedbackMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    switch (err.code) {
-      case "market_provider_unavailable":
-        return `数据源暂时不可用：${err.message}`;
-      case "market_provider_timeout":
-        return "数据源响应超时，请重试";
-      case "provider_data_anomaly":
-        return "刷新被拒绝：检测到异常日收益率。";
-      case "instrument_not_refreshable":
-        return "该标的不可刷新。";
-      default:
-        return err.message;
-    }
-  }
-  return err instanceof Error ? err.message : "刷新失败，请稍后重试。";
-}
-
 const ASSET_CLASS_OPTIONS = [
   { value: "equity", label: "权益" },
   { value: "bond", label: "债券" },
@@ -88,8 +64,6 @@ function classificationFeedbackMessage(err: unknown): string {
     switch (err.code) {
       case "instrument_version_conflict":
         return "资产资料已被更新，请刷新后确认分类再保存。";
-      case "instrument_fetch_in_progress":
-        return "历史数据抓取中，抓取完成后可编辑大类和地区。";
       case "instrument_not_editable":
         return "系统资产不可编辑分类。";
       case "instrument_classification_unsupported":
@@ -105,15 +79,8 @@ export default function AssetDetailPage() {
   const id = useParams().id as string;
   const router = useRouter();
   const qc = useQueryClient();
-  const [refreshNotice, setRefreshNotice] = useState<{ kind: "success" | "error"; text: string } | null>(
-    null,
-  );
-  const [showFetchDialog, setShowFetchDialog] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [fetchStatusError, setFetchStatusError] = useState<string | null>(null);
-  const [fetchErrorCode, setFetchErrorCode] = useState<string | null>(null);
 
   const [editingClass, setEditingClass] = useState(false);
   const [classDraft, setClassDraft] = useState<{ asset_class: string; region: string } | null>(null);
@@ -138,21 +105,6 @@ export default function AssetDetailPage() {
   });
 
   useEffect(() => {
-    if (!data) return;
-    if (data.instrument.status === "pending_fetch" || data.instrument.status === "fetch_failed") {
-      void getFetchStatus(id)
-        .then((s) => {
-          setFetchStatusError(null);
-          setFetchErrorCode(s.error_code ?? null);
-          if (s.job_id) setActiveJobId(s.job_id);
-        })
-        .catch((err) => {
-          setFetchStatusError(err instanceof Error ? err.message : "抓取状态查询失败");
-        });
-    }
-  }, [data, id]);
-
-  useEffect(() => {
     if (!editingClass || !pendingEditFocusRef.current) return;
     pendingEditFocusRef.current = false;
     basicInfoRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -169,40 +121,6 @@ export default function AssetDetailPage() {
     if (focus) pendingEditFocusRef.current = true;
     setEditingClass(true);
   };
-
-  const handleJobTerminal = () => {
-    setActiveJobId(null);
-    void refetch();
-    void qc.invalidateQueries({ queryKey: ["instruments"] });
-  };
-
-  const jobState = useJobStatus(activeJobId, {
-    onComplete: handleJobTerminal,
-    onFailed: () => handleJobTerminal(),
-    onCanceled: () => {
-      setFetchErrorCode("fetch_canceled");
-      handleJobTerminal();
-    },
-  });
-
-  const refreshMut = useMutation({
-    mutationFn: () => refreshInstrument(id),
-    onMutate: () => {
-      setRefreshNotice(null);
-    },
-    onSuccess: (inst) => {
-      void qc.invalidateQueries({ queryKey: ["instrument-detail", id] });
-      void qc.invalidateQueries({ queryKey: ["instruments"] });
-      const asOf = inst.data_as_of ? `，截至 ${inst.data_as_of}` : "";
-      const src = inst.data_source_name
-        ? `，来源 ${dataSourceLabel(inst.data_source_name)}`
-        : "";
-      setRefreshNotice({ kind: "success", text: `数据已刷新${asOf}${src}。` });
-    },
-    onError: (err) => {
-      setRefreshNotice({ kind: "error", text: refreshFeedbackMessage(err) });
-    },
-  });
 
   const classMut = useMutation({
     mutationFn: (body: { asset_class: string; region: string; expected_updated_at: number }) =>
@@ -234,19 +152,10 @@ export default function AssetDetailPage() {
     onSuccess: async () => {
       qc.removeQueries({ queryKey: ["instrument-detail", id] });
       await qc.invalidateQueries({ queryKey: ["instruments"] });
-      router.push("/assets");
+      router.push("/assets/library");
     },
     onError: (err) => {
       setDeleteError(queryErrorMessage(err, "删除失败"));
-    },
-  });
-
-  const retryMut = useMutation({
-    mutationFn: () => retryFetch(id),
-    onSuccess: (result) => {
-      setActiveJobId(result.job_id);
-      void refetch();
-      void qc.invalidateQueries({ queryKey: ["instruments"] });
     },
   });
 
@@ -258,8 +167,8 @@ export default function AssetDetailPage() {
       <ErrorState
         message="无法加载资产详情。请确认后端服务可用后重试。"
         onRetry={() => void refetch()}
-        backHref="/assets"
-        backLabel="返回资料库"
+        backHref="/assets/library"
+        backLabel="返回资产库"
         technicalDetail={queryErrorMessage(error)}
       />
     );
@@ -267,23 +176,24 @@ export default function AssetDetailPage() {
   if (!data) return null;
 
   const inst = data.instrument;
-  const isPending = inst.status === "pending_fetch";
-  const isFailed = inst.status === "fetch_failed";
   const isActive = inst.status === "active";
   const win = data.simulation_window;
   const annualReturns = [...(data.annual_returns ?? [])].sort((a, b) => b.year - a.year);
   const historicalSnapshots = data.historical_snapshots ?? [];
   const referencingPlans = data.referencing_plans ?? [];
+  const marketAssetHref = inst.asset_key
+    ? `/assets/market/${encodeURIComponent(inst.asset_key)}`
+    : null;
 
   return (
     <div className="max-w-6xl">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <Link
-            href="/assets"
+            href="/assets/library"
             className="text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline"
           >
-            ← 资料库
+            ← 我的资产库
           </Link>
           <h1 className="mt-4 text-2xl font-semibold text-ink">
             {inst.name}{" "}
@@ -294,14 +204,15 @@ export default function AssetDetailPage() {
             {inst.instrument_type}
           </p>
         </div>
-        {!inst.is_system && !isPending && (
+        {!inst.is_system && (
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            {isActive && (
+            {marketAssetHref && (
               <Button
-                disabled={refreshMut.isPending}
-                onClick={() => refreshMut.mutate()}
+                variant="secondary"
+                href={marketAssetHref}
+                data-testid="market-asset-link"
               >
-                {refreshMut.isPending ? "刷新中（可能需要数分钟）…" : "刷新"}
+                查看全局资产 / 刷新历史
               </Button>
             )}
             <Button
@@ -328,58 +239,16 @@ export default function AssetDetailPage() {
         )}
       </div>
 
-      {refreshNotice && (
-        <p
-          className={`mt-3 text-sm ${refreshNotice.kind === "success" ? "text-positive" : "text-danger"}`}
-          role="status"
-        >
-          {refreshNotice.text}
-        </p>
-      )}
-
-      {fetchStatusError && (
-        <Alert variant="warning" title="抓取状态查询失败" className="mt-4">
-          {fetchStatusError}
-        </Alert>
-      )}
-
-      {isPending && (
-        <Alert variant="info" title="历史数据抓取中" className="mt-4">
-          <p>后台任务正在拉取全量历史，完成后将自动刷新本页。</p>
-          <p className="mt-1 text-sm text-ink-muted">抓取完成后可编辑大类和地区。</p>
-          <Button
-            variant="ghost"
-            className="mt-2 px-2 py-1"
-            onClick={() => setShowFetchDialog(true)}
+      {marketAssetHref && (
+        <Alert variant="info" className="mt-4">
+          历史数据由全局市场资产统一同步；如需刷新或切换数据源，请前往
+          <Link
+            href={marketAssetHref}
+            className="mx-1 underline underline-offset-2"
           >
-            查看抓取状态
-          </Button>
-        </Alert>
-      )}
-
-      {isFailed && fetchErrorCode === "fetch_canceled" && (
-        <Alert variant="warning" title="历史数据抓取已取消" className="mt-4">
-          <p>抓取任务已取消，可点击下方按钮重试。</p>
-          <Button
-            className="mt-2"
-            disabled={retryMut.isPending}
-            onClick={() => retryMut.mutate()}
-          >
-            {retryMut.isPending ? "提交中…" : "重试抓取"}
-          </Button>
-        </Alert>
-      )}
-
-      {isFailed && fetchErrorCode !== "fetch_canceled" && (
-        <Alert variant="danger" title="历史数据抓取失败" className="mt-4">
-          <p>{jobState.error ?? "请重试抓取或检查数据源。"}</p>
-          <Button
-            className="mt-2"
-            disabled={retryMut.isPending}
-            onClick={() => retryMut.mutate()}
-          >
-            {retryMut.isPending ? "提交中…" : "重试抓取"}
-          </Button>
+            全局资产详情页
+          </Link>
+          操作，完成后本页数据自动更新。
         </Alert>
       )}
 
@@ -491,18 +360,14 @@ export default function AssetDetailPage() {
         </div>
         <div>
           <dt className="text-ink-muted">数据状态</dt>
-          <dd className="text-ink">
-            {isPending || isFailed
-              ? instrumentStatusLabel(inst.status)
-              : qualityStatusLabel(inst.quality_status ?? inst.status)}
-          </dd>
+          <dd className="text-ink">{qualityStatusLabel(inst.quality_status ?? inst.status)}</dd>
         </div>
         <div>
           <dt className="text-ink-muted">数据截止</dt>
           <dd className="text-ink">{inst.data_as_of || "—"}</dd>
         </div>
         <div>
-          <dt className="text-ink-muted">抓取数据源</dt>
+          <dt className="text-ink-muted">数据源</dt>
           <dd className="text-ink">{dataSourceLabel(inst.data_source_name)}</dd>
         </div>
         <div>
@@ -755,42 +620,10 @@ export default function AssetDetailPage() {
         </>
       )}
 
-      <Dialog
-        open={showFetchDialog}
-        onClose={() => setShowFetchDialog(false)}
-        title="抓取状态"
-        footer={
-          <Button variant="secondary" onClick={() => setShowFetchDialog(false)}>
-            关闭
-          </Button>
-        }
-      >
-        <dl className="space-y-2 text-sm">
-          <div>
-            <dt className="text-ink-muted">任务状态</dt>
-            <dd className="text-ink" data-testid="fetch-status-job-status">{jobState.job?.status ?? "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-muted">阶段</dt>
-            <dd className="text-ink">{jobState.job?.phase ?? "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-muted">进度</dt>
-            <dd className="text-ink">{Math.round(jobState.progress * 100)}%</dd>
-          </div>
-          {jobState.error && (
-            <div>
-              <dt className="text-ink-muted">错误</dt>
-              <dd className="text-danger">{jobState.error}</dd>
-            </div>
-          )}
-        </dl>
-      </Dialog>
-
       <ConfirmDialog
         open={showDeleteConfirm}
         title="删除标的"
-        description={`确定删除标的「${inst.name}」？此操作不可撤销。`}
+        description={`确定删除标的「${inst.name}」？此操作仅移除您的引用，不影响全局市场资产数据。`}
         confirmLabel="删除标的"
         variant="danger"
         pending={deleteMut.isPending}

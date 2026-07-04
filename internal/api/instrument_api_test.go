@@ -16,53 +16,103 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-func mockProviderServer(t *testing.T) *httptest.Server {
+func buildServices(db *sql.DB) Services {
+	return NewServices(db, "", nil)
+}
+
+func testRouterWithDB(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/instruments/resolve":
-			var req marketdata.ResolveRequest
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			code := req.Code
-			if req.Market == "CN" && req.InstrumentType == "cn_exchange_fund" && !marketdata.HasCNExchangePrefix(code) {
-				code = "sh" + code
-			}
-			if req.Market == "HK" {
-				code = marketdata.NormalizeHKCode(code)
-			}
-			resp := marketdata.ResolveResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.ResolveData{
-					Ambiguous: false,
-					Resolved: &marketdata.ResolveCandidate{
-						Code: code, ProviderSymbol: code,
-						Name: "沪深300ETF", Exchange: "SH", InstrumentKind: "etf",
-					},
-				},
-			}
-			if req.Market == "HK" {
-				resp.Data.Resolved = &marketdata.ResolveCandidate{
-					Code: code, ProviderSymbol: code,
-					Name: "腾讯控股", Exchange: "HK", InstrumentKind: "stock",
-				}
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		case "/v1/instruments/fetch":
-			resp := marketdata.FetchResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.FetchData{
-					Provider: "akshare", ProviderSymbol: "510300", Name: "沪深300ETF",
-					AssetClass: "equity", Currency: "CNY", PointType: "adjusted_close",
-					ExpenseRatioStatus: "unavailable", ExpenseRatioComponents: map[string]any{"region": "domestic"},
-					Points:     buildFixturePoints(),
-					SourceName: "test_fixture", SourceQuality: "full",
-				},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		default:
-			http.NotFound(w, r)
+	db := testutil.OpenTestDB(t)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
+	t.Cleanup(srv.Close)
+	return srv, db, srv.Client()
+}
+
+// marketAssetSeed describes one directory entry plus its synced history used
+// by import tests. The td/078 import path performs no remote calls: it only
+// projects already-synced market_asset_points into the instrument tables.
+type marketAssetSeed struct {
+	AssetKey       string
+	Market         string
+	InstrumentType string
+	RegionCode     string
+	Symbol         string
+	Name           string
+	InstrumentKind string
+	Currency       string
+	PointType      string
+	Points         []marketdata.HistoricalPoint
+}
+
+func cnETFAssetSeed() marketAssetSeed {
+	return marketAssetSeed{
+		AssetKey: "cn:cn_exchange_fund:sh:510300", Market: "CN",
+		InstrumentType: "cn_exchange_fund", RegionCode: "sh", Symbol: "510300",
+		Name: "沪深300ETF", InstrumentKind: "etf", Currency: "CNY",
+		PointType: "adjusted_close", Points: buildFixturePoints(),
+	}
+}
+
+func hkStockAssetSeed() marketAssetSeed {
+	return marketAssetSeed{
+		AssetKey: "hk:hk_stock:00700", Market: "HK",
+		InstrumentType: "hk_stock", Symbol: "00700",
+		Name: "腾讯控股", InstrumentKind: "stock", Currency: "HKD",
+		PointType: "adjusted_close", Points: buildTwentyYearFixturePoints(),
+	}
+}
+
+// seedMarketAssetWithHistory is idempotent so a test can delete an imported
+// instrument and import the same asset again.
+func seedMarketAssetWithHistory(t *testing.T, db *sql.DB, seed marketAssetSeed) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO market_assets (
+			asset_key, market, instrument_type, region_code, symbol, name, exchange,
+			instrument_kind, currency, active, listing_status, last_seen_at,
+			source_name, source_as_of, refreshed_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, 1, 'active', ?, 'test_directory', '', ?, ?, ?)`,
+		seed.AssetKey, seed.Market, seed.InstrumentType, seed.RegionCode, seed.Symbol,
+		seed.Name, seed.InstrumentKind, seed.Currency, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(seed.Points) == 0 {
+		return
+	}
+	for _, p := range seed.Points {
+		if _, err := db.ExecContext(ctx, `
+			INSERT OR IGNORE INTO market_asset_points (
+				asset_key, adjust_policy, point_type, trade_date, value, source_name, fetched_at
+			) VALUES (?, 'none', ?, ?, ?, 'test_fixture', ?)`,
+			seed.AssetKey, seed.PointType, p.Date, p.Value, now); err != nil {
+			t.Fatal(err)
 		}
-	}))
+	}
+	last := seed.Points[len(seed.Points)-1]
+	if _, err := db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO market_asset_history_state (
+			asset_key, adjust_policy, point_type, last_task_id, last_success_task_id,
+			last_success_at, data_as_of, point_count, source_name, updated_at
+		) VALUES (?, 'none', ?, 'task_seed', 'task_seed', ?, ?, ?, 'test_fixture', ?)`,
+		seed.AssetKey, seed.PointType, now, last.Date, len(seed.Points), now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func importMarketAsset(t *testing.T, client *http.Client, baseURL, assetKey string) map[string]any {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"asset_key": assetKey})
+	resp, err := client.Post(baseURL+"/api/v1/instruments/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", resp.StatusCode, raw)
+	}
+	return decodeEnvelope(t, raw)["data"].(map[string]any)
 }
 
 func buildTwentyYearFixturePoints() []marketdata.HistoricalPoint {
@@ -82,43 +132,6 @@ func buildTwentyYearFixturePoints() []marketdata.HistoricalPoint {
 		}
 	}
 	return out
-}
-
-func mockHKProviderServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/instruments/resolve":
-			var req marketdata.ResolveRequest
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			code := marketdata.NormalizeHKCode(req.Code)
-			resp := marketdata.ResolveResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.ResolveData{
-					Ambiguous: false,
-					Resolved: &marketdata.ResolveCandidate{
-						Code: code, ProviderSymbol: code,
-						Name: "腾讯控股", Exchange: "HK", InstrumentKind: "stock",
-					},
-				},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		case "/v1/instruments/fetch":
-			resp := marketdata.FetchResponse{
-				Code: 0, Message: "success",
-				Data: marketdata.FetchData{
-					Provider: "akshare", ProviderSymbol: "00700", Name: "腾讯控股",
-					AssetClass: "equity", Currency: "HKD", PointType: "adjusted_close",
-					ExpenseRatioStatus: "unavailable",
-					Points:             buildTwentyYearFixturePoints(),
-					SourceName:         "test_hk_fixture", SourceQuality: "full",
-				},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
 }
 
 func buildFixturePoints() []marketdata.HistoricalPoint {
@@ -148,70 +161,43 @@ func sprintf2(n int) string {
 	return fmt.Sprintf("%02d", n)
 }
 
-func testRouterWithProvider(t *testing.T, providerURL string) *httptest.Server {
-	t.Helper()
-	db := testutil.OpenTestDB(t)
-	r := NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, providerURL)})
-	return httptest.NewServer(r)
-}
-
-func buildServices(db *sql.DB, providerURL string) Services {
-	return NewServices(db, "", providerURL, nil)
-}
-
-func TestInstrumentFieldsReadOnly(t *testing.T) {
-	provider := mockProviderServer(t)
-	defer provider.Close()
-	srv := testRouterWithProvider(t, provider.URL)
-	defer srv.Close()
+func TestInstrumentImportFieldsReadOnly(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	seedMarketAssetWithHistory(t, db, cnETFAssetSeed())
 
 	body, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund", "code": "510300",
-		"name": "hack",
+		"asset_key": "cn:cn_exchange_fund:sh:510300",
+		"name":      "hack",
 	})
-	resp, err := srv.Client().Post(srv.URL+"/api/v1/instruments/import/preview", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	raw := readBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status=%d", resp.StatusCode)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
 	}
+	assertErrorCode(t, raw, "instrument_fields_read_only")
 }
 
-func TestInstrumentImportPreviewAndImport(t *testing.T) {
-	provider := mockProviderServer(t)
-	defer provider.Close()
-	srv := testRouterWithProvider(t, provider.URL)
-	defer srv.Close()
-	client := srv.Client()
+func TestInstrumentImportFromMarketAsset(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	seedMarketAssetWithHistory(t, db, cnETFAssetSeed())
+	client = srv.Client()
 
-	payload, _ := json.Marshal(map[string]any{
-		"market": "CN", "instrument_type": "cn_exchange_fund", "code": "510300",
-	})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/import/preview", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("preview status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-
-	resp, err = client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	env := decodeEnvelope(t, readBody(t, resp))
-	inst := env["data"].(map[string]any)
+	inst := importMarketAsset(t, client, srv.URL, "cn:cn_exchange_fund:sh:510300")
 	id := inst["id"].(string)
-	if inst["status"] != "pending_fetch" {
-		t.Fatalf("import status=%v want pending_fetch", inst["status"])
+	if inst["status"] != "active" {
+		t.Fatalf("import status=%v want active", inst["status"])
+	}
+	if inst["asset_key"] != "cn:cn_exchange_fund:sh:510300" {
+		t.Fatalf("asset_key=%v", inst["asset_key"])
+	}
+	if inst["code"] != "510300" || inst["name"] != "沪深300ETF" {
+		t.Fatalf("identity=%v/%v", inst["code"], inst["name"])
 	}
 
-	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + id)
+	resp, err := client.Get(srv.URL + "/api/v1/instruments/" + id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,80 +210,74 @@ func TestInstrumentImportPreviewAndImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("annual status=%d", resp.StatusCode)
 	}
+	returns := decodeEnvelope(t, raw)["data"].(map[string]any)["annual_returns"].([]any)
+	if len(returns) == 0 {
+		t.Fatal("expected annual returns projected at import time")
+	}
 }
 
-func TestHKInstrumentDuplicateNormalizedCode(t *testing.T) {
-	provider := mockHKProviderServer(t)
-	defer provider.Close()
-	srv := testRouterWithProvider(t, provider.URL)
-	defer srv.Close()
-	client := srv.Client()
+func TestInstrumentImportDuplicateRejected(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	seedMarketAssetWithHistory(t, db, hkStockAssetSeed())
 
-	payload700, _ := json.Marshal(map[string]any{
-		"market": "HK", "instrument_type": "hk_stock", "code": "700",
-	})
-	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload700))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("import 700 status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	first := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
+	first := importMarketAsset(t, client, srv.URL, "hk:hk_stock:00700")
 	if first["code"] != "00700" {
 		t.Fatalf("imported code=%v want 00700", first["code"])
 	}
+	if first["currency"] != "HKD" {
+		t.Fatalf("imported currency=%v want HKD", first["currency"])
+	}
+	if first["region"] != "foreign" {
+		t.Fatalf("imported region=%v want foreign", first["region"])
+	}
 
-	payload00700, _ := json.Marshal(map[string]any{
-		"market": "HK", "instrument_type": "hk_stock", "code": "00700",
-	})
-	resp, err = client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(payload00700))
+	body, _ := json.Marshal(map[string]any{"asset_key": "hk:hk_stock:00700"})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := readBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("duplicate import status=%d body=%s", resp.StatusCode, readBody(t, resp))
+		t.Fatalf("duplicate import status=%d body=%s", resp.StatusCode, raw)
 	}
-	body := decodeEnvelope(t, readBody(t, resp))
-	if body["code"] != "instrument_fetch_in_progress" && body["code"] != "instrument_already_exists" {
-		t.Fatalf("duplicate code=%v want instrument_fetch_in_progress or instrument_already_exists", body["code"])
-	}
+	assertErrorCode(t, raw, "instrument_already_exists")
 }
 
-func TestHKInstrumentPreviewNormalizesCode(t *testing.T) {
-	provider := mockHKProviderServer(t)
-	defer provider.Close()
-	srv := testRouterWithProvider(t, provider.URL)
-	defer srv.Close()
-	client := srv.Client()
+func TestInstrumentImportUnknownAssetRejected(t *testing.T) {
+	srv, _, client := testRouterWithDB(t)
 
-	for _, code := range []string{"700", "00700"} {
-		payload, _ := json.Marshal(map[string]any{
-			"market": "HK", "instrument_type": "hk_stock", "code": code,
-		})
-		resp, err := client.Post(srv.URL+"/api/v1/instruments/import/preview", "application/json", bytes.NewReader(payload))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("preview %s status=%d body=%s", code, resp.StatusCode, readBody(t, resp))
-		}
-		preview := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
-		if preview["deprecated"] != true {
-			t.Fatalf("preview should be deprecated")
-		}
-		resolve := preview["resolve"].(map[string]any)
-		if resolve["ambiguous"] != false {
-			t.Fatalf("preview resolve should be unambiguous for %s", code)
-		}
-		resolved := resolve["resolved"].(map[string]any)
-		if resolved["code"] != "00700" {
-			t.Fatalf("preview code for %s=%v want 00700", code, resolved["code"])
-		}
+	body, _ := json.Marshal(map[string]any{"asset_key": "cn:cn_exchange_fund:sh:999999"})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
 	}
+	raw := readBody(t, resp)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	assertErrorCode(t, raw, "market_asset_not_found")
+}
+
+func TestInstrumentImportWithoutHistoryRejected(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	seed := cnETFAssetSeed()
+	seed.Points = nil
+	seedMarketAssetWithHistory(t, db, seed)
+
+	body, _ := json.Marshal(map[string]any{"asset_key": seed.AssetKey})
+	resp, err := client.Post(srv.URL+"/api/v1/instruments/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := readBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	assertErrorCode(t, raw, "market_asset_history_empty")
 }
 
 func readBody(t *testing.T, resp *http.Response) []byte {
@@ -341,10 +321,7 @@ func patchClassification(
 // TestUpdateInstrumentClassificationAPI covers classification editing: valid edit, optimistic
 // lock conflict, enum rejection and system-asset protection.
 func TestUpdateInstrumentClassificationAPI(t *testing.T) {
-	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
-	defer srv.Close()
-	client := srv.Client()
+	srv, db, client := testRouterWithDB(t)
 
 	instID, updatedAt := insertLibraryInstrument(t, db, "equity", "domestic")
 
@@ -386,44 +363,4 @@ func TestUpdateInstrumentClassificationAPI(t *testing.T) {
 		t.Fatalf("system asset status=%d body=%s", resp.StatusCode, readBody(t, resp))
 	}
 	assertErrorCode(t, readBody(t, resp), "instrument_not_editable")
-}
-
-// TestUpdateInstrumentClassificationRejectedDuringFetch verifies that
-// a pending_fetch asset cannot have its classification edited, since the in-flight
-// fetch would later overwrite it with the import-time payload.
-func TestUpdateInstrumentClassificationRejectedDuringFetch(t *testing.T) {
-	db := testutil.OpenTestDB(t)
-	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db, "")}))
-	defer srv.Close()
-	client := srv.Client()
-
-	id := "ins_pending_fetch"
-	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO instruments (
-			id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system, expense_ratio, expense_ratio_status,
-			fee_treatment, status, created_at, updated_at
-		) VALUES (?, '510500', '抓取中ETF', 'CN', 'cn_exchange_fund', 'equity', 'domestic', 'CNY',
-			'akshare', '510500', 'none', 0, NULL, 'unavailable', 'embedded', 'pending_fetch', ?, ?)`,
-		id, now, now); err != nil {
-		t.Fatal(err)
-	}
-
-	resp := patchClassification(t, client, srv.URL, id, map[string]any{
-		"asset_class": "bond", "region": "foreign", "expected_updated_at": now,
-	})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("pending fetch patch status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
-	assertErrorCode(t, readBody(t, resp), "instrument_fetch_in_progress")
-
-	var assetClass, region string
-	if err := db.QueryRowContext(context.Background(),
-		`SELECT asset_class, region FROM instruments WHERE id=?`, id).Scan(&assetClass, &region); err != nil {
-		t.Fatal(err)
-	}
-	if assetClass != "equity" || region != "domestic" {
-		t.Fatalf("pending fetch classification must be unchanged, got %s/%s", assetClass, region)
-	}
 }

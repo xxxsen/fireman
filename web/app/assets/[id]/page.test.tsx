@@ -1,21 +1,12 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const useJobStatusMock = vi.hoisted(() => vi.fn());
 const getInstrumentDetailMock = vi.hoisted(() => vi.fn());
-const getFetchStatusMock = vi.hoisted(() => vi.fn());
 const deleteInstrumentMock = vi.hoisted(() => vi.fn());
-const refreshInstrumentMock = vi.hoisted(() => vi.fn());
 const updateClassificationMock = vi.hoisted(() => vi.fn());
 const routerPushMock = vi.hoisted(() => vi.fn());
-
-let jobStatusCallbacks: {
-  onComplete?: () => void;
-  onFailed?: (message: string) => void;
-  onCanceled?: () => void;
-} = {};
 
 const baseInstrument = {
   id: "ins_test",
@@ -31,28 +22,9 @@ const baseInstrument = {
   data_source_name: "akshare",
   point_type: "close",
   is_system: false,
+  asset_key: "cn:cn_exchange_fund:sh:510300",
   updated_at: 1750000000000,
 };
-
-function pendingDetail() {
-  return {
-    instrument: { ...baseInstrument, status: "pending_fetch" },
-    annual_returns: [],
-    simulation_window: {},
-    historical_snapshots: [],
-    referencing_plans: [],
-  };
-}
-
-function failedDetail() {
-  return {
-    instrument: { ...baseInstrument, status: "fetch_failed" },
-    annual_returns: [],
-    simulation_window: {},
-    historical_snapshots: [],
-    referencing_plans: [],
-  };
-}
 
 function activeDetail() {
   return {
@@ -108,9 +80,6 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/instruments", () => ({
   getInstrumentDetail: (...args: unknown[]) => getInstrumentDetailMock(...args),
-  getFetchStatus: (...args: unknown[]) => getFetchStatusMock(...args),
-  retryFetch: vi.fn(),
-  refreshInstrument: (...args: unknown[]) => refreshInstrumentMock(...args),
   updateInstrumentClassification: (...args: unknown[]) => updateClassificationMock(...args),
   deleteInstrument: (...args: unknown[]) => deleteInstrumentMock(...args),
   getReturnSeries: vi.fn().mockResolvedValue({
@@ -130,13 +99,6 @@ vi.mock("@/components/charts/ReturnSeriesChart", () => ({
   ReturnSeriesChart: () => <div data-testid="return-series-chart" />,
 }));
 
-vi.mock("@/hooks/useJobStatus", () => ({
-  useJobStatus: (jobId: string | null, options?: typeof jobStatusCallbacks) => {
-    jobStatusCallbacks = options ?? {};
-    return useJobStatusMock(jobId, options);
-  },
-}));
-
 import AssetDetailPage from "./page";
 
 function renderPage() {
@@ -148,182 +110,58 @@ function renderPage() {
   );
 }
 
-describe("AssetDetailPage job terminal states", () => {
+describe("AssetDetailPage layout (td/078 task-based data)", () => {
   beforeEach(() => {
-    useJobStatusMock.mockReset();
     getInstrumentDetailMock.mockReset();
-    getFetchStatusMock.mockReset();
-    jobStatusCallbacks = {};
-
-    getInstrumentDetailMock.mockResolvedValue(failedDetail());
-    getFetchStatusMock.mockResolvedValue({
-      job_id: "job_test",
-      instrument_status: "fetch_failed",
-    });
-    useJobStatusMock.mockImplementation((jobId) => {
-      if (!jobId) {
-        return { job: null, progress: 0, error: null, loading: false };
-      }
-      return {
-        job: {
-          id: "job_test",
-          status: "failed",
-          error_message: "fetch_failed",
-          progress_current: 0,
-          progress_total: 1,
-          phase: "",
-        },
-        progress: 0,
-        error: "fetch_failed",
-        loading: false,
-      };
-    });
+    getInstrumentDetailMock.mockResolvedValue(activeDetail());
   });
 
-  it("shows retry button when instrument is fetch_failed", async () => {
+  it("links to the global market asset instead of offering local refresh", async () => {
     renderPage();
-    expect(await screen.findByText("历史数据抓取失败")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重试抓取" })).toBeInTheDocument();
+    expect(await screen.findByTestId("market-asset-link")).toHaveAttribute(
+      "href",
+      `/assets/market/${encodeURIComponent("cn:cn_exchange_fund:sh:510300")}`,
+    );
+    // The legacy synchronous refresh/retry controls are gone.
+    expect(screen.queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试抓取" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "强制刷新" })).not.toBeInTheDocument();
+    // The info alert explains where history refreshes happen now.
+    expect(screen.getByText(/历史数据由全局市场资产统一同步/)).toBeInTheDocument();
   });
 
-  it("shows fetch status query error", async () => {
-    getFetchStatusMock.mockRejectedValue(new Error("网络错误"));
+  it("hides the market asset link for instruments without an asset_key", async () => {
+    getInstrumentDetailMock.mockResolvedValue({
+      ...activeDetail(),
+      instrument: { ...baseInstrument, status: "active", asset_key: "" },
+    });
     renderPage();
-    expect(await screen.findByText("抓取状态查询失败")).toBeInTheDocument();
-    expect(screen.getByText("网络错误")).toBeInTheDocument();
+    await screen.findByText("基础信息");
+    expect(screen.queryByTestId("market-asset-link")).not.toBeInTheDocument();
   });
 
-  it("refetches and shows failure banner after pending_fetch job fails", async () => {
-    getInstrumentDetailMock
-      .mockResolvedValueOnce(pendingDetail())
-      .mockResolvedValue(failedDetail());
-    getFetchStatusMock.mockResolvedValue({
-      job_id: "job_pending",
-      instrument_status: "pending_fetch",
-    });
-    useJobStatusMock.mockImplementation((jobId, options) => {
-      jobStatusCallbacks = options ?? {};
-      if (jobId === "job_pending") {
-        return {
-          job: { id: "job_pending", status: "running", progress_current: 0, progress_total: 1, phase: "fetching" },
-          progress: 0.1,
-          error: null,
-          loading: false,
-        };
-      }
-      return { job: null, progress: 0, error: null, loading: false };
-    });
-
+  it("renders simulation window, annual returns and the return curve", async () => {
     renderPage();
-    expect(await screen.findByText("历史数据抓取中")).toBeInTheDocument();
-
-    await act(async () => {
-      jobStatusCallbacks.onFailed?.("provider_timeout");
-    });
-
-    await waitFor(() => expect(getInstrumentDetailMock).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("历史数据抓取失败")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重试抓取" })).toBeInTheDocument();
-    expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();
-  });
-
-  it("refetches and shows annual returns after pending_fetch job succeeds", async () => {
-    getInstrumentDetailMock
-      .mockResolvedValueOnce(pendingDetail())
-      .mockResolvedValue(activeDetail());
-    getFetchStatusMock.mockResolvedValue({
-      job_id: "job_pending",
-      instrument_status: "pending_fetch",
-    });
-    useJobStatusMock.mockImplementation((jobId, options) => {
-      jobStatusCallbacks = options ?? {};
-      if (jobId === "job_pending") {
-        return {
-          job: { id: "job_pending", status: "running", progress_current: 0, progress_total: 1, phase: "fetching" },
-          progress: 0.5,
-          error: null,
-          loading: false,
-        };
-      }
-      return { job: null, progress: 0, error: null, loading: false };
-    });
-
-    renderPage();
-    expect(await screen.findByText("历史数据抓取中")).toBeInTheDocument();
-
-    await act(async () => {
-      jobStatusCallbacks.onComplete?.();
-    });
-
-    await waitFor(() => expect(getInstrumentDetailMock).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("年度收益")).toBeInTheDocument();
     expect(screen.getByText("模拟窗口预览（完整自然年度）")).toBeInTheDocument();
     expect(screen.getByText("2023-01-03 ~ 2023-12-29")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
-    expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();
+    expect(screen.getByText("收益曲线")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "近3月" })).toBeInTheDocument();
+    expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
   });
 
-  it("opens centered fetch status dialog", async () => {
-    getInstrumentDetailMock.mockResolvedValue(pendingDetail());
-    getFetchStatusMock.mockResolvedValue({
-      job_id: "job_pending",
-      instrument_status: "pending_fetch",
-    });
-    useJobStatusMock.mockReturnValue({
-      job: { id: "job_pending", status: "running", progress_current: 1, progress_total: 2, phase: "fetching" },
-      progress: 0.5,
-      error: null,
-      loading: false,
-    });
-
+  it("switches return curve range when a range button is clicked", async () => {
+    const { getReturnSeries } = await import("@/lib/api/instruments");
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看抓取状态" }));
-    expect(screen.getByTestId("dialog")).toBeInTheDocument();
-    expect(screen.getByTestId("fetch-status-job-status")).toHaveTextContent("running");
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
-  });
-
-  it("shows canceled notice instead of permanent fetching banner", async () => {
-    getInstrumentDetailMock
-      .mockResolvedValueOnce(pendingDetail())
-      .mockResolvedValue(failedDetail());
-    getFetchStatusMock.mockResolvedValue({
-      job_id: "job_pending",
-      instrument_status: "fetch_failed",
-      error_code: "fetch_canceled",
-    });
-    useJobStatusMock.mockImplementation((jobId, options) => {
-      jobStatusCallbacks = options ?? {};
-      if (jobId === "job_pending") {
-        return {
-          job: { id: "job_pending", status: "canceled", progress_current: 0, progress_total: 1, phase: "" },
-          progress: 0,
-          error: null,
-          loading: false,
-        };
-      }
-      return { job: null, progress: 0, error: null, loading: false };
-    });
-
-    renderPage();
-    expect(await screen.findByText("历史数据抓取中")).toBeInTheDocument();
-
-    await act(async () => {
-      jobStatusCallbacks.onCanceled?.();
-    });
-
-    await waitFor(() => expect(getInstrumentDetailMock).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("历史数据抓取已取消")).toBeInTheDocument();
-    expect(screen.queryByText("历史数据抓取中")).not.toBeInTheDocument();
+    await screen.findByTestId("return-series-chart");
+    fireEvent.click(screen.getByRole("button", { name: "近1年" }));
+    await waitFor(() => expect(getReturnSeries).toHaveBeenCalledWith("ins_test", "1y"));
   });
 });
 
 describe("AssetDetailPage historical snapshots", () => {
   beforeEach(() => {
     getInstrumentDetailMock.mockReset();
-    getFetchStatusMock.mockReset();
-    useJobStatusMock.mockReset();
     getInstrumentDetailMock.mockResolvedValue({
       ...activeDetail(),
       historical_snapshots: [
@@ -340,7 +178,6 @@ describe("AssetDetailPage historical snapshots", () => {
         },
       ],
     });
-    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
   });
 
   it("shows historical snapshot metrics and warnings", async () => {
@@ -352,65 +189,11 @@ describe("AssetDetailPage historical snapshots", () => {
   });
 });
 
-describe("AssetDetailPage layout and return curve", () => {
-  beforeEach(() => {
-    getInstrumentDetailMock.mockReset();
-    getFetchStatusMock.mockReset();
-    useJobStatusMock.mockReset();
-    refreshInstrumentMock.mockReset();
-    getInstrumentDetailMock.mockResolvedValue(activeDetail());
-    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
-  });
-
-  it("shows only refresh/delete actions without force-refresh", async () => {
-    renderPage();
-    expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "强制刷新" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/刷新 AKShare 数据/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/24 小时/)).not.toBeInTheDocument();
-
-    expect(screen.getByText("收益曲线")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "近3天" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "近1天" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "近3月" })).toBeInTheDocument();
-    expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
-  });
-
-  it("refreshes immediately and shows success without force wording", async () => {
-    refreshInstrumentMock.mockResolvedValue({
-      ...baseInstrument,
-      status: "active",
-      data_as_of: "2026-06-18",
-      data_source_name: "ak.fund_open_fund_info_em:累计净值走势",
-    });
-    renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "刷新" }));
-    await waitFor(() => expect(refreshInstrumentMock).toHaveBeenCalledWith("ins_test"));
-    const notice = await screen.findByText(/数据已刷新/);
-    expect(notice.textContent).toContain("东方财富 · 公募基金 · 累计净值走势");
-    expect(notice.textContent).not.toContain("强制");
-  });
-
-  it("switches return curve range when a range button is clicked", async () => {
-    const { getReturnSeries } = await import("@/lib/api/instruments");
-    renderPage();
-    await screen.findByTestId("return-series-chart");
-    fireEvent.click(screen.getByRole("button", { name: "近1年" }));
-    await waitFor(() =>
-      expect(getReturnSeries).toHaveBeenCalledWith("ins_test", "1y"),
-    );
-  });
-});
-
 describe("AssetDetailPage classification editing", () => {
   beforeEach(() => {
     getInstrumentDetailMock.mockReset();
-    getFetchStatusMock.mockReset();
-    useJobStatusMock.mockReset();
     updateClassificationMock.mockReset();
     getInstrumentDetailMock.mockResolvedValue(activeDetail());
-    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
   });
 
   it("edits classification and shows the frozen-plan notice", async () => {
@@ -462,15 +245,6 @@ describe("AssetDetailPage classification editing", () => {
     expect(screen.queryByRole("button", { name: "编辑大类和地区" })).not.toBeInTheDocument();
   });
 
-  it("hides the edit entry while fetching and shows the hint", async () => {
-    getInstrumentDetailMock.mockResolvedValue(pendingDetail());
-    getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
-    renderPage();
-    await screen.findByText("基础信息");
-    expect(screen.queryByRole("button", { name: "编辑大类和地区" })).not.toBeInTheDocument();
-    expect(screen.getByText("抓取完成后可编辑大类和地区。")).toBeInTheDocument();
-  });
-
   it("opens the editor and focuses the asset-class select from the top entry", async () => {
     renderPage();
     const entry = await screen.findByRole("button", { name: "编辑大类和地区" });
@@ -479,15 +253,6 @@ describe("AssetDetailPage classification editing", () => {
     expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
     await waitFor(() => expect(select).toHaveFocus());
   });
-
-  it("allows editing classification for fetch_failed instruments", async () => {
-    getInstrumentDetailMock.mockResolvedValue(failedDetail());
-    getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
-    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
-    renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑大类和地区" }));
-    expect(screen.getByTestId("classification-editor")).toBeInTheDocument();
-  });
 });
 
 describe("AssetDetailPage delete", () => {
@@ -495,14 +260,11 @@ describe("AssetDetailPage delete", () => {
     deleteInstrumentMock.mockReset();
     routerPushMock.mockReset();
     getInstrumentDetailMock.mockReset();
-    getFetchStatusMock.mockReset();
-    useJobStatusMock.mockReset();
     deleteInstrumentMock.mockResolvedValue({ deleted: true });
     getInstrumentDetailMock.mockResolvedValue(activeDetail());
-    useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
   });
 
-  it("invalidates instruments cache and navigates home after delete", async () => {
+  it("invalidates instruments cache and navigates to the library after delete", async () => {
     const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
     const removeSpy = vi.spyOn(QueryClient.prototype, "removeQueries");
 
@@ -516,9 +278,20 @@ describe("AssetDetailPage delete", () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["instruments"] }),
     );
     expect(removeSpy).toHaveBeenCalledWith({ queryKey: ["instrument-detail", "ins_test"] });
-    expect(routerPushMock).toHaveBeenCalledWith("/assets");
+    expect(routerPushMock).toHaveBeenCalledWith("/assets/library");
 
     invalidateSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+
+  it("disables delete while the instrument is referenced by plans", async () => {
+    getInstrumentDetailMock.mockResolvedValue({
+      ...activeDetail(),
+      referencing_plans: [
+        { plan_id: "plan_1", plan_name: "养老计划", snapshot_inclusion_date: "2026-01-01" },
+      ],
+    });
+    renderPage();
+    expect(await screen.findByRole("button", { name: "删除" })).toBeDisabled();
   });
 });

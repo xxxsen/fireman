@@ -3,12 +3,6 @@ import { normalizeApiArrays } from "./normalize";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
-/** Web operation timeout for resolve/import (below Next proxy, above Go resolve 90s). */
-export const MARKET_OPERATION_TIMEOUT_MS = 105_000;
-
-/** Sync instrument refresh waits for Go fetch (default 300s) + margin. */
-export const INSTRUMENT_REFRESH_TIMEOUT_MS = 330_000;
-
 export class ApiError extends Error {
   constructor(
     public readonly code: string,

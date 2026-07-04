@@ -6,10 +6,10 @@ import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
 import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, historyDepthLabel, regionLabel } from "@/lib/format";
 import {
-  flattenResolveCandidates,
-  importResolvedCandidate,
+  importMarketAssetCandidate,
   looksLikeFundCode,
-  resolveCNInstrumentCode,
+  MarketAssetHistoryEmptyError,
+  searchMarketAssetCandidates,
 } from "@/lib/instrument-resolve-search";
 import {
   addInstrumentToGroup,
@@ -17,7 +17,8 @@ import {
   removeInstrumentFromGroup,
   updateInstrumentWeightInGroup,
 } from "@/lib/wizard-allocation";
-import { searchInstruments, type ResolveCandidate } from "@/lib/api/instruments";
+import { searchInstruments } from "@/lib/api/instruments";
+import type { MarketAsset } from "@/lib/api/market-assets";
 import type { Instrument } from "@/types/api";
 import type { WizardHoldingSelection } from "@/lib/wizard-allocation";
 
@@ -61,7 +62,7 @@ export function AssetClassHoldingPicker({
   const [resolveLoading, setResolveLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
-  const [externalCandidates, setExternalCandidates] = useState<ResolveCandidate[]>([]);
+  const [externalCandidates, setExternalCandidates] = useState<MarketAsset[]>([]);
 
   const selectedCodes = useMemo(
     () => new Set(selected.map((s) => s.inst.code.toLowerCase())),
@@ -140,8 +141,8 @@ export function AssetClassHoldingPicker({
   // and hasExactLibraryHit cannot be trusted.
   const listSettled = !listQuery.isLoading && !listQuery.isFetching;
 
-  // Resolve via AKShare only when the query looks like a fund code AND the
-  // local library search has settled with no exact match for it.
+  // Search the local market asset directory only when the query looks like a
+  // fund code AND the library search has settled with no exact match for it.
   useEffect(() => {
     const q = debouncedFilter;
     let cancelled = false;
@@ -162,21 +163,18 @@ export function AssetClassHoldingPicker({
       setResolveError(null);
       void (async () => {
         try {
-          const result = await resolveCNInstrumentCode(q);
-          if (cancelled) return;
-          const candidates = flattenResolveCandidates(result).filter(
-            (c) => !selectedCodes.has(c.code.toLowerCase()),
+          const candidates = (await searchMarketAssetCandidates(q)).filter(
+            (a) => !selectedCodes.has(a.symbol.toLowerCase()),
           );
+          if (cancelled) return;
           setExternalCandidates(candidates);
           if (candidates.length === 0) {
-            setResolveError("未在 AKShare 找到可录入的标的");
+            setResolveError("未在本地资产目录中找到可录入的标的");
           }
         } catch (error) {
           if (cancelled) return;
           setExternalCandidates([]);
-          if (error instanceof ApiError && error.code === "market_provider_timeout") {
-            setResolveError("数据源响应超时，请重试");
-          } else if (error instanceof ApiError) {
+          if (error instanceof ApiError) {
             setResolveError(error.message);
           } else {
             setResolveError(error instanceof Error ? error.message : "查询失败");
@@ -219,16 +217,16 @@ export function AssetClassHoldingPicker({
     setOpen(false);
   };
 
-  const importAndAdd = async (candidate: ResolveCandidate) => {
+  const importAndAdd = async (candidate: MarketAsset) => {
     setImportLoading(true);
     setResolveError(null);
     try {
-      const inst = await importResolvedCandidate(candidate, assetClass, effectiveRegion);
+      const inst = await importMarketAssetCandidate(candidate, assetClass, effectiveRegion);
       await queryClient.invalidateQueries({ queryKey: ["instrument-picker"] });
       addInstrument(inst);
     } catch (error) {
-      if (error instanceof ApiError && error.code === "market_provider_timeout") {
-        setResolveError("数据源响应超时，请重试");
+      if (error instanceof MarketAssetHistoryEmptyError) {
+        setResolveError(error.message);
       } else {
         setResolveError(error instanceof Error ? error.message : "录入失败");
       }
@@ -371,7 +369,7 @@ export function AssetClassHoldingPicker({
       )}
       {open && (resolveLoading || importLoading) && (
         <p className="mt-2 text-sm text-ink-muted" role="status">
-          {importLoading ? "正在录入并抓取历史数据…" : "正在查询 AKShare…"}
+          {importLoading ? "正在录入…" : "正在搜索本地资产目录…"}
         </p>
       )}
       {open && externalCandidates.length > 0 && (
@@ -381,7 +379,7 @@ export function AssetClassHoldingPicker({
           data-testid="wizard-external-results"
         >
           {externalCandidates.map((candidate) => (
-            <li key={`${candidate.code}-${candidate.provider_symbol}`} role="option" aria-selected={false}>
+            <li key={candidate.asset_key} role="option" aria-selected={false}>
               <button
                 type="button"
                 className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:opacity-50"
@@ -389,8 +387,8 @@ export function AssetClassHoldingPicker({
                 onClick={() => void importAndAdd(candidate)}
               >
                 <span className="font-medium">{candidate.name}</span>
-                <span className="ml-2 text-ink-muted">{candidate.code}</span>
-                <span className="ml-2 text-xs text-ink-muted">资料库未收录 · 点击录入并添加</span>
+                <span className="ml-2 text-ink-muted">{candidate.symbol}</span>
+                <span className="ml-2 text-xs text-ink-muted">资产库未收录 · 点击录入并添加</span>
               </button>
             </li>
           ))}
@@ -406,7 +404,7 @@ export function AssetClassHoldingPicker({
       )}
       {showEmptyHint && looksLikeFundCode(debouncedFilter) && !resolveError && (
         <p className="mt-2 text-sm text-ink-muted">
-          资料库中暂无该代码；输入完整基金编号后会自动查询 AKShare。
+          资产库中暂无该代码；输入完整代码后会自动搜索本地资产目录。
         </p>
       )}
     </section>

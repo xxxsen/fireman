@@ -5,7 +5,9 @@ services:
     volumes:
       - fireman-data:/data
       - fireman-provider-cache:/cache
-    entrypoint: ["sh", "-c", "mkdir -p /data /cache && chown 65532:65532 /data && chown 1001:1001 /cache"]
+    # Backend (distroless nonroot, uid 65532) owns /data; the sidecar worker
+    # runs as the same uid so it can open the shared SQLite files in WAL mode.
+    entrypoint: ["sh", "-c", "mkdir -p /data /cache && chown 65532:65532 /data /cache"]
     restart: "no"
 
   backend:
@@ -16,16 +18,13 @@ services:
     container_name: fireman-backend
     ports:
       - "8080:8080"
+    # The internal API (:8081, resource upload + post-process) is reachable by
+    # the sidecar over the compose network only and must not be published.
     volumes:
       - fireman-data:/data
-    environment:
-      MARKET_PROVIDER_RESOLVE_TIMEOUT: "90s"
-      MARKET_PROVIDER_FETCH_TIMEOUT: "300s"
     depends_on:
       data-init:
         condition: service_completed_successfully
-      market-provider:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "/app/fireman", "healthcheck"]
       interval: 30s
@@ -64,13 +63,17 @@ services:
       context: ../sidecars/market-provider
       dockerfile: Dockerfile
     container_name: fireman-market-provider
+    # Share uid with the backend so the worker can write worker_tasks in the
+    # shared SQLite main DB (WAL requires write access to db/-wal/-shm files).
+    user: "65532:65532"
     environment:
       TZ: "Asia/Shanghai"
+      HOME: /tmp
+      FIREMAN_DB_PATH: /data/fireman.db
+      FIREMAN_INTERNAL_API_URL: http://backend:8081
       MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH: /cache/mutual_fund_names.json
       MARKET_PROVIDER_MUTUAL_FUND_FETCH_TIMEOUT: "60"
       MARKET_PROVIDER_FETCH_TIMEOUT: "240"
-      MARKET_PROVIDER_RESOLVE_TIMEOUT: "60"
-      MARKET_PROVIDER_RESOLVE_DEADLINE: "70"
       # TickFlow priority fetch: off by default; enable per environment. With an
       # API key the client targets the paid API, otherwise the free API.
       MARKET_PROVIDER_TICKFLOW_ENABLED: "${MARKET_PROVIDER_TICKFLOW_ENABLED:-false}"
@@ -81,12 +84,14 @@ services:
       MARKET_PROVIDER_TICKFLOW_TYPES: "${MARKET_PROVIDER_TICKFLOW_TYPES:-cn_exchange_stock,cn_exchange_fund}"
       MARKET_PROVIDER_TICKFLOW_REQUIRE_ADJUST_NONE: "${MARKET_PROVIDER_TICKFLOW_REQUIRE_ADJUST_NONE:-true}"
     volumes:
+      - fireman-data:/data
       - fireman-provider-cache:/cache
-    ports:
-      - "18081:18081"
     depends_on:
       data-init:
         condition: service_completed_successfully
+      # Migrations must run before the worker starts claiming tasks.
+      backend:
+        condition: service_healthy
     healthcheck:
       test:
         - "CMD-SHELL"

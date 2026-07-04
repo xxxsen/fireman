@@ -165,10 +165,10 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedOneYearSimulationPlan(t, db)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -250,7 +250,7 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 
@@ -294,7 +294,7 @@ func TestReturnOverrideEndpoint(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 	base := srv.URL + "/api/v1/plans/" + planID + "/return-overrides"
@@ -405,10 +405,10 @@ func TestSimulationJobFlow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil, services.EventHub, nil, nil)
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -593,13 +593,13 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	jobsRepo := repository.NewJobRepo(db)
 	simsRepo := repository.NewSimulationRepo(db)
 	runner := persistFailingRunner{db: db, sims: simsRepo}
-	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil,
+	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)),
 		jobs.NewEventHub(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
 

@@ -106,7 +106,7 @@ func (r *InstrumentLibraryMetricsRepo) Upsert(ctx context.Context, tx *sql.Tx, r
 // the projection table, so qualification is required).
 const instrumentBaseColumnsAliased = `i.id, i.code, i.name, i.market, i.instrument_type,
 		i.asset_class, i.region, i.currency,
-		i.provider, i.provider_symbol, i.adjust_policy, i.instrument_kind, i.is_system,
+		i.provider, i.provider_symbol, i.asset_key, i.adjust_policy, i.instrument_kind, i.is_system,
 		i.expense_ratio, i.expense_ratio_status, i.fee_treatment, i.status,
 		i.created_at, i.updated_at`
 
@@ -154,7 +154,7 @@ func scanInstrumentListRow(rows *sql.Rows) (InstrumentRecord, error) {
 	if err := rows.Scan(
 		&inst.ID, &inst.Code, &inst.Name, &inst.Market, &inst.InstrumentType,
 		&inst.AssetClass, &inst.Region, &inst.Currency,
-		&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
+		&inst.Provider, &inst.ProviderSymbol, &inst.AssetKey, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
 		&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
 		&inst.CreatedAt, &inst.UpdatedAt,
 		&dataAsOf, &dataSource, &pointType, &quality,

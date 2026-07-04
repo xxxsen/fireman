@@ -2,8 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,15 +14,9 @@ import (
 
 func (s Services) registerInstrumentRoutes(rg *gin.RouterGroup) {
 	rg.GET("/instruments", s.listInstruments)
-	rg.POST("/instruments/resolve", s.resolveInstrument)
-	rg.POST("/instruments/import-async", s.importInstrumentAsync)
-	rg.GET("/instruments/:instrument_id/fetch-status", s.getInstrumentFetchStatus)
-	rg.POST("/instruments/:instrument_id/retry-fetch", s.retryInstrumentFetch)
-	rg.POST("/instruments/import/preview", s.previewInstrumentImport)
 	rg.POST("/instruments/import", s.importInstrument)
 	rg.GET("/instruments/:instrument_id", s.getInstrument)
 	rg.GET("/instruments/:instrument_id/detail", s.getInstrumentDetail)
-	rg.POST("/instruments/:instrument_id/refresh", s.refreshInstrument)
 	rg.PATCH("/instruments/:instrument_id/classification", s.updateInstrumentClassification)
 	rg.DELETE("/instruments/:instrument_id", s.deleteInstrument)
 	rg.GET("/instruments/:instrument_id/annual-returns", s.getInstrumentAnnualReturns)
@@ -104,71 +96,12 @@ func decodeInstrumentImportBody[T any](
 	return req, true
 }
 
-func (s Services) previewInstrumentImport(c *gin.Context) {
-	req, ok := decodeInstrumentImportBody[service.InstrumentImportRequest](c, service.CheckInstrumentReadOnlyFields)
-	if !ok {
-		return
-	}
-	out, err := s.Instruments.Preview(c.Request.Context(), req)
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
 func (s Services) importInstrument(c *gin.Context) {
-	req, ok := decodeInstrumentImportBody[service.InstrumentImportRequest](c, service.CheckInstrumentReadOnlyFields)
+	req, ok := decodeInstrumentImportBody[service.InstrumentImportRequest](c, service.CheckInstrumentImportFields)
 	if !ok {
 		return
 	}
-	out, err := s.Instruments.Import(c.Request.Context(), req)
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) resolveInstrument(c *gin.Context) {
-	var req service.InstrumentResolveRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	out, err := s.Instruments.Resolve(c.Request.Context(), req)
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) importInstrumentAsync(c *gin.Context) {
-	req, ok := decodeInstrumentImportBody[service.InstrumentImportAsyncRequest](c,
-		service.CheckInstrumentImportAsyncFields)
-	if !ok {
-		return
-	}
-	out, err := s.Instruments.ImportAsync(c.Request.Context(), req)
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) getInstrumentFetchStatus(c *gin.Context) {
-	out, err := s.Instruments.GetFetchStatus(c.Request.Context(), c.Param("instrument_id"))
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) retryInstrumentFetch(c *gin.Context) {
-	out, err := s.Instruments.RetryFetch(c.Request.Context(), c.Param("instrument_id"))
+	out, err := s.Instruments.ImportFromMarketAsset(c.Request.Context(), req)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -187,24 +120,6 @@ func (s Services) getInstrument(c *gin.Context) {
 
 func (s Services) getInstrumentDetail(c *gin.Context) {
 	out, err := s.Instruments.GetDetail(c.Request.Context(), c.Param("instrument_id"))
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) refreshInstrument(c *gin.Context) {
-	var req service.InstrumentRefreshOptions
-	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	// Manual library refresh is always an immediate full refresh; the
-	// legacy `force` field is accepted for compatibility but no longer changes the
-	// user-visible behavior or the 24h throttle.
-	req.Force = true
-	out, err := s.Instruments.Refresh(c.Request.Context(), c.Param("instrument_id"), req)
 	if err != nil {
 		FailErr(c, err)
 		return

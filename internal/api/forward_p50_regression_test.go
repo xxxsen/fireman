@@ -65,7 +65,7 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 	planID := seedSimulationReadyPlan(t, db)
 	configureRegressionPlan(t, db, planID)
 
-	services := buildServices(db, "")
+	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	simRepo := repository.NewSimulationRepo(db)
 

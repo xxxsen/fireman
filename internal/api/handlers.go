@@ -25,6 +25,7 @@ type Services struct {
 	RebalanceExecutions *service.RebalanceExecutionService
 	AssetRefresh        *service.AssetRefreshService
 	Instruments         *service.InstrumentService
+	MarketAssets        *service.MarketAssetService
 	HoldingSnapshots    *service.HoldingSnapshotService
 	Simulations         *service.SimulationService
 	Assumptions         *service.AssumptionService
@@ -37,10 +38,7 @@ type Services struct {
 	Maintenance         *service.MaintenanceGate
 }
 
-func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *service.MaintenanceGate) Services {
-	if marketProviderURL == "" {
-		marketProviderURL = "http://127.0.0.1:18081"
-	}
+func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate) Services {
 	plans := repository.NewPlanRepo(db)
 	params := repository.NewParametersRepo(db)
 	alloc := repository.NewAllocationRepo(db)
@@ -51,11 +49,12 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 	annualRepo := repository.NewAnnualReturnsRepo(db)
 	snapRepo := repository.NewSnapshotRepo(db)
 	hash := service.NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
-	provider := marketdata.NewProviderClient(marketProviderURL).FetchClient()
 	snapSvc := marketdata.NewSnapshotService(snapRepo, instRepo, marketRepo)
 	jobRepo := repository.NewJobRepo(db)
 	simRepo := repository.NewSimulationRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
+	workerTaskRepo := repository.NewWorkerTaskRepo(db)
+	marketAssetRepo := repository.NewMarketAssetRepo(db)
 	eventHub := jobs.NewEventHub()
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
@@ -90,9 +89,9 @@ func NewServices(db *sql.DB, dbPath, marketProviderURL string, maintenance *serv
 			db, plans, params, alloc, scenario, holdingsSvc, repository.NewAssetRefreshEventRepo(db), executionRepo,
 		),
 		Instruments: service.NewInstrumentService(
-			db, instRepo, marketRepo, annualRepo, jobRepo,
-			repository.NewResolutionTicketRepo(db), provider,
+			db, instRepo, marketRepo, annualRepo, marketAssetRepo,
 		),
+		MarketAssets: service.NewMarketAssetService(db, workerTaskRepo, marketAssetRepo),
 		HoldingSnapshots: service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
 		Simulations:      simSvc,
 		Assumptions:      service.NewAssumptionService(db),

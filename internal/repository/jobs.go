@@ -9,11 +9,10 @@ import (
 )
 
 const (
-	JobTypeSimulation      = "simulation"
-	JobTypeStress          = "stress"
-	JobTypeSensitivity     = "sensitivity"
-	JobTypeInstrumentFetch = "instrument_fetch"
-	JobStatusQueued        = "queued"
+	JobTypeSimulation  = "simulation"
+	JobTypeStress      = "stress"
+	JobTypeSensitivity = "sensitivity"
+	JobStatusQueued    = "queued"
 	JobStatusRunning       = "running"
 	JobStatusSucceeded     = "succeeded"
 	JobStatusFailed        = "failed"
@@ -331,30 +330,6 @@ func (r *JobRepo) ListByPlanAndType(ctx context.Context, planID, jobType string,
 		return nil, fmt.Errorf("iterate jobs: %w", err)
 	}
 	return out, nil
-}
-
-func (r *JobRepo) FindInProgressByInputHash(ctx context.Context, jobType, inputHash string) (Job, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, plan_id, type, status, input_hash, payload_json,
-			progress_current, progress_total, phase, cancel_requested, retry_count,
-			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
-		FROM jobs
-		WHERE type=? AND input_hash=? AND status IN (?, ?)
-		ORDER BY created_at DESC LIMIT 1`,
-		jobType, inputHash, JobStatusQueued, JobStatusRunning)
-	return scanJob(row)
-}
-
-func (r *JobRepo) FindLatestInstrumentFetch(ctx context.Context, instrumentID string) (Job, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, plan_id, type, status, input_hash, payload_json,
-			progress_current, progress_total, phase, cancel_requested, retry_count,
-			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
-		FROM jobs
-		WHERE type=? AND json_extract(payload_json, '$.instrument_id')=?
-		ORDER BY created_at DESC LIMIT 1`,
-		JobTypeInstrumentFetch, instrumentID)
-	return scanJob(row)
 }
 
 func scanJob(row *sql.Row) (Job, error) {

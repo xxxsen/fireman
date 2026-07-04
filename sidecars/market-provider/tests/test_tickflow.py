@@ -5,12 +5,12 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 from tickflow import RateLimitError
 from tickflow import TimeoutError as TickFlowTimeoutError
 
-from fireman_market_provider import create_app
 from fireman_market_provider.adapters import tickflow as tickflow_module
+
+from .fetch_compat import fetch
 from fireman_market_provider.adapters.tickflow import (
     TICKFLOW_KLINES_SOURCE,
     get_tickflow_client,
@@ -40,10 +40,6 @@ def _clean_client_cache():
     reset_tickflow_client()
     yield
     reset_tickflow_client()
-
-
-def _client() -> TestClient:
-    return TestClient(create_app())
 
 
 def _payload(
@@ -415,9 +411,7 @@ def test_fetch_stock_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
         "akshare.stock_zh_a_hist",
         side_effect=AssertionError("akshare must not be called on tickflow hit"),
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "600519",
@@ -447,9 +441,7 @@ def test_fetch_stock_tickflow_empty_falls_back_to_akshare(
     with _patch_client(_FakeClient(result=_payload([], []))), patch(
         "akshare.stock_zh_a_hist", return_value=ak_df
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "600519",
@@ -471,9 +463,7 @@ def test_fetch_stock_tickflow_timeout_falls_back_to_akshare(
     with _patch_client(_FakeClient(error=TickFlowTimeoutError("tickflow timed out"))), patch(
         "akshare.stock_zh_a_hist", return_value=ak_df
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "600519",
@@ -490,9 +480,7 @@ def test_fetch_stock_qfq_does_not_call_tickflow(monkeypatch: pytest.MonkeyPatch)
     ak_df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [11.0]})
     fake = _FakeClient(error=AssertionError("tickflow must not be called for qfq"))
     with _patch_client(fake), patch("akshare.stock_zh_a_hist", return_value=ak_df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "600519",
@@ -512,9 +500,7 @@ def test_fetch_etf_kind_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> Non
         "akshare.fund_etf_hist_em",
         side_effect=AssertionError("akshare must not be called on tickflow hit"),
     ):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
@@ -537,9 +523,7 @@ def test_fetch_lof_kind_never_calls_tickflow(monkeypatch: pytest.MonkeyPatch) ->
     ak_df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [1.2]})
     fake = _FakeClient(error=AssertionError("tickflow must not be called for lof"))
     with _patch_client(fake), patch("akshare.fund_lof_hist_em", return_value=ak_df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sz161725",
@@ -558,9 +542,7 @@ def test_fetch_unknown_fund_kind_never_calls_tickflow(monkeypatch: pytest.Monkey
     ak_df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [1.2]})
     fake = _FakeClient(error=AssertionError("tickflow must not be called for unknown kind"))
     with _patch_client(fake), patch("akshare.fund_etf_hist_em", return_value=ak_df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
@@ -592,9 +574,7 @@ def test_fetch_mutual_fund_never_calls_tickflow(monkeypatch: pytest.MonkeyPatch)
         "fireman_market_provider.adapters.names.lookup_cn_mutual_fund_name_readonly",
         return_value="易方达消费行业",
     ), patch("akshare.fund_open_fund_info_em", return_value=open_df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_mutual_fund",
                 "source_code": "110022",
@@ -612,9 +592,7 @@ def test_fetch_default_config_never_calls_tickflow(monkeypatch: pytest.MonkeyPat
     ak_df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [11.0]})
     fake = _FakeClient(error=AssertionError("tickflow must not be called when disabled"))
     with _patch_client(fake), patch("akshare.stock_zh_a_hist", return_value=ak_df):
-        response = _client().post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "600519",

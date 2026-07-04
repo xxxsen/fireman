@@ -10,16 +10,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	fdb "github.com/fireman/fireman/internal/db"
+	"github.com/fireman/fireman/internal/libmetrics"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// InstrumentImportRequest is the only client-writable import payload.
+// InstrumentImportRequest imports a user instrument from the global market
+// asset directory (td/078 P4). asset_class and region are the only
+// user-writable classification fields.
 type InstrumentImportRequest struct {
-	Market         string `json:"market"`
-	InstrumentType string `json:"instrument_type"`
-	Code           string `json:"code"`
+	AssetKey   string `json:"asset_key"`
+	AssetClass string `json:"asset_class"`
+	Region     string `json:"region"`
 }
 
 // InstrumentService manages the asset library.
@@ -29,9 +34,7 @@ type InstrumentService struct {
 	marketRepo *repository.MarketDataRepo
 	annualRepo *repository.AnnualReturnsRepo
 	libMetrics *repository.InstrumentLibraryMetricsRepo
-	jobs       *repository.JobRepo
-	tickets    *repository.ResolutionTicketRepo
-	provider   *marketdata.ProviderClient
+	assets     *repository.MarketAssetRepo
 }
 
 func NewInstrumentService(
@@ -39,14 +42,12 @@ func NewInstrumentService(
 	instRepo *repository.InstrumentRepo,
 	marketRepo *repository.MarketDataRepo,
 	annualRepo *repository.AnnualReturnsRepo,
-	jobs *repository.JobRepo,
-	tickets *repository.ResolutionTicketRepo,
-	provider *marketdata.ProviderClient,
+	assets *repository.MarketAssetRepo,
 ) *InstrumentService {
 	return &InstrumentService{
 		sql: sqlDB, instRepo: instRepo, marketRepo: marketRepo,
 		annualRepo: annualRepo, libMetrics: repository.NewInstrumentLibraryMetricsRepo(sqlDB),
-		jobs: jobs, tickets: tickets, provider: provider,
+		assets: assets,
 	}
 }
 
@@ -218,138 +219,137 @@ func (s *InstrumentService) Get(ctx context.Context, id string) (repository.Inst
 	return inst, nil
 }
 
-func normalizeInstrumentImport(req *InstrumentImportRequest) {
-	req.Code = strings.TrimSpace(req.Code)
-	if strings.EqualFold(req.Market, "HK") {
-		req.Code = marketdata.NormalizeHKCode(req.Code)
+// ImportFromMarketAsset creates a user instrument from a market asset
+// directory entry and projects its stored history into the legacy instrument
+// tables. It performs no remote calls: assets without synced history are
+// rejected with market_asset_history_empty so the UI can direct the user to
+// the asset detail page first.
+func (s *InstrumentService) ImportFromMarketAsset(
+	ctx context.Context, req InstrumentImportRequest,
+) (repository.InstrumentRecord, error) {
+	req.AssetKey = strings.TrimSpace(req.AssetKey)
+	req.AssetClass = strings.TrimSpace(req.AssetClass)
+	req.Region = strings.TrimSpace(req.Region)
+	if req.AssetKey == "" {
+		return repository.InstrumentRecord{}, newErr("invalid_request", "asset_key is required", nil)
 	}
-}
-
-func (s *InstrumentService) Preview(ctx context.Context, req InstrumentImportRequest) (map[string]any, error) {
-	normalizeInstrumentImport(&req)
-	if err := validateImportRequest(req); err != nil {
-		return nil, err
-	}
-	resolved, err := s.Resolve(ctx, InstrumentResolveRequest(req))
+	asset, err := s.assets.GetByKey(ctx, req.AssetKey)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, repository.ErrMarketAssetNotFound) {
+			return repository.InstrumentRecord{}, newErr("market_asset_not_found",
+				"market asset not found; sync the asset directory first", nil)
+		}
+		return repository.InstrumentRecord{}, wrapRepo("load market asset", err)
 	}
-	out := map[string]any{
-		"deprecated": true,
-		"preview":    true,
-		"message":    "preview no longer fetches full history; use resolve + import-async",
-		"resolve":    resolved,
+	if req.AssetClass == "" {
+		req.AssetClass = defaultImportAssetClass(asset.InstrumentType)
 	}
-	if amb, ok := resolved["ambiguous"].(bool); ok && !amb {
-		if r, ok := resolved["resolved"].(map[string]any); ok {
-			out["instrument"] = map[string]any{
-				"code": r["code"], "name": r["name"], "market": req.Market,
-				"instrument_type": req.InstrumentType,
-				"currency":        defaultCurrency(req.Market),
-			}
-			out["provider_symbol"] = r["provider_symbol"]
+	if req.Region == "" {
+		req.Region = defaultImportRegion(asset.Market)
+	}
+	if err := validateUserAssetClass(req.AssetClass); err != nil {
+		return repository.InstrumentRecord{}, err
+	}
+	if err := validateUserRegion(req.Region); err != nil {
+		return repository.InstrumentRecord{}, err
+	}
+
+	adjust := marketdata.DefaultAdjustPolicy(asset.InstrumentType)
+	dimAdjust, dimPointType, err := s.importHistoryDimension(ctx, asset)
+	if err != nil {
+		return repository.InstrumentRecord{}, err
+	}
+	points, err := s.assets.ListPoints(ctx, asset.AssetKey, dimAdjust, dimPointType)
+	if err != nil {
+		return repository.InstrumentRecord{}, wrapRepo("list market asset points", err)
+	}
+	if len(points) == 0 {
+		return repository.InstrumentRecord{}, newErr("market_asset_history_empty",
+			"market asset has no synced history; sync history on the asset detail page first",
+			map[string]any{"asset_key": asset.AssetKey})
+	}
+
+	if existing, findErr := s.instRepo.FindByKey(
+		ctx, asset.Market, asset.InstrumentType, asset.Symbol, adjust,
+	); findErr == nil {
+		return repository.InstrumentRecord{}, newErr("instrument_already_exists",
+			"instrument already imported", map[string]any{"instrument_id": existing.ID})
+	} else if !errors.Is(findErr, repository.ErrInstrumentNotFound) {
+		return repository.InstrumentRecord{}, wrapRepo("find instrument by key", findErr)
+	}
+
+	currency := asset.Currency
+	if currency == "" {
+		currency = defaultCurrency(asset.Market)
+	}
+	providerSymbol := asset.Symbol
+	if asset.RegionCode != "" && strings.EqualFold(asset.Market, "CN") {
+		providerSymbol = asset.RegionCode + asset.Symbol
+	}
+	inst := repository.InstrumentRecord{
+		ID: "ins_" + uuid.New().String(), Code: asset.Symbol, Name: asset.Name,
+		Market: asset.Market, InstrumentType: asset.InstrumentType,
+		AssetClass: req.AssetClass, Region: req.Region, Currency: currency,
+		Provider: "akshare", ProviderSymbol: providerSymbol,
+		AssetKey: asset.AssetKey, AdjustPolicy: adjust,
+		InstrumentKind:     asset.InstrumentKind,
+		ExpenseRatioStatus: "unavailable",
+		FeeTreatment:       marketdata.FeeTreatmentForType(asset.InstrumentType),
+		Status:             "active",
+	}
+
+	dp := make([]marketdata.DataPoint, len(points))
+	for i, p := range points {
+		dp[i] = marketdata.DataPoint{
+			TradeDate: p.TradeDate, Value: p.Value,
+			PointType: p.PointType, SourceName: p.SourceName, FetchedAt: p.FetchedAt,
 		}
 	}
-	return out, nil
-}
-
-func (s *InstrumentService) Import(ctx context.Context, req InstrumentImportRequest) (repository.InstrumentRecord,
-	error,
-) {
-	normalizeInstrumentImport(&req)
-	if err := validateImportRequest(req); err != nil {
-		return repository.InstrumentRecord{}, wrapRepo("load instrument", err)
-	}
-	resolved, err := s.Resolve(ctx, InstrumentResolveRequest(req))
-	if err != nil {
-		return repository.InstrumentRecord{}, wrapRepo("load instrument", err)
-	}
-	if amb, _ := resolved["ambiguous"].(bool); amb {
-		return repository.InstrumentRecord{}, newErr("instrument_ambiguous",
-			"code is ambiguous; use import-async after resolve", nil)
-	}
-	r, ok := resolved["resolved"].(map[string]any)
-	if !ok {
-		return repository.InstrumentRecord{}, newErr("instrument_not_found", "instrument not found", nil)
-	}
-	ticketID, _ := r["ticket_id"].(string)
-	if ticketID == "" {
-		return repository.InstrumentRecord{}, newErr("invalid_request", "resolve did not return ticket_id", nil)
-	}
-	result, err := s.ImportAsync(ctx, InstrumentImportAsyncRequest{
-		TicketID:   ticketID,
-		AssetClass: defaultImportAssetClass(req.InstrumentType),
-		Region:     defaultImportRegion(req.Market),
-	})
-	if err != nil {
-		return repository.InstrumentRecord{}, wrapRepo("load instrument", err)
-	}
-	inst, err := s.instRepo.GetByID(ctx, result.InstrumentID)
-	if err != nil {
-		return repository.InstrumentRecord{}, wrapRepo("load instrument", err)
-	}
-	inst.QualityStatus = "pending_sync"
-	return inst, nil
-}
-
-// InstrumentRefreshOptions controls instrument refresh behavior.
-type InstrumentRefreshOptions struct {
-	Force bool `json:"force"`
-}
-
-func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string,
-	opts InstrumentRefreshOptions,
-) (repository.InstrumentRecord, error) {
-	inst, err := s.loadRefreshableInstrument(ctx, instrumentID, opts)
-	if err != nil {
-		return inst, err
-	}
-	if opts.Force {
-		slog.InfoContext(
-			ctx, "instrument force refresh",
-			"instrument_id", instrumentID,
-			"code", inst.Code,
-		)
-	}
-
-	// Heal identity before fetching so refresh requests carry instrument_kind and
-	// the sidecar selects an identity-consistent history source.
-	inst, err = s.ensureInstrumentKind(ctx, inst)
-	if err != nil {
-		return inst, err
-	}
-
-	existingRows, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
-	if err != nil {
-		return repository.InstrumentRecord{}, wrapRepo("load instrument", err)
-	}
-	existing := repoToDataPoints(existingRows)
-	fullReplace := marketdata.ShouldFullReplaceOnRefresh(opts.Force, existing, "")
-	lastDate, _ := s.marketRepo.LastTradeDate(ctx, instrumentID)
-	start := refreshOverlapStart(fullReplace, lastDate)
-	end := time.Now().Format("2006-01-02")
-	data, processed, err := s.fetchAndProcessForInstrument(ctx, inst, start)
-	if err != nil {
-		// upstream failure: keep existing data
-		return inst, err
-	}
-	if processed.HasAnomaly {
-		return inst, newErr("provider_data_anomaly", "refresh rejected due to abnormal daily returns", nil)
-	}
-
-	fullReplace = marketdata.ShouldFullReplaceOnRefresh(opts.Force, existing, processed.SourceName)
-	reprocessed := mergeRefreshProcessedData(ctx, instrumentID, existing, processed, opts.Force, end)
-
-	newName := strings.TrimSpace(data.Name)
-	shouldUpdateName := shouldUpgradeInstrumentName(inst.Name, newName, inst.Code)
+	annual := marketdata.ComputeAnnualReturns(dp)
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		return persistRefreshMarketDataTx(ctx, s, tx, instrumentID, fullReplace, reprocessed, shouldUpdateName, newName)
+		if err := s.instRepo.Create(ctx, tx, inst); err != nil {
+			return wrapRepo("create instrument", err)
+		}
+		if err := s.marketRepo.UpsertBatch(ctx, tx, inst.ID, toRepoPoints(inst.ID, dp)); err != nil {
+			return wrapRepo("project market data", err)
+		}
+		if err := s.annualRepo.ReplaceAll(ctx, tx, inst.ID, toRepoAnnual(inst.ID, annual)); err != nil {
+			return wrapRepo("project annual returns", err)
+		}
+		return libmetrics.SyncTx(ctx, s.libMetrics, tx, inst.ID, dp)
 	})
 	if err != nil {
-		return repository.InstrumentRecord{}, wrapRepo("refresh instrument", err)
+		if isUniqueConstraintErr(err) {
+			return repository.InstrumentRecord{}, newErr("instrument_already_exists",
+				"instrument already imported", nil)
+		}
+		var ae *AppError
+		if errors.As(err, &ae) {
+			return repository.InstrumentRecord{}, ae
+		}
+		return repository.InstrumentRecord{}, wrapRepo("import instrument from market asset", err)
 	}
-	return s.Get(ctx, instrumentID)
+	slog.InfoContext(ctx, "instrument imported from market asset",
+		"instrument_id", inst.ID, "asset_key", asset.AssetKey, "points", len(dp))
+	return s.Get(ctx, inst.ID)
+}
+
+// importHistoryDimension picks the history dimension to project at import
+// time: the asset's synced history state wins, falling back to type defaults.
+func (s *InstrumentService) importHistoryDimension(
+	ctx context.Context, asset repository.MarketAsset,
+) (string, string, error) {
+	states, err := s.assets.ListHistoryStatesByAsset(ctx, asset.AssetKey)
+	if err != nil {
+		return "", "", wrapRepo("list history states", err)
+	}
+	for _, st := range states {
+		if st.PointCount > 0 {
+			return st.AdjustPolicy, st.PointType, nil
+		}
+	}
+	return "none", DefaultPointType(asset.InstrumentType, asset.InstrumentKind), nil
 }
 
 func (s *InstrumentService) Delete(ctx context.Context, instrumentID string) error {
@@ -595,200 +595,6 @@ func toMarketAnnualFromRepo(rows []repository.AnnualReturnRecord) []marketdata.A
 	return out
 }
 
-func (s *InstrumentService) fetchAndProcessForInstrument(
-	ctx context.Context,
-	inst repository.InstrumentRecord,
-	start *string,
-) (*marketdata.FetchData, marketdata.ProcessFetchResult, error) {
-	end := time.Now().Format("2006-01-02")
-	fetchReq := marketdata.FetchRequest{
-		Market: inst.Market, InstrumentType: inst.InstrumentType,
-		SourceCode: inst.Code, StartDate: start, EndDate: end,
-		AdjustPolicy:   marketdata.DefaultAdjustPolicy(inst.InstrumentType),
-		ResolvedName:   inst.Name,
-		InstrumentKind: inst.InstrumentKind,
-	}
-	data, err := s.provider.Fetch(ctx, fetchReq)
-	if err != nil {
-		slog.WarnContext(
-			ctx, "instrument fetch failed",
-			"instrument_id", inst.ID,
-			"market", inst.Market,
-			"instrument_type", inst.InstrumentType,
-			"code", inst.Code,
-			"error", err,
-		)
-		return nil, marketdata.ProcessFetchResult{}, mapMarketProviderError(err)
-	}
-	if err := marketdata.ValidateFetchSourceCompatibility(inst.InstrumentType, inst.AssetClass, data); err != nil {
-		return nil, marketdata.ProcessFetchResult{}, mapSourceConflictError(err)
-	}
-	if _, err := marketdata.ResolveClassification(inst.Market, inst.InstrumentType, data); err != nil {
-		return nil, marketdata.ProcessFetchResult{}, mapClassifyError(err)
-	}
-	processed := marketdata.ProcessProviderData(data, end)
-	return data, processed, nil
-}
-
-// identitySensitiveInstrumentType reports whether an instrument type relies on a
-// resolved instrument_kind to pick identity-consistent history sources. Only
-// cn_exchange_fund currently shares bare codes across ETF/LOF/stock variants in
-// the sidecar fallback chain.
-func identitySensitiveInstrumentType(instrumentType string) bool {
-	return instrumentType == "cn_exchange_fund"
-}
-
-// ensureInstrumentKind backfills a missing resolved instrument_kind before a
-// refresh fetch. Legacy assets imported before instrument_kind was persisted
-// would otherwise let the sidecar fall back to the legacy ETF->LOF->stock chain
-// and mix data across instruments sharing a bare code. Identity is
-// healed here via one controlled resolve, then persisted so future refreshes are
-// identity-safe.
-func (s *InstrumentService) ensureInstrumentKind(
-	ctx context.Context, inst repository.InstrumentRecord,
-) (repository.InstrumentRecord, error) {
-	if inst.InstrumentKind != "" || !identitySensitiveInstrumentType(inst.InstrumentType) {
-		return inst, nil
-	}
-	data, err := s.provider.Resolve(ctx, marketdata.ResolveRequest{
-		Market: inst.Market, InstrumentType: inst.InstrumentType, Code: inst.Code,
-	})
-	if err != nil {
-		if ae := mapMarketProviderError(err); ae != nil {
-			return inst, ae
-		}
-		return inst, newErr("market_provider_unavailable", err.Error(), nil)
-	}
-	kind := matchResolvedInstrumentKind(data, inst.Code, inst.ProviderSymbol)
-	if kind == "" {
-		return inst, newErr("instrument_identity_unresolved",
-			"cannot establish instrument identity for refresh; re-import the asset", nil)
-	}
-	if err := s.instRepo.UpdateInstrumentKindTx(ctx, nil, inst.ID, kind); err != nil {
-		return inst, wrapRepo("backfill instrument kind", err)
-	}
-	inst.InstrumentKind = kind
-	slog.InfoContext(ctx, "instrument kind backfilled for refresh",
-		"instrument_id", inst.ID, "code", inst.Code, "instrument_kind", kind)
-	return inst, nil
-}
-
-// matchResolvedInstrumentKind picks the kind of the resolved candidate whose
-// identity (code/provider_symbol) matches the stored instrument, tolerating
-// prefixed (sh510300) and bare (510300) forms.
-func matchResolvedInstrumentKind(data *marketdata.ResolveData, code, providerSymbol string) string {
-	if data == nil {
-		return ""
-	}
-	match := func(c marketdata.ResolveCandidate) bool {
-		return identityCodeMatch(c.ProviderSymbol, providerSymbol) ||
-			identityCodeMatch(c.Code, code) ||
-			identityCodeMatch(c.Code, providerSymbol) ||
-			identityCodeMatch(c.ProviderSymbol, code)
-	}
-	if data.Resolved != nil && match(*data.Resolved) {
-		return data.Resolved.InstrumentKind
-	}
-	for _, c := range data.Candidates {
-		if match(c) {
-			return c.InstrumentKind
-		}
-	}
-	return ""
-}
-
-func identityCodeMatch(a, b string) bool {
-	a = strings.ToLower(strings.TrimSpace(a))
-	b = strings.ToLower(strings.TrimSpace(b))
-	if a == "" || b == "" {
-		return false
-	}
-	return a == b || bareInstrumentCode(a) == bareInstrumentCode(b)
-}
-
-func bareInstrumentCode(s string) string {
-	for _, p := range []string{"sh", "sz", "bj"} {
-		if strings.HasPrefix(s, p) {
-			s = s[len(p):]
-			break
-		}
-	}
-	return strings.TrimLeft(s, "0")
-}
-
-// isPlaceholderInstrumentName reports whether a stored name is just the code
-// (a placeholder left behind when name resolution failed). It tolerates the
-// prefixed (sh510300), bare (510300) and zero-stripped forms.
-func isPlaceholderInstrumentName(name, code string) bool {
-	n := strings.TrimSpace(name)
-	if n == "" {
-		return true
-	}
-	c := strings.TrimSpace(code)
-	candidates := map[string]struct{}{
-		strings.ToLower(c): {},
-	}
-	bare := strings.ToLower(c)
-	for _, p := range []string{"sh", "sz", "bj"} {
-		if strings.HasPrefix(bare, p) {
-			bare = bare[len(p):]
-			break
-		}
-	}
-	candidates[bare] = struct{}{}
-	candidates[strings.TrimLeft(bare, "0")] = struct{}{}
-	_, ok := candidates[strings.ToLower(n)]
-	return ok
-}
-
-// shouldUpgradeInstrumentName decides whether a freshly fetched name should
-// overwrite the stored one. A real name always replaces a placeholder (code)
-// name, enabling self-heal of instruments that were imported before the name
-// was resolvable; a placeholder fetch result never overwrites a real name.
-func shouldUpgradeInstrumentName(current, fetched, code string) bool {
-	fetched = strings.TrimSpace(fetched)
-	if fetched == "" || isPlaceholderInstrumentName(fetched, code) {
-		return false
-	}
-	if isPlaceholderInstrumentName(current, code) {
-		return true
-	}
-	return fetched != strings.TrimSpace(current)
-}
-
-func validateImportRequest(req InstrumentImportRequest) error {
-	if req.Market == "" || req.InstrumentType == "" || req.Code == "" {
-		return newErr("invalid_request", "market, instrument_type and code are required", nil)
-	}
-	if len(req.Code) > 64 {
-		return newErr("invalid_request", "code too long", nil)
-	}
-	return nil
-}
-
-func mapClassifyError(err error) *AppError {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "instrument_classification_unsupported"):
-		return newErr("instrument_classification_unsupported", "instrument classification is not supported", nil)
-	case strings.Contains(msg, "instrument_metadata_conflict"):
-		return newErr("instrument_metadata_conflict", "instrument metadata conflict", nil)
-	default:
-		return newErr("invalid_request", msg, nil)
-	}
-}
-
-func mapSourceConflictError(err error) *AppError {
-	if errors.Is(err, marketdata.ErrSourceTypeConflict) {
-		return newErr(
-			"market_data_source_type_conflict",
-			"fetch source does not match instrument asset class; existing data kept",
-			nil,
-		)
-	}
-	return newErr("invalid_request", err.Error(), nil)
-}
-
 func (s *InstrumentService) libraryQuality(ctx context.Context, instrumentID string) string {
 	return LibraryQualityFromRepos(ctx, s.marketRepo, instrumentID)
 }
@@ -855,27 +661,15 @@ func toMarketAnnual(rows []repository.AnnualReturnRecord) []marketdata.AnnualRet
 	return out
 }
 
-func toHistorical(points []marketdata.DataPoint) []marketdata.HistoricalPoint {
-	out := make([]marketdata.HistoricalPoint, len(points))
-	for i, p := range points {
-		out[i] = marketdata.HistoricalPoint{Date: p.TradeDate, Value: p.Value}
-	}
-	return out
-}
-
 func applyDataStale(inst *repository.InstrumentRecord, lastTradeDate string) {
 	stale, warning := marketdata.DataStale(lastTradeDate, time.Now())
 	inst.DataStale = stale
 	inst.StaleWarning = warning
 }
 
-// CheckInstrumentReadOnlyFields rejects client metadata in import payloads.
-func CheckInstrumentReadOnlyFields(body []byte) error {
-	return checkInstrumentReadOnlyFields(body, nil)
-}
-
-// CheckInstrumentImportAsyncFields allows user-selected asset_class and region on import-async.
-func CheckInstrumentImportAsyncFields(body []byte) error {
+// CheckInstrumentImportFields allows user-selected asset_class and region on
+// import; all other instrument metadata and metrics are read-only.
+func CheckInstrumentImportFields(body []byte) error {
 	return checkInstrumentReadOnlyFields(body, map[string]struct{}{"asset_class": {}, "region": {}})
 }
 

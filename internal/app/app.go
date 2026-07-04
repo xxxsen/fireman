@@ -21,11 +21,15 @@ import (
 	"github.com/fireman/fireman/internal/config"
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/jobs"
-	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
+	"github.com/fireman/fireman/internal/resourcedb"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/migrations"
 )
+
+// resourceCleanupInterval controls how often expired rows are purged from
+// resource_db.
+const resourceCleanupInterval = time.Hour
 
 // Run boots the backend and blocks until the process receives SIGINT/SIGTERM
 // or the HTTP server fails. It is the single entry point used by main.
@@ -51,24 +55,32 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
+	if err := ensureDataDir(cfg.ResourceDBPath); err != nil {
+		if closeErr := pool.Close(); closeErr != nil {
+			logger.Error("db close after resource dir failure", "error", closeErr)
+		}
+		return fmt.Errorf("ensure resource db parent dir: %w", err)
+	}
+	resources, err := resourcedb.Open(ctx, cfg.ResourceDBPath)
+	if err != nil {
+		if closeErr := pool.Close(); closeErr != nil {
+			logger.Error("db close after resource db failure", "error", closeErr)
+		}
+		return fmt.Errorf("open resource database: %w", err)
+	}
+
 	maintenance := &service.MaintenanceGate{}
-	services := api.NewServices(pool, cfg.DBPath, cfg.MarketProviderURL, maintenance)
+	services := api.NewServices(pool, cfg.DBPath, maintenance)
 	jobRepo := repository.NewJobRepo(pool)
 	simRepo := repository.NewSimulationRepo(pool)
-	instRepo := repository.NewInstrumentRepo(pool)
-	marketRepo := repository.NewMarketDataRepo(pool)
-	annualRepo := repository.NewAnnualReturnsRepo(pool)
-	fetchProvider := marketdata.NewProviderClient(cfg.MarketProviderURL).FetchClient()
-	instrumentFetchRunner := jobs.NewInstrumentFetchRunner(pool, jobRepo, instRepo, marketRepo, annualRepo, fetchProvider)
 	runner := jobs.NewSimulationRunner(pool, simRepo)
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(pool))
 	worker := jobs.NewWorker(
-		pool, jobRepo, simRepo, runner, analysisRunner, instrumentFetchRunner,
+		pool, jobRepo, simRepo, runner, analysisRunner,
 		services.EventHub, logger, maintenance.Active,
 	)
 
-	ticketRepo := repository.NewResolutionTicketRepo(pool)
-	runTicketCleanup(ctx, ticketRepo, logger)
+	resourcedb.StartCleanup(ctx, resources, resourceCleanupInterval, logger.Warn)
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
@@ -78,8 +90,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}()
 
 	router := api.NewRouter(ctx, api.Deps{
-		DB: pool, DBPath: cfg.DBPath, Logger: logger,
-		MarketProviderURL: cfg.MarketProviderURL, Services: services,
+		DB: pool, DBPath: cfg.DBPath, Logger: logger, Services: services,
+	})
+
+	postProcess := service.NewPostProcessService(
+		pool,
+		repository.NewWorkerTaskRepo(pool),
+		repository.NewMarketAssetRepo(pool),
+		repository.NewInstrumentRepo(pool),
+		repository.NewMarketDataRepo(pool),
+		repository.NewAnnualReturnsRepo(pool),
+		repository.NewInstrumentLibraryMetricsRepo(pool),
+		resources,
+	)
+	internalRouter := api.NewInternalRouter(api.InternalDeps{
+		Logger: logger, PostProcess: postProcess, Resources: resources,
 	})
 
 	server := &http.Server{
@@ -87,14 +112,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	internalServer := &http.Server{
+		Addr:              cfg.InternalAddr,
+		Handler:           internalRouter,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
-	return runServer(ctx, server, pool, logger, workerCancel, workerDone)
+	return runServer(ctx, server, internalServer, pool, resources, logger, workerCancel, workerDone)
 }
 
 func runServer(
 	ctx context.Context,
 	server *http.Server,
+	internalServer *http.Server,
 	pool *sql.DB,
+	resources *resourcedb.DB,
 	logger *slog.Logger,
 	workerCancel context.CancelFunc,
 	workerDone <-chan struct{},
@@ -102,49 +134,61 @@ func runServer(
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	serverErr := make(chan error, 1)
+	serverErr := make(chan error, 2)
 	go func() {
 		logger.Info("http server starting", "addr", server.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- err
+			serverErr <- fmt.Errorf("http server: %w", err)
+			return
+		}
+		serverErr <- nil
+	}()
+	go func() {
+		logger.Info("internal http server starting", "addr", internalServer.Addr)
+		if err := internalServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- fmt.Errorf("internal http server: %w", err)
 			return
 		}
 		serverErr <- nil
 	}()
 
 	shutdownHTTP := false
+	var firstErr error
 	select {
 	case <-signalCtx.Done():
 		logger.Info("shutdown requested")
 		shutdownHTTP = true
 	case err := <-serverErr:
-		if err != nil {
-			shutdownApp(ctx, logger, server, pool, workerCancel, workerDone, false)
-			return fmt.Errorf("http server: %w", err)
-		}
-		shutdownApp(ctx, logger, server, pool, workerCancel, workerDone, false)
-		return nil
+		firstErr = err
 	}
 
-	shutdownApp(ctx, logger, server, pool, workerCancel, workerDone, shutdownHTTP)
-	return nil
+	shutdownApp(ctx, logger, []*http.Server{server, internalServer}, pool, resources,
+		workerCancel, workerDone, shutdownHTTP)
+	return firstErr
 }
 
-// shutdownApp stops HTTP (when still serving), waits for worker exit, then closes the database.
+// shutdownApp stops HTTP (when still serving), waits for worker exit, then closes the databases.
 func shutdownApp(
 	ctx context.Context,
 	logger *slog.Logger,
-	server *http.Server,
+	servers []*http.Server,
 	pool *sql.DB,
+	resources *resourcedb.DB,
 	workerCancel context.CancelFunc,
 	workerDone <-chan struct{},
 	shutdownHTTP bool,
 ) {
-	if shutdownHTTP {
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("http server shutdown error", "error", err)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	for _, srv := range servers {
+		if !shutdownHTTP {
+			// One listener already failed; still close the others so shutdown
+			// can proceed.
+			_ = srv.Close()
+			continue
+		}
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("http server shutdown error", "addr", srv.Addr, "error", err)
 		}
 	}
 
@@ -153,6 +197,9 @@ func shutdownApp(
 	<-workerDone
 	logger.Info("worker stopped")
 
+	if err := resources.Close(); err != nil {
+		logger.Error("resource db close error", "error", err)
+	}
 	if err := pool.Close(); err != nil {
 		logger.Error("db close error", "error", err)
 	}

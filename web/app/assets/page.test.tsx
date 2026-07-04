@@ -1,349 +1,302 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import AssetsPage from "./page";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MarketAsset, MarketAssetSyncView } from "@/lib/api/market-assets";
+import MarketAssetsPage from "./page";
 
-const deleteInstrumentMock = vi.hoisted(() => vi.fn());
+const listMarketAssetsMock = vi.hoisted(() => vi.fn());
+const syncMarketAssetsMock = vi.hoisted(() => vi.fn());
+const syncFXRatesMock = vi.hoisted(() => vi.fn());
+const useWorkerTaskPollingMock = vi.hoisted(() => vi.fn());
 
-const { defaultInstruments, mockState } = vi.hoisted(() => {
-  const defaultInstruments = [
-    {
-      id: "inst_1",
-      code: "510300",
-      name: "沪深300ETF",
-      market: "SH",
-      instrument_type: "etf",
-      asset_class: "equity",
-      region: "domestic",
-      currency: "CNY",
-      provider: "akshare",
-      is_system: false,
-      expense_ratio_status: "unknown",
-      fee_treatment: "deduct",
-      status: "active",
-      quality_status: "available",
-      data_source_name: "akshare",
-      data_stale: false,
-      referencing_plan_count: 0,
-      created_at: 0,
-      updated_at: 0,
-    },
-    {
-      id: "inst_2",
-      code: "999999",
-      name: "抓取失败示例",
-      market: "SH",
-      instrument_type: "etf",
-      asset_class: "equity",
-      region: "domestic",
-      currency: "CNY",
-      provider: "akshare",
-      is_system: false,
-      expense_ratio_status: "unknown",
-      fee_treatment: "deduct",
-      status: "fetch_failed",
-      data_stale: false,
-      referencing_plan_count: 0,
-      created_at: 0,
-      updated_at: 0,
-    },
-    {
-      id: "inst_3",
-      code: "888888",
-      name: "抓取中示例",
-      market: "SH",
-      instrument_type: "etf",
-      asset_class: "equity",
-      region: "domestic",
-      currency: "CNY",
-      provider: "akshare",
-      is_system: false,
-      expense_ratio_status: "unknown",
-      fee_treatment: "deduct",
-      status: "pending_fetch",
-      data_stale: false,
-      referencing_plan_count: 0,
-      created_at: 0,
-      updated_at: 0,
-    },
-  ];
-  return {
-    defaultInstruments,
-    mockState: {
-      instruments: defaultInstruments.map((i) => ({ ...i })),
-      isLoading: false,
-      isError: false,
-      error: null as Error | null,
-      isFetching: false,
-      refetch: vi.fn(),
-      keepCachedData: false,
-    },
-  };
-});
-
-vi.mock("@tanstack/react-query", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return {
-    ...actual,
-    useQuery: () => ({
-      data:
-        mockState.isLoading && !mockState.keepCachedData
-          ? undefined
-          : mockState.isError && !mockState.keepCachedData
-            ? undefined
-            : { instruments: mockState.instruments },
-      isLoading: mockState.isLoading,
-      isError: mockState.isError,
-      error: mockState.error,
-      isFetching: mockState.isFetching,
-      refetch: mockState.refetch,
-    }),
-  };
-});
-
-vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: vi.fn(),
-  deleteInstrument: (...args: unknown[]) => deleteInstrumentMock(...args),
+vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
+  listMarketAssets: (...args: unknown[]) => listMarketAssetsMock(...args),
+  syncMarketAssets: (...args: unknown[]) => syncMarketAssetsMock(...args),
+  syncFXRates: (...args: unknown[]) => syncFXRatesMock(...args),
 }));
+
+vi.mock("@/hooks/useWorkerTaskPolling", () => ({
+  useWorkerTaskPolling: (...args: unknown[]) => useWorkerTaskPollingMock(...args),
+}));
+
+function makeAsset(overrides: Partial<MarketAsset> = {}): MarketAsset {
+  return {
+    asset_key: "cn:cn_exchange_fund:sh:510300",
+    market: "CN",
+    instrument_type: "cn_exchange_fund",
+    region_code: "sh",
+    symbol: "510300",
+    name: "沪深300ETF",
+    exchange: "SH",
+    instrument_kind: "etf",
+    currency: "CNY",
+    active: true,
+    listing_status: "active",
+    last_seen_at: 1751000000000,
+    source_name: "ak.fund_etf_spot_em",
+    source_as_of: "2026-07-01",
+    refreshed_at: 1751000000000,
+    created_at: 0,
+    updated_at: 0,
+    ...overrides,
+  };
+}
+
+function makeSyncs(overrides: Partial<MarketAssetSyncView>[] = []): MarketAssetSyncView[] {
+  const base: MarketAssetSyncView[] = [
+    { scope: "cn_all", last_success_at: Date.now() - 60_000, last_success_task_id: "wt_cn" },
+    { scope: "hk_all", last_success_at: null, last_success_task_id: "" },
+    { scope: "us_all", last_success_at: null, last_success_task_id: "" },
+  ];
+  overrides.forEach((patch, i) => Object.assign(base[i], patch));
+  return base;
+}
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <AssetsPage />
+      <MarketAssetsPage />
     </QueryClientProvider>,
   );
 }
 
-describe("AssetsPage", () => {
+describe("MarketAssetsPage", () => {
   beforeEach(() => {
-    mockState.instruments = defaultInstruments.map((i) => ({ ...i }));
-    mockState.isLoading = false;
-    mockState.isError = false;
-    mockState.error = null;
-    mockState.isFetching = false;
-    mockState.keepCachedData = false;
-    mockState.refetch.mockClear();
-    deleteInstrumentMock.mockReset();
-    deleteInstrumentMock.mockResolvedValue({ deleted: true });
-    window.confirm = vi.fn(() => true);
-  });
-
-  it("shows short-history simulation label for one-year instruments", () => {
-    mockState.instruments = defaultInstruments.map((i) =>
-      i.id === "inst_1"
-        ? {
-            ...i,
-            simulation_eligible: true,
-            history_depth: "one_year",
-            complete_year_count: 1,
-          }
-        : { ...i },
-    );
-    renderPage();
-    expect(screen.getAllByText("可用于模拟·历史样本有限").length).toBeGreaterThan(0);
-  });
-
-  it("renders instruments in table and mobile cards", () => {
-    renderPage();
-    expect(screen.getByRole("heading", { name: "资产资料库" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "510300" })).toHaveAttribute("href", "/assets/inst_1");
-    expect(screen.getByTestId("instrument-cards")).toBeInTheDocument();
-    expect(screen.getAllByTestId("instrument-card")).toHaveLength(3);
-  });
-
-  it("filters by search query", () => {
-    renderPage();
-    fireEvent.change(screen.getByTestId("assets-search"), { target: { value: "510300" } });
-    expect(screen.getByRole("link", { name: "510300" })).toBeInTheDocument();
-    expect(screen.queryByText("抓取失败示例")).not.toBeInTheDocument();
-  });
-
-  it("filters by status", () => {
-    renderPage();
-    fireEvent.change(screen.getByTestId("assets-status-filter"), {
-      target: { value: "fetch_failed" },
+    listMarketAssetsMock.mockReset();
+    syncMarketAssetsMock.mockReset();
+    syncFXRatesMock.mockReset();
+    useWorkerTaskPollingMock.mockReset();
+    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null, isActive: false });
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: makeSyncs(),
+      total: 1,
     });
-    expect(screen.getAllByText("抓取失败示例").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("link", { name: "510300" })).not.toBeInTheDocument();
   });
 
-  it("shows filter-empty state", () => {
+  it("renders the sync panel with all three scopes and the asset table", async () => {
     renderPage();
-    fireEvent.change(screen.getByTestId("assets-search"), { target: { value: "不存在" } });
-    expect(screen.getByText("没有匹配的标的")).toBeInTheDocument();
-  });
+    await screen.findByTestId("market-assets-table");
+    expect(screen.getByRole("heading", { name: "资产目录" })).toBeInTheDocument();
 
-  it("shows loading skeleton without data", () => {
-    mockState.isLoading = true;
-    renderPage();
-    expect(screen.getAllByTestId("skeleton").length).toBeGreaterThan(0);
-  });
+    const panel = screen.getByTestId("directory-sync-panel");
+    expect(within(panel).getByText("A 股 / 场内基金")).toBeInTheDocument();
+    expect(within(panel).getByText("港股")).toBeInTheDocument();
+    expect(within(panel).getByText("美股")).toBeInTheDocument();
 
-  it("shows error state with retry", () => {
-    mockState.isError = true;
-    mockState.error = new Error("boom");
-    renderPage();
-    fireEvent.click(screen.getByTestId("error-state-retry"));
-    expect(mockState.refetch).toHaveBeenCalled();
-  });
-
-  it("shows library empty state", () => {
-    mockState.instruments = [];
-    renderPage();
-    expect(screen.getByText("资料库为空")).toBeInTheDocument();
-  });
-
-  it("has single primary action to import", () => {
-    renderPage();
-    const primary = screen.getByTestId("page-header-primary");
-    expect(primary).toHaveTextContent("录入资产");
-    expect(primary).toHaveAttribute("href", "/assets/import");
-  });
-
-  it("shows context action for fetch_failed", () => {
-    renderPage();
-    const rows = screen.getAllByRole("row");
-    const failedRow = rows.find((row) => within(row).queryByText("抓取失败示例"));
-    expect(failedRow).toBeTruthy();
-    expect(within(failedRow!).getByRole("link", { name: "查看并重试" })).toHaveAttribute(
+    const row = screen.getByTestId("market-asset-row");
+    expect(within(row).getByRole("link", { name: "510300" })).toHaveAttribute(
       "href",
-      "/assets/inst_2",
+      `/assets/market/${encodeURIComponent("cn:cn_exchange_fund:sh:510300")}`,
     );
-  });
-
-  it("shows context action for pending_fetch", () => {
-    renderPage();
-    const rows = screen.getAllByRole("row");
-    const pendingRow = rows.find((row) => within(row).queryByText("抓取中示例"));
-    expect(pendingRow).toBeTruthy();
-    expect(within(pendingRow!).getByRole("link", { name: "查看进度" })).toHaveAttribute(
+    expect(within(row).getByRole("link", { name: "录入" })).toHaveAttribute(
       "href",
-      "/assets/inst_3",
+      `/assets/import?asset_key=${encodeURIComponent("cn:cn_exchange_fund:sh:510300")}`,
     );
   });
 
-  it("mobile pending_fetch card has no nested anchor links", () => {
+  it("links to the user library and import flow from the header", async () => {
     renderPage();
-    const cards = screen.getAllByTestId("instrument-card");
-    const pendingCard = cards.find((card) => within(card).queryByText("抓取中示例"));
-    expect(pendingCard).toBeTruthy();
-    expect(within(pendingCard!).getByRole("link", { name: "查看进度" })).toHaveAttribute(
-      "href",
-      "/assets/inst_3",
+    await screen.findByTestId("market-assets-table");
+    expect(screen.getByTestId("my-library-link")).toHaveAttribute("href", "/assets/library");
+    expect(screen.getByTestId("page-header-primary")).toHaveAttribute("href", "/assets/import");
+  });
+
+  it("shows the never-synced empty state before the first directory sync", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [],
+      syncs: makeSyncs([{ last_success_at: null, last_success_task_id: "" }]),
+      total: 0,
+    });
+    renderPage();
+    expect(await screen.findByText("当前没有资产基础信息")).toBeInTheDocument();
+  });
+
+  it("searches the local directory after the debounce", async () => {
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+
+    fireEvent.change(screen.getByTestId("market-assets-search"), {
+      target: { value: "沪深300" },
+    });
+    await waitFor(
+      () =>
+        expect(listMarketAssetsMock).toHaveBeenCalledWith(
+          expect.objectContaining({ q: "沪深300", offset: 0 }),
+        ),
+      { timeout: 2000 },
     );
-    expect(within(pendingCard!).queryAllByRole("link")).toHaveLength(1);
   });
 
-  it("mobile fetch_failed card has no nested anchor links", () => {
+  it("filters by market immediately", async () => {
     renderPage();
-    const cards = screen.getAllByTestId("instrument-card");
-    const failedCard = cards.find((card) => within(card).queryByText("抓取失败示例"));
-    expect(failedCard).toBeTruthy();
-    expect(within(failedCard!).getByRole("link", { name: "查看并重试" })).toHaveAttribute(
-      "href",
-      "/assets/inst_2",
+    await screen.findByTestId("market-assets-table");
+
+    fireEvent.change(screen.getByTestId("market-assets-market-filter"), {
+      target: { value: "HK" },
+    });
+    await waitFor(() =>
+      expect(listMarketAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ market: "HK" }),
+      ),
     );
-    expect(within(failedCard!).queryAllByRole("link")).toHaveLength(1);
   });
 
-  it("shows back link on error state", () => {
-    mockState.isError = true;
-    mockState.error = new Error("boom");
+  it("shows a stale banner when a scope has not synced for over 7 days", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: makeSyncs([
+        { last_success_at: Date.now() - 8 * 24 * 60 * 60 * 1000, last_success_task_id: "wt_cn" },
+      ]),
+      total: 1,
+    });
     renderPage();
-    expect(screen.getByTestId("error-state-back")).toHaveAttribute("href", "/");
+    const banner = await screen.findByTestId("directory-stale-banner");
+    expect(banner).toHaveTextContent("A 股 / 场内基金");
+    expect(banner).toHaveTextContent("超过 7 天未同步");
   });
 
-  it("keeps cached instruments visible when background refresh fails", () => {
-    mockState.keepCachedData = true;
-    mockState.isError = true;
-    mockState.error = new Error("network");
+  it("creates a directory sync task from the scope row", async () => {
+    syncMarketAssetsMock.mockResolvedValue({
+      task: { id: "wt_new", type: "asset_directory_sync", status: "pending", created_at: 0 },
+      existed: false,
+    });
     renderPage();
-    expect(screen.getByRole("link", { name: "510300" })).toBeInTheDocument();
-    expect(screen.queryByTestId("error-state")).not.toBeInTheDocument();
-  });
+    await screen.findByTestId("market-assets-table");
 
-  it("shows delete button for deletable instruments", () => {
-    renderPage();
-    expect(screen.getAllByTestId("instrument-delete-inst_1")[0]).toBeEnabled();
-  });
-
-  it("disables delete when instrument is referenced by plans", () => {
-    mockState.instruments = defaultInstruments.map((i) =>
-      i.id === "inst_1" ? { ...i, referencing_plan_count: 2 } : { ...i },
+    fireEvent.click(screen.getByTestId("sync-button-hk_all"));
+    await waitFor(() =>
+      expect(syncMarketAssetsMock).toHaveBeenCalledWith({ scope: "hk_all" }),
     );
-    renderPage();
-    expect(screen.getAllByTestId("instrument-delete-inst_1")[0]).toBeDisabled();
-    expect(screen.getAllByText("已被计划引用，无法删除").length).toBeGreaterThan(0);
   });
 
-  it("calls deleteInstrument after confirm", async () => {
+  it("disables the sync button and shows progress while a task is active", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: makeSyncs([
+        {
+          task: {
+            id: "wt_running",
+            type: "asset_directory_sync",
+            status: "running",
+            created_at: 0,
+          },
+        },
+      ]),
+      total: 1,
+    });
     renderPage();
-    fireEvent.click(screen.getAllByTestId("instrument-delete-inst_1")[0]!);
-    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
-    await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("inst_1"));
-  });
-
-  it("merges trailing returns into one 年化数据 column with labeled values", () => {
-    mockState.instruments = defaultInstruments.map((i) =>
-      i.id === "inst_1"
-        ? {
-            ...i,
-            trailing_returns: {
-              as_of_date: "2026-06-18",
-              one_year_annualized_return: 0.0812,
-              three_year_annualized_return: 0.0641,
-              five_year_annualized_return: null,
-            },
-          }
-        : { ...i },
+    const row = await screen.findByTestId("directory-sync-cn_all");
+    expect(within(row).getByTestId("sync-button-cn_all")).toBeDisabled();
+    expect(within(row).getByText("同步进行中…")).toBeInTheDocument();
+    expect(within(row).getByTestId("task-status-badge")).toHaveAttribute(
+      "data-status",
+      "running",
     );
-    renderPage();
-
-    // Single combined header, no separate 1/3/5y headers.
-    expect(screen.getByText("数据截至")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "年化数据" })).toBeInTheDocument();
-    expect(screen.queryByText("近1年年化")).not.toBeInTheDocument();
-    expect(screen.queryByText("近3年年化")).not.toBeInTheDocument();
-    expect(screen.queryByText("近5年年化")).not.toBeInTheDocument();
-
-    const rows = screen.getAllByRole("row");
-    const eqRow = rows.find((row) => within(row).queryByRole("link", { name: "510300" }));
-    expect(eqRow).toBeTruthy();
-    expect(within(eqRow!).getByText("2026-06-18")).toBeInTheDocument();
-    // Labels are always kept; partial history renders 5年 — in the same cell.
-    expect(within(eqRow!).getByText("1年 8.12% · 3年 6.41% · 5年 —")).toBeInTheDocument();
   });
 
-  it("renders all dashes in 年化数据 for an instrument without a projection", () => {
+  it("surfaces the error code when the latest sync task failed", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: makeSyncs([
+        {
+          task: {
+            id: "wt_failed",
+            type: "asset_directory_sync",
+            status: "failed",
+            error_code: "directory_data_incomplete",
+            error_message: "category CN/cn_mutual_fund returned no assets",
+            created_at: 0,
+          },
+        },
+      ]),
+      total: 1,
+    });
     renderPage();
-    const rows = screen.getAllByRole("row");
-    const eqRow = rows.find((row) => within(row).queryByRole("link", { name: "510300" }));
-    expect(eqRow).toBeTruthy();
-    expect(within(eqRow!).getByText("1年 — · 3年 — · 5年 —")).toBeInTheDocument();
-  });
-
-  it("mobile card reuses the same labeled trailing-return order", () => {
-    mockState.instruments = defaultInstruments.map((i) =>
-      i.id === "inst_1"
-        ? {
-            ...i,
-            data_as_of: "2026-06-18",
-            trailing_returns: {
-              as_of_date: "2026-06-18",
-              one_year_annualized_return: 0.0812,
-              three_year_annualized_return: 0.0641,
-              five_year_annualized_return: null,
-            },
-          }
-        : { ...i },
+    const row = await screen.findByTestId("directory-sync-cn_all");
+    expect(within(row).getByTestId("task-status-badge")).toHaveAttribute(
+      "data-status",
+      "failed",
     );
+    expect(within(row).getByTestId("task-error-inline")).toHaveTextContent(
+      "category CN/cn_mutual_fund returned no assets",
+    );
+  });
+
+  it("marks inactive assets as delisted in the table", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset({ active: false })],
+      syncs: makeSyncs(),
+      total: 1,
+    });
     renderPage();
-    const cards = screen.getAllByTestId("instrument-card");
-    const eqCard = cards.find((card) => within(card).queryByText("沪深300ETF"));
-    expect(eqCard).toBeTruthy();
-    expect(
-      within(eqCard!).getByText("截至 2026-06-18 · 1年 8.12% · 3年 6.41% · 5年 —"),
-    ).toBeInTheDocument();
+    const row = await screen.findByTestId("market-asset-row");
+    expect(within(row).getByText("已退市/未在目录")).toBeInTheDocument();
+  });
+
+  it("passes include_inactive when the delisted filter is checked", async () => {
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+
+    fireEvent.click(screen.getByTestId("market-assets-include-inactive"));
+    await waitFor(() =>
+      expect(listMarketAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ includeInactive: true, offset: 0 }),
+      ),
+    );
+  });
+
+  it("creates an fx_rate_sync task from the FX row", async () => {
+    syncFXRatesMock.mockResolvedValue({
+      task: { id: "wt_fx", type: "fx_rate_sync", status: "pending", created_at: 0 },
+      existed: false,
+    });
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+
+    const row = screen.getByTestId("fx-sync-row");
+    expect(within(row).getByText("汇率（USD/HKD）")).toBeInTheDocument();
+    fireEvent.click(within(row).getByTestId("fx-sync-button"));
+    await waitFor(() => expect(syncFXRatesMock).toHaveBeenCalled());
+    // The created task id is handed to the polling hook.
+    await waitFor(() =>
+      expect(useWorkerTaskPollingMock).toHaveBeenLastCalledWith(
+        "wt_fx",
+        expect.objectContaining({ onComplete: expect.any(Function) }),
+      ),
+    );
+  });
+
+  it("surfaces polling errors without hiding the sync row", async () => {
+    useWorkerTaskPollingMock.mockReturnValue({
+      task: {
+        id: "wt_running",
+        type: "asset_directory_sync",
+        status: "running",
+        created_at: 0,
+      },
+      pollError: "network down",
+      isActive: true,
+    });
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: makeSyncs([
+        {
+          task: {
+            id: "wt_running",
+            type: "asset_directory_sync",
+            status: "running",
+            created_at: 0,
+          },
+        },
+      ]),
+      total: 1,
+    });
+    renderPage();
+    const row = await screen.findByTestId("directory-sync-cn_all");
+    expect(within(row).getByText(/任务状态查询失败/)).toBeInTheDocument();
+    expect(within(row).getByTestId("task-status-badge")).toBeInTheDocument();
   });
 });

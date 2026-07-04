@@ -317,6 +317,7 @@ export interface Instrument {
   region: string;
   currency: string;
   provider: string;
+  asset_key?: string;
   is_system: boolean;
   expense_ratio?: number | null;
   expense_ratio_status: string;
@@ -348,9 +349,9 @@ export interface InstrumentTrailingReturns {
 }
 
 export interface InstrumentImportRequest {
-  market: string;
-  instrument_type: string;
-  code: string;
+  asset_key: string;
+  asset_class: string;
+  region: string;
 }
 
 export interface Job {

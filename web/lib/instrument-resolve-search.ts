@@ -1,70 +1,63 @@
 import { ApiError } from "@/lib/api/client";
+import { getInstrument } from "@/lib/api/instruments";
 import {
-  getFetchStatus,
-  getInstrument,
-  importAsync,
-  resolveImport,
-  type ResolveCandidate,
-  type ResolveResult,
-} from "@/lib/api/instruments";
+  importFromMarketAsset,
+  listMarketAssets,
+  type MarketAsset,
+} from "@/lib/api/market-assets";
+import type { Instrument } from "@/types/api";
 
 export function looksLikeFundCode(query: string): boolean {
   const trimmed = query.trim();
   return trimmed.length >= 4 && /^[a-zA-Z0-9.]+$/.test(trimmed);
 }
 
-export async function resolveCNInstrumentCode(code: string): Promise<ResolveResult> {
+/**
+ * Searches the local market asset directory (never remote sources) for
+ * candidates matching the query. Only active entries are offered for import.
+ */
+export async function searchMarketAssetCandidates(
+  query: string,
+  limit = 10,
+): Promise<MarketAsset[]> {
+  const result = await listMarketAssets({ q: query.trim(), limit });
+  return result.assets.filter((a) => a.active);
+}
+
+/** Raised when the market asset has no locally synced history yet. */
+export class MarketAssetHistoryEmptyError extends Error {
+  constructor(public readonly assetKey: string) {
+    super("该资产还没有本地历史数据，请先在资产详情页同步历史数据后再录入。");
+    this.name = "MarketAssetHistoryEmptyError";
+  }
+}
+
+/**
+ * Imports a market asset into the user library. Import is a purely local
+ * projection of already-synced history, so the instrument is usable
+ * immediately; no fetch polling is required.
+ */
+export async function importMarketAssetCandidate(
+  asset: MarketAsset,
+  assetClass: string,
+  region: string,
+): Promise<Instrument> {
   try {
-    return await resolveImport({ market: "CN", instrument_type: "cn_exchange_fund", code: code.trim() });
+    return await importFromMarketAsset({
+      asset_key: asset.asset_key,
+      asset_class: assetClass,
+      region,
+    });
   } catch (error) {
-    if (
-      error instanceof ApiError &&
-      error.code === "instrument_type_mismatch" &&
-      error.details?.suggested_instrument_type === "cn_mutual_fund"
-    ) {
-      return resolveImport({ market: "CN", instrument_type: "cn_mutual_fund", code: code.trim() });
+    if (error instanceof ApiError && error.code === "market_asset_history_empty") {
+      throw new MarketAssetHistoryEmptyError(asset.asset_key);
+    }
+    if (error instanceof ApiError && error.code === "instrument_already_exists") {
+      const instId = error.details?.instrument_id;
+      if (typeof instId === "string" && instId) {
+        return getInstrument(instId);
+      }
     }
     throw error;
   }
-}
-
-export function flattenResolveCandidates(result: ResolveResult): ResolveCandidate[] {
-  if (result.resolved) {
-    return [result.resolved];
-  }
-  if (result.ambiguous && result.candidates?.length) {
-    return result.candidates.filter((c) => c.is_importable !== false);
-  }
-  return [];
-}
-
-export async function waitForInstrumentActive(instrumentId: string, maxAttempts = 60): Promise<void> {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const status = await getFetchStatus(instrumentId);
-    if (status.instrument_status === "active") {
-      return;
-    }
-    if (status.job_status === "failed" || status.instrument_status === "failed") {
-      throw new Error(status.error_message ?? "历史数据抓取失败");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  throw new Error("录入超时，请稍后在资产资料库查看进度");
-}
-
-export async function importResolvedCandidate(
-  candidate: ResolveCandidate,
-  assetClass: string,
-  region: string,
-): Promise<import("@/types/api").Instrument> {
-  if (!candidate.ticket_id) {
-    throw new Error("缺少 resolution ticket，请重新查询");
-  }
-  const imported = await importAsync({
-    ticket_id: candidate.ticket_id,
-    asset_class: assetClass,
-    region,
-  });
-  await waitForInstrumentActive(imported.instrument_id);
-  return getInstrument(imported.instrument_id);
 }

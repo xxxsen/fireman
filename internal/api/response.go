@@ -58,8 +58,11 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusConflict
 		case "idempotency_conflict", "job_already_terminal", "system_profile_identity_conflict":
 			status = http.StatusConflict
-		case "simulation_not_found", "path_not_found", "job_not_found":
+		case "simulation_not_found", "path_not_found", "job_not_found",
+			"task_not_found", "market_asset_not_found":
 			status = http.StatusNotFound
+		case "market_asset_history_empty":
+			status = http.StatusBadRequest
 		case "simulation_input_invalid", "plan_weights_invalid", "invalid_backup", "invalid_request":
 			status = http.StatusBadRequest
 		case "builtin_scenario_immutable", "scenario_in_use":

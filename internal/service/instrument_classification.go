@@ -49,13 +49,6 @@ func (s *InstrumentService) UpdateClassification(
 		return ClassificationUpdateResult{}, newErr(
 			"instrument_not_editable", "system instruments cannot be edited", nil)
 	}
-	// A pending/in-progress fetch would later persist the import-time
-	// classification via UpdateAfterFetchTx, silently overwriting an edit made
-	// now. Reject the edit until the fetch settles (fetch_failed stays editable
-	// because retry rebuilds the payload from the current instrument row).
-	if err := s.ensureNoFetchInProgress(ctx, inst); err != nil {
-		return ClassificationUpdateResult{}, err
-	}
 
 	if _, err := s.instRepo.UpdateClassification(
 		ctx, id, req.AssetClass, req.Region, req.ExpectedUpdatedAt,

@@ -1,7 +1,8 @@
 {
   "addr": ":8080",
+  "internal_addr": ":8081",
   "db_path": "/data/fireman.db",
-  "market_provider_url": "http://market-provider:18081",
+  "resource_db_path": "/data/fireman_resource.db",
   "timezone": "Asia/Shanghai",
   "log_level": "info",
   "worker_concurrency": 1

@@ -21,6 +21,7 @@ type InstrumentRecord struct {
 	Currency             string                     `json:"currency"`
 	Provider             string                     `json:"provider"`
 	ProviderSymbol       string                     `json:"provider_symbol"`
+	AssetKey             string                     `json:"asset_key,omitempty"`
 	AdjustPolicy         string                     `json:"adjust_policy"`
 	InstrumentKind       string                     `json:"instrument_kind,omitempty"`
 	IsSystem             bool                       `json:"is_system"`
@@ -67,10 +68,7 @@ func NewInstrumentRepo(db *sql.DB) *InstrumentRepo {
 
 func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
-			expense_ratio, expense_ratio_status, fee_treatment, status,
-			created_at, updated_at
+		SELECT `+instrumentBaseColumns+`
 		FROM instruments
 		WHERE provider='akshare' OR is_system=1
 		ORDER BY is_system DESC, name`)
@@ -196,10 +194,7 @@ func (r *InstrumentRepo) Search(ctx context.Context, opts InstrumentSearchOption
 
 func (r *InstrumentRepo) GetByID(ctx context.Context, id string) (InstrumentRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
-			expense_ratio, expense_ratio_status, fee_treatment, status,
-			created_at, updated_at
+		SELECT `+instrumentBaseColumns+`
 		FROM instruments WHERE id=?`, id)
 	return scanInstrumentRecord(row)
 }
@@ -208,14 +203,27 @@ func (r *InstrumentRepo) FindByKey(ctx context.Context, market, instrumentType, 
 	adjustPolicy string,
 ) (InstrumentRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
-			expense_ratio, expense_ratio_status, fee_treatment, status,
-			created_at, updated_at
+		SELECT `+instrumentBaseColumns+`
 		FROM instruments
 		WHERE market=? AND instrument_type=? AND code=? AND adjust_policy=?`,
 		market, instrumentType, code, adjustPolicy)
 	return scanInstrumentRecord(row)
+}
+
+// ListByAssetKeyTx returns user instruments linked to a global market asset
+// (P4 projection targets). System instruments never carry an asset_key.
+func (r *InstrumentRepo) ListByAssetKeyTx(
+	ctx context.Context, tx *sql.Tx, assetKey string,
+) ([]InstrumentRecord, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT `+instrumentBaseColumns+`
+		FROM instruments WHERE asset_key=?
+		ORDER BY created_at, id`, assetKey)
+	if err != nil {
+		return nil, fmt.Errorf("query instruments by asset key: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanInstrumentRecords(rows)
 }
 
 func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst InstrumentRecord) error {
@@ -227,13 +235,14 @@ func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst Instrument
 	_, err := r.exec(tx).ExecContext(ctx, `
 		INSERT INTO instruments (
 			id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, instrument_kind, is_system,
+			provider, provider_symbol, asset_key, adjust_policy, instrument_kind, is_system,
 			expense_ratio, expense_ratio_status, fee_treatment, status,
 			created_at, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		inst.ID, inst.Code, inst.Name, inst.Market, inst.InstrumentType,
 		inst.AssetClass, inst.Region, inst.Currency,
-		inst.Provider, inst.ProviderSymbol, inst.AdjustPolicy, inst.InstrumentKind, boolToInt(inst.IsSystem),
+		inst.Provider, inst.ProviderSymbol, inst.AssetKey, inst.AdjustPolicy,
+		inst.InstrumentKind, boolToInt(inst.IsSystem),
 		inst.ExpenseRatio, inst.ExpenseRatioStatus, inst.FeeTreatment, inst.Status,
 		inst.CreatedAt, inst.UpdatedAt)
 	if err != nil {
@@ -375,6 +384,13 @@ func (r *InstrumentRepo) exec(tx *sql.Tx) dbExec {
 	return r.db
 }
 
+// instrumentBaseColumns is the unaliased instruments column list in the exact
+// order scanInstrumentRecord / scanInstrumentRecords expect.
+const instrumentBaseColumns = `id, code, name, market, instrument_type, asset_class, region, currency,
+		provider, provider_symbol, asset_key, adjust_policy, instrument_kind, is_system,
+		expense_ratio, expense_ratio_status, fee_treatment, status,
+		created_at, updated_at`
+
 func scanInstrumentRecord(row *sql.Row) (InstrumentRecord, error) {
 	var inst InstrumentRecord
 	var isSystem int
@@ -382,7 +398,7 @@ func scanInstrumentRecord(row *sql.Row) (InstrumentRecord, error) {
 	err := row.Scan(
 		&inst.ID, &inst.Code, &inst.Name, &inst.Market, &inst.InstrumentType,
 		&inst.AssetClass, &inst.Region, &inst.Currency,
-		&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
+		&inst.Provider, &inst.ProviderSymbol, &inst.AssetKey, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
 		&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
 		&inst.CreatedAt, &inst.UpdatedAt,
 	)
@@ -409,7 +425,7 @@ func scanInstrumentRecords(rows *sql.Rows) ([]InstrumentRecord, error) {
 		if err := rows.Scan(
 			&inst.ID, &inst.Code, &inst.Name, &inst.Market, &inst.InstrumentType,
 			&inst.AssetClass, &inst.Region, &inst.Currency,
-			&inst.Provider, &inst.ProviderSymbol, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
+			&inst.Provider, &inst.ProviderSymbol, &inst.AssetKey, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
 			&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
 			&inst.CreatedAt, &inst.UpdatedAt,
 		); err != nil {
