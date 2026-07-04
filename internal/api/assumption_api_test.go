@@ -208,15 +208,13 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	r := NewRouter(context.Background(), Deps{DB: db})
 
-	// Seed an active legacy v1 row directly via SQL: it carries zero tail
-	// truncation, which fails the current Validate gate, so it is ineligible even
-	// though it is active. Raw SQL bypasses the service gate, mimicking a DB
-	// upgraded from a pre-td063 release.
-	seedSystemProfileRow(t, db, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion,
-		"系统默认（CMA v1）", func(p *assumptions.Profile) {
-			p.ReturnFloor = 0
-			p.ReturnCeil = 0
-		})
+	// Seed the REAL published td/061/062 v1 row (byte-exact fixture). It predates
+	// the tail-truncation field, so it carries zero truncation and fails the
+	// current Validate gate (ineligible even though active), while still being a
+	// registry-recognized system content so the startup audit accepts it (td/068
+	// R16). Raw SQL bypasses the service gate, mimicking a pre-td063 upgrade.
+	seedSystemFixtureRow(t, db, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion,
+		"系统默认（CMA v1）", "system_cma_v1_canonical.json")
 	// Seed the REAL published td/064 v2 content (byte-exact fixture). It is a
 	// recognized historical system content (so the upgrade accepts it) but is NOT
 	// the current identity, so it must still be ineligible purely on the identity
@@ -284,39 +282,6 @@ func seedRealV2SystemRow(t *testing.T, db *sql.DB) {
 		"系统默认（CMA v2）", "active", string(raw), hash,
 		"historical release", "FIRE", "2026-06-20", now, now); err != nil {
 		t.Fatalf("seed v2 fixture: %v", err)
-	}
-}
-
-// seedSystemProfileRow inserts an active system-owned profile row directly via SQL
-// (bypassing the service gate) to mimic a database upgraded from an older release.
-// mutate optionally bends the profile content before it is frozen.
-func seedSystemProfileRow(
-	t *testing.T, db *sql.DB, id string, version int, name string, mutate func(*assumptions.Profile),
-) {
-	t.Helper()
-	p := assumptions.SystemDefaultProfile()
-	p.ID = id
-	p.Version = version
-	p.Name = name
-	if mutate != nil {
-		mutate(&p)
-	}
-	cb, err := p.CanonicalJSON()
-	if err != nil {
-		t.Fatalf("canonical json: %v", err)
-	}
-	h, err := p.ContentHash()
-	if err != nil {
-		t.Fatalf("content hash: %v", err)
-	}
-	now := time.Now().UnixMilli()
-	if _, err := db.Exec(`INSERT INTO simulation_assumption_profiles
-		(id, version, owner_scope, name, status, canonical_json, content_hash,
-		 source_note, reviewed_by, reviewed_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		p.ID, p.Version, "system", p.Name, "active", string(cb), h,
-		"legacy", "FIRE", "2026-06-20", now, now); err != nil {
-		t.Fatalf("seed system profile %s@%d: %v", id, version, err)
 	}
 }
 

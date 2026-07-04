@@ -79,7 +79,7 @@ func insertRealV2Row(t *testing.T, db *sql.DB) (string, string) {
 // insertProfileRowRaw inserts a single profile row with explicit owner_scope and
 // status, mimicking a row written by an older release or a hijacking client.
 func insertProfileRowRaw(
-	t *testing.T, db *sql.DB, p assumptions.Profile, ownerScope, status string,
+	t *testing.T, db *sql.DB, p assumptions.Profile, ownerScope string,
 ) (string, string) {
 	t.Helper()
 	canonical, err := p.CanonicalJSON()
@@ -95,7 +95,7 @@ func insertProfileRowRaw(
 		(id, version, owner_scope, name, status, canonical_json, content_hash,
 		 source_note, reviewed_by, reviewed_at, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		p.ID, p.Version, ownerScope, p.Name, status, string(canonical), hash,
+		p.ID, p.Version, ownerScope, p.Name, assumptions.StatusActive, string(canonical), hash,
 		"seed", "tester", "2026-06-20", now, now); err != nil {
 		t.Fatalf("insert profile %s@%d: %v", p.ID, p.Version, err)
 	}
@@ -331,7 +331,7 @@ func TestEnsureSystemDefaultRepairsUserSystemSquatter(t *testing.T) {
 	squat.OwnerScope = assumptions.OwnerUser
 	squat.Name = "我的劫持模型"
 	squat.StudentTDf = 9 // makes the content differ from the real v3
-	_, squatHash := insertProfileRowRaw(t, db, squat, assumptions.OwnerUser, assumptions.StatusActive)
+	_, squatHash := insertProfileRowRaw(t, db, squat, assumptions.OwnerUser)
 	wantLegacyID := "user_legacy_" + squatHash[:16]
 
 	// A plan pins it, and it is the global default.
@@ -396,7 +396,7 @@ func TestEnsureSystemDefaultRejectsTamperedSystemV3(t *testing.T) {
 
 	tampered := assumptions.SystemDefaultProfile()
 	tampered.StudentTDf = 4 // diverges from the published v3 content
-	canonicalBefore, _ := insertProfileRowRaw(t, db, tampered, assumptions.OwnerSystem, assumptions.StatusActive)
+	canonicalBefore, _ := insertProfileRowRaw(t, db, tampered, assumptions.OwnerSystem)
 
 	err := repo.EnsureSystemDefault(ctx)
 	if !errors.Is(err, repository.ErrSystemProfileIdentityConflict) {
@@ -455,10 +455,135 @@ func TestEnsureSystemDefaultRejectsUnknownSystemV2(t *testing.T) {
 	fake.ID = assumptions.SystemProfileV2ID
 	fake.Version = assumptions.SystemProfileV2Version
 	fake.Name = "伪造 v2"
-	insertProfileRowRaw(t, db, fake, assumptions.OwnerSystem, assumptions.StatusActive)
+	insertProfileRowRaw(t, db, fake, assumptions.OwnerSystem)
 
 	err := repo.EnsureSystemDefault(ctx)
 	if !errors.Is(err, repository.ErrSystemProfileIdentityConflict) {
 		t.Fatalf("unknown system v2 must yield identity conflict, got %v", err)
+	}
+}
+
+// countReservedUserProfiles returns how many owner_scope=user rows occupy the
+// reserved system_cma_ namespace.
+func countReservedUserProfiles(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(1) FROM simulation_assumption_profiles
+		 WHERE owner_scope='user' AND id LIKE 'system\_cma\_%' ESCAPE '\'`).Scan(&n); err != nil {
+		t.Fatalf("count reserved user profiles: %v", err)
+	}
+	return n
+}
+
+// TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB covers td/068 R16 acceptance
+// #1 and #2: a TD 066-upgraded database already holds a correct system v3, yet a
+// user illegally created an active owner_scope=user system_cma_v2@1 and made it the
+// global default + a plan pin. The previous fast path returned as soon as v3 was
+// valid and skipped repair; the tightened path must still migrate the squatter to
+// user_legacy_<hash>, repoint the pin and default, keep v3 byte-for-byte, and be
+// idempotent with no reserved user rows left.
+func TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := repository.NewAssumptionProfileRepo(db)
+
+	// Correctly published system v3 (registry content), as TD 066 would have left it.
+	v3CanonicalBefore, v3HashBefore := insertProfileRowRaw(
+		t, db, assumptions.SystemDefaultProfile(), assumptions.OwnerSystem)
+
+	// A user squats on system_cma_v2@1 with distinct content and makes it default + pin.
+	squat := assumptions.SystemDefaultProfile()
+	squat.ID = assumptions.SystemProfileV2ID
+	squat.Version = assumptions.SystemProfileV2Version
+	squat.OwnerScope = assumptions.OwnerUser
+	squat.Name = "我的伪v2"
+	squat.StudentTDf = 8 // distinct from registry content
+	_, squatHash := insertProfileRowRaw(t, db, squat, assumptions.OwnerUser)
+	wantLegacyID := "user_legacy_" + squatHash[:16]
+
+	seedPlanWithPinnedProfile(t, db, "plan_v2pin", assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version)
+	seedDefaultPreference(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version, "conservative")
+
+	if err := repo.EnsureSystemDefault(ctx); err != nil {
+		t.Fatalf("upgrade with published v3 + user v2 squatter: %v", err)
+	}
+
+	// Squatter migrated to deterministic legacy id, keeping user content.
+	migrated, err := repo.Get(ctx, wantLegacyID, 1)
+	if err != nil {
+		t.Fatalf("migrated user profile %s must exist: %v", wantLegacyID, err)
+	}
+	if migrated.OwnerScope != assumptions.OwnerUser || migrated.StudentTDf != 8 {
+		t.Fatalf("migrated profile must keep user content, got owner=%s df=%d",
+			migrated.OwnerScope, migrated.StudentTDf)
+	}
+	// The original reserved user v2 row is gone.
+	if _, err := repo.Get(ctx, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version); err == nil {
+		t.Fatal("reserved user system_cma_v2@1 row must be removed after migration")
+	}
+	// Pin and default both repoint to the migrated user profile (not v3).
+	if id, ver := readPlanPin(t, db, "plan_v2pin"); id != wantLegacyID || ver != 1 {
+		t.Fatalf("plan pin must repoint to %s@1, got %s@%d", wantLegacyID, id, ver)
+	}
+	pref, err := repo.GetPreferences(ctx)
+	if err != nil {
+		t.Fatalf("get preferences: %v", err)
+	}
+	if pref.DefaultProfileID != wantLegacyID || pref.DefaultProfileVersion != 1 {
+		t.Fatalf("default must repoint to %s@1, got %+v", wantLegacyID, pref)
+	}
+	// Real v3 is untouched byte-for-byte.
+	if c, h := readProfileBytes(t, db, assumptions.SystemProfileID); c != v3CanonicalBefore || h != v3HashBefore {
+		t.Fatalf("system v3 must be immutable: hash %s want %s", h, v3HashBefore)
+	}
+
+	// Idempotent: a second run changes nothing and leaves no reserved user rows.
+	if err := repo.EnsureSystemDefault(ctx); err != nil {
+		t.Fatalf("second upgrade: %v", err)
+	}
+	if n := countReservedUserProfiles(t, db); n != 0 {
+		t.Fatalf("no owner=user system_cma_ rows may remain, got %d", n)
+	}
+	pref2, err := repo.GetPreferences(ctx)
+	if err != nil {
+		t.Fatalf("get preferences after second run: %v", err)
+	}
+	if pref2.DefaultProfileID != wantLegacyID {
+		t.Fatalf("default must stay on %s after idempotent run, got %+v", wantLegacyID, pref2)
+	}
+}
+
+// TestEnsureSystemDefaultRejectsUnknownSystemRowsOnPublishedV3DB covers td/068 R16
+// acceptance #3: a database with a correct v3 plus an UNKNOWN owner_scope=system v2
+// (and unknown system v1) must fail integrity at the very first EnsureSystemDefault
+// call (not lazily when later pinned), and must not overwrite the existing rows.
+func TestEnsureSystemDefaultRejectsUnknownSystemRowsOnPublishedV3DB(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := repository.NewAssumptionProfileRepo(db)
+
+	v3CanonicalBefore, _ := insertProfileRowRaw(
+		t, db, assumptions.SystemDefaultProfile(), assumptions.OwnerSystem)
+
+	// Unknown owner=system v2 (fabricated content) AND unknown owner=system v1.
+	fakeV2 := assumptions.SystemDefaultProfile()
+	fakeV2.ID = assumptions.SystemProfileV2ID
+	fakeV2.Name = "未知系统v2"
+	fakeV2.StudentTDf = 5
+	insertProfileRowRaw(t, db, fakeV2, assumptions.OwnerSystem)
+
+	fakeV1 := assumptions.SystemDefaultProfile()
+	fakeV1.ID = assumptions.SystemLegacyProfileID
+	fakeV1.Name = "未知系统v1"
+	fakeV1.StudentTDf = 6
+	insertProfileRowRaw(t, db, fakeV1, assumptions.OwnerSystem)
+
+	if err := repo.EnsureSystemDefault(ctx); !errors.Is(err, repository.ErrSystemProfileIdentityConflict) {
+		t.Fatalf("unknown system rows must yield identity conflict on first call, got %v", err)
+	}
+	// v3 is not overwritten.
+	if c, _ := readProfileBytes(t, db, assumptions.SystemProfileID); c != v3CanonicalBefore {
+		t.Fatal("v3 must not be overwritten when a sibling system row is unknown")
 	}
 }

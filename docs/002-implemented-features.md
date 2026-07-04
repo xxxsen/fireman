@@ -111,6 +111,9 @@
 | 交易成本 | 现金支出不计费；卖出补现金与调仓双边计费 |
 | Job + Worker | 异步 `simulation` job，进度与 SSE/轮询 |
 | 参数过期 | 计划参数变更后旧模拟 run 标记 stale |
+| 版本化模拟假设 | CNY 基准的 CMA v3 profile、历史 profile 回放、canonical/evidence hash provenance、固定 seed P50 回归 |
+
+详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md)。
 
 ---
 
