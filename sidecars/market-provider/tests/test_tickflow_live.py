@@ -1,9 +1,12 @@
-"""Optional live TickFlow smoke + reconciliation tests (td/074 §7.3/§7.4).
+"""Optional live TickFlow smoke + reconciliation tests.
 
 Not run in default CI. Run explicitly:
 
     FIREMAN_LIVE_TICKFLOW=1 MARKET_PROVIDER_TICKFLOW_ENABLED=true \
         uv run pytest -m live tests/test_tickflow_live.py
+
+To exercise the paid API, additionally export MARKET_PROVIDER_TICKFLOW_API_KEY
+in the local environment; the key must never be written into the repository.
 """
 
 import os
@@ -14,6 +17,7 @@ from fastapi.testclient import TestClient
 from fireman_market_provider import create_app
 from fireman_market_provider.adapters.tickflow import (
     fetch_tickflow_instruments,
+    reset_tickflow_client,
     try_tickflow_klines,
 )
 from fireman_market_provider.schemas import FetchRequest
@@ -27,6 +31,13 @@ pytestmark = [
 ]
 
 _EXCHANGE_SAMPLES = ["510300.SH", "159915.SZ", "600000.SH", "000001.SZ"]
+
+
+@pytest.fixture(autouse=True)
+def _fresh_client():
+    reset_tickflow_client()
+    yield
+    reset_tickflow_client()
 
 
 def _request(instrument_type: str, source_code: str, kind: str | None = None) -> FetchRequest:
@@ -54,6 +65,27 @@ def test_live_exchange_samples_have_instruments_and_klines(symbol: str) -> None:
     assert df is not None and not df.empty, f"expected klines for {symbol}"
 
 
+def test_live_600036_full_history_single_request() -> None:
+    """One request must cover 600036.SH from its 2002-04-09 listing to a recent day."""
+    df = try_tickflow_klines(
+        FetchRequest(
+            market="CN",
+            instrument_type="cn_exchange_stock",
+            source_code="600036",
+            start_date=None,
+            end_date="2026-07-04",
+            adjust_policy="none",
+        ),
+        "600036.SH",
+        "19900101",
+        "20260704",
+    )
+    assert df is not None, "expected full history for 600036.SH"
+    assert len(df) > 5800, f"expected >5800 rows, got {len(df)}"
+    assert str(df["日期"].iloc[0]) == "2002-04-09"
+    assert str(df["日期"].iloc[-1]) >= "2026-06-01"
+
+
 def test_live_mutual_fund_sample_is_unsupported() -> None:
     """110022.OF must return empty metadata or empty klines — never usable data."""
     instruments = fetch_tickflow_instruments(["110022.OF"])
@@ -61,6 +93,25 @@ def test_live_mutual_fund_sample_is_unsupported() -> None:
         _request("cn_exchange_stock", "110022"), "110022.OF", "20240101", "20260704"
     )
     assert not instruments or df is None
+
+
+@pytest.mark.skipif(
+    not os.getenv("MARKET_PROVIDER_TICKFLOW_API_KEY"),
+    reason="set MARKET_PROVIDER_TICKFLOW_API_KEY to run the paid API smoke",
+)
+def test_live_paid_api_klines_with_key() -> None:
+    """With a key injected via env, the client targets the paid API and returns data."""
+    from fireman_market_provider.adapters.tickflow import get_tickflow_client, tickflow_base_url
+
+    assert tickflow_base_url() == os.environ.get(
+        "MARKET_PROVIDER_TICKFLOW_BASE_URL", "https://api.tickflow.org"
+    ).rstrip("/")
+    client = get_tickflow_client()
+    assert client.api_key
+    df = try_tickflow_klines(
+        _request("cn_exchange_fund", "510300", "etf"), "510300.SH", "20240101", "20260704"
+    )
+    assert df is not None and not df.empty
 
 
 def test_live_reconciliation_tickflow_vs_akshare(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -217,7 +217,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     em_adjust = _cn_em_adjust(adjust)
     tx_adjust = tx_adjust_policy(adjust)
 
-    # TickFlow priority fetch (td/074): the central gate limits this to resolved
+    # TickFlow priority fetch: the central gate limits this to resolved
     # etf/index_etf kinds under the configured adjust policy; LOF and unknown
     # kinds always stay on the AKShare chain below.
     if tickflow_allowed_for_request(req):

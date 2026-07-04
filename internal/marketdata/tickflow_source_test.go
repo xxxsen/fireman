@@ -2,7 +2,7 @@ package marketdata
 
 import "testing"
 
-// td/074: the sidecar may return source_name "tickflow.klines:1d" for resolved
+// The sidecar may return source_name "tickflow.klines:1d" for resolved
 // exchange-traded instruments. The Go pipeline treats source_name as an opaque
 // string; these tests pin that the TickFlow value flows through processing,
 // hashing and refresh-replacement decisions without special-casing.

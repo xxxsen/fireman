@@ -15,6 +15,7 @@ from .adapters.names import (
     refresh_cn_mutual_fund_names,
     warm_cn_mutual_fund_name_cache,
 )
+from .adapters.tickflow import reset_tickflow_client
 from .logutil import configure_logging, get_logger
 from .provider_errors import ProviderError, provider_error_from_exception
 from .schemas import (
@@ -82,6 +83,8 @@ def create_app() -> FastAPI:
         # startup (and therefore /healthz) on upstream availability.
         _start_mutual_fund_cache_warm()
         yield
+        # Release the cached TickFlow SDK client's connection pool on shutdown.
+        reset_tickflow_client()
 
     app = FastAPI(
         title="fireman-market-provider",
