@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// td/064 R7: a profile may not be saved or activated unless it covers every
+// A profile may not be saved or activated unless it covers every
 // required base-currency asset cell, and every native-currency (non-base) asset
 // prior has a matching FX prior. The errors must name the missing canonical key.
 

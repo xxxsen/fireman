@@ -6,7 +6,7 @@ import (
 )
 
 // cashOnlySnapshot builds an all-cash, no-cash-flow plan over horizonMonths so the
-// only thing moving the balance is the deterministic cash return (td/063 R1).
+// only thing moving the balance is the deterministic cash return.
 func cashOnlySnapshot(horizonMonths int, deterministic bool) *InputSnapshot {
 	endAge := 30 + horizonMonths/12
 	in := &InputSnapshot{
@@ -67,7 +67,7 @@ func TestLegacyCashStaysFlat(t *testing.T) {
 }
 
 // TestForwardCashSeedIndependent verifies the cash growth does not depend on the
-// RNG seed or Student-t df (td/063 R1 acceptance #2).
+// RNG seed or Student-t df.
 func TestForwardCashSeedIndependent(t *testing.T) {
 	a := cashOnlySnapshot(120, true)
 	a.Parameters.Seed = "1"

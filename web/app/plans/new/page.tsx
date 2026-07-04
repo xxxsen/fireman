@@ -80,7 +80,7 @@ const DEFAULT_ADVANCED: AdvancedFireParams = {
 /** High fixed-inflation threshold that requires an explicit risk acknowledgement. */
 const HIGH_FIXED_INFLATION = 0.15;
 
-/** Whether the advanced params still equal the documented defaults (td/062 R3). */
+/** Whether the advanced params still equal the documented defaults. */
 function advancedIsDefault(a: AdvancedFireParams): boolean {
   return (Object.keys(DEFAULT_ADVANCED) as (keyof AdvancedFireParams)[]).every(
     (k) => a[k] === DEFAULT_ADVANCED[k],
@@ -88,7 +88,7 @@ function advancedIsDefault(a: AdvancedFireParams): boolean {
 }
 
 /**
- * Client mirror of the server's validateParameterAdvanced ranges (td/062 R2). All
+ * Client mirror of the server's validateParameterAdvanced ranges. All
  * fields are checked unconditionally so a value edited in one withdrawal/inflation
  * mode and then hidden by switching modes cannot slip past to a server rejection.
  */

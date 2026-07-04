@@ -34,7 +34,7 @@ const emptyDraft: Draft = {
 };
 
 /**
- * ReturnOverridesCard manages td/061 §4.1.5 asset-level overrides: a rare,
+ * ReturnOverridesCard manages asset-level return overrides: a rare,
  * plan-specific escape hatch that pins a held instrument's forward geometric
  * return and/or volatility. It saves through its own per-instrument API
  * (independent of the parameters form) and shows the required reason + expiry.

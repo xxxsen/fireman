@@ -307,7 +307,7 @@ describe("ParametersPage strategy enums", () => {
     expect(req.parameters.inflation_mode).toBe("random_ar1");
   });
 
-  it("requires confirmation before switching the return-assumption mode (td/061 §4.2.3)", async () => {
+  it("requires confirmation before switching the return-assumption mode", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
@@ -337,7 +337,7 @@ describe("ParametersPage strategy enums", () => {
     expect(req.parameters.return_assumption_mode).toBe("historical_cagr");
   });
 
-  it("renders the plan baseline help inline with its label (td/049 §5)", async () => {
+  it("renders the plan baseline help inline with its label", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>

@@ -240,8 +240,8 @@ func TestInstrumentRetryFetchIntegration(t *testing.T) {
 	}
 }
 
-// TestInstrumentClassificationEditAfterFailedFetchPreservedOnRetry covers td/054
-// finding #2: a fetch_failed asset stays editable, and a subsequent retry rebuilds
+// TestInstrumentClassificationEditAfterFailedFetchPreservedOnRetry verifies
+// that a fetch_failed asset stays editable, and a subsequent retry rebuilds
 // the payload from the current instrument so the user's edited classification is
 // preserved (not reverted to the import-time value).
 func TestInstrumentClassificationEditAfterFailedFetchPreservedOnRetry(t *testing.T) {

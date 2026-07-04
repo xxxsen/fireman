@@ -298,7 +298,7 @@ describe("AssetClassHoldingPicker", () => {
     },
   };
 
-  it("closes external AKShare candidates on outside click (td/054 #3)", async () => {
+  it("closes external AKShare candidates on outside click", async () => {
     pool = [];
     resolveImport.mockResolvedValueOnce(externalResolved);
     renderPicker();
@@ -311,7 +311,7 @@ describe("AssetClassHoldingPicker", () => {
     );
   });
 
-  it("closes external AKShare candidates on Escape (td/054 #3)", async () => {
+  it("closes external AKShare candidates on Escape", async () => {
     pool = [];
     resolveImport.mockResolvedValueOnce(externalResolved);
     renderPicker();
@@ -325,7 +325,7 @@ describe("AssetClassHoldingPicker", () => {
     );
   });
 
-  it("renders the local dropdown at a fixed 10-row height with single-line rows (td/054 #4)", async () => {
+  it("renders the local dropdown at a fixed 10-row height with single-line rows", async () => {
     pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
     renderPicker();
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));

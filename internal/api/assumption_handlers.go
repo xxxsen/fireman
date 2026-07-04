@@ -73,7 +73,7 @@ func (s Services) validateAssumptionProfile(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	// A non-system profile must never claim a reserved system_cma_ id (td/067 R13).
+	// A non-system profile must never claim a reserved system_cma_ id.
 	if req.Profile.OwnerScope != assumptions.OwnerSystem && assumptions.HasReservedSystemID(req.Profile.ID) {
 		Fail(c, http.StatusBadRequest, "assumption_profile_reserved_id",
 			"profile id uses the reserved 'system_cma_' namespace; user profiles receive a server-assigned id",

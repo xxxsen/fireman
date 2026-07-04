@@ -8,7 +8,7 @@ import (
 	"github.com/fireman/fireman/internal/simulation"
 )
 
-// TestBuildFrozenFactorModelMissingPriorBlocks covers td/063 R4: a cross-type
+// TestBuildFrozenFactorModelMissingPriorBlocks verifies that a cross-type
 // factor pair with no correlation prior must fail the build instead of silently
 // becoming ρ=0.
 func TestBuildFrozenFactorModelMissingPriorBlocks(t *testing.T) {

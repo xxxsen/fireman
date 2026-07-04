@@ -187,7 +187,7 @@ func monthKey(year, month int) string {
 	return fmt.Sprintf("%04d-%02d", year, month)
 }
 
-// applyReturnCalibration freezes the td/061 forward-return audit fields onto the
+// applyReturnCalibration freezes the forward-return audit fields onto the
 // asset. ModeledAnnualReturn (the value the engine consumes) is always the
 // calibrated forward geometric return, kept identical to the explicit
 // ForwardAnnualGeometricReturn field.
@@ -208,7 +208,7 @@ func applyReturnCalibration(sa *simulation.SnapshotAsset, cal assumptions.Calibr
 }
 
 // applyReturnOverride applies an asset-level plan-specific override on top of the
-// calibrated forward values (td/061 §4.1.5). It only touches the forward
+// calibrated forward values. It only touches the forward
 // geometric return and/or volatility — historical facts, correlation and the FX
 // factor are untouched. The override is recorded in the audit (source +
 // warning) so the run's assumption view explains why the number differs from the
@@ -302,7 +302,7 @@ func (s *SimulationService) fxMetricsCached(
 // profile-driven FX calibration for blended_prior and custom modes (custom only
 // overrides the asset's local return, never FX, so its FX still uses the prior).
 // historical_cagr keeps the historical FX drift so legacy runs are unchanged. A
-// missing FX prior under a forward mode is a hard error (td/063 R2).
+// missing FX prior under a forward mode is a hard error.
 func applyFXCalibration(
 	sa *simulation.SnapshotAsset,
 	resolved resolvedAssumption,
@@ -385,13 +385,12 @@ func buildInputSnapshotStruct(
 		Assets: assets,
 	}
 	// Freeze the resolved assumption provenance so a run is always explainable by a
-	// specific immutable model identity + content/evidence hash (td/066 R11/R12).
+	// specific immutable model identity + content/evidence hash.
 	// The CMA evidence hash is recorded ONLY when the resolved profile is genuinely
 	// system-owned AND its content matches a recognized published system identity by
 	// exact (id, version, content_hash). A user profile (even one that squats on a
 	// reserved id) never inherits official evidence provenance, and an unrecognized
-	// system content is refused outright so it can never run with forged provenance
-	// (td/067 R13 #4 / R14 #3).
+	// system content is refused outright so it can never run with forged provenance.
 	in.AssumptionProfileID = resolved.Profile.ID
 	in.AssumptionProfileVersion = resolved.Profile.Version
 	contentHash := resolved.ProfileContentHash
@@ -423,7 +422,7 @@ func buildInputSnapshotStruct(
 	// Forward-looking modes (blended_prior / custom) run the joint, correlated
 	// engine and apply the deterministic cash return; historical_cagr keeps the
 	// legacy independent path with implicit 0% cash so migrated plans reproduce
-	// their old numbers exactly (td/061 §4.2 / td/063 R1).
+	// their old numbers exactly.
 	if resolved.Mode != assumptions.SourceHistoricalCAGR {
 		// A forward run is a 3.0.0 run even when it has no risk factor (an all-cash
 		// plan): cash must still grow at its frozen forward return.
@@ -433,7 +432,7 @@ func buildInputSnapshotStruct(
 		fm, refs, err := buildFrozenFactorModel(assets, plan.BaseCurrency, resolved.Profile)
 		if err != nil {
 			// The forward engine must block, never silently fall back to the
-			// independent 2.0.0 path (td/063 R4/N3).
+			// independent 2.0.0 path.
 			return nil, newErr("assumption_unavailable",
 				"forward risk model could not be built; check the global assumption profile",
 				map[string]any{"error": err.Error()})
@@ -451,7 +450,7 @@ func buildInputSnapshotStruct(
 // freezeTailRiskParams freezes the active profile's Student-t df and per-month
 // return truncation into the forward (3.0.0) snapshot so the sampler reads frozen
 // values, a plan can no longer change them, and changing the profile only affects
-// new runs (td/063 R3). Profiles predating these fields (zero/invalid bounds) fall
+// new runs. Profiles predating these fields (zero/invalid bounds) fall
 // back to the engine defaults so a legacy profile can never collapse the band.
 func freezeTailRiskParams(in *simulation.InputSnapshot, profile assumptions.Profile) {
 	if profile.StudentTDf > 2 {

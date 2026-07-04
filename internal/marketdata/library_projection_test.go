@@ -17,7 +17,7 @@ func dailyPoints(start, end string, daily float64) []DataPoint {
 	return pts
 }
 
-// TestComputeLibraryProjectionStaleAsOf is the core td/057 P1 guard: trailing
+// TestComputeLibraryProjectionStaleAsOf is the core stale-as-of guard: trailing
 // windows end at the instrument's own last trade date (data_as_of), not the
 // server's current date. A 停更 instrument with full 2018-12-28..2024-01-01
 // history still reports its near-5y annualized return, and that value matches the

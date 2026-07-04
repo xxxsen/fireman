@@ -37,7 +37,7 @@ type CreateSimulationResponse struct {
 }
 
 // SimulationRetentionLimit is how many Monte Carlo runs are kept per plan; older
-// runs (and their attached analysis results) are pruned on each new run (td/050).
+// runs (and their attached analysis results) are pruned on each new run.
 const SimulationRetentionLimit = 7
 
 // SimulationService orchestrates simulation jobs and results.
@@ -82,7 +82,7 @@ func NewSimulationService(
 }
 
 // AnalysisRunContext is a resolved Monte Carlo run used as the frozen input for
-// an attached stress / sensitivity analysis (td/050).
+// an attached stress / sensitivity analysis.
 type AnalysisRunContext struct {
 	RunID     string
 	Snapshot  *simulation.InputSnapshot
@@ -423,7 +423,7 @@ type SimulationRunView struct {
 }
 
 // RunAssumptionView exposes the frozen return-calibration and risk-model audit of
-// a run so the UI can explain (per td/061 §8) which profile/scenario produced the
+// a run so the UI can explain which profile/scenario produced the
 // numbers and whether the joint risk model mainly relies on priors. It always
 // reflects the run's frozen snapshot, never the plan's current (mutable) values.
 type RunAssumptionView struct {
@@ -451,7 +451,7 @@ type RunAssetAssumptionView struct {
 	SampleYears                     int      `json:"sample_years"`
 	HistoricalWeight                float64  `json:"historical_weight"`
 	Warnings                        []string `json:"warnings,omitempty"`
-	// td/063 R2 FX forward-calibration audit (present only for cross-currency
+	// FX forward-calibration audit (present only for cross-currency
 	// holdings). FXForwardReturn is the FX drift the engine consumes.
 	HasFX              bool     `json:"has_fx"`
 	FXForwardReturn    float64  `json:"fx_forward_return,omitempty"`
@@ -540,8 +540,8 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 // buildInputSnapshot freezes a plan into a simulation input. When
 // scenarioOverride is non-empty the resolved assumption is forced to
 // blended_prior + that scenario, which is how the scenario comparison runs the
-// same frozen plan under conservative/baseline/optimistic with one shared seed
-// (td/061 §3.6 / §5.4.6). A normal run passes "" to keep the plan's selection.
+// same frozen plan under conservative/baseline/optimistic with one shared seed.
+// A normal run passes "" to keep the plan's selection.
 // resolveAndBuildAssets validates the plan's allocation/holdings, resolves the
 // return-assumption selection (optionally forced to a comparison scenario), and
 // builds the per-asset frozen snapshot including any active asset-level overrides.
@@ -633,7 +633,7 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 }
 
 // activeReturnOverrides loads the plan's asset-level overrides and drops any that
-// have expired as of the plan's valuation date (td/061 §4.1.5). ISO dates compare
+// have expired as of the plan's valuation date. ISO dates compare
 // lexicographically, so an override is active while expires_at >= valuation_date.
 func (s *SimulationService) activeReturnOverrides(
 	ctx context.Context, plan repository.Plan,
@@ -655,7 +655,7 @@ func (s *SimulationService) activeReturnOverrides(
 // validateSimulationReady defers entirely to validateParameters, which now owns
 // the advanced-parameter ranges and the (1 - tax*taxable) > 0 rule. Keeping a
 // single source of truth prevents a plan that passes creation from failing only
-// at simulation time (td/062 R2).
+// at simulation time.
 func validateSimulationReady(p repository.PlanParameters) error {
 	return validateParameters(p)
 }

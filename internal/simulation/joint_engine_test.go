@@ -2,7 +2,7 @@ package simulation
 
 import "testing"
 
-// td/061 §5.C.2: a single risk asset run under the multivariate factor model must
+// A single risk asset run under the multivariate factor model must
 // be bit-for-bit identical to the legacy independent run (same seed, same draws),
 // because the 1-factor sampler consumes the RNG in the same order.
 func TestJointEngineSingleAssetMatchesIndependent(t *testing.T) {

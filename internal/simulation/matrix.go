@@ -91,8 +91,8 @@ func jacobiRotate(a, v [][]float64, p, q int) {
 }
 
 // projectToPSD repairs a symmetric correlation matrix to be positive definite by
-// flooring eigenvalues at eigenEpsilon and renormalising the diagonal back to 1
-// (td/061 §3.5.2). It returns the repaired matrix, the minimum eigenvalue of the
+// flooring eigenvalues at eigenEpsilon and renormalising the diagonal back to 1.
+// It returns the repaired matrix, the minimum eigenvalue of the
 // input and the largest absolute element change.
 func projectToPSD(r [][]float64) ([][]float64, float64, float64) {
 	values, vectors := jacobiEigenSymmetric(r)

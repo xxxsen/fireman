@@ -62,7 +62,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	if stressView["simulation_run_id"].(string) != runID {
 		t.Fatalf("stress should be bound to run %s, got %+v", runID, stressView["simulation_run_id"])
 	}
-	// Regression for td/051 finding #2: the run input_hash is a different hash
+	// Regression guard: the run input_hash is a different hash
 	// space than the plan config hash, so they differ; despite that, an unedited
 	// plan must NOT mark the freshly completed analysis as stale.
 	if ih, cc := stressView["input_hash"].(string), stressView["current_config_hash"].(string); ih == cc {
@@ -115,7 +115,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	}
 }
 
-// TestAttachedAnalysisListByRunRejectsForeignRun guards td/051 finding #4: a
+// TestAttachedAnalysisListByRunRejectsForeignRun guards cross-plan isolation: a
 // plan must not be able to read another plan's attached analysis by passing a
 // foreign simulation_run_id.
 func TestAttachedAnalysisListByRunRejectsForeignRun(t *testing.T) {
@@ -198,7 +198,7 @@ func seedSimulationRun(t *testing.T, db *sql.DB, planID string) string {
 	return runID
 }
 
-// TestStressRerunCancelsPriorQueuedJob guards td/052 finding #1: re-running stress
+// TestStressRerunCancelsPriorQueuedJob verifies that re-running stress
 // on the same run cancels a still-queued prior job instead of orphaning it.
 func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	db := testutil.OpenTestDB(t)
@@ -251,7 +251,7 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	}
 }
 
-// TestSensitivityRerunRequestsCancelOfRunningJob guards td/052 finding #1 for a
+// TestSensitivityRerunRequestsCancelOfRunningJob covers the rerun-cancel behavior for a
 // prior job that is already running: it receives a cancel request, and its stale
 // analysis record is removed in favor of the new job.
 func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {

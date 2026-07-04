@@ -9,7 +9,7 @@ import (
 	"github.com/fireman/fireman/internal/simulation"
 )
 
-// td/063 R2: the forward FX calibration must reach production via
+// The forward FX calibration must reach production via
 // applyFXCalibration. These cover the three currency combinations the doc calls
 // out: a native-currency (USD) holding gets a forward, prior-blended FX drift;
 // historical_cagr keeps the raw historical FX drift; and a holding whose

@@ -41,7 +41,7 @@ const holding = {
   instrument_code: "B001",
 };
 
-describe("ReturnOverridesCard (td/061 §4.1.5)", () => {
+describe("ReturnOverridesCard", () => {
   beforeEach(() => {
     mockGetHoldings.mockReset();
     mockGetOverrides.mockReset();

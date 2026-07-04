@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// td/061 §5.C.2 / §6.1.9: a single factor with σ>0 must consume the RNG in the
+// A single factor with σ>0 must consume the RNG in the
 // same order and produce the same draws as the legacy SampleStudentT.
 func TestMultivariateSingleFactorMatchesLegacy(t *testing.T) {
 	p := ParamsFromAnnual(0.07, 0.15)
@@ -22,7 +22,7 @@ func TestMultivariateSingleFactorMatchesLegacy(t *testing.T) {
 	}
 }
 
-// td/061 §6.1.9: 300k draws should reproduce Σ within statistical tolerance.
+// 300k draws should reproduce Σ within statistical tolerance.
 func TestMultivariateSampleCovarianceMatchesSigma(t *testing.T) {
 	sigma := []float64{0.04, 0.05}
 	r := [][]float64{{1, 0.5}, {0.5, 1}}
@@ -59,7 +59,7 @@ func TestMultivariateSampleCovarianceMatchesSigma(t *testing.T) {
 	}
 }
 
-// td/061 §6.1.9: ρ=1 equal assets get no diversification; ρ=0 does.
+// ρ=1 equal assets get no diversification; ρ=0 does.
 func TestMultivariateDiversificationByCorrelation(t *testing.T) {
 	sigma := []float64{0.04, 0.04}
 	mu := []float64{0, 0}

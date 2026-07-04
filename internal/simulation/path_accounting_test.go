@@ -45,7 +45,7 @@ func TestYearAccountingIdentityWithWithdrawalTax(t *testing.T) {
 }
 
 func TestYearAccumulatorAnnualReturn(t *testing.T) {
-	// td/060 §2.3: annual_return = (end - start - income + spending + tax + tx) / start,
+	// annual_return = (end - start - income + spending + tax + tx) / start,
 	// i.e. InvestmentGainLoss / StartWealthMinor. Cash flows must not be counted
 	// as investment return.
 	cases := []struct {

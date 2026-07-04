@@ -37,7 +37,7 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 		req.BaseCurrency = "CNY"
 	}
 	// Reject the unsupported currency before any other work so a non-CNY plan can
-	// never be partially created (td/065 R9).
+	// never be partially created.
 	if err := validateBaseCurrency(req.BaseCurrency); err != nil {
 		return PlanDetail{}, newErr("validation_failed", err.Error(), nil)
 	}
@@ -54,7 +54,7 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 	params.SelectedScenarioID = &scenarioID
 	applyNewPlanAssumptionDefaults(&params)
 	// student_t_df is a legacy 2.x-only field and is not client-writable; forward
-	// runs freeze the global profile's df (td/064 N6). Force the server default so
+	// runs freeze the global profile's df. Force the server default so
 	// a wizard request can never set it.
 	params.StudentTDf = repository.DefaultStudentTDf
 	if err := validateParameters(params); err != nil {
@@ -113,8 +113,8 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 
 // applyNewPlanAssumptionDefaults fills the return-assumption selection for a newly
 // created plan when the client omitted it. New plans use the forward-looking,
-// auditable blended_prior calibration following the user's global profile
-// (td/061 §4.2.3 / td/063 R0); the repository's historical_cagr default is only
+// auditable blended_prior calibration following the user's global profile;
+// the repository's historical_cagr default is only
 // for migration-era rows.
 func applyNewPlanAssumptionDefaults(p *repository.PlanParameters) {
 	if p.ReturnAssumptionMode == "" {

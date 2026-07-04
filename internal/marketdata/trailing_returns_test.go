@@ -83,7 +83,7 @@ func TestTrailingInsufficientHistory(t *testing.T) {
 	}
 }
 
-// td/056 §4.2: the asset-library list view annualizes 1y/3y/5y. 3y/5y must equal
+// The asset-library list view annualizes 1y/3y/5y. 3y/5y must equal
 // the detail-page annualized values; 1y is annualized from its own cumulative
 // return. Insufficient windows surface as nil rather than zero.
 func TestComputeListTrailingReturnsAnnualizes(t *testing.T) {

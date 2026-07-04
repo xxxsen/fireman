@@ -433,7 +433,7 @@ func TestScenarioRegionTargetsRoundTrip(t *testing.T) {
 			equityDomestic = row["weight_within_class"].(float64)
 		}
 	}
-	// td/049 §3: applying a scenario must NOT overwrite the plan's region split.
+	// Applying a scenario must NOT overwrite the plan's region split.
 	if equityDomestic != 0.8 {
 		t.Fatalf("expected plan equity domestic 0.8 preserved after apply, got %v", equityDomestic)
 	}

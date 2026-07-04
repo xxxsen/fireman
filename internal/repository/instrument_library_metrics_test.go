@@ -9,7 +9,7 @@ import (
 
 func f64(v float64) *float64 { return &v }
 
-// TestListWithMetricsJoinsProjection covers td/057 P1: ListWithMetrics returns
+// TestListWithMetricsJoinsProjection verifies that ListWithMetrics returns
 // the precomputed projection via a single LEFT JOIN. Instruments with a
 // projection row expose data_as_of / quality / trailing returns; instruments
 // without one keep empty/nil list fields (rendered "—") and never trigger a

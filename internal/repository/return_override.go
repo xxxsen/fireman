@@ -7,7 +7,7 @@ import (
 )
 
 // PlanReturnOverride is an asset-level plan-specific override of the forward
-// geometric return and/or volatility (td/061 §4.1.5). Only forward-looking
+// geometric return and/or volatility. Only forward-looking
 // values may be overridden; historical facts, correlation priors and the FX
 // common factor are never affected. ForwardReturn / AnnualVolatility are nil
 // when that dimension is not overridden.

@@ -284,7 +284,7 @@ describe("AssetsPage", () => {
     await waitFor(() => expect(deleteInstrumentMock).toHaveBeenCalledWith("inst_1"));
   });
 
-  it("merges trailing returns into one 年化数据 column with labeled values (td/060 §1)", () => {
+  it("merges trailing returns into one 年化数据 column with labeled values", () => {
     mockState.instruments = defaultInstruments.map((i) =>
       i.id === "inst_1"
         ? {
@@ -315,7 +315,7 @@ describe("AssetsPage", () => {
     expect(within(eqRow!).getByText("1年 8.12% · 3年 6.41% · 5年 —")).toBeInTheDocument();
   });
 
-  it("renders all dashes in 年化数据 for an instrument without a projection (td/060 §1)", () => {
+  it("renders all dashes in 年化数据 for an instrument without a projection", () => {
     renderPage();
     const rows = screen.getAllByRole("row");
     const eqRow = rows.find((row) => within(row).queryByRole("link", { name: "510300" }));
@@ -323,7 +323,7 @@ describe("AssetsPage", () => {
     expect(within(eqRow!).getByText("1年 — · 3年 — · 5年 —")).toBeInTheDocument();
   });
 
-  it("mobile card reuses the same labeled trailing-return order (td/060 §1)", () => {
+  it("mobile card reuses the same labeled trailing-return order", () => {
     mockState.instruments = defaultInstruments.map((i) =>
       i.id === "inst_1"
         ? {

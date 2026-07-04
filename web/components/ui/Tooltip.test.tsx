@@ -23,7 +23,7 @@ describe("Tooltip", () => {
     expect(tooltip.style.top).not.toBe("");
   });
 
-  it("places a followCursor tooltip near the cursor and tracks movement (td/051 §5)", () => {
+  it("places a followCursor tooltip near the cursor and tracks movement", () => {
     render(
       <Tooltip content="提示" followCursor contentTestId="follow-content" triggerTestId="follow-trigger">
         <button type="button">触发</button>

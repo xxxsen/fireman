@@ -22,7 +22,7 @@ func seedActiveInstrument(t *testing.T, repo *repository.InstrumentRepo, id, sta
 	}
 }
 
-// TestListServesProjectionWithoutPerRowReads covers td/057 P1: the asset library
+// TestListServesProjectionWithoutPerRowReads verifies that the asset library
 // list reads its metadata/trailing returns from the precomputed projection
 // (single JOIN) and never recomputes full history per row. The active instrument
 // carries a projection row but zero market_data_points, so populated trailing
@@ -36,7 +36,7 @@ func TestListServesProjectionWithoutPerRowReads(t *testing.T) {
 	seedActiveInstrument(t, instRepo, "ins_eq", "active")
 	seedActiveInstrument(t, instRepo, "ins_inactive", "delisted")
 	// Active instrument whose projection is missing must render "—" rather than
-	// falling back to a per-row synchronous computation (td/057 acceptance).
+	// falling back to a per-row synchronous computation.
 	seedActiveInstrument(t, instRepo, "ins_noproj", "active")
 
 	// Active row: projection present, but no market_data_points exist at all.

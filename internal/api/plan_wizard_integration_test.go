@@ -181,7 +181,7 @@ func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
 
 	const total = int64(10_000_000_00)
 	params := wizardParams(total)
-	// td/060 §3.3: advanced FIRE params chosen in the wizard's disclosure must be
+	// Advanced FIRE params chosen in the wizard's disclosure must be
 	// persisted as plan parameters, not silently replaced by hard-coded defaults.
 	params["inflation_mode"] = "random_ar1"
 	params["inflation_mu"] = 0.025
@@ -264,7 +264,7 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 		},
 	}
 
-	// td/062 R2: each out-of-range advanced parameter must be rejected at wizard
+	// Each out-of-range advanced parameter must be rejected at wizard
 	// creation, leaving no plan / holdings / snapshot rows behind.
 	cases := []struct {
 		name  string

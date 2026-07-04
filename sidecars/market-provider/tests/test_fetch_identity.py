@@ -1,4 +1,4 @@
-"""Identity-consistent fetch source selection (td/037 phase 2, 现象-4)."""
+"""Identity-consistent fetch source selection."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { annualCompletenessLabel, compressYears, dataSourceLabel, formatAnnualPeriod, formatDateFromMs, formatMoneyInlineUnit, formatMoneyScaled, formatMoneyUnitHint, formatMoneyWan, representativePercentileRank, sortRepresentativePaths } from "./format";
 
-describe("formatMoneyWan (td/056 §2.2)", () => {
+describe("formatMoneyWan", () => {
   it("converts minor to 万元 with two decimals and no separators", () => {
     expect(formatMoneyWan(5_787_302_02)).toBe("¥578.73w");
     expect(formatMoneyWan(100_000_00)).toBe("¥10.00w");
@@ -18,7 +18,7 @@ describe("formatMoneyWan (td/056 §2.2)", () => {
   });
 });
 
-describe("representative path ordering (td/056 §2.1)", () => {
+describe("representative path ordering", () => {
   it("ranks percentiles p00<p25<p50<p75<p95, unknown last", () => {
     expect(representativePercentileRank("p00")).toBeLessThan(representativePercentileRank("p95"));
     expect(representativePercentileRank("p50")).toBe(2);

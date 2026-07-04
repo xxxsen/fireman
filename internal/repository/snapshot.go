@@ -90,8 +90,8 @@ func (r *SnapshotRepo) replaceSnapshotMonths(ctx context.Context, tx *sql.Tx, sn
 	return nil
 }
 
-// ListSnapshotMonths returns the frozen monthly log-return series for a snapshot
-// (td/061 §4.1.6), ordered chronologically. It is loaded on demand (not by
+// ListSnapshotMonths returns the frozen monthly log-return series for a snapshot,
+// ordered chronologically. It is loaded on demand (not by
 // GetByID) so only the joint factor model build pays for it.
 //
 //nolint:dupl // generic query/scan loop shared with other simple list readers

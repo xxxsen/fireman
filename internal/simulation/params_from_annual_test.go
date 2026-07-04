@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// td/061 §5.A.4: 12 months of unperturbed compounding of the monthly log drift
+// 12 months of unperturbed compounding of the monthly log drift
 // must reproduce the forward annual geometric return exactly.
 func TestParamsFromAnnualCompoundsToGeometricReturn(t *testing.T) {
 	for _, r := range []float64{0, 0.03, 0.065, 0.169564, -0.05} {

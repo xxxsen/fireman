@@ -28,7 +28,7 @@ vi.mock("echarts-for-react", () => ({
 
 import { ParameterCurvesChart, SensitivityHeatmap } from "./SensitivityCharts";
 
-describe("SensitivityCharts (td/051 §6)", () => {
+describe("SensitivityCharts", () => {
   beforeEach(() => {
     capturedOption = null;
     capturedHeight = undefined;

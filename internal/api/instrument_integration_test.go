@@ -219,7 +219,7 @@ func TestInstrumentDeleteIntegration(t *testing.T) {
 	assertErrorCode(t, readBody(t, resp), "instrument_in_use")
 }
 
-// TestInstrumentRefreshNotThrottledIntegration guards td/053 §3: manual library
+// TestInstrumentRefreshNotThrottledIntegration verifies that manual library
 // refresh is always immediate, so two consecutive refreshes both succeed and the
 // throttle error never surfaces.
 func TestInstrumentRefreshNotThrottledIntegration(t *testing.T) {
@@ -250,7 +250,7 @@ func TestInstrumentRefreshNotThrottledIntegration(t *testing.T) {
 	}
 }
 
-// TestInstrumentClassificationFreezeIntegration guards td/053 §2.2: editing the
+// TestInstrumentClassificationFreezeIntegration verifies that editing the
 // library classification does not retro-actively change an existing plan's frozen
 // holding classification, even when that plan saves a structural holdings update.
 func TestInstrumentClassificationFreezeIntegration(t *testing.T) {
@@ -530,7 +530,7 @@ func getInstrumentFromList(t *testing.T, client *http.Client, baseURL, instrumen
 	return nil
 }
 
-// TestInstrumentForceRefreshEmptyClearsProjectionIntegration covers td/058 P1: a
+// TestInstrumentForceRefreshEmptyClearsProjectionIntegration verifies that a
 // full replace whose upstream returns empty points clears market data, annual
 // returns AND the list projection in the same transaction, so the library can
 // never show a stale data_as_of / trailing return / eligibility for an asset
@@ -577,7 +577,7 @@ func TestInstrumentForceRefreshEmptyClearsProjectionIntegration(t *testing.T) {
 	}
 }
 
-// TestInstrumentRefreshProjectionFailureRollsBackIntegration covers td/058
+// TestInstrumentRefreshProjectionFailureRollsBackIntegration covers
 // transaction atomicity: if the projection sync SQL fails, the whole refresh
 // rolls back, leaving the previous market data, annual returns and projection
 // untouched.
@@ -630,7 +630,7 @@ func TestInstrumentRefreshProjectionFailureRollsBackIntegration(t *testing.T) {
 	}
 }
 
-// TestInstrumentSourceChangeEmptyClearsProjectionIntegration covers the td/058
+// TestInstrumentSourceChangeEmptyClearsProjectionIntegration covers the
 // acceptance variant where fullReplace is triggered by a source switch (not
 // force): an empty upstream payload still clears history, annual returns and the
 // projection together.
@@ -670,7 +670,7 @@ func TestInstrumentSourceChangeEmptyClearsProjectionIntegration(t *testing.T) {
 	}
 }
 
-// TestInstrumentImportProjectionFailureRollsBackIntegration covers td/058
+// TestInstrumentImportProjectionFailureRollsBackIntegration covers
 // transaction atomicity on the import/fetch (job) path: if the projection
 // upsert SQL fails, the whole fetch transaction rolls back (no market data) and
 // the instrument is marked fetch_failed.

@@ -7,7 +7,7 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// td/061 §6.1.6 / §6.2.4: the return-assumption selection is part of the plan
+// The return-assumption selection is part of the plan
 // config hash, so switching scenario, mode, profile or version must change the
 // hash (which is what marks existing runs stale). This is a regression test for
 // a bug where parametersToMap omitted the assumption fields and assumption-only
@@ -56,7 +56,7 @@ func TestConfigHashChangesWithAssumptionSelection(t *testing.T) {
 	}
 }
 
-// td/064 N6: student_t_df is a legacy 2.x-only field. Forward (blended_prior/
+// student_t_df is a legacy 2.x-only field. Forward (blended_prior/
 // custom) runs freeze the global profile's df, so changing the plan df must not
 // change a forward run's config hash; historical_cagr replay still depends on it.
 func TestConfigHashStudentTDfLegacySemantics(t *testing.T) {
@@ -90,7 +90,7 @@ func TestConfigHashStudentTDfLegacySemantics(t *testing.T) {
 	}
 }
 
-// td/061 §4.1.5: an asset-level override is part of the plan config, so adding or
+// An asset-level override is part of the plan config, so adding or
 // editing one (for a held instrument) must change the config hash that marks
 // existing runs stale.
 func TestConfigHashChangesWithReturnOverride(t *testing.T) {

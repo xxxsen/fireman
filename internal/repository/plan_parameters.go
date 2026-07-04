@@ -161,8 +161,8 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 
 // Assumption-selection defaults. New plans currently default to historical_cagr
 // so existing numerical behavior is preserved; the blended_prior/baseline flip
-// is gated behind the final td/061 rollout step once the joint factor engine and
-// regression report land (td/061 §7.5).
+// is gated behind the final forward-engine rollout step once the joint factor engine and
+// regression report land.
 const (
 	DefaultReturnAssumptionMode     = "historical_cagr"
 	DefaultAssumptionSelectionMode  = "follow_global"
@@ -177,7 +177,7 @@ const (
 	// DefaultStudentTDf is the server-assigned Student-t df for new plans. The
 	// plan-level df is a legacy field used only to replay 2.x snapshots; forward
 	// (blended_prior/custom) runs freeze the global profile's df instead, so the
-	// plan value is never client-writable (td/064 N6).
+	// plan value is never client-writable.
 	DefaultStudentTDf = 7
 )
 

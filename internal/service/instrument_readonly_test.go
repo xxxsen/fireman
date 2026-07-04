@@ -2,7 +2,7 @@ package service
 
 import "testing"
 
-// TestDefaultParametersCurrentAge covers td/056 §6: non-wizard plan creation must
+// TestDefaultParametersCurrentAge verifies that non-wizard plan creation must
 // default current age to 35 so the parameters page matches the wizard default.
 func TestDefaultParametersCurrentAge(t *testing.T) {
 	if got := defaultParameters("pln_test", nil).CurrentAge; got != 35 {

@@ -19,7 +19,7 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-// td/061 §6.2.5/§6.6/§7: the system profile is always present and read-only; the
+// The system profile is always present and read-only; the
 // preferences default to it; copying it to a user draft + activating works; and
 // trying to overwrite the system profile is rejected.
 func TestAssumptionProfilesLifecycle(t *testing.T) {
@@ -53,8 +53,7 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 		map[string]any{"profile": sysCopy}, "assumption_profile_read_only")
 
 	// Copy to a user draft, save it. The client-proposed id is ignored: the server
-	// assigns a fresh user_ id so a user profile can never squat a system id
-	// (td/067 R13).
+	// assigns a fresh user_ id so a user profile can never squat a system id.
 	draft := cloneProfile(profile)
 	draft["id"] = "user_cma_custom"
 	draft["version"] = 1
@@ -88,7 +87,7 @@ func TestAssumptionProfilesLifecycle(t *testing.T) {
 	}
 }
 
-// TestCreateUserProfileRejectsReservedID covers td/067 R13 acceptance #1: a user
+// TestCreateUserProfileRejectsReservedID verifies that a user
 // profile may never claim a reserved system_cma_ id (create AND validate paths
 // reject it), and a normal user profile always receives a server-assigned user_ id.
 func TestCreateUserProfileRejectsReservedID(t *testing.T) {
@@ -151,7 +150,7 @@ func TestAssumptionValidateRejectsBadProfile(t *testing.T) {
 	}
 }
 
-// td/063 R4 §1 / R3 §2: a draft whose correlation matrix needs a heavy PSD
+// A draft whose correlation matrix needs a heavy PSD
 // repair can neither be saved nor activated. We copy the system profile and bend
 // three pairwise correlations into a non-PSD triangle, then assert both the save
 // and the (separately-seeded) activate path reject it.
@@ -199,7 +198,7 @@ func TestAssumptionHeavyPSDRepairBlocksSaveAndActivate(t *testing.T) {
 		nil, "assumption_profile_invalid")
 }
 
-// td/065 R8 + td/066 R12: a frozen historical system profile (v1 ineligible by the
+// A frozen historical system profile (v1 ineligible by the
 // publish gate, v2 ineligible because it is no longer the current identity) must
 // not be selectable as the global default. The list exposes
 // eligible_for_global_default, SetPreferences rejects both with
@@ -208,17 +207,16 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	r := NewRouter(context.Background(), Deps{DB: db})
 
-	// Seed the REAL published td/061/062 v1 row (byte-exact fixture). It predates
+	// Seed the REAL published v1 row (byte-exact fixture). It predates
 	// the tail-truncation field, so it carries zero truncation and fails the
 	// current Validate gate (ineligible even though active), while still being a
-	// registry-recognized system content so the startup audit accepts it (td/068
-	// R16). Raw SQL bypasses the service gate, mimicking a pre-td063 upgrade.
+	// registry-recognized system content so the startup audit accepts it. Raw SQL bypasses the service gate, mimicking a pre-td063 upgrade.
 	seedSystemFixtureRow(t, db, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion,
 		"系统默认（CMA v1）", "system_cma_v1_canonical.json")
-	// Seed the REAL published td/064 v2 content (byte-exact fixture). It is a
+	// Seed the REAL published v2 content (byte-exact fixture). It is a
 	// recognized historical system content (so the upgrade accepts it) but is NOT
 	// the current identity, so it must still be ineligible purely on the identity
-	// rule (td/066 R12 / td/067 R14), proving the gate is identity-based, not only
+	// rule, proving the gate is identity-based, not only
 	// structural.
 	seedRealV2SystemRow(t, db)
 
@@ -262,9 +260,9 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	}
 }
 
-// seedRealV2SystemRow inserts the byte-exact published td/064 system_cma_v2@1
+// seedRealV2SystemRow inserts the byte-exact published system_cma_v2@1
 // canonical fixture so a v2 row carries a content hash recognized by the system
-// content registry (td/067 R14).
+// content registry.
 func seedRealV2SystemRow(t *testing.T, db *sql.DB) {
 	t.Helper()
 	raw, err := os.ReadFile("../repository/testdata/system_cma_v2_canonical.json")

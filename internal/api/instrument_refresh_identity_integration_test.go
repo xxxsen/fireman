@@ -54,7 +54,7 @@ func identityFetchData() marketdata.FetchData {
 
 // TestInstrumentRefreshThreadsResolvedKindIntegration proves that a kind resolved
 // at import time is persisted and re-sent on the refresh fetch, so the sidecar
-// can pick an identity-consistent history source (td/038 P1-1).
+// can pick an identity-consistent history source.
 func TestInstrumentRefreshThreadsResolvedKindIntegration(t *testing.T) {
 	rec := &fetchKindRecorder{}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +133,7 @@ func TestInstrumentRefreshThreadsResolvedKindIntegration(t *testing.T) {
 
 // TestInstrumentRefreshBackfillsMissingKindIntegration proves that a legacy asset
 // missing instrument_kind is healed by a controlled resolve before the refresh
-// fetch, then refreshes with the resolved kind (td/038 P1-1 #4).
+// fetch, then refreshes with the resolved kind.
 func TestInstrumentRefreshBackfillsMissingKindIntegration(t *testing.T) {
 	rec := &fetchKindRecorder{}
 	var resolveCalls int

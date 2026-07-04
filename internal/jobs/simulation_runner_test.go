@@ -138,7 +138,7 @@ func TestSimulationCompleteCommitsSummaryPathIndexAndQuantileSeries(t *testing.T
 		t.Fatalf("expected %d quantile rows, got %d", len(snap.QuantileSeries), len(series))
 	}
 
-	// td/061 §4.1.8: the real quantile series lands in its own table, aligned
+	// The real quantile series lands in its own table, aligned
 	// with the nominal series and below it under positive inflation.
 	realSeries, err := repo.ListRealQuantileSeries(ctx, runID)
 	if err != nil {

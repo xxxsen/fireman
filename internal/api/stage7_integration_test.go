@@ -216,7 +216,7 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 	srv, db, client, _ := setupFullStackIntegration(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	// Stress / sensitivity attach to an existing Monte Carlo run (td/050+).
+	// Stress / sensitivity attach to an existing Monte Carlo run.
 	runID := createSimulationAndWait(t, srv, planID, "11")
 
 	stressBody, _ := json.Marshal(map[string]any{"simulation_run_id": runID})

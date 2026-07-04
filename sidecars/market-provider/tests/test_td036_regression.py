@@ -1,4 +1,4 @@
-"""Regression tests for td/036 P1: a bare code that is present in BOTH the ETF and LOF
+"""Regression tests: a bare code that is present in BOTH the ETF and LOF
 spot maps must not be silently narrowed to an ETF-only result when the LOF authoritative
 ``fund_lof_code_id_map_em`` lookup fails/times out. The LOF authoritative failure must win
 over any partial ETF candidate and surface ``market_provider_timeout``.

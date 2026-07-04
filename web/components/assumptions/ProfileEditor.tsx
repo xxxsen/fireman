@@ -519,7 +519,7 @@ function CorrelationEditor({
   const remove = (i: number) => onChange({ correlation_priors: rows.filter((_, idx) => idx !== i) });
 
   // fillMissing adds every uncovered universe pair with rho=0 so completeness
-  // (td/063 R4) can be satisfied in one click; existing pairs are preserved.
+  // can be satisfied in one click; existing pairs are preserved.
   const fillMissing = () => {
     const have = new Set(
       rows.map((r) => [r.factor_a, r.factor_b].sort().join("|")),

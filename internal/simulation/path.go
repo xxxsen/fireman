@@ -37,7 +37,7 @@ type PathSummary struct {
 	// MonthlyCumInflation is the path's realized cumulative inflation factor at
 	// each month (1.0 at start). Collected alongside MonthlyWealthMinor so real
 	// (start-of-plan purchasing power) wealth uses each path's own inflation
-	// process, never an averaged rate (td/061 §3.6).
+	// process, never an averaged rate.
 	MonthlyCumInflation []float64
 	// RealTerminalWealthMinor is TerminalWealthMinor deflated by the path's final
 	// cumulative inflation.
@@ -54,7 +54,7 @@ type MonthRecord struct {
 	TransactionCost  int64   `json:"transaction_cost"`
 	Drawdown         float64 `json:"drawdown"`
 	Rebalanced       bool    `json:"rebalanced"`
-	// td/061 §5.5: this path's realized cumulative inflation at month end and the
+	// This path's realized cumulative inflation at month end and the
 	// wealth deflated into start-of-plan purchasing power, so the UI can toggle
 	// the amount caliber without re-deriving the inflation process.
 	CumInflation         float64 `json:"cum_inflation"`
@@ -81,7 +81,7 @@ type YearRecord struct {
 	AnnualReturn *float64           `json:"annual_return"`
 	Rebalanced   bool               `json:"rebalanced"`
 	AssetWeights map[string]float64 `json:"asset_weights"`
-	// td/061 §5.5: real (start-of-plan purchasing power) opening/closing wealth,
+	// Real (start-of-plan purchasing power) opening/closing wealth,
 	// deflated by this path's own cumulative inflation at year start/end.
 	CumInflation         float64 `json:"cum_inflation"`
 	RealStartWealthMinor int64   `json:"real_start_wealth_minor"`

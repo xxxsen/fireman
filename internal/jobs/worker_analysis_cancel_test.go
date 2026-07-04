@@ -40,7 +40,7 @@ func (r *barrierAnalysisRunner) RunSensitivity(
 	return r.run(cancelCheck)
 }
 
-// TestAnalysisSupersededRunningJobConvergesToCanceled guards td/054 finding #1:
+// TestAnalysisSupersededRunningJobConvergesToCanceled guards a superseded-job regression:
 // when a running stress/sensitivity job is superseded after its final cancelCheck
 // but before the terminal write, the worker must converge it to canceled with the
 // supersede error code, never to succeeded.

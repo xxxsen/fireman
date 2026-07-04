@@ -6,7 +6,7 @@ import (
 	"github.com/fireman/fireman/internal/assumptions"
 )
 
-// TestForwardReturnRegressionReport implements td/061 §6.1.11: build three frozen
+// TestForwardReturnRegressionReport builds three frozen
 // assumption variants for the documented 90/10 case that differ ONLY in the
 // forward geometric return (cash-flows, seed, volatility and rebalancing held
 // constant) and emit a regression report. Acceptance only requires direction and

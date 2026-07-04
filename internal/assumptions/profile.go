@@ -1,6 +1,6 @@
 // Package assumptions holds the version-controlled, auditable capital-market
 // assumption profiles that drive forward-looking FIRE simulation returns,
-// volatility, correlation and fat-tail parameters (td/061). Everything here is
+// volatility, correlation and fat-tail parameters. Everything here is
 // pure: it never reads the database, RNG or runtime config, so the same profile
 // always calibrates to the same frozen run inputs.
 package assumptions
@@ -98,7 +98,7 @@ type Profile struct {
 	// ReturnFloor/ReturnCeil are the per-month simple-return truncation bounds the
 	// fat-tail sampler clamps to. They are part of the global profile (not a plan
 	// setting) so the tail behavior is versioned and auditable, and frozen into
-	// each run's InputSnapshot (td/063 R3). ReturnFloor must be in (-1, 0) and
+	// each run's InputSnapshot. ReturnFloor must be in (-1, 0) and
 	// ReturnCeil > 0 with ReturnFloor < ReturnCeil.
 	ReturnFloor       float64             `json:"return_floor"`
 	ReturnCeil        float64             `json:"return_ceil"`
@@ -138,12 +138,12 @@ var (
 )
 
 // cashAssetClass is the deterministic, non-random asset class that is excluded
-// from the random factor universe (td/061 §3.5 / td/063 R1/R4).
+// from the random factor universe.
 const cashAssetClass = "cash"
 
 // BaseCoverageCurrency is the home/base currency every active or global profile
 // must fully cover so a supported plan never silently fails to calibrate at run
-// time (td/064 R7).
+// time.
 const BaseCoverageCurrency = "CNY"
 
 // requiredAssetCell is one (asset_class, region) cell that must have a base
@@ -151,7 +151,7 @@ const BaseCoverageCurrency = "CNY"
 type requiredAssetCell struct{ AssetClass, Region string }
 
 // RequiredGlobalCoverage is the single source of truth for the minimum
-// asset-class coverage the product supports today (td/064 R7). A profile that
+// asset-class coverage the product supports today. A profile that
 // does not define a base currency prior for every cell here — or that adds a
 // native-currency (non-base) asset prior without the matching FX prior — cannot
 // be saved or activated.
@@ -185,7 +185,7 @@ func (p *Profile) Validate() error {
 	return p.validateCorrelationPriors()
 }
 
-// validateCoverage enforces the minimum global coverage gate (td/064 R7): every
+// validateCoverage enforces the minimum global coverage gate: every
 // RequiredGlobalCoverage cell must have a base-currency (CNY) return prior, and
 // every non-cash asset prior priced in a non-base currency must have the matching
 // (currency, base) FX prior. Errors carry the missing canonical key so the editor
@@ -322,7 +322,7 @@ func finiteFloat(x float64) bool {
 	return !math.IsNaN(x) && !math.IsInf(x, 0)
 }
 
-// validAuditMeta enforces auditable provenance on every prior (td/063 N1): a
+// validAuditMeta enforces auditable provenance on every prior: a
 // non-empty https source URL and ISO (YYYY-MM-DD) published/reviewed dates so a
 // reviewer can open the source and the dates are machine-checkable.
 func validAuditMeta(sourceURL, publishedAt, reviewedAt string) bool {
@@ -343,8 +343,8 @@ func isISODate(s string) bool {
 
 // FactorUniverse is the canonical, sorted set of random factor keys implied by a
 // profile: one factor per distinct non-cash (asset_class, region) return prior
-// cell and one per FX prior pair. Deterministic cash is intentionally excluded
-// (td/061 §3.5 / td/063 R4). Multiple valuation currencies for the same
+// cell and one per FX prior pair. Deterministic cash is intentionally excluded.
+// Multiple valuation currencies for the same
 // (asset_class, region) collapse to a single asset factor.
 func (p *Profile) FactorUniverse() []string {
 	seen := map[string]struct{}{}
@@ -369,11 +369,11 @@ func (p *Profile) FactorUniverse() []string {
 }
 
 // validateCorrelationPriors enforces a complete, non-degenerate correlation
-// structure (td/063 R4): every prior must reference two distinct factors that
+// structure: every prior must reference two distinct factors that
 // exist in the factor universe, rho must be finite and in [-1,1], no factor pair
 // may be specified twice (in either order), and every distinct pair of universe
 // factors must have exactly one prior. A missing pair would otherwise be silently
-// treated as rho=0 at run time, which td/061 explicitly forbids.
+// treated as rho=0 at run time, which the forward engine explicitly forbids.
 func (p *Profile) validateCorrelationPriors() error {
 	keys := p.FactorUniverse()
 	universe := make(map[string]struct{}, len(keys))

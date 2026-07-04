@@ -73,7 +73,7 @@ func TestProfileValidateFailures(t *testing.T) {
 		"duplicate prior": func(p *Profile) {
 			p.ReturnPriors = append(p.ReturnPriors, p.ReturnPriors[0])
 		},
-		// td/063 N4: non-finite numerics must be rejected even when range checks pass.
+		// Non-finite numerics must be rejected even when range checks pass.
 		"inf vol multiplier": func(p *Profile) {
 			s := p.Scenarios[ScenarioBaseline]
 			s.VolatilityMultiplier = math.Inf(1)
@@ -88,7 +88,7 @@ func TestProfileValidateFailures(t *testing.T) {
 		"duplicate fx prior": func(p *Profile) {
 			p.FXPriors = append(p.FXPriors, p.FXPriors[0])
 		},
-		// td/063 N1: provenance must be an https URL and ISO dates.
+		// Provenance must be an https URL and ISO dates.
 		"non-https source":   func(p *Profile) { p.ReturnPriors[0].SourceURL = "http://x.test" },
 		"bad published date": func(p *Profile) { p.ReturnPriors[0].PublishedAt = "2026/06/20" },
 		"empty reviewed at":  func(p *Profile) { p.FXPriors[0].ReviewedAt = "" },

@@ -12,7 +12,7 @@ import (
 
 // frozenClassification carries the asset_class/region already recorded on a
 // plan's holding so structural updates keep the plan-level frozen copy instead of
-// silently adopting the library's current classification (td/053 §2.2).
+// silently adopting the library's current classification.
 type frozenClassification struct {
 	assetClass string
 	region     string

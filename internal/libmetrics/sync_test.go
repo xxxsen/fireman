@@ -48,7 +48,7 @@ func countProjection(t *testing.T, db *sql.DB, id string) int {
 	return n
 }
 
-// TestSyncTxUpsertsThenDeletes is the td/058 P1 guard: SyncTx upserts a
+// TestSyncTxUpsertsThenDeletes is the P1 guard: SyncTx upserts a
 // projection from non-empty history, and on empty history deletes the stale row
 // rather than leaving it behind.
 func TestSyncTxUpsertsThenDeletes(t *testing.T) {

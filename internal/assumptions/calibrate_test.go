@@ -21,7 +21,7 @@ func expectedBlended(hist, prior, shift float64, completeYears, priorStrength in
 
 func TestCalibrateBlendedWeights(t *testing.T) {
 	p := SystemDefaultProfile() // prior_strength_years = 20
-	const histReturn = 0.169564 // the td/061 P50 equity historical CAGR
+	const histReturn = 0.169564 // the P50 equity historical CAGR
 	priorReturn := 0.0659       // equity/foreign/CNY system prior (v3 geometric)
 	for _, years := range []int{1, 13, 20, 30} {
 		t.Run(map[int]string{1: "1y", 13: "13y", 20: "20y", 30: "30y"}[years], func(t *testing.T) {

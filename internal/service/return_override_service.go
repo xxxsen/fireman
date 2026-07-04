@@ -9,7 +9,7 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// Asset-level override guard rails (td/061 §4.1.5). Overrides are a rare,
+// Asset-level override guard rails. Overrides are a rare,
 // plan-specific escape hatch, so the accepted ranges are generous but still
 // reject obvious nonsense (e.g. a 900% forward return or zero volatility).
 const (

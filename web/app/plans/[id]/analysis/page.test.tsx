@@ -209,7 +209,7 @@ describe("AnalysisPage zero success", () => {
     expect(screen.getByTestId("wealth-chart")).toBeInTheDocument();
   });
 
-  it("drops the terminal_quantiles Pxx grid but keeps ordered representative paths (td/060 §2.1)", async () => {
+  it("drops the terminal_quantiles Pxx grid but keeps ordered representative paths", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({
       simulations: [
@@ -480,7 +480,7 @@ describe("AnalysisPage zero success", () => {
     expect(await screen.findByText(/无法加载敏感性测试结果/)).toBeInTheDocument();
   });
 
-  it("defaults to the latest run and queries attached analysis by run id (td/050 §5,§6)", async () => {
+  it("defaults to the latest run and queries attached analysis by run id", async () => {
     renderAnalysis();
     await screen.findAllByText(/成功率 0%/);
     await waitFor(() =>
@@ -489,7 +489,7 @@ describe("AnalysisPage zero success", () => {
     expect(listSensitivityTestsMock).toHaveBeenCalledWith("plan_1", "run_1");
   });
 
-  it("switches attached analysis queries when a historical run is selected (td/050 §6)", async () => {
+  it("switches attached analysis queries when a historical run is selected", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({
       simulations: [
@@ -511,7 +511,7 @@ describe("AnalysisPage zero success", () => {
     expect(listSensitivityTestsMock).toHaveBeenCalledWith("plan_1", "run_0");
   });
 
-  it("disables attached analysis when no simulation exists (td/050 §6)", async () => {
+  it("disables attached analysis when no simulation exists", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({ simulations: [] });
     renderAnalysis();
@@ -520,7 +520,7 @@ describe("AnalysisPage zero success", () => {
     expect(screen.getAllByText("请先运行 Monte Carlo 模拟").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("disables attached analysis when the selected run is not completed (td/050 §6)", async () => {
+  it("disables attached analysis when the selected run is not completed", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({
       simulations: [
@@ -535,7 +535,7 @@ describe("AnalysisPage zero success", () => {
     expect(screen.getAllByText(/当前模拟尚未完成/).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("first run shows results after the job completes without manual refresh (td/051 §3)", async () => {
+  it("first run shows results after the job completes without manual refresh", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({ simulations: [] });
     createSimulation.mockReset();

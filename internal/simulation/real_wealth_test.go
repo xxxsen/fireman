@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// td/061 §6.1.5: under fixed inflation, every path's real wealth must equal
+// Under fixed inflation, every path's real wealth must equal
 // nominal / (1+inflation)^(month/12), using the path's own realized inflation.
 func TestRealWealthFixedInflationMatchesClosedForm(t *testing.T) {
 	in := testInputSnapshot()

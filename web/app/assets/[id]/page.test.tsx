@@ -362,7 +362,7 @@ describe("AssetDetailPage layout and return curve", () => {
     useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
   });
 
-  it("shows only refresh/delete actions without force-refresh (td/053 §3)", async () => {
+  it("shows only refresh/delete actions without force-refresh", async () => {
     renderPage();
     expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
@@ -377,7 +377,7 @@ describe("AssetDetailPage layout and return curve", () => {
     expect(await screen.findByTestId("return-series-chart")).toBeInTheDocument();
   });
 
-  it("refreshes immediately and shows success without force wording (td/053 §3)", async () => {
+  it("refreshes immediately and shows success without force wording", async () => {
     refreshInstrumentMock.mockResolvedValue({
       ...baseInstrument,
       status: "active",
@@ -413,7 +413,7 @@ describe("AssetDetailPage classification editing", () => {
     useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });
   });
 
-  it("edits classification and shows the frozen-plan notice (td/053 §2.3)", async () => {
+  it("edits classification and shows the frozen-plan notice", async () => {
     updateClassificationMock.mockResolvedValue({
       instrument: { ...baseInstrument, status: "active", asset_class: "bond", region: "foreign" },
       referencing_plan_count: 2,
@@ -437,7 +437,7 @@ describe("AssetDetailPage classification editing", () => {
     expect(await screen.findByText(/已关联 2 个计划保持原配置/)).toBeInTheDocument();
   });
 
-  it("keeps input and offers reload on version conflict (td/053 §2.3)", async () => {
+  it("keeps input and offers reload on version conflict", async () => {
     const { ApiError } = await import("@/lib/api/client");
     updateClassificationMock.mockRejectedValue(
       new ApiError("instrument_version_conflict", "conflict"),
@@ -462,7 +462,7 @@ describe("AssetDetailPage classification editing", () => {
     expect(screen.queryByRole("button", { name: "编辑大类和地区" })).not.toBeInTheDocument();
   });
 
-  it("hides the edit entry while fetching and shows the hint (td/054 #2)", async () => {
+  it("hides the edit entry while fetching and shows the hint", async () => {
     getInstrumentDetailMock.mockResolvedValue(pendingDetail());
     getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
     renderPage();
@@ -471,7 +471,7 @@ describe("AssetDetailPage classification editing", () => {
     expect(screen.getByText("抓取完成后可编辑大类和地区。")).toBeInTheDocument();
   });
 
-  it("opens the editor and focuses the asset-class select from the top entry (td/056 §4.1)", async () => {
+  it("opens the editor and focuses the asset-class select from the top entry", async () => {
     renderPage();
     const entry = await screen.findByRole("button", { name: "编辑大类和地区" });
     fireEvent.click(entry);
@@ -480,7 +480,7 @@ describe("AssetDetailPage classification editing", () => {
     await waitFor(() => expect(select).toHaveFocus());
   });
 
-  it("allows editing classification for fetch_failed instruments (td/056 §4.1)", async () => {
+  it("allows editing classification for fetch_failed instruments", async () => {
     getInstrumentDetailMock.mockResolvedValue(failedDetail());
     getFetchStatusMock.mockResolvedValue({ job_id: null, error_code: null });
     useJobStatusMock.mockReturnValue({ job: null, progress: 0, error: null, loading: false });

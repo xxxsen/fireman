@@ -18,7 +18,7 @@ import (
 // AssumptionService is the API-facing manager for the global "模拟假设" center: it
 // lists/reads/validates/saves/activates version-locked profiles and reads/writes
 // the user's global default selection. The read-only system profile is always
-// present (td/061 §3.2, §6.6).
+// present.
 type AssumptionService struct {
 	repo *repository.AssumptionProfileRepo
 }
@@ -69,7 +69,7 @@ func (s *AssumptionService) ListProfiles(ctx context.Context) (AssumptionProfile
 // default: it must be active AND still pass the current publish gate (structure +
 // coverage + PSD + tail). The legacy system_cma_v1@1 stays active for replay/pins
 // but fails this gate (no tail truncation, stale correlation universe), so it can
-// never be re-selected as the default (td/065 R8).
+// never be re-selected as the default.
 func (s *AssumptionService) isEligibleForGlobalDefault(
 	ctx context.Context, id string, version int, status string,
 ) (bool, error) {
@@ -85,8 +85,7 @@ func (s *AssumptionService) isEligibleForGlobalDefault(
 	}
 	// A system-owned profile is only eligible when it is the CURRENT system
 	// identity (v3). Frozen historical system profiles (v1/v2) stay active for
-	// replay and explicit pins but can never be re-selected as the global default
-	// (td/066 R12).
+	// replay and explicit pins but can never be re-selected as the global default.
 	if p.OwnerScope == assumptions.OwnerSystem &&
 		!assumptions.IsCurrentSystemDefaultIdentity(p.ID, p.Version) {
 		return false, nil
@@ -145,7 +144,7 @@ func (s *AssumptionService) ValidateProfile(p assumptions.Profile) AssumptionVal
 // owner_scope=user with a server-assigned id: a brand-new profile (version 1) is
 // given a fresh user_<uuid> id (the client id is never trusted), and the reserved
 // system_cma_ namespace is rejected outright, so a user profile can never shadow a
-// system identity and steal its evidence provenance (td/067 R13). A new version
+// system identity and steal its evidence provenance. A new version
 // (version > 1) of an existing user profile keeps its id.
 func (s *AssumptionService) SaveDraft(
 	ctx context.Context, p assumptions.Profile, sourceNote, reviewedBy, reviewedAt string,
@@ -157,7 +156,7 @@ func (s *AssumptionService) SaveDraft(
 		return assumptions.Profile{}, newErr("assumption_profile_read_only",
 			"system profile is read-only; copy it to a custom profile first", nil)
 	}
-	// Reserved namespace: a user profile must never use a system_cma_ id (td/067 R13).
+	// Reserved namespace: a user profile must never use a system_cma_ id.
 	if assumptions.HasReservedSystemID(p.ID) {
 		return assumptions.Profile{}, newErr("assumption_profile_reserved_id",
 			"profile id uses the reserved 'system_cma_' namespace; user profiles receive a server-assigned id",
@@ -201,7 +200,7 @@ func (s *AssumptionService) Activate(ctx context.Context, id string, version int
 // any structural validation failure, or a correlation matrix that needs a heavy
 // (> threshold) PSD repair. Both save and activate share this rule so a draft
 // that fails completeness/duplicate/PSD checks can neither be persisted nor
-// promoted (td/063 R3 §2, R4 §1).
+// promoted.
 func (s *AssumptionService) assertActivatable(p assumptions.Profile) error {
 	v := s.ValidateProfile(p)
 	if !v.Valid {
@@ -251,7 +250,7 @@ func (s *AssumptionService) SetPreferences(
 	// A frozen historical system profile (system_cma_v1@1 / v2@1) is active for
 	// replay and explicit pins but is NOT the current default-able system identity,
 	// so it can never be re-selected as the global default — which would otherwise
-	// silently undo the system-default migration (td/066 R12).
+	// silently undo the system-default migration.
 	if p.OwnerScope == assumptions.OwnerSystem &&
 		!assumptions.IsCurrentSystemDefaultIdentity(p.ID, p.Version) {
 		return repository.AssumptionPreferences{}, newErr("assumption_profile_not_eligible",
@@ -261,7 +260,7 @@ func (s *AssumptionService) SetPreferences(
 	}
 	// The global default must also still pass the current publish gate (structure,
 	// coverage, PSD, tail). The legacy system profiles fail this gate, so they can
-	// never be re-selected as the default (td/065 R8 / td/066 R12).
+	// never be re-selected as the default.
 	if err := s.assertActivatable(p); err != nil {
 		var ae *AppError
 		if errors.As(err, &ae) {
@@ -278,7 +277,7 @@ func (s *AssumptionService) SetPreferences(
 }
 
 // validateProfileAudit enforces named, sourced, dated review metadata on every
-// saved profile version (td/063 N1): a non-empty source note, a named reviewer,
+// saved profile version: a non-empty source note, a named reviewer,
 // and an ISO (YYYY-MM-DD) review date.
 func validateProfileAudit(sourceNote, reviewedBy, reviewedAt string) error {
 	if strings.TrimSpace(sourceNote) == "" {

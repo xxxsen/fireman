@@ -8,13 +8,13 @@ import (
 	"github.com/fireman/fireman/internal/simulation"
 )
 
-// TestForwardSnapshotFreezesProfileTailParams covers td/063 R3: a forward
+// TestForwardSnapshotFreezesProfileTailParams verifies that a forward
 // (blended_prior) snapshot freezes the active profile's Student-t df and return
 // truncation band into the InputSnapshot, ignoring the plan's legacy df.
 func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 	// A profile with edited tail params is, by definition, a user-customized copy
 	// (the system identity is immutable), so mark it user-owned: the snapshot
-	// provenance guard only blesses byte-faithful system content (td/067 R13/R14).
+	// provenance guard only blesses byte-faithful system content.
 	profile := assumptions.SystemDefaultProfile()
 	profile.OwnerScope = assumptions.OwnerUser
 	profile.ID = "user_tail_custom"
@@ -48,7 +48,7 @@ func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 	}
 }
 
-// TestSnapshotRecordsAssumptionProvenance covers td/066 R11/R12 acceptance #4: a
+// TestSnapshotRecordsAssumptionProvenance verifies that a
 // run snapshot freezes the resolved profile identity, its canonical content hash
 // and (for the current system profile) the backing CMA evidence hash, so a result
 // is always explainable by a specific immutable model. For the system default this
@@ -87,7 +87,7 @@ func TestSnapshotRecordsAssumptionProvenance(t *testing.T) {
 	}
 }
 
-// TestLegacySnapshotKeepsConstantsAndPlanDf covers td/063 R3: a historical_cagr
+// TestLegacySnapshotKeepsConstantsAndPlanDf verifies that a historical_cagr
 // snapshot stays on the legacy engine and does not freeze profile tail params, so
 // it falls back to the plan df and the engine constants for byte-for-byte replay.
 func TestLegacySnapshotKeepsConstantsAndPlanDf(t *testing.T) {

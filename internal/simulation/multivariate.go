@@ -4,7 +4,7 @@ import "math"
 
 // SampleMultivariateStudentT draws one month of jointly-distributed simple
 // returns for every factor, sharing a single fat-tail scale across all factors
-// so extreme months happen together rather than independently (td/061 §3.5.3):
+// so extreme months happen together rather than independently:
 //
 //	z ~ N(0, I);  q ~ χ²(ν);  s = sqrt((ν-2)/q)
 //	y = L (z * s);  log_return_i = μ_i + y_i;  simple_i = exp(log_return_i) - 1
@@ -15,7 +15,7 @@ import "math"
 // then ν normals for the chi-square), so single-asset runs stay bit-compatible.
 //
 // The frozen per-factor simple-return truncation band is applied independently;
-// the number of truncated factors is returned (td/063 R3).
+// the number of truncated factors is returned.
 func SampleMultivariateStudentT(
 	rng *RNG, mu []float64, l [][]float64, df int, trunc TailTruncation,
 ) ([]float64, int) {

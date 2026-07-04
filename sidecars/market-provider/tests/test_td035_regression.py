@@ -1,4 +1,4 @@
-"""Regression tests for td/035 P1: LOF exchange must come from the authoritative
+"""Regression tests: LOF exchange must come from the authoritative
 market-id map. A LOF name hit (fund_lof_spot_em) with a failed/timed-out
 fund_lof_code_id_map_em must surface market_provider_timeout, never fabricate an
 SZ/SH candidate from the bare code.

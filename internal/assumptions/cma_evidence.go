@@ -14,10 +14,10 @@ import (
 // source, dated publication, raw real-return / inflation / fee inputs and the
 // exact geometric conversion to a CNY-nominal after-fee prior, so every published
 // number is auditable and independently reproducible rather than an unexplained
-// constant (td/065 R10, td/066 R11). The profile is BUILT from this artifact and
+// constant. The profile is BUILT from this artifact and
 // its sha256 is pinned in the system profile registry; any change to a source,
 // input or conversion changes the hash and MUST be published as a NEW system
-// profile identity/version (td/066 R12) — editing it in place fails CI.
+// profile identity/version — editing it in place fails CI.
 //
 //go:embed cma_evidence_v3.json
 var cmaEvidenceRaw []byte
@@ -32,7 +32,7 @@ type returnPriorEvidence struct {
 	SourcePublishedAt string `json:"source_published_at"`
 	// NominalAfterFee marks a source that already publishes a nominal, after-fee
 	// figure; then NominalAfterFeeReturn is used verbatim with no further
-	// conversion or fee deduction (td/066 R11).
+	// conversion or fee deduction.
 	NominalAfterFee       bool    `json:"nominal_after_fee"`
 	NominalAfterFeeReturn float64 `json:"nominal_after_fee_return"`
 	// Otherwise the nominal after-fee return is compounded from these inputs.
@@ -48,7 +48,7 @@ type returnPriorEvidence struct {
 
 // ExactNominalAfterFee returns the EXACT (unrounded) nominal, after-fee geometric
 // return. Returns must compound, not add: a 4% real return with 2% inflation is
-// (1.04)(1.02)-1 = 6.08%, not 6.00% (td/066 R11). round4 is applied only when the
+// (1.04)(1.02)-1 = 6.08%, not 6.00%. round4 is applied only when the
 // value is written into the canonical profile.
 func (e returnPriorEvidence) ExactNominalAfterFee() float64 {
 	if e.NominalAfterFee {
@@ -75,7 +75,7 @@ type fxPriorEvidence struct {
 
 // ExactDrift returns the EXACT (unrounded) long-run FX drift from relative PPP:
 // (1+base_inflation)/(1+quote_inflation)-1. For unequal inflations the ratio (not
-// the difference) is required (td/066 R11). HKD tracks USD via its peg.
+// the difference) is required. HKD tracks USD via its peg.
 func (e fxPriorEvidence) ExactDrift() float64 {
 	return (1+e.BaseInflation)/(1+e.QuoteInflation) - 1
 }
@@ -97,7 +97,7 @@ var CMAEvidenceVersion = cmaEvidenceV3.Version
 
 // CMAEvidenceContentHash is the sha256 of the committed evidence artifact bytes.
 // It pins the exact source/input/conversion set behind system_cma_v3@1 and is
-// asserted against the registry in tests (td/066 R12).
+// asserted against the registry in tests.
 var CMAEvidenceContentHash = func() string {
 	sum := sha256.Sum256(cmaEvidenceRaw)
 	return hex.EncodeToString(sum[:])
@@ -115,7 +115,7 @@ func mustParseCMAEvidence(raw []byte) cmaEvidence {
 }
 
 // round4 rounds to 4 decimal places, applied only when an exact derived value is
-// written into the canonical profile (td/066 R11).
+// written into the canonical profile.
 func round4(x float64) float64 {
 	return math.Round(x*1e4) / 1e4
 }

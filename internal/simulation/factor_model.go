@@ -7,11 +7,11 @@ import (
 
 // MinCommonMonths is the minimum number of common observations required before a
 // pairwise historical correlation is trusted; below it the prior is used and a
-// correlation_prior_only warning is recorded (td/061 §3.5.2).
+// correlation_prior_only warning is recorded.
 const MinCommonMonths = 24
 
 // PSDRepairWarnThreshold is the maximum off-diagonal repair magnitude before a
-// high-priority model warning is required (td/061 §3.5.2).
+// high-priority model warning is required.
 const PSDRepairWarnThreshold = 0.05
 
 // FactorSpec is one risk factor (asset or FX) entering the joint model. Months
@@ -50,7 +50,7 @@ type FactorModel struct {
 
 // CorrelationPriorLookup returns the prior correlation between two factor keys.
 // The second return is false when no prior is configured (which must block a
-// profile from being published per td/061 §3.5.2).
+// profile from being published).
 type CorrelationPriorLookup func(a, b string) (float64, bool)
 
 func pairKey(a, b string) string {
@@ -97,7 +97,7 @@ func PairwiseCorrelation(a, b FactorSpec) (float64, int, bool) {
 }
 
 // CorrelationPSDResult reports whether a candidate correlation matrix is PSD and
-// how large the deterministic repair would be (td/061 §3.5.2, §6.6).
+// how large the deterministic repair would be.
 type CorrelationPSDResult struct {
 	MinEigenvalue  float64
 	MaxRepairDelta float64
@@ -120,7 +120,7 @@ func CheckCorrelationPSD(rRaw [][]float64) CorrelationPSDResult {
 // BuildFactorModel assembles the frozen joint risk model: pairwise shrinkage
 // correlations, PSD repair, covariance scaling and Cholesky. It is pure (no RNG,
 // no DB) so the same frozen factors + profile always produce the same model
-// byte-for-byte (td/061 §5.C.1).
+// byte-for-byte.
 func BuildFactorModel(
 	factors []FactorSpec, priorRho CorrelationPriorLookup, strengthMonths int,
 ) (FactorModel, bool) {
@@ -199,7 +199,7 @@ func AssembleFactorModel(
 // monthly history (pair months, shrinkage λ and the prior-only pair list). It is
 // used when same-type asset pairs are forced to ρ=1 and cross-type pairs carry
 // shrunk historical correlations, which the generic buildRawCorrelation path
-// cannot express (td/061 §3.5.1/§3.5.2).
+// cannot express.
 func AssembleFactorModelDetailed(
 	keys []string, mu, sigma []float64, rRaw [][]float64,
 	pairMonths map[string]int, lambda map[string]float64, priorOnlyPairs []string,
@@ -284,7 +284,7 @@ func covarianceFromCorrelation(r [][]float64, sigma []float64) [][]float64 {
 // ShrinkCorrelation blends the historical correlation toward the prior using the
 // strength-month weight λ = strength / (m + strength). When m < MinCommonMonths
 // or the historical estimate is untrustworthy, it falls back to the prior and
-// reports priorOnly = true (td/061 §3.5.2).
+// reports priorOnly = true.
 func ShrinkCorrelation(
 	rhoHist float64, m int, histOK bool, rhoPrior float64, strengthMonths int,
 ) (float64, float64, bool) {

@@ -11,10 +11,10 @@ import (
 var (
 	// errFactorCorrelationMissing is returned when a cross-type factor pair has no
 	// correlation prior in the resolved profile. The forward engine must block
-	// rather than silently assume ρ=0 (td/063 R4).
+	// rather than silently assume ρ=0.
 	errFactorCorrelationMissing = errors.New("no correlation prior for factor pair")
 	// errFactorModelNotPSD is returned when the frozen covariance cannot be
-	// Cholesky-decomposed, so the joint sampler cannot be built (td/063 N3).
+	// Cholesky-decomposed, so the joint sampler cannot be built.
 	errFactorModelNotPSD = errors.New("factor model covariance is not positive semi-definite")
 )
 
@@ -28,17 +28,17 @@ type factorBuild struct {
 }
 
 // buildFrozenFactorModel assembles the joint risk model frozen into a run's input
-// snapshot (td/061 §3.5). Factors are per non-cash asset (so each asset keeps its
+// snapshot. Factors are per non-cash asset (so each asset keeps its
 // own forward drift and volatility) plus one shared FX factor per foreign
 // currency. Cross-type correlations blend the frozen monthly history toward the
 // profile prior (shrinkage), falling back to the prior when fewer than 24 common
 // months exist; two holdings of the same (asset_class, region) are forced to ρ=1
-// so identical exposures get no fake diversification (td/061 §3.5.1/§3.5.2).
+// so identical exposures get no fake diversification.
 //
 // It returns (nil, nil, nil) when there is no risk factor (an all-cash plan), in
 // which case the caller keeps the legacy independent path. It returns an error
 // when a required correlation prior is missing or the covariance is not PSD, so
-// the forward engine blocks instead of silently degrading (td/063 R4/N3).
+// the forward engine blocks instead of silently degrading.
 func buildFrozenFactorModel(
 	assets []simulation.SnapshotAsset, baseCurrency string, profile assumptions.Profile,
 ) (*simulation.FactorModel, []simulation.FactorRef, error) {
@@ -139,7 +139,7 @@ func (fb *factorBuild) pairCorrelation(
 	prior, hasPrior := priorLookup(fb.typeKeys[i], fb.typeKeys[j])
 	if !hasPrior {
 		// A missing cross-type correlation prior must block the run, never silently
-		// become ρ=0 (td/063 R4).
+		// become ρ=0.
 		return 0, fmt.Errorf("%w: %s|%s", errFactorCorrelationMissing, fb.typeKeys[i], fb.typeKeys[j])
 	}
 	rhoHist, m, histOK := simulation.PairwiseCorrelation(

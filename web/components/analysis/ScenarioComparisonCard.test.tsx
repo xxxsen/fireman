@@ -19,7 +19,7 @@ function renderCard() {
   );
 }
 
-describe("ScenarioComparisonCard (td/061 §3.6/§5.4.6)", () => {
+describe("ScenarioComparisonCard", () => {
   it("runs three scenarios on demand and shows deltas vs baseline", async () => {
     mockGet.mockResolvedValue({
       plan_id: "plan_1",

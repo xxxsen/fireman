@@ -83,7 +83,7 @@ func persistRefreshMarketDataTx(
 	}
 	// Keep the list projection exactly in sync with the history just written: a
 	// full replace that cleared every point must drop the stale projection, not
-	// leave the previous date/returns/eligibility behind (td/058 P1).
+	// leave the previous date/returns/eligibility behind.
 	if err := libmetrics.SyncTx(ctx, s.libMetrics, tx, instrumentID, reprocessed.Points); err != nil {
 		return wrapRepo("sync library metrics", err)
 	}

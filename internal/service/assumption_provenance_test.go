@@ -28,7 +28,7 @@ func provenancePlanParams() (repository.Plan, repository.PlanParameters) {
 		repository.PlanParameters{CurrentAge: 30, RetirementAge: 55, EndAge: 90, StudentTDf: 7, SimulationRuns: 100}
 }
 
-// TestSnapshotPinnedV2VariantProvenance covers td/067 R14 acceptance #2: an
+// TestSnapshotPinnedV2VariantProvenance verifies that an
 // explicit pin of the TD 065 v2 VARIANT records that variant's own historical CMA
 // evidence hash and canonical hash — not the current v3 evidence — so historical
 // replay provenance is exact.
@@ -62,7 +62,7 @@ func TestSnapshotPinnedV2VariantProvenance(t *testing.T) {
 	}
 }
 
-// TestSnapshotTD064V2HasNoEvidenceHash covers td/067 R14: the TD 064 v2 content is
+// TestSnapshotTD064V2HasNoEvidenceHash verifies that the TD 064 v2 content is
 // recognized but has no backing evidence artifact, so its run snapshot records an
 // empty evidence hash (and its own canonical hash).
 func TestSnapshotTD064V2HasNoEvidenceHash(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSnapshotTD064V2HasNoEvidenceHash(t *testing.T) {
 	}
 }
 
-// TestSnapshotUserProfileNeverInheritsEvidence covers td/067 R13 #4: a user profile
+// TestSnapshotUserProfileNeverInheritsEvidence verifies that a user profile
 // (even one that copies the system content verbatim) never inherits official CMA
 // evidence provenance.
 func TestSnapshotUserProfileNeverInheritsEvidence(t *testing.T) {
@@ -107,7 +107,7 @@ func TestSnapshotUserProfileNeverInheritsEvidence(t *testing.T) {
 	}
 }
 
-// TestSnapshotRejectsUnrecognizedSystemContent covers td/067 R13 #4 / R14 #3: a
+// TestSnapshotRejectsUnrecognizedSystemContent verifies that a
 // system-owned profile whose content matches no recognized published identity must
 // never run with forged provenance.
 func TestSnapshotRejectsUnrecognizedSystemContent(t *testing.T) {

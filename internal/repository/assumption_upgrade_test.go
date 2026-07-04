@@ -15,15 +15,15 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-// realV1ReleaseContentHash is the sha256 of the actual published td/061/062
+// realV1ReleaseContentHash is the sha256 of the actual published
 // system_cma_v1@1 canonical JSON (commit 6954346). The static fixture in testdata
 // is the byte-exact output of that release; pinning the hash here makes any drift
-// in the fixture an immediate test failure (td/065 N7).
+// in the fixture an immediate test failure.
 const realV1ReleaseContentHash = "6eecc14f7c8c8f812382e9cea88b7c056c18db8e6fd1a832961e63dd66f0971c"
 
-// realV2ReleaseContentHash is the sha256 of the actual published td/064
-// system_cma_v2@1 canonical JSON (commit d51a595, before the td/065 in-place edit
-// that td/066 R12 forbids). The static fixture in testdata is the byte-exact
+// realV2ReleaseContentHash is the sha256 of the actual published
+// system_cma_v2@1 canonical JSON (commit d51a595, before the in-place edit
+// that the immutability rule forbids). The static fixture in testdata is the byte-exact
 // output of that release; pinning it here makes the v2-frozen guarantee testable.
 const realV2ReleaseContentHash = "3a1545466b5f40856706e66952a3cad26ef546a929e181949727b96dbd143698"
 
@@ -63,7 +63,7 @@ func insertRealLegacyV1Row(t *testing.T, db *sql.DB) (string, string) {
 	return canonical, hash
 }
 
-// insertRealV2Row writes the real published td/064 v2 fixture into the DB exactly
+// insertRealV2Row writes the real published v2 fixture into the DB exactly
 // as a post-td064 (pre-td066) release would have.
 func insertRealV2Row(t *testing.T, db *sql.DB) (string, string) {
 	t.Helper()
@@ -159,8 +159,8 @@ func readProfileBytes(t *testing.T, db *sql.DB, id string) (string, string) {
 	return canonical, hash
 }
 
-// TestEnsureSystemDefaultUpgradesV2ToV3 covers td/066 R12 acceptance #1: a database
-// holding the REAL published td/064 system_cma_v2@1 (alongside the frozen v1) must,
+// TestEnsureSystemDefaultUpgradesV2ToV3 covers the v2-to-v3 upgrade: a database
+// holding the REAL published system_cma_v2@1 (alongside the frozen v1) must,
 // after running the new code, keep v1 AND v2 byte-for-byte (matching their release
 // hashes), gain an immutable system_cma_v3@1, and have a v2-pointing default
 // preference atomically repointed to v3/baseline.
@@ -171,7 +171,7 @@ func TestEnsureSystemDefaultUpgradesV2ToV3(t *testing.T) {
 
 	v1Canonical, v1Hash := insertRealLegacyV1Row(t, db)
 	v2Canonical, v2Hash := insertRealV2Row(t, db)
-	// A real upgraded DB has the default pointing at v2 (the td/064 migration target).
+	// A real upgraded DB has the default pointing at v2 (the migration target).
 	seedDefaultPreference(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version, "baseline")
 
 	if err := repo.EnsureSystemDefault(ctx); err != nil {
@@ -227,9 +227,9 @@ func TestEnsureSystemDefaultUpgradesV2ToV3(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultLeavesV1DefaultUntouched covers td/066 R12: only the
+// TestEnsureSystemDefaultLeavesV1DefaultUntouched verifies that only the
 // DIRECT predecessor (v2) is auto-migrated to v3. A database whose default still
-// points at the non-direct predecessor v1 (i.e. it never ran td/064) is left
+// points at the non-direct predecessor v1 (i.e. it never ran the v2 migration) is left
 // untouched — v3 is published but the default is not silently rewritten.
 func TestEnsureSystemDefaultLeavesV1DefaultUntouched(t *testing.T) {
 	db := testutil.OpenTestDB(t)
@@ -255,7 +255,7 @@ func TestEnsureSystemDefaultLeavesV1DefaultUntouched(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultKeepsCustomDefault covers td/064 R6 / td/066 R12: a user
+// TestEnsureSystemDefaultKeepsCustomDefault verifies that a user
 // who already chose a custom global default must not be repointed to v3.
 func TestEnsureSystemDefaultKeepsCustomDefault(t *testing.T) {
 	db := testutil.OpenTestDB(t)
@@ -277,7 +277,7 @@ func TestEnsureSystemDefaultKeepsCustomDefault(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultFreshInstallHasOnlyV3 covers td/066 R12: a brand-new
+// TestEnsureSystemDefaultFreshInstallHasOnlyV3 verifies that a brand-new
 // database seeds only v3 (no legacy v1/v2) and resolves the default to v3.
 func TestEnsureSystemDefaultFreshInstallHasOnlyV3(t *testing.T) {
 	db := testutil.OpenTestDB(t)
@@ -293,7 +293,7 @@ func TestEnsureSystemDefaultFreshInstallHasOnlyV3(t *testing.T) {
 	if _, err := repo.Get(ctx, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version); err == nil {
 		t.Fatal("fresh install must not create legacy v2")
 	}
-	// A fresh-install v3 must hash identically to an upgraded-DB v3 (td/066 R12 #2):
+	// A fresh-install v3 must hash identically to an upgraded-DB v3:
 	// both equal the registry-pinned canonical hash.
 	v3, err := repo.Get(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion)
 	if err != nil {
@@ -316,7 +316,7 @@ func TestEnsureSystemDefaultFreshInstallHasOnlyV3(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultRepairsUserSystemSquatter covers td/067 R13 acceptance #2:
+// TestEnsureSystemDefaultRepairsUserSystemSquatter covers the reserved-namespace repair:
 // a database where a user profile illegally occupies system_cma_v3@1 must, after
 // the upgrade, migrate that user profile to a deterministic user_legacy_<hash> id
 // (repointing the plan pin and the global default to it), and publish the REAL
@@ -386,7 +386,7 @@ func TestEnsureSystemDefaultRepairsUserSystemSquatter(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultRejectsTamperedSystemV3 covers td/067 R13 acceptance #3:
+// TestEnsureSystemDefaultRejectsTamperedSystemV3 covers the tamper guard:
 // an owner_scope=system v3 row whose content does not match the registry canonical
 // hash is refused with a conflict and is never overwritten.
 func TestEnsureSystemDefaultRejectsTamperedSystemV3(t *testing.T) {
@@ -408,7 +408,7 @@ func TestEnsureSystemDefaultRejectsTamperedSystemV3(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultUpgradesTD065V2Variant covers td/067 R14 acceptance #1: a
+// TestEnsureSystemDefaultUpgradesTD065V2Variant covers the v2-variant upgrade: a
 // database first initialized on the TD 065 build holds the v2 VARIANT content; the
 // upgrade must accept it (recognized variant), keep it byte-for-byte, publish v3,
 // and migrate the v2-pointing default to v3.
@@ -442,7 +442,7 @@ func TestEnsureSystemDefaultUpgradesTD065V2Variant(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultRejectsUnknownSystemV2 covers td/067 R14 acceptance #3: an
+// TestEnsureSystemDefaultRejectsUnknownSystemV2 covers the unknown-content guard: an
 // owner_scope=system v2 row whose content matches no recognized published variant
 // is refused with a conflict (its meaning is never guessed).
 func TestEnsureSystemDefaultRejectsUnknownSystemV2(t *testing.T) {
@@ -476,8 +476,8 @@ func countReservedUserProfiles(t *testing.T, db *sql.DB) int {
 	return n
 }
 
-// TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB covers td/068 R16 acceptance
-// #1 and #2: a TD 066-upgraded database already holds a correct system v3, yet a
+// TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB covers the startup
+// audit repair (cases #1 and #2): a TD 066-upgraded database already holds a correct system v3, yet a
 // user illegally created an active owner_scope=user system_cma_v2@1 and made it the
 // global default + a plan pin. The previous fast path returned as soon as v3 was
 // valid and skipped repair; the tightened path must still migrate the squatter to
@@ -554,8 +554,8 @@ func TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultRejectsUnknownSystemRowsOnPublishedV3DB covers td/068 R16
-// acceptance #3: a database with a correct v3 plus an UNKNOWN owner_scope=system v2
+// TestEnsureSystemDefaultRejectsUnknownSystemRowsOnPublishedV3DB covers the startup
+// audit rejection case: a database with a correct v3 plus an UNKNOWN owner_scope=system v2
 // (and unknown system v1) must fail integrity at the very first EnsureSystemDefault
 // call (not lazily when later pinned), and must not overwrite the existing rows.
 func TestEnsureSystemDefaultRejectsUnknownSystemRowsOnPublishedV3DB(t *testing.T) {

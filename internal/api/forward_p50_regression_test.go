@@ -20,7 +20,7 @@ import (
 
 // Fixed regression inputs. Any engine, profile, calibration, sampling or
 // serialization change that moves these numbers must be reviewed and the pinned
-// constants below updated DELIBERATELY (td/067 R15).
+// constants below updated DELIBERATELY.
 const (
 	regressionSeed = "424242"
 	regressionRuns = 1000
@@ -46,7 +46,7 @@ type regressionResult struct {
 	snap        simulation.InputSnapshot
 }
 
-// TestForwardP50RegressionE2E covers td/067 R15: a fixed plan / holdings snapshot /
+// TestForwardP50RegressionE2E is the end-to-end P50 gate: a fixed plan / holdings snapshot /
 // 50-year horizon / seed / runs is driven through the REAL create→run→read flow.
 // It locks the terminal P50 and asserts the four provenance fields persisted in
 // input_snapshot_json against the registry, proving runs are reproducible and that

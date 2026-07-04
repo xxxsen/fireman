@@ -53,14 +53,14 @@ export function nextUserProfileId(): string {
 }
 
 // maxVersionForId returns the highest stored version for a profile id, so editing
-// an existing user profile always saves as a new version (never in place; td/063 R3).
+// an existing user profile always saves as a new version (never in place).
 export function maxVersionForId(profiles: AssumptionProfileSummary[], id: string): number {
   return profiles.reduce((m, p) => (p.id === id && p.version > m ? p.version : m), 0);
 }
 
 // factorUniverse mirrors the backend canonical factor set: one factor per
-// distinct non-cash (asset_class, region) return prior and one per FX prior
-// (td/063 R4). The correlation editor uses it so every pair is a real factor.
+// distinct non-cash (asset_class, region) return prior and one per FX prior.
+// The correlation editor uses it so every pair is a real factor.
 export function factorUniverse(p: AssumptionProfile): string[] {
   const set = new Set<string>();
   for (const rp of p.return_priors) {
@@ -70,8 +70,7 @@ export function factorUniverse(p: AssumptionProfile): string[] {
   return [...set].sort();
 }
 
-// REQUIRED_BASE_RETURN_CELLS mirrors the backend RequiredGlobalCoverage (td/064
-// R7): these CNY base-currency cells must exist in every active/global profile,
+// REQUIRED_BASE_RETURN_CELLS mirrors the backend RequiredGlobalCoverage: these CNY base-currency cells must exist in every active/global profile,
 // so the editor forbids deleting them.
 export const REQUIRED_BASE_RETURN_CELLS: ReadonlyArray<readonly [string, string]> = [
   ["equity", "domestic"],

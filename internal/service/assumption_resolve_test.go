@@ -61,7 +61,7 @@ func TestCalibrateAssetBlendedMissingPriorErrors(t *testing.T) {
 
 func TestCalibrateAssetBlendedNativeUSDPrior(t *testing.T) {
 	res := sysResolved(assumptions.SourceBlendedPrior, assumptions.ScenarioBaseline)
-	// USD now has a native-currency prior (td/063 R2), so a USD-valued asset
+	// USD now has a native-currency prior, so a USD-valued asset
 	// calibrates its local return without an FX/currency mismatch.
 	out, err := calibrateAsset(res, "ins_us", "equity", "foreign", "USD", 0.10, 0.18, 10, nil)
 	if err != nil {

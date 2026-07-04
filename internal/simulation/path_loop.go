@@ -165,7 +165,7 @@ func applyPathReturns(
 }
 
 // applyPathReturnsJoint draws one jointly-distributed month for every factor and
-// composes asset-local with shared FX returns (td/061 §3.5.3). All factors share
+// composes asset-local with shared FX returns. All factors share
 // one fat-tail scale so extreme months co-occur instead of being independent.
 func applyPathReturnsJoint(
 	in *InputSnapshot,
@@ -302,7 +302,7 @@ func applySlotReturn(
 // applyCashReturns grows every cash slot by its frozen deterministic monthly
 // return r_m = exp(ln(1+forward_annual)/12) - 1. Cash is intentionally non-random
 // and FX-free: it is excluded from the Student-t draw, the correlation matrix and
-// the FX factor (td/061 §3.5 / td/063 R1). Only forward (3.0.0) inputs set
+// the FX factor. Only forward (3.0.0) inputs set
 // DeterministicCashReturn; legacy 2.x snapshots keep cash at 0% so old runs replay
 // byte-for-byte. A cash-specific stress shock composes on the deterministic return
 // using the same AssetShock semantics as risk assets.

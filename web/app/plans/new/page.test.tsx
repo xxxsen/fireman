@@ -242,7 +242,7 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByRole("button", { name: "创建计划" })).toBeInTheDocument();
   });
 
-  it("uses one full-width step card across all steps (td/053 §4)", async () => {
+  it("uses one full-width step card across all steps", async () => {
     renderWizard();
     const card = screen.getByTestId("wizard-step-card");
     expect(card).toHaveClass("w-full");
@@ -381,7 +381,7 @@ describe("NewPlanWizardPage", () => {
     expect(createPlanWizard).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the three merged steps in the progress bar (td/060 §3.1)", () => {
+  it("renders the three merged steps in the progress bar", () => {
     renderWizard();
     expect(screen.getByText("1. 计划目标")).toBeInTheDocument();
     expect(screen.getByText("2. 建立持仓")).toBeInTheDocument();
@@ -390,14 +390,14 @@ describe("NewPlanWizardPage", () => {
     expect(screen.queryByText("1. 计划基础")).not.toBeInTheDocument();
   });
 
-  it("blocks leaving 计划目标 until a scenario is chosen (td/060 §3.1)", async () => {
+  it("blocks leaving 计划目标 until a scenario is chosen", async () => {
     renderWizard();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(await screen.findByText("请选择配置模板。")).toBeInTheDocument();
     expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
   });
 
-  it("preserves the draft when navigating back to 计划目标 and forward (td/060 §3.1)", async () => {
+  it("preserves the draft when navigating back to 计划目标 and forward", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument();
@@ -413,7 +413,7 @@ describe("NewPlanWizardPage", () => {
     expect(await screen.findByText(/已选标的：1 个/)).toBeInTheDocument();
   });
 
-  it("fire duration: one editable input with preset回填 (td/060 §3.2)", async () => {
+  it("fire duration: one editable input with preset回填", async () => {
     renderWizard();
     const durationInputs = screen.getAllByLabelText("预计 FIRE 时长（年）");
     expect(durationInputs).toHaveLength(1);
@@ -430,14 +430,14 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByLabelText("常用 FIRE 时长预设")).toHaveValue("40");
   });
 
-  it("keeps a custom fire duration after switching scenario (td/060 §3.2)", async () => {
+  it("keeps a custom fire duration after switching scenario", async () => {
     renderWizard();
     fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), { target: { value: "37" } });
     await selectScenario("scn_a");
     expect(screen.getByLabelText("预计 FIRE 时长（年）")).toHaveValue(37);
   });
 
-  it("advanced FIRE params start collapsed and submit current defaults (td/060 §3.3)", async () => {
+  it("advanced FIRE params start collapsed and submit current defaults", async () => {
     renderWizard();
     expect(screen.getByTestId("wizard-advanced-params")).not.toHaveAttribute("open");
 
@@ -462,7 +462,7 @@ describe("NewPlanWizardPage", () => {
     });
   });
 
-  it("removes a now-disabled region holding and excludes it from the payload (td/062 R1)", async () => {
+  it("removes a now-disabled region holding and excludes it from the payload", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
     await selectEquityInstrument(); // domestic T1
@@ -498,7 +498,7 @@ describe("NewPlanWizardPage", () => {
     expect(ids).not.toContain("ins_equity_domestic");
   });
 
-  it("blocks advancing when advanced params are out of range (td/062 R2)", async () => {
+  it("blocks advancing when advanced params are out of range", async () => {
     renderWizard();
     const advancedInputs = screen.getAllByTestId("percent-input");
     // Default fixed_real layout: [固定通胀率, 有效提取税率, 应税提取比例].
@@ -514,7 +514,7 @@ describe("NewPlanWizardPage", () => {
     expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
   });
 
-  it("requires confirmation when fixed inflation exceeds 15% (td/062 R2)", async () => {
+  it("requires confirmation when fixed inflation exceeds 15%", async () => {
     renderWizard();
     const advancedInputs = screen.getAllByTestId("percent-input");
     fireEvent.change(advancedInputs[0]!, { target: { value: "18" } });
@@ -533,7 +533,7 @@ describe("NewPlanWizardPage", () => {
     );
   });
 
-  it("sends end_age = retirement_age + custom duration (td/062 R3)", async () => {
+  it("sends end_age = retirement_age + custom duration", async () => {
     renderWizard();
     fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), {
       target: { value: "37" },
@@ -551,7 +551,7 @@ describe("NewPlanWizardPage", () => {
     expect(body.parameters.end_age).toBe(72);
   });
 
-  it("summarizes advanced params on the confirm step (td/062 R3)", async () => {
+  it("summarizes advanced params on the confirm step", async () => {
     renderWizard();
     await goToConfirmStep();
     const summary = screen.getByTestId("wizard-advanced-summary");
@@ -560,7 +560,7 @@ describe("NewPlanWizardPage", () => {
     expect(summary).toHaveTextContent("固定实际支出");
   });
 
-  it("marks advanced summary as 已自定义 after editing (td/062 R3)", async () => {
+  it("marks advanced summary as 已自定义 after editing", async () => {
     renderWizard();
     fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "guardrail" } });
     await goToConfirmStep();
@@ -569,7 +569,7 @@ describe("NewPlanWizardPage", () => {
     expect(summary).toHaveTextContent("动态提取（护栏）");
   });
 
-  it("persists guardrail withdrawal and random inflation from advanced panel (td/060 §3.3)", async () => {
+  it("persists guardrail withdrawal and random inflation from advanced panel", async () => {
     renderWizard();
     fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "guardrail" } });
     fireEvent.change(screen.getByLabelText("通胀模式"), { target: { value: "random_ar1" } });

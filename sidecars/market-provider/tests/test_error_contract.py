@@ -1,4 +1,4 @@
-"""Contract tests for the unified structured error envelope (td/037 phase 1)."""
+"""Contract tests for the unified structured error envelope."""
 
 from __future__ import annotations
 

@@ -200,7 +200,7 @@ func (s Services) refreshInstrument(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	// Manual library refresh is always an immediate full refresh (td/053 §3); the
+	// Manual library refresh is always an immediate full refresh; the
 	// legacy `force` field is accepted for compatibility but no longer changes the
 	// user-visible behavior or the 24h throttle.
 	req.Force = true

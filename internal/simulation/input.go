@@ -11,10 +11,10 @@ import (
 // EngineVersion is bumped when simulation semantics change. 3.0.0 introduces the
 // forward-return calibration and the joint (correlated, shared fat-tail) factor
 // model. 2.x snapshots continue to replay with the independent per-asset sampler
-// and their frozen ModeledAnnualReturn so old runs reproduce exactly (td/061).
+// and their frozen ModeledAnnualReturn so old runs reproduce exactly.
 const EngineVersion = "3.0.0"
 
-// LegacyEngineVersion is the pre-td/061 independent-factor engine. Snapshots
+// LegacyEngineVersion is the legacy independent-factor engine. Snapshots
 // frozen at this version must keep replaying with the independent sampler.
 const LegacyEngineVersion = "2.0.0"
 
@@ -57,7 +57,7 @@ type SnapshotAsset struct {
 	ModeledAnnualReturn float64 `json:"modeled_annual_return"`
 	AnnualVolatility    float64 `json:"annual_volatility"`
 	MaxDrawdown         float64 `json:"max_drawdown"`
-	// td/061 forward-return calibration audit fields. These are frozen at run
+	// Forward-return calibration audit fields. These are frozen at run
 	// creation so a run can always explain how its drift was derived. Historical
 	// facts (HistoricalAnnualGeometricReturn) and the value actually fed to the
 	// engine (ForwardAnnualGeometricReturn == ModeledAnnualReturn) are kept
@@ -90,7 +90,7 @@ type SnapshotAsset struct {
 	FXHistoryDepth                  string         `json:"fx_history_depth,omitempty"`
 	FXMetricsVersion                string         `json:"fx_metrics_version,omitempty"`
 	FXDataWarnings                  []string       `json:"fx_data_warnings,omitempty"`
-	// td/061 §3.4 / td/063 R2 forward FX calibration audit. FXModeledReturn is the
+	// Forward FX calibration audit. FXModeledReturn is the
 	// value the engine consumes (the forward FX drift for blended_prior/custom, or
 	// the raw historical drift for historical_cagr). The fields below explain how
 	// it was derived; they are frozen so a run can always justify its FX drift.
@@ -102,7 +102,7 @@ type SnapshotAsset struct {
 	FXReturnWarnings   []string `json:"fx_return_warnings,omitempty"`
 	// Months / FXMonths freeze the complete-year monthly log-return series (keyed
 	// "YYYY-MM") used to estimate historical correlations in the joint factor
-	// model (td/061 §3.5.1 / §4.1.6). Empty means the pair falls back to the
+	// model. Empty means the pair falls back to the
 	// profile correlation prior.
 	Months   map[string]float64 `json:"months,omitempty"`
 	FXMonths map[string]float64 `json:"fx_months,omitempty"`
@@ -147,16 +147,16 @@ type InputSnapshot struct {
 	Assets             []SnapshotAsset    `json:"assets"`
 	ConfigHash         string             `json:"config_hash"`
 	MarketSnapshotHash string             `json:"market_snapshot_hash"`
-	// td/061 joint risk model. Present only for multivariate (3.0.0) runs;
+	// Joint risk model. Present only for multivariate (3.0.0) runs;
 	// nil for legacy independent (2.x) snapshots so old runs replay unchanged.
 	FactorModel     *FactorModel `json:"factor_model,omitempty"`
 	AssetFactorRefs []FactorRef  `json:"asset_factor_refs,omitempty"`
 	// DeterministicCashReturn is set for forward (3.0.0) inputs so cash slots grow
-	// at their frozen, non-random monthly return instead of an implicit 0%
-	// (td/061 / td/063 R1). Legacy 2.x snapshots leave it false so cash stays at
+	// at their frozen, non-random monthly return instead of an implicit 0%.
+	// Legacy 2.x snapshots leave it false so cash stays at
 	// 0% and old runs replay byte-for-byte.
 	DeterministicCashReturn bool `json:"deterministic_cash_return,omitempty"`
-	// td/063 R3 frozen tail-risk parameters. For forward (3.0.0) runs these are
+	// Frozen tail-risk parameters. For forward (3.0.0) runs these are
 	// taken from the active profile so the Student-t df and the per-month return
 	// truncation are versioned/auditable and a plan can no longer change them; the
 	// joint and independent samplers read these frozen values only. Legacy (2.x)
@@ -165,7 +165,7 @@ type InputSnapshot struct {
 	TailStudentTDf  int      `json:"tail_student_t_df,omitempty"`
 	TailReturnFloor *float64 `json:"tail_return_floor,omitempty"`
 	TailReturnCeil  *float64 `json:"tail_return_ceil,omitempty"`
-	// td/066 R11/R12 assumption provenance: the exact system/user profile identity,
+	// Assumption provenance: the exact system/user profile identity,
 	// its canonical content hash and (for system profiles) the backing CMA evidence
 	// artifact hash a run was calibrated against, so a result is always explainable
 	// by a specific, immutable model. Empty on legacy snapshots predating the field.
@@ -177,7 +177,7 @@ type InputSnapshot struct {
 
 // EffectiveDf returns the frozen Student-t degrees of freedom for sampling: the
 // profile-frozen value for forward (3.0.0) runs, or the legacy plan parameter for
-// 2.x snapshots (td/063 R3).
+// 2.x snapshots.
 func (in *InputSnapshot) EffectiveDf() int {
 	if in.TailStudentTDf > 0 {
 		return in.TailStudentTDf
@@ -187,7 +187,7 @@ func (in *InputSnapshot) EffectiveDf() int {
 
 // TailTruncationBounds returns the frozen per-month simple-return truncation. It
 // uses the profile-frozen bounds for forward runs and the legacy constants for
-// 2.x snapshots, so historical replays keep their exact clamp (td/063 R3).
+// 2.x snapshots, so historical replays keep their exact clamp.
 func (in *InputSnapshot) TailTruncationBounds() TailTruncation {
 	if in.TailReturnFloor != nil && in.TailReturnCeil != nil {
 		return TailTruncation{Floor: *in.TailReturnFloor, Ceil: *in.TailReturnCeil}

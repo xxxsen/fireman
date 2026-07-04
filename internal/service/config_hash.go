@@ -91,7 +91,7 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		"rebalance_threshold":         p.RebalanceThreshold,
 		"transaction_cost_rate":       p.TransactionCostRate,
 		"simulation_runs":             p.SimulationRuns,
-		// td/061: the return-assumption selection is part of the plan config, so
+		// The return-assumption selection is part of the plan config, so
 		// switching mode/profile/version/scenario marks existing runs stale and
 		// changes the input hash (§6.1.6, §6.2.4).
 		"return_assumption_mode":        p.ReturnAssumptionMode,
@@ -103,7 +103,7 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 	// student_t_df is a legacy 2.x-only field. Forward (blended_prior/custom) runs
 	// freeze the global profile's df, so the plan value has no effect on a forward
 	// run and must not be part of its config identity; including it would let an
-	// irrelevant field mark forward runs stale (td/064 N6). historical_cagr replay
+	// irrelevant field mark forward runs stale. historical_cagr replay
 	// configs still depend on the plan df, so they keep it in the hash.
 	if p.ReturnAssumptionMode == "" || p.ReturnAssumptionMode == repository.ModeHistoricalCAGR {
 		m["student_t_df"] = p.StudentTDf
@@ -156,7 +156,7 @@ func holdingsToMaps(holds []repository.PlanHolding,
 			"sort_order":             h.SortOrder,
 		}
 		// Fold the asset-level override into the hash so editing it marks existing
-		// runs stale and changes the input hash (td/061 §4.1.5). Overrides for
+		// runs stale and changes the input hash. Overrides for
 		// instruments not held don't affect simulation, so they're ignored here.
 		if o, ok := byInstrument[h.InstrumentID]; ok {
 			m["override_forward_return"] = o.ForwardReturn

@@ -457,7 +457,7 @@ export interface QuantilePoint {
   p95_minor: number;
 }
 
-// ---- Simulation assumptions (td/061) ----
+// ---- Simulation assumptions ----
 
 export interface AssumptionProfileSummary {
   id: string;
@@ -485,8 +485,8 @@ export interface AssumptionPreferences {
   default_scenario: string;
 }
 
-// Asset-level plan-specific override of the forward return / volatility
-// (td/061 §4.1.5). A null dimension means it is not overridden.
+// Asset-level plan-specific override of the forward return / volatility.
+// A null dimension means it is not overridden.
 export interface ReturnOverride {
   instrument_id: string;
   forward_return: number | null;

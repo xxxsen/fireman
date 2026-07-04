@@ -36,10 +36,10 @@ type PlanParametersAPI struct {
 	SimulationRuns           int     `json:"simulation_runs"`
 	StudentTDf               int     `json:"student_t_df"`
 	Seed                     *string `json:"seed,omitempty"`
-	// td/061 return-assumption selection. These must round-trip through the API so
+	// Return-assumption selection. These must round-trip through the API so
 	// the wizard/parameters page can persist blended_prior + profile selection;
 	// otherwise the binding drops them and the plan silently reverts to
-	// historical_cagr (td/063 R0).
+	// historical_cagr.
 	ReturnAssumptionMode        string `json:"return_assumption_mode"`
 	AssumptionSelectionMode     string `json:"assumption_selection_mode"`
 	ReturnAssumptionSetID       string `json:"return_assumption_set_id"`

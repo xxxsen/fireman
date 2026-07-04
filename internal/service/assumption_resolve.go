@@ -13,7 +13,7 @@ import (
 // resolvedAssumption is the frozen-at-resolution global profile, scenario and
 // mode a run will calibrate against. Every plan/run path must obtain its
 // assumptions only through ResolveAssumptionProfile so the system default
-// fallback is identical everywhere (td/061 §5.A.2).
+// fallback is identical everywhere.
 type resolvedAssumption struct {
 	Profile  assumptions.Profile
 	Scenario string
@@ -22,7 +22,7 @@ type resolvedAssumption struct {
 	// row (not a re-canonicalization of the decoded struct). For a legacy system
 	// profile whose on-disk canonical predates current struct fields, the stored
 	// hash is the only one that matches the immutable registry, so run provenance
-	// and the system-content recognition check must use it (td/067 R13/R14). Empty
+	// and the system-content recognition check must use it. Empty
 	// for an in-memory profile (unit tests / built-in fallback), in which case the
 	// snapshot builder recomputes it.
 	ProfileContentHash string
@@ -68,7 +68,7 @@ func (s *SimulationService) resolveProfileAndScenario(
 				})
 		}
 		// A pinned profile must reference an active version: a draft/superseded pin
-		// must never enter a run (td/063 N2).
+		// must never enter a run.
 		if p.Status != assumptions.StatusActive {
 			return assumptions.Profile{}, "", "", newErr("assumption_profile_not_active",
 				"pinned assumption profile must be an active version", map[string]any{

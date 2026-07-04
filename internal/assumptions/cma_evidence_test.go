@@ -13,7 +13,7 @@ const evidenceTol = 1e-9
 // recomputeReturn independently re-derives the after-fee nominal geometric return
 // from the documented inputs WITHOUT calling the production helper, proving the
 // published prior is reproducible from the artifact via the correct geometric
-// convention (td/066 R11): (1+real)*(1+pi)*(1-fee)-1, then round to 4 decimals.
+// convention: (1+real)*(1+pi)*(1-fee)-1, then round to 4 decimals.
 func recomputeReturn(realRet, infl, fee float64) float64 {
 	return math.Round(((1+realRet)*(1+infl)*(1-fee)-1)*1e4) / 1e4
 }
@@ -26,7 +26,7 @@ func recomputeFX(baseInfl, quoteInfl float64) float64 {
 
 // TestExactGeometricReturnFormula pins the exact (unrounded) compounded return for
 // the documented worked example, using independent literal expectations rather
-// than the production helper (td/066 R11 acceptance #1).
+// than the production helper.
 func TestExactGeometricReturnFormula(t *testing.T) {
 	noFee := returnPriorEvidence{RealGeometricReturn: 0.04, ExpectedInflation: 0.02, AnnualFeeRate: 0}
 	if got := noFee.ExactNominalAfterFee(); math.Abs(got-0.0608) > evidenceTol {
@@ -44,7 +44,7 @@ func TestExactGeometricReturnFormula(t *testing.T) {
 		t.Errorf("with-fee canonical: got %.10f want 0.0587", got)
 	}
 
-	// The additive shortcut (the td/065 bug) would give 0.06 / 0.058; assert we are
+	// The additive shortcut (the bug) would give 0.06 / 0.058; assert we are
 	// NOT producing those.
 	if math.Abs(noFee.ExactNominalAfterFee()-0.06) < evidenceTol {
 		t.Error("no-fee return must not equal the additive shortcut 0.06")
@@ -52,7 +52,7 @@ func TestExactGeometricReturnFormula(t *testing.T) {
 }
 
 // TestNominalAfterFeePassthrough verifies a source already published as nominal,
-// after-fee is used verbatim with no second conversion (td/066 R11).
+// after-fee is used verbatim with no second conversion.
 func TestNominalAfterFeePassthrough(t *testing.T) {
 	e := returnPriorEvidence{
 		NominalAfterFee: true, NominalAfterFeeReturn: 0.0731,
@@ -64,7 +64,7 @@ func TestNominalAfterFeePassthrough(t *testing.T) {
 }
 
 // TestExactFXDriftFormula pins the relative-PPP ratio formula with independent
-// expectations and covers a negative inflation differential (td/066 R11 #2).
+// expectations and covers a negative inflation differential.
 func TestExactFXDriftFormula(t *testing.T) {
 	pos := fxPriorEvidence{BaseInflation: 0.03, QuoteInflation: 0.01}
 	want := 1.03/1.01 - 1
@@ -137,7 +137,7 @@ func TestSystemReturnPriorsRecomputeFromInputs(t *testing.T) {
 			t.Errorf("%s: canonical %.6f != recomputed %.6f", key, rp.AnnualGeometricReturn, want)
 		}
 	}
-	// Independent headline expectations (td/066 R11 #3): hardcoded geometric values,
+	// Independent headline expectations: hardcoded geometric values,
 	// NOT derived by calling the production builder.
 	expect := map[string]float64{
 		"equity|domestic|CNY": 0.0608,
@@ -236,7 +236,7 @@ func TestSystemProfileWithEvidenceValidates(t *testing.T) {
 	}
 }
 
-// TestSystemProfileRegistryGuardsV3 is the CI guard for td/066 R12 §3: editing the
+// TestSystemProfileRegistryGuardsV3 is the CI guard for the frozen registry: editing the
 // v3 evidence artifact (or its built canonical content) without publishing a new
 // identity and updating the pinned registry fails here.
 func TestSystemProfileRegistryGuardsV3(t *testing.T) {
@@ -261,7 +261,7 @@ func TestSystemProfileRegistryGuardsV3(t *testing.T) {
 
 // TestHistoricalSystemProfileVariants pins the read-only variant registry that
 // records every recognized published system CONTENT keyed by (id, version,
-// content_hash), including the TD 065 v2 variant (td/067 R14). LookupSystemContent
+// content_hash), including the TD 065 v2 variant. LookupSystemContent
 // must accept exactly these contents and reject unknown ones, and only the current
 // identity (v3) may be a global default.
 func TestHistoricalSystemProfileVariants(t *testing.T) {
@@ -315,7 +315,7 @@ func TestHistoricalSystemProfileVariants(t *testing.T) {
 	}
 }
 
-// TestReservedSystemNamespace covers td/067 R13: the system_cma_ prefix is reserved.
+// TestReservedSystemNamespace verifies that the system_cma_ prefix is reserved.
 func TestReservedSystemNamespace(t *testing.T) {
 	for _, id := range []string{"system_cma_v3", "system_cma_v1", "system_cma_anything"} {
 		if !HasReservedSystemID(id) {
@@ -330,7 +330,7 @@ func TestReservedSystemNamespace(t *testing.T) {
 }
 
 // TestSystemProfileRegistryChain pins the immutable identity chain and the frozen
-// v1/v2 canonical hashes (td/066 R12).
+// v1/v2 canonical hashes.
 func TestSystemProfileRegistryChain(t *testing.T) {
 	reg := SystemProfileRegistry()
 	if len(reg) != 3 {

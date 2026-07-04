@@ -54,7 +54,7 @@ func (s *InstrumentService) List(ctx context.Context, valuationDate string) ([]r
 	// Plan-context listing (valuation_date set) truncates quality to the plan's
 	// valuation date, which the precomputed list projection cannot express, so it
 	// keeps the per-row path. The asset library itself (no valuation_date) reads
-	// the projection in a single JOIN (td/057 P1).
+	// the projection in a single JOIN.
 	if valuationDate != "" {
 		return s.listAtValuationDate(ctx, valuationDate)
 	}
@@ -313,7 +313,7 @@ func (s *InstrumentService) Refresh(ctx context.Context, instrumentID string,
 	}
 
 	// Heal identity before fetching so refresh requests carry instrument_kind and
-	// the sidecar selects an identity-consistent history source (td/038 P1-1).
+	// the sidecar selects an identity-consistent history source.
 	inst, err = s.ensureInstrumentKind(ctx, inst)
 	if err != nil {
 		return inst, err
@@ -633,7 +633,7 @@ func (s *InstrumentService) fetchAndProcessForInstrument(
 // identitySensitiveInstrumentType reports whether an instrument type relies on a
 // resolved instrument_kind to pick identity-consistent history sources. Only
 // cn_exchange_fund currently shares bare codes across ETF/LOF/stock variants in
-// the sidecar fallback chain (td/037 现象-4).
+// the sidecar fallback chain.
 func identitySensitiveInstrumentType(instrumentType string) bool {
 	return instrumentType == "cn_exchange_fund"
 }
@@ -641,7 +641,7 @@ func identitySensitiveInstrumentType(instrumentType string) bool {
 // ensureInstrumentKind backfills a missing resolved instrument_kind before a
 // refresh fetch. Legacy assets imported before instrument_kind was persisted
 // would otherwise let the sidecar fall back to the legacy ETF->LOF->stock chain
-// and mix data across instruments sharing a bare code (td/038 P1-1). Identity is
+// and mix data across instruments sharing a bare code. Identity is
 // healed here via one controlled resolve, then persisted so future refreshes are
 // identity-safe.
 func (s *InstrumentService) ensureInstrumentKind(

@@ -25,7 +25,7 @@ func TestValidateParametersAdvancedRanges(t *testing.T) {
 		f(&p)
 		return p
 	}
-	// Doc-defined boundaries must be rejected (td/062 R2).
+	// Doc-defined boundaries must be rejected.
 	invalid := map[string]repository.PlanParameters{
 		"fixed_inflation high":   mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = 0.25 }),
 		"fixed_inflation low":    mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = -0.05 }),

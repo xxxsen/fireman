@@ -229,7 +229,7 @@ func (r *SimulationRepo) ListQuantileSeries(ctx context.Context, runID string) (
 
 // ReplaceRealQuantileSeries persists the real (start-of-plan purchasing power)
 // monthly wealth quantiles into the dedicated simulation_real_quantile_series
-// table (td/061 §4.1.8), kept separate from the nominal series so the two
+// table, kept separate from the nominal series so the two
 // calibers are never mixed in one row.
 func (r *SimulationRepo) ReplaceRealQuantileSeries(ctx context.Context, tx *sql.Tx, runID string,
 	series []QuantileSeriesRow,

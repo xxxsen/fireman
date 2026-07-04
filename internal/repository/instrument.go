@@ -85,7 +85,7 @@ func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
 // instrument_library_metrics projection (market metadata, simulation eligibility
 // and trailing returns). It performs a single LEFT JOIN so the library list
 // reads list metadata in a constant number of queries, never recomputing full
-// price history per row (td/057 P1). Instruments without a projection row keep
+// price history per row. Instruments without a projection row keep
 // empty/nil list fields, which the frontend renders as "—".
 func (r *InstrumentRepo) ListWithMetrics(ctx context.Context) ([]InstrumentRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `

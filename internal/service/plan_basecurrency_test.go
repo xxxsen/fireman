@@ -42,7 +42,7 @@ func assertAppErrorCode(t *testing.T, err error, wantCode string) {
 	}
 }
 
-// td/065 R9: the published system profile is CNY-only, so a non-CNY base currency
+// The published system profile is CNY-only, so a non-CNY base currency
 // must be rejected at every plan write entry point (create, wizard, metadata
 // update) rather than being saved and then failing at simulation time.
 func TestCreatePlanRejectsNonCNYBaseCurrency(t *testing.T) {

@@ -63,7 +63,7 @@ func putPlanParams(t *testing.T, baseURL, planID string, params map[string]any) 
 	return resp.StatusCode, string(mustRead(t, resp))
 }
 
-// TestPlanParametersAssumptionRoundTrip covers td/063 R0: the six td/061
+// TestPlanParametersAssumptionRoundTrip verifies that the six
 // return-assumption fields must round-trip through the API DTO. New plans persist
 // blended_prior/follow_global/baseline; an update of an unrelated field keeps the
 // selection verbatim; and a pin to the active system profile survives a save.
@@ -108,7 +108,7 @@ func TestPlanParametersAssumptionRoundTrip(t *testing.T) {
 	}
 }
 
-// TestStudentTDfReadOnlyOnForwardPlan covers td/064 N6: the plan-level
+// TestStudentTDfReadOnlyOnForwardPlan verifies that the plan-level
 // student_t_df is a read-only legacy field on forward plans. Sending a new value
 // must neither change the persisted value nor the config hash (so existing runs
 // are not marked stale for a field with no forward modeling effect).
@@ -142,7 +142,7 @@ func TestStudentTDfReadOnlyOnForwardPlan(t *testing.T) {
 	}
 }
 
-// TestPlanParametersAssumptionRejections covers td/063 R0/R5/N2: unknown enums, a
+// TestPlanParametersAssumptionRejections covers rejection paths: unknown enums, a
 // draft/non-existent pin, unparseable custom JSON and a floor>=ceiling guardrail
 // must all be rejected with parameters_invalid and leave the record unchanged.
 func TestPlanParametersAssumptionRejections(t *testing.T) {

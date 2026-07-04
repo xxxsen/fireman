@@ -145,7 +145,7 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 
 // applyCorrelationModelSummary replaces the legacy independent-factor disclaimer
 // with an accurate description when the run uses the joint factor model, and
-// surfaces the frozen correlation/PSD-repair warnings (td/061 §3.5.2, §8.3).
+// surfaces the frozen correlation/PSD-repair warnings.
 func applyCorrelationModelSummary(summary *Summary, in *InputSnapshot) {
 	if in.FactorModel == nil {
 		return

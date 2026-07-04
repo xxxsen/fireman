@@ -53,8 +53,8 @@ func TestProfileRejectsCorrelationForNonUniverseFactor(t *testing.T) {
 
 // TestNativeCurrencyPriorsShareAssetFactor verifies that native-currency foreign
 // equity priors collapse into the same equity:foreign factor as the CNY one, so
-// the correlation universe (and its completeness requirement) is unchanged
-// (td/063 R2/R4). The system profile already prices equity:foreign in CNY, USD
+// the correlation universe (and its completeness requirement) is unchanged.
+// The system profile already prices equity:foreign in CNY, USD
 // and HKD, so the factor must appear exactly once.
 func TestNativeCurrencyPriorsShareAssetFactor(t *testing.T) {
 	p := SystemDefaultProfile()

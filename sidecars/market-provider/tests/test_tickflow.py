@@ -395,6 +395,19 @@ def test_try_tickflow_klines_truncation_guard(monkeypatch: pytest.MonkeyPatch) -
 # ---------------------------------------------------------------------------
 
 
+def test_httpx2_shadow_package_absent() -> None:
+    """Regression guard: the httpx2 shadow package must never be installed.
+
+    Starlette's TestClient silently prefers ``httpx2`` when it is importable,
+    and the previously pinned httpx2 2.4.0 build made in-process TestClient
+    requests hang, blocking every API-level test below. The fix removed the
+    direct httpx2 dev dependency so TestClient stays on standard httpx; this
+    test fails fast if httpx2 ever sneaks back into the environment.
+    """
+    with pytest.raises(ModuleNotFoundError):
+        import httpx2  # noqa: F401
+
+
 def test_fetch_stock_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_tickflow(monkeypatch)
     fake = _FakeClient(result=_payload([_TS_20240102, _TS_20240103], [10.2, 10.3]))

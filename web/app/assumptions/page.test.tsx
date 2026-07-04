@@ -125,7 +125,7 @@ describe("AssumptionsPage", () => {
     renderPage();
     const copyBtn = await screen.findByRole("button", { name: "复制为自定义" });
     fireEvent.click(copyBtn);
-    // Editor opens (copy does not save immediately; td/063 R3).
+    // Editor opens (copy does not save immediately).
     expect(await screen.findByTestId("profile-editor")).toBeInTheDocument();
     expect(saveAssumptionProfile).not.toHaveBeenCalled();
     // Provide the now-required named reviewer, then save.

@@ -1,4 +1,4 @@
-"""Regression tests for td/034 P1 resolve/fetch fixes."""
+"""Regression tests for historical resolve/fetch fixes."""
 
 from unittest.mock import patch
 

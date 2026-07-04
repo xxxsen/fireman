@@ -20,11 +20,11 @@ var ErrAssumptionProfileNotFound = errors.New("assumption profile not found")
 // identity (id+version) is not a recognized, immutable published content: e.g. an
 // owner_scope=system row whose content hash matches no entry in the system content
 // registry. The startup upgrade refuses to overwrite or silently accept it; a
-// release data-repair script must resolve it explicitly (td/067 R13/R14).
+// release data-repair script must resolve it explicitly.
 var ErrSystemProfileIdentityConflict = errors.New("system profile identity conflict")
 
 // AssumptionProfileRepo persists global simulation assumption profiles, their
-// normalized projections and the single-row user preference (td/061 §4.1).
+// normalized projections and the single-row user preference.
 type AssumptionProfileRepo struct {
 	db *sql.DB
 }
@@ -49,7 +49,7 @@ type ProfileSummary struct {
 	// EligibleForGlobalDefault reports whether this profile may be selected as the
 	// user's global default: it must be active AND still pass the current publish
 	// gate (structure + coverage + PSD + tail). The legacy system_cma_v1@1 stays
-	// active for replay/pins but is NOT eligible (td/065 R8). Computed by the
+	// active for replay/pins but is NOT eligible. Computed by the
 	// service, not stored.
 	EligibleForGlobalDefault bool `json:"eligible_for_global_default"`
 }
@@ -61,15 +61,14 @@ type AssumptionPreferences struct {
 	DefaultScenario       string `json:"default_scenario"`
 }
 
-// EnsureSystemDefault performs the idempotent system-profile upgrade (td/064 R6,
-// td/066 R12, td/067 R13/R14). It publishes the current system default
+// EnsureSystemDefault performs the idempotent system-profile upgrade. It publishes the current system default
 // (system_cma_v3@1) as a NEW immutable identity without ever updating or deleting
 // the frozen system_cma_v1@1 / system_cma_v2@1, then atomically repoints the
 // global default preference to v3 only when it is empty or still points at v3's
 // DIRECT predecessor (v2). A preference pointing at a user-chosen custom profile,
 // or at a non-direct predecessor (v1), is left untouched.
 //
-// Identity integrity (td/067 R13/R14, td/068 R16):
+// Identity integrity:
 //   - The current identity row, if present, must be owner_scope=system and its
 //     stored content hash + raw canonical bytes must equal the registry hash.
 //   - A user profile that squats on the reserved system_cma_ namespace is migrated
@@ -109,7 +108,7 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 
 // systemNamespaceClean reports whether the reserved system namespace needs no
 // repair, publish or audit work, so EnsureSystemDefault can skip the upgrade
-// transaction. It is clean ONLY when all three read-only probes pass (td/068 R16):
+// transaction. It is clean ONLY when all three read-only probes pass:
 //   - the current identity (v3) exists, is owner_scope=system and matches the
 //     registry canonical hash (stored content hash AND raw canonical bytes);
 //   - no owner_scope=user profile squats on the reserved system_cma_ namespace;
@@ -173,7 +172,7 @@ func (r *AssumptionProfileRepo) runSystemDefaultUpgrade(
 		}
 		// v3 already exists and was audited above. Do NOT migrate the default here:
 		// only a freshly-published v3 triggers the v2->v3 repoint, so a user's
-		// deliberate non-v3 default choice is preserved (td/068 R16 #3).
+		// deliberate non-v3 default choice is preserved.
 		return assertRecognizedCurrentIdentity(cur, row)
 	}
 	// Publish the current system identity and migrate the default from its direct
@@ -212,13 +211,13 @@ func probeProfileRow(ctx context.Context, q dbQuerier, id string, version int) (
 }
 
 // assertRecognizedCurrentIdentity verifies a system-owned current-identity row is
-// byte-faithful to the pinned registry canonical hash (td/067 R13 #2): the stored
+// byte-faithful to the pinned registry canonical hash: the stored
 // content hash AND the raw SHA-256 of the stored canonical JSON bytes must both
 // equal the registry hash, otherwise the row was tampered/hijacked and is refused.
 // The raw-byte hash is used (not a re-canonicalization of the decoded struct)
 // because a legacy on-disk canonical can predate current struct fields and would
 // drift when re-marshaled, yet its frozen byte hash is the immutable identity (see
-// GetWithHash, td/067 R13/R14).
+// GetWithHash).
 func assertRecognizedCurrentIdentity(cur assumptions.SystemProfileIdentity, row profileRow) error {
 	if row.contentHash != cur.CanonicalHash {
 		return fmt.Errorf("system identity %s stored content hash %q != registry %q: %w",
@@ -241,7 +240,7 @@ type reservedSystemRow struct {
 }
 
 // auditReservedSystemRows validates EVERY owner_scope=system row in the reserved
-// system_cma_ namespace (td/068 R16 #2). Each row's (id, version, content_hash)
+// system_cma_ namespace. Each row's (id, version, content_hash)
 // must be a recognized published content AND its stored canonical_json bytes must
 // hash (raw SHA-256) to that content_hash. Any unknown or tampered row yields a
 // conflict and is never overwritten, so the integrity invariant is enforced
@@ -298,7 +297,7 @@ func listReservedSystemRows(ctx context.Context, q dbRowsQuerier) ([]reservedSys
 }
 
 // existsReservedUserProfile reports whether any owner_scope=user profile squats on
-// the reserved system_cma_ namespace and must be migrated (td/068 R16 #1).
+// the reserved system_cma_ namespace and must be migrated.
 func existsReservedUserProfile(ctx context.Context, db *sql.DB) (bool, error) {
 	var present int
 	err := db.QueryRowContext(ctx,
@@ -315,8 +314,7 @@ func existsReservedUserProfile(ctx context.Context, db *sql.DB) (bool, error) {
 // fails the integrity check (unknown (id, version, content_hash) OR stored bytes
 // that no longer hash to content_hash). It is the read-only fast-path signal that
 // mirrors the transactional auditReservedSystemRows, so the integrity invariant is
-// validated on every startup/read, not only when an upgrade transaction runs
-// (td/068 R16 #1).
+// validated on every startup/read, not only when an upgrade transaction runs.
 func existsUnrecognizedSystemRow(ctx context.Context, db *sql.DB) (bool, error) {
 	rows, err := listReservedSystemRows(ctx, db)
 	if err != nil {
@@ -350,7 +348,7 @@ type legacySquatter struct {
 // repairReservedUserProfilesTx migrates every owner_scope=user profile whose id is
 // in the reserved system_cma_ namespace to a deterministic user_legacy_<old hash
 // prefix> id, repointing plan pins and the global default to the new id before
-// deleting the conflicting row (td/067 R13 #3). Frozen run input snapshots are
+// deleting the conflicting row. Frozen run input snapshots are
 // never rewritten.
 func repairReservedUserProfilesTx(ctx context.Context, tx *sql.Tx) error {
 	squatters, err := collectReservedUserProfiles(ctx, tx)
@@ -391,7 +389,7 @@ func collectReservedUserProfiles(ctx context.Context, tx *sql.Tx) ([]legacySquat
 }
 
 // legacyUserProfileID derives the deterministic migration id from the old
-// canonical content hash (td/067 R13 #3).
+// canonical content hash.
 func legacyUserProfileID(oldContentHash string) string {
 	h := oldContentHash
 	if len(h) > 16 {
@@ -451,7 +449,7 @@ func deleteProfileVersionTx(ctx context.Context, tx *sql.Tx, id string, version 
 // points at that direct predecessor. A preference row pointing at a user-chosen
 // custom profile, or at a non-direct predecessor (system_cma_v1@1), is left
 // untouched; a missing preference row resolves to the current default via
-// GetPreferences's fallback (td/064 R6 / td/066 R12).
+// GetPreferences's fallback.
 func (r *AssumptionProfileRepo) migrateDefaultToCurrentSystem(ctx context.Context, tx *sql.Tx) error {
 	exec := r.exec(tx)
 	_, err := exec.ExecContext(ctx,
@@ -508,7 +506,7 @@ func (r *AssumptionProfileRepo) Get(ctx context.Context, id string, version int)
 // GetWithHash is Get plus the FROZEN stored content_hash column. The stored hash
 // is the canonical identity of the row even when the on-disk canonical JSON
 // predates current struct fields (so re-canonicalizing the decoded struct would
-// drift); run provenance must use it (td/067 R13/R14).
+// drift); run provenance must use it.
 func (r *AssumptionProfileRepo) GetWithHash(
 	ctx context.Context, id string, version int,
 ) (assumptions.Profile, string, error) {

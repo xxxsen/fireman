@@ -7,7 +7,7 @@ import (
 	"github.com/fireman/fireman/internal/testutil"
 )
 
-// TestSnapshotMonthsRoundTripAndCascade covers td/061 §4.1.6: the frozen monthly
+// TestSnapshotMonthsRoundTripAndCascade verifies that the frozen monthly
 // log-return series is persisted with the snapshot, read back in order, and
 // removed by ON DELETE CASCADE when the snapshot is deleted.
 func TestSnapshotMonthsRoundTripAndCascade(t *testing.T) {

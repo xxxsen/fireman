@@ -209,7 +209,7 @@ export function retryFetch(id: string): Promise<ImportAsyncResult> {
 }
 
 export function refreshInstrument(id: string): Promise<Instrument> {
-  // Manual library refresh is always an immediate full refresh (td/053 §3). The
+  // Manual library refresh is always an immediate full refresh. The
   // legacy `force` field is still sent for backend compatibility.
   return apiPost(
     `/api/v1/instruments/${id}/refresh`,

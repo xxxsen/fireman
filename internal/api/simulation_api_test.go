@@ -242,7 +242,7 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 	t.Fatalf("model_warnings missing one-year asset warning: %v", rawWarnings)
 }
 
-// TestScenarioComparisonEndpoint covers td/061 §3.6 / §5.4.6: the comparison
+// TestScenarioComparisonEndpoint verifies that the comparison
 // runs the same frozen plan input under conservative/baseline/optimistic with one
 // shared seed, so the forward return and headline P50 must increase strictly from
 // conservative to optimistic and real wealth must stay below nominal.
@@ -287,7 +287,7 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 	}
 }
 
-// TestReturnOverrideEndpoint covers td/061 §4.1.5: an asset-level override is
+// TestReturnOverrideEndpoint verifies that an asset-level override is
 // validated, persisted, and applied to the next run's frozen forward return
 // (source = plan_override), and only held instruments may be overridden.
 func TestReturnOverrideEndpoint(t *testing.T) {
@@ -506,7 +506,7 @@ func TestSimulationJobFlow(t *testing.T) {
 
 // assertPathDetailSnakeCaseContract guards the path detail API contract: the
 // frontend reads snake_case fields, so MonthRecord/YearRecord must serialize
-// with snake_case JSON tags (regression for td/051 finding #1).
+// with snake_case JSON tags.
 func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
 	t.Helper()
 	env := decodeEnvelope(t, body)
@@ -528,7 +528,7 @@ func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
 		}
 	}
 
-	// td/056 §3.1: monthly rows must be real (not fake zero spacers). For a path
+	// Monthly rows must be real (not fake zero spacers). For a path
 	// that runs the full horizon, monthly length equals 12×yearly and the
 	// first/last month_offset are parseable, increasing month indices.
 	mLast := monthly[len(monthly)-1].(map[string]any)
@@ -560,7 +560,7 @@ func assertPathDetailSnakeCaseContract(t *testing.T, body []byte) {
 		}
 	}
 
-	// td/056 §3: path detail must carry frozen-snapshot asset labels so the UI
+	// Path detail must carry frozen-snapshot asset labels so the UI
 	// renders instrument names instead of internal holding IDs in weight rows.
 	labels, ok := detail["asset_labels"].(map[string]any)
 	if !ok || len(labels) == 0 {

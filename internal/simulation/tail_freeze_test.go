@@ -4,7 +4,7 @@ import "testing"
 
 // TestEffectiveDfPrefersFrozenProfileValue verifies the sampler reads the
 // profile-frozen df for forward runs and falls back to the legacy plan parameter
-// only when no frozen value is present (td/063 R3).
+// only when no frozen value is present.
 func TestEffectiveDfPrefersFrozenProfileValue(t *testing.T) {
 	in := &InputSnapshot{Parameters: SnapshotParameters{StudentTDf: 7}}
 	if got := in.EffectiveDf(); got != 7 {
@@ -33,7 +33,7 @@ func TestTailTruncationBoundsPreferFrozenValues(t *testing.T) {
 
 // TestFrozenTruncationActuallyClampsSampling verifies a tighter frozen band
 // changes the truncation a run produces, proving the sampler reads frozen values
-// rather than the package constants (td/063 R3 acceptance #3).
+// rather than the package constants.
 func TestFrozenTruncationActuallyClampsSampling(t *testing.T) {
 	p := ParamsFromAnnual(0.08, 0.60) // high vol so tails are hit
 	tight := TailTruncation{Floor: -0.05, Ceil: 0.05}

@@ -60,8 +60,7 @@ export default function AssumptionsPage() {
     void qc.invalidateQueries({ queryKey: ["assumption-profile"] });
   };
 
-  // Copy a (system or user) profile into a fresh editable user draft. Per td/063
-  // R3 this does not save immediately; it opens the editor so the user can edit,
+  // Copy a (system or user) profile into a fresh editable user draft. This does not save immediately; it opens the editor so the user can edit,
   // pre-validate and then save as a new draft version.
   const startCopy = (profile: AssumptionProfile) => {
     const draft: AssumptionProfile = {

@@ -41,7 +41,7 @@ type PlanParameters struct {
 	SimulationRuns           int     `json:"simulation_runs"`
 	StudentTDf               int     `json:"student_t_df"`
 	Seed                     *int64  `json:"seed,omitempty"`
-	// td/061 return-assumption selection. These reference a global profile and
+	// Return-assumption selection. These reference a global profile and
 	// scenario; they never duplicate the profile's numeric values.
 	ReturnAssumptionMode        string `json:"return_assumption_mode"`
 	AssumptionSelectionMode     string `json:"assumption_selection_mode"`

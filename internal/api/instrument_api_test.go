@@ -338,7 +338,7 @@ func patchClassification(
 	return resp
 }
 
-// TestUpdateInstrumentClassificationAPI covers td/053 §2.1: valid edit, optimistic
+// TestUpdateInstrumentClassificationAPI covers classification editing: valid edit, optimistic
 // lock conflict, enum rejection and system-asset protection.
 func TestUpdateInstrumentClassificationAPI(t *testing.T) {
 	db := testutil.OpenTestDB(t)
@@ -388,7 +388,7 @@ func TestUpdateInstrumentClassificationAPI(t *testing.T) {
 	assertErrorCode(t, readBody(t, resp), "instrument_not_editable")
 }
 
-// TestUpdateInstrumentClassificationRejectedDuringFetch covers td/054 finding #2:
+// TestUpdateInstrumentClassificationRejectedDuringFetch verifies that
 // a pending_fetch asset cannot have its classification edited, since the in-flight
 // fetch would later overwrite it with the import-time payload.
 func TestUpdateInstrumentClassificationRejectedDuringFetch(t *testing.T) {

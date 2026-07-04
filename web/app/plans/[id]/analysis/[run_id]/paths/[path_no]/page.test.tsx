@@ -74,17 +74,17 @@ describe("PathDetailPage", () => {
     expect(screen.getByText(/共 20 行/)).toBeInTheDocument();
     expect(screen.getByText("投资损益")).toBeInTheDocument();
     expect(screen.getByText("年内最大回撤")).toBeInTheDocument();
-    // td/060 §2.3: 年末收益率 added next to the retained 年末回撤 column.
+    // 年末收益率 added next to the retained 年末回撤 column.
     expect(screen.getByRole("columnheader", { name: "年末收益率" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /年末回撤/ })).toBeInTheDocument();
     expect(screen.getAllByText("5.12%").length).toBeGreaterThan(0);
-    // td/060 §2.2: weights collapsed under 年末配置 / per-row 查看 controls.
+    // Weights collapsed under 年末配置 / per-row 查看 controls.
     expect(screen.getByRole("columnheader", { name: "年末配置" })).toBeInTheDocument();
     expect(screen.queryByText("年末权重")).toBeNull();
     expect(screen.getAllByRole("button", { name: /查看 \d+ 年末资产配置/ })).toHaveLength(20);
   });
 
-  it("toggles wealth columns between nominal and real purchasing power (td/061 §5.5)", async () => {
+  it("toggles wealth columns between nominal and real purchasing power", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -117,7 +117,7 @@ describe("PathDetailPage", () => {
     expect(screen.getAllByText("¥45.00w").length).toBeGreaterThan(0);
   });
 
-  it("renders first/last monthly rows and all money in ¥xx.xxw format (td/056 §2.2/§3.1)", async () => {
+  it("renders first/last monthly rows and all money in ¥xx.xxw format", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -142,7 +142,7 @@ describe("PathDetailPage", () => {
     expect(screen.queryByText(/¥[\d,]{4,}\.\d{2}(?!w)/)).toBeNull();
   });
 
-  it("opens year-end weights via 查看 tooltip with graceful labels, never holding IDs (td/060 §2.2)", async () => {
+  it("opens year-end weights via 查看 tooltip with graceful labels, never holding IDs", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -193,7 +193,7 @@ describe("PathDetailPage", () => {
     expect(screen.queryByText(/hold_/)).toBeNull();
   });
 
-  it("year-end config control opens on keyboard focus and click (td/060 §2.2)", async () => {
+  it("year-end config control opens on keyboard focus and click", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -223,14 +223,14 @@ describe("PathDetailPage", () => {
     // Keyboard focus opens it.
     fireEvent.focus(viewBtn);
     expect(screen.getByText(/沪深300ETF（510300）: 100\.00%/)).toBeInTheDocument();
-    // td/062 R3: a click actually toggles it closed, then open again.
+    // A click actually toggles it closed, then open again.
     fireEvent.click(viewBtn);
     expect(screen.queryByText(/沪深300ETF（510300）: 100\.00%/)).toBeNull();
     fireEvent.click(viewBtn);
     expect(screen.getByText(/沪深300ETF（510300）: 100\.00%/)).toBeInTheDocument();
   });
 
-  it("renders — for a null annual_return (td/062 R3)", async () => {
+  it("renders — for a null annual_return", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -254,7 +254,7 @@ describe("PathDetailPage", () => {
     expect(within(dataRow).getAllByText("—").length).toBeGreaterThan(0);
   });
 
-  it("renders — for years without weights and creates no 查看 control (td/060 §2.2)", async () => {
+  it("renders — for years without weights and creates no 查看 control", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",
@@ -278,7 +278,7 @@ describe("PathDetailPage", () => {
     expect(within(dataRow).getByText("—")).toBeInTheDocument();
   });
 
-  it("shows empty state when monthly/yearly are empty (td/056 §3.1)", async () => {
+  it("shows empty state when monthly/yearly are empty", async () => {
     mockGetPathDetail.mockResolvedValue({
       path_no: 0,
       path_seed: "1",

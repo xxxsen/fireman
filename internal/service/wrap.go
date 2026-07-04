@@ -15,8 +15,8 @@ func wrapRepo(msg string, err error) error {
 	if errors.As(err, &ae) {
 		return err
 	}
-	// A system profile identity/content conflict is a stable, client-facing error
-	// (td/067 R13/R14): the on-disk system row no longer matches a recognized
+	// A system profile identity/content conflict is a stable, client-facing error:
+	// the on-disk system row no longer matches a recognized
 	// published identity and must be resolved by an explicit release repair, never
 	// silently overwritten.
 	if errors.Is(err, repository.ErrSystemProfileIdentityConflict) {

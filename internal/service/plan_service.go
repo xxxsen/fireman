@@ -105,7 +105,7 @@ func defaultParameters(planID string, scenarioID *string) repository.PlanParamet
 		TransactionCostRate:      0,
 		SimulationRuns:           10000,
 		StudentTDf:               repository.DefaultStudentTDf,
-		// td/061 §4.2.3 / §7.5: new plans default to the forward-looking,
+		// New plans default to the forward-looking,
 		// auditable blended_prior calibration with the baseline scenario, following
 		// the user's global profile. Existing plans were migrated to historical_cagr
 		// and keep their old numbers until the user explicitly switches.
@@ -284,7 +284,7 @@ func (s *PlanService) UpdateParameters(ctx context.Context, planID string,
 	// student_t_df is a read-only legacy field: forward runs freeze the profile df,
 	// so an API caller must not be able to change the plan value (which would churn
 	// the config hash and mark runs stale for no modeling effect). Preserve the
-	// stored value and ignore whatever the client sent (td/064 N6).
+	// stored value and ignore whatever the client sent.
 	if existing, perr := s.params.Get(ctx, planID); perr == nil {
 		req.Parameters.StudentTDf = existing.StudentTDf
 	}

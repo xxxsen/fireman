@@ -30,7 +30,7 @@ type ScenarioComparisonRow struct {
 }
 
 // ScenarioComparisonView compares the same frozen plan input under the three
-// global scenarios with one shared seed (td/061 §3.6 / §5.4.6). Because only the
+// global scenarios with one shared seed. Because only the
 // scenario differs, the rows isolate the effect of the return/volatility shift.
 type ScenarioComparisonView struct {
 	PlanID         string                  `json:"plan_id"`

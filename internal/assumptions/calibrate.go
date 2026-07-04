@@ -6,7 +6,7 @@ import (
 	"math"
 )
 
-// Return assumption sources (td/061 §3.1).
+// Return assumption sources.
 const (
 	SourceBlendedPrior   = "blended_prior"
 	SourceCustom         = "custom"
@@ -76,7 +76,7 @@ func (p *Profile) LookupFXPrior(from, base string) (FXPrior, bool) {
 }
 
 // CalibrateForwardReturn derives the forward geometric return, monthly log drift
-// and reviewed volatility for one asset (td/061 §3.3). It never silently falls
+// and reviewed volatility for one asset. It never silently falls
 // back to the raw historical CAGR for a blended_prior asset: a missing prior is
 // a hard error so the caller blocks the simulation and routes the user to add a
 // mapping in the global assumption center.
@@ -206,7 +206,7 @@ func (p *Profile) CalibrateFX(in FXCalibrationInput) (CalibrationResult, error) 
 }
 
 // applyBlended performs the log-space shrinkage of historical CAGR toward the
-// long-run prior, plus the scenario log shift (td/061 §3.3):
+// long-run prior, plus the scenario log shift:
 //
 //	n      = min(complete_year_count, prior_strength_years)
 //	w      = n / (n + prior_strength_years)
@@ -233,7 +233,7 @@ func (p *Profile) applyBlended(res *CalibrationResult, in CalibrationInput, prio
 }
 
 // applyVolatility clips the historical volatility into the reviewed band and
-// applies the scenario multiplier (td/061 §3.3). Clipping and the scenario
+// applies the scenario multiplier. Clipping and the scenario
 // multiplier only apply to blended_prior: the custom and historical_cagr
 // (legacy-compat) sources keep the raw historical volatility so old plans and
 // explicit user assumptions reproduce their prior behavior exactly.

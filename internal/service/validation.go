@@ -64,7 +64,7 @@ const (
 // errBaseCurrencyUnsupported rejects any plan base currency the published system
 // profile does not cover. The system profile's return/FX/cash priors and the
 // RequiredGlobalCoverage gate are CNY-only, so a non-CNY plan would save but then
-// fail to simulate for a missing currency mapping (td/065 R9). Supporting another
+// fail to simulate for a missing currency mapping. Supporting another
 // base currency requires first publishing a system profile that fully covers it.
 var errBaseCurrencyUnsupported = errors.New(
 	"base_currency must be " + assumptions.BaseCoverageCurrency +
@@ -100,8 +100,8 @@ func validateParameters(p repository.PlanParameters) error {
 	return validateParameterAdvanced(p)
 }
 
-// validateAssumptionSelection enforces the td/061 return-assumption selection
-// enums (td/063 R0). It is tolerant of empty values (those are normalised to the
+// validateAssumptionSelection enforces the return-assumption selection
+// enums. It is tolerant of empty values (those are normalised to the
 // per-context default before persistence) but rejects any non-empty value outside
 // the allowed set, an incomplete pin, or an unparseable custom map. The pin's
 // active status is checked separately because it requires a database lookup
@@ -137,7 +137,7 @@ func validateAssumptionSelection(p repository.PlanParameters) error {
 }
 
 // validatePinnedProfileActive enforces that a pinned profile selection references
-// an existing, active profile version (td/063 R0/N2). Plans pinning a
+// an existing, active profile version. Plans pinning a
 // draft/superseded version are rejected at create/update/wizard time; already
 // frozen runs are unaffected because they snapshot the resolved profile.
 func validatePinnedProfileActive(
@@ -163,7 +163,7 @@ func validatePinnedProfileActive(
 // the advanced FIRE parameters (inflation, withdrawal, taxation) exposed by the
 // creation wizard and parameters page. It is the single authority shared by plan
 // creation, wizard creation, parameter updates and simulation readiness, so a
-// plan can never be created that later fails to simulate (td/062 R2).
+// plan can never be created that later fails to simulate.
 func validateParameterAdvanced(p repository.PlanParameters) error {
 	if err := validateInflationParams(p); err != nil {
 		return err
@@ -198,7 +198,7 @@ func validateWithdrawalParams(p repository.PlanParameters) error {
 		return errWithdrawalCeilingRange
 	}
 	// Guardrail must keep a usable band: a floor at or above the ceiling leaves no
-	// room to flex spending and is an invalid plan (td/062 R2 / td/063 R5).
+	// room to flex spending and is an invalid plan.
 	if p.WithdrawalFloorRatio >= p.WithdrawalCeilingRatio {
 		return errWithdrawalFloorCeiling
 	}

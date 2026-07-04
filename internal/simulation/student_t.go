@@ -11,13 +11,13 @@ const (
 
 // TailTruncation bounds a single simulated monthly simple return. It is frozen
 // per run from the active profile (3.0.0) or from the legacy constants (2.x), so
-// the truncation is auditable and a plan can no longer change it (td/063 R3).
+// the truncation is auditable and a plan can no longer change it.
 type TailTruncation struct {
 	Floor float64
 	Ceil  float64
 }
 
-// LegacyTailTruncation is the pre-td/063 hard-coded band kept for 2.x replay and
+// LegacyTailTruncation is the legacy hard-coded band kept for 2.x replay and
 // for any snapshot that did not freeze profile bounds.
 func LegacyTailTruncation() TailTruncation {
 	return TailTruncation{Floor: ReturnFloor, Ceil: ReturnCeil}
@@ -54,7 +54,7 @@ func ParamsFromAnnual(annualGeometricReturn, annualVolatility float64) AssetRetu
 }
 
 // SampleStudentT draws one monthly simple return from an independent Student-t
-// factor and truncates it to the frozen tail band (td/063 R3).
+// factor and truncates it to the frozen tail band.
 func SampleStudentT(rng *RNG, p AssetReturnParams, df int, trunc TailTruncation) (float64, bool) {
 	if p.MonthlySigma == 0 {
 		return math.Exp(p.MonthlyMu) - 1, false

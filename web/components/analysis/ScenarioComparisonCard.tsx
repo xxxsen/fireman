@@ -27,7 +27,7 @@ function deltaLabel(value: number, baseline: number, isBaseline: boolean): strin
 }
 
 /**
- * td/061 §3.6 / §5.4.6: on-demand comparison of the same frozen plan input under
+ * On-demand comparison of the same frozen plan input under
  * the three global scenarios with one shared seed. Only the scenario differs, so
  * the rows isolate the effect of the return/volatility shift; the deltas are
  * measured against the baseline row.
