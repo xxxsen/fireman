@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import RebalancePage from "./page";
@@ -83,6 +83,18 @@ const createRebalanceExecution = vi.hoisted(() =>
   ),
 );
 
+const getActiveRebalanceDraft = vi.hoisted(() =>
+  vi.fn((): Promise<unknown> => Promise.resolve(null)),
+);
+const createRebalanceDraft = vi.hoisted(() =>
+  vi.fn(() =>
+    Promise.resolve({
+      draft: { id: "rbd_1", created_at: "2026-07-04T00:00:00Z" },
+      lines: [],
+    }),
+  ),
+);
+
 vi.mock("@/lib/api/holdings", () => ({
   getTargets: () =>
     Promise.resolve({
@@ -101,6 +113,11 @@ vi.mock("@/lib/api/rebalance-executions", () => ({
   createRebalanceExecution: (...args: unknown[]) => createRebalanceExecution(...args),
 }));
 
+vi.mock("@/lib/api/rebalance-drafts", () => ({
+  getActiveRebalanceDraft: (...args: unknown[]) => getActiveRebalanceDraft(...args),
+  createRebalanceDraft: (...args: unknown[]) => createRebalanceDraft(...args),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -116,6 +133,8 @@ describe("RebalancePage (调仓工作台)", () => {
   beforeEach(() => {
     mockSearchParams.set(new URLSearchParams());
     getActiveRebalanceExecution.mockResolvedValue(null);
+    getActiveRebalanceDraft.mockReset();
+    getActiveRebalanceDraft.mockResolvedValue(null);
     getRebalance.mockImplementation(() =>
       Promise.resolve({
         mode: "full",
@@ -142,6 +161,58 @@ describe("RebalancePage (调仓工作台)", () => {
       "/plans/plan_1/asset-refresh",
     );
     expect(screen.getByTestId("start-rebalance-execution")).toBeInTheDocument();
+    expect(screen.getByTestId("create-rebalance-plan")).toBeInTheDocument();
+  });
+
+  it("shows continue button when a draft is active", async () => {
+    getActiveRebalanceDraft.mockResolvedValue({
+      draft: { id: "rbd_active", created_at: "2026-07-01T00:00:00Z" },
+      lines: [],
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("continue-rebalance-plan")).toHaveAttribute(
+      "href",
+      "/plans/plan_1/rebalance/plan/rbd_active",
+    );
+    expect(screen.getByTestId("draft-in-progress-hint")).toBeInTheDocument();
+    expect(screen.queryByTestId("create-rebalance-plan")).not.toBeInTheDocument();
+  });
+
+  it("shows error state without action entries when active draft check fails, and retries", async () => {
+    getActiveRebalanceDraft.mockRejectedValue(new Error("draft check down"));
+
+    renderPage();
+
+    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    expect(screen.queryByTestId("create-rebalance-plan")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("continue-rebalance-plan")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("start-rebalance-execution")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("asset-refresh-primary")).not.toBeInTheDocument();
+
+    const callsBeforeRetry = getActiveRebalanceDraft.mock.calls.length;
+    fireEvent.click(screen.getByTestId("error-state-retry"));
+    expect(getActiveRebalanceDraft.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+  });
+
+  it("keeps page skeleton until active draft check resolves", async () => {
+    let resolveDraft: (v: unknown) => void = () => {};
+    getActiveRebalanceDraft.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDraft = resolve;
+        }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId("page-skeleton")).toBeInTheDocument();
+    expect(screen.queryByTestId("create-rebalance-plan")).not.toBeInTheDocument();
+
+    resolveDraft(null);
+    expect(await screen.findByTestId("create-rebalance-plan")).toBeInTheDocument();
+    expect(screen.queryByTestId("page-skeleton")).not.toBeInTheDocument();
   });
 
   it("shows error state (not open refresh) when active execution check fails", async () => {

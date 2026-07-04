@@ -110,7 +110,8 @@ export default function RebalancePage() {
 
   if (
     ((targets.isError || rebalance.isError) && (!targets.data || !rebalance.data)) ||
-    (activeExecution.isError && active == null)
+    (activeExecution.isError && active == null) ||
+    (activeDraft.isError && draft == null)
   ) {
     return (
       <ErrorState
@@ -119,11 +120,12 @@ export default function RebalancePage() {
           if (targets.isError) void targets.refetch();
           if (rebalance.isError) void rebalance.refetch();
           if (activeExecution.isError) void activeExecution.refetch();
+          if (activeDraft.isError) void activeDraft.refetch();
         }}
         backHref={`/plans/${planId}/overview`}
         backLabel="返回总览"
         technicalDetail={queryErrorMessage(
-          targets.error ?? rebalance.error ?? activeExecution.error,
+          targets.error ?? rebalance.error ?? activeExecution.error ?? activeDraft.error,
         )}
       />
     );
@@ -133,6 +135,7 @@ export default function RebalancePage() {
     targets.isLoading ||
     rebalance.isLoading ||
     activeExecution.isLoading ||
+    activeDraft.isLoading ||
     !targets.data ||
     !rebalance.data
   ) {
