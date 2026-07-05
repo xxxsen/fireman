@@ -416,6 +416,22 @@ describe("ParametersPage strategy enums", () => {
     expect(updatePlanSettings).not.toHaveBeenCalled();
   });
 
+  it("blocks save when the plan name is cleared (backend would silently ignore it)", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    const nameInput = await screen.findByTestId("plan-name-input");
+    fireEvent.change(nameInput, { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText("计划名称不能为空。")).toBeInTheDocument();
+    expect(updatePlanSettings).not.toHaveBeenCalled();
+  });
+
   it("renders the plan baseline help inline with its label", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(

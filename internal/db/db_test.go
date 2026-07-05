@@ -266,8 +266,9 @@ func testMigrate0004To0005Deduplicates(t *testing.T, createdAtFirst, createdAtSe
 	}
 }
 
-// td/096-E: 0024 must drop the retired rebalance draft tables even when they
-// still hold historical draft data, without touching unrelated tables.
+// Migration 0024 retires the rebalance draft feature: it must drop the draft
+// tables even when they still hold historical draft data, without touching
+// unrelated tables.
 func TestMigrate_0024_DropsRebalanceDraftTablesWithData(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "fireman.db")

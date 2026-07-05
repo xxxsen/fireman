@@ -17,6 +17,13 @@ type WithdrawalPlanner struct {
 	// adjustments compound on it, so consecutive ±10% cuts/raises accumulate
 	// across years instead of resetting to the inflation baseline.
 	lastAnnualReal float64
+	// LegacyAnnualReset selects the guardrail semantics frozen into snapshots
+	// created before the compounding fix (engine versions 2.0.0 / 3.0.0):
+	// every anniversary resets the proposal to the inflation baseline instead
+	// of compounding on last year's spending. It must be set from the input
+	// snapshot's engine version so stored runs replay with the exact semantics
+	// their persisted summaries were computed with.
+	LegacyAnnualReset bool
 }
 
 func NewWithdrawalPlanner(wType string, annualSpending int64, rate, floor, ceiling float64) WithdrawalPlanner {
@@ -44,6 +51,9 @@ func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthSta
 	case "fixed_portfolio":
 		return int64(math.Round(float64(monthStartWealth) * w.WithdrawalRate / 12))
 	case "guardrail":
+		if w.LegacyAnnualReset {
+			return w.legacyAnnualResetGuardrail(monthStartWealth, inflCumulative, isRetirementAnniversary)
+		}
 		if w.ProposedAnnual == 0 { // first retirement month
 			w.ProposedAnnual = float64(w.AnnualSpending) * inflCumulative
 			w.lastAnnualReal = float64(w.AnnualSpending)
@@ -71,6 +81,42 @@ func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthSta
 	default: // fixed_real
 		return int64(math.Round(float64(w.AnnualSpending) * inflCumulative / 12))
 	}
+}
+
+// legacyAnnualResetGuardrail is the guardrail behavior shipped in engine
+// versions 2.0.0 and 3.0.0, kept verbatim so snapshots frozen at those
+// versions replay bit-for-bit: each anniversary resets the proposal to the
+// inflation-adjusted baseline, then applies a single ±10% adjustment and the
+// floor/ceiling clamp, so cuts/raises never accumulate across years. Serves
+// replay only — never wire it up for newly created snapshots.
+func (w *WithdrawalPlanner) legacyAnnualResetGuardrail(
+	monthStartWealth int64, inflCumulative float64, isRetirementAnniversary bool,
+) int64 {
+	inflBase := float64(w.AnnualSpending) * inflCumulative
+	if isRetirementAnniversary || w.ProposedAnnual == 0 {
+		w.ProposedAnnual = inflBase
+	}
+	if isRetirementAnniversary && w.WealthAtRetire > 0 {
+		yearStartWealth := float64(monthStartWealth)
+		if yearStartWealth > 0 {
+			currentRate := w.ProposedAnnual / yearStartWealth
+			switch {
+			case currentRate > 1.2*w.InitialRate:
+				w.ProposedAnnual *= 0.90
+			case currentRate < 0.8*w.InitialRate:
+				w.ProposedAnnual *= 1.10
+			}
+		}
+		floor := inflBase * w.FloorRatio
+		ceil := inflBase * w.CeilingRatio
+		if w.ProposedAnnual < floor {
+			w.ProposedAnnual = floor
+		}
+		if w.ProposedAnnual > ceil {
+			w.ProposedAnnual = ceil
+		}
+	}
+	return int64(math.Round(w.ProposedAnnual / 12))
 }
 
 // GrossWithdrawal applies the effective withdrawal-tax approximation.

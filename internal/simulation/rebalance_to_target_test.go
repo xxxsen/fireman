@@ -105,7 +105,7 @@ func TestRebalanceToTargetMatchesLegacyLoop(t *testing.T) {
 	}
 }
 
-// Acceptance properties from td/096 D4: cost is non-negative, the post-cost
+// Acceptance properties of the closed-form rebalance: cost is non-negative, the post-cost
 // total equals the pre-cost total minus cost (within half a cent), and a zero
 // rate rebalances exactly onto total*weight with zero cost.
 func TestRebalanceToTargetProperties(t *testing.T) {

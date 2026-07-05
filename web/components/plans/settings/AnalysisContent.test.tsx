@@ -593,6 +593,35 @@ describe("AnalysisPage zero success", () => {
     expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
   });
 
+  it("does not re-adopt an older failed run when the newest run already succeeded", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        // Newest first (created_at DESC): a completed run with a summary.
+        { ...defaultSimulations.simulations[0] },
+        // Older run that failed before persisting a summary: it must stay
+        // settled instead of resurfacing its failure on every page visit.
+        {
+          ...defaultSimulations.simulations[0],
+          id: "run_old_failed",
+          job_id: "job_old_failed",
+          summary_json: {},
+          created_at: -1000,
+        },
+      ],
+    });
+
+    renderAnalysis();
+    await screen.findAllByText(/成功率 0%/);
+
+    expect(useJobStatusMock).not.toHaveBeenCalledWith(
+      "job_old_failed",
+      expect.anything(),
+    );
+    expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
+
   it("re-attaches running stress and sensitivity jobs from persisted lists", async () => {
     const baseView = {
       plan_id: "plan_1",

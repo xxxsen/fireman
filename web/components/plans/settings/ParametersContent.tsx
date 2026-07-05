@@ -800,6 +800,12 @@ export function ParametersContent({
         saving={saveMut.isPending}
         error={saveError}
         onSave={() => {
+          // The backend silently ignores an empty plan name (patch semantics),
+          // so a cleared name would "save" without effect; reject it up front.
+          if (planName.trim() === "") {
+            setSaveError("计划名称不能为空。");
+            return;
+          }
           const ageCheck = validateAges({
             currentAge: params.current_age,
             retirementAge: params.retirement_age,

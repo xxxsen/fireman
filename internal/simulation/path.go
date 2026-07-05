@@ -140,6 +140,10 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 	infl := NewInflationState(p.InflationMode, p.FixedInflationRate, p.InflationMu, p.InflationPhi, p.InflationSigma, rng)
 	withdraw := NewWithdrawalPlanner(p.WithdrawalType, p.AnnualSpendingMinor, p.WithdrawalRate, p.WithdrawalFloorRatio,
 		p.WithdrawalCeilingRatio)
+	// Guardrail semantics are frozen per snapshot: replays of runs created
+	// before the compounding fix keep their original annual-reset behavior so
+	// regenerated paths stay consistent with the stored summary metrics.
+	withdraw.LegacyAnnualReset = GuardrailUsesLegacyAnnualReset(in.EngineVersion)
 
 	var detail *PathDetail
 	if opts.CollectDetail {

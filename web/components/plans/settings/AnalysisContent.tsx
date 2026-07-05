@@ -492,16 +492,19 @@ export function AnalysisContent() {
         next[kind] = jobId;
         changed = true;
       };
-      // A simulation run persists its summary only on success, so a run with
-      // a job_id and no numeric success_probability is still pending (or
-      // failed — attaching then surfaces the failure reason exactly once).
+      // A simulation run persists its summary only on success, so the newest
+      // run having a job_id but no numeric success_probability means it is
+      // still pending (or failed — attaching then surfaces the failure reason
+      // once). Only the newest run is considered: creating a new run
+      // supersedes older jobs, so an older run without a summary is a settled
+      // failure whose banner must not resurface on every page visit.
+      const newestSim = simsData?.simulations?.[0];
       adopt(
         "sim",
-        (simsData?.simulations ?? []).find(
-          (run) =>
-            run.job_id &&
-            typeof run.summary_json?.success_probability !== "number",
-        )?.job_id,
+        newestSim?.job_id &&
+          typeof newestSim.summary_json?.success_probability !== "number"
+          ? newestSim.job_id
+          : undefined,
       );
       adopt(
         "stress",
