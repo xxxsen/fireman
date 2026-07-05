@@ -122,7 +122,7 @@ function makeDetailWithHistory(): MarketAssetDetail {
   };
 }
 
-describe("MarketAssetDetailPage history range shortcuts (td/093)", () => {
+describe("MarketAssetDetailPage history range shortcuts", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
     useWorkerTaskPollingMock.mockReset();

@@ -1,7 +1,7 @@
 import type { MarketAssetPoint } from "@/lib/api/market-assets";
 
 /**
- * History range shortcuts for the asset detail chart (td/093). Filtering is
+ * History range shortcuts for the asset detail chart. Filtering is
  * frontend-only over the already-loaded points; the range end is the last
  * history point's date (not today) so a stale series still shows a full
  * window.

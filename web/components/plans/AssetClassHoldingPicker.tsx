@@ -115,7 +115,7 @@ export interface AssetClassHoldingPickerProps {
   /**
    * Every asset_key already selected anywhere in the plan (all asset
    * classes/regions). Candidates in this set are hidden so one market asset
-   * can only be owned by a single class+region (td/092). Falls back to this
+   * can only be owned by a single class+region. Falls back to this
    * picker's own selection when omitted.
    */
   selectedAssetKeys?: Set<string>;

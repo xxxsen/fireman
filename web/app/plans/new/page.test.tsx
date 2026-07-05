@@ -249,7 +249,7 @@ describe("NewPlanWizardPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps one plan-wide owner per asset_key across class pickers (td/092)", async () => {
+  it("keeps one plan-wide owner per asset_key across class pickers", async () => {
     const shared = makeDirectoryAsset("159007", "深红利ETF");
     searchPool = [shared, makeDirectoryAsset("B1", "测试债券基金")];
     const consoleError = vi.spyOn(console, "error");

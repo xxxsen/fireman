@@ -79,7 +79,7 @@ func wizardHoldingsGap(params repository.PlanParameters, req PlanWizardRequest) 
 // validateWizardAssets checks every wizard holding against the market asset
 // directory: existence, active status and user-chosen classification, plus
 // the plan-level asset_key uniqueness rule — one market asset may only be
-// owned by a single asset_class/region within a plan (td/092).
+// owned by a single asset_class/region within a plan.
 func (s *PlanService) validateWizardAssets(
 	ctx context.Context,
 	holdings []WizardHoldingItem,
@@ -168,7 +168,7 @@ func buildWizardHoldings(
 	}
 	if req.ApplyUnallocatedToCash && gap > 100 {
 		// Merge into an existing base-currency cash row so the plan-level
-		// asset_key uniqueness holds (td/092): validateWizardAssets already
+		// asset_key uniqueness holds: validateWizardAssets already
 		// guarantees at most one row per asset_key, so matching by asset_key
 		// alone can never merge into the wrong row.
 		merged := false

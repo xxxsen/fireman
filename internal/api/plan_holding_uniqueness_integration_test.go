@@ -1,6 +1,6 @@
 //go:build integration
 
-// td/092: one market asset (asset_key) may only be owned by a single
+// One market asset (asset_key) may only be owned by a single
 // asset_class/region within a plan. These tests bypass the frontend and
 // verify the backend rejects duplicates on both write paths.
 package api

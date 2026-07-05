@@ -156,7 +156,7 @@ export function addInstrumentToGroup(
 }
 
 /**
- * Plan-level defence for the "one asset_key per plan" rule (td/092): keeps
+ * Plan-level defence for the "one asset_key per plan" rule: keeps
  * the first selection of each asset_key and drops later duplicates, whatever
  * their asset_class/region. UI candidate filtering should prevent duplicates
  * up front; this guards merges against races and future refactors.

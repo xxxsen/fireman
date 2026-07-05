@@ -374,7 +374,7 @@ export default function NewPlanWizardPage() {
   );
 
   // Plan-wide selected asset_keys shared by every picker: once an asset is
-  // owned by any class/region it stops being a candidate everywhere (td/092).
+  // owned by any class/region it stops being a candidate everywhere.
   const selectedAssetKeys = useMemo(
     () => new Set(selectedInstruments.map((s) => s.inst.id)),
     [selectedInstruments],
@@ -748,7 +748,7 @@ export default function NewPlanWizardPage() {
                       );
                       setRemovedByTargets([]);
                       // Earlier owners win: an asset already held by another
-                      // class/region drops the incoming duplicate (td/092).
+                      // class/region drops the incoming duplicate.
                       setSelectedInstruments(
                         dedupeWizardSelectionsByAssetKey([...other, ...next]),
                       );

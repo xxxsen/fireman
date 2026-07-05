@@ -9,7 +9,7 @@ import (
 	"github.com/fireman/fireman/internal/service"
 )
 
-// td/086: the history sync payload must carry the directory identity
+// The history sync payload must carry the directory identity
 // (region_code/exchange/symbol/instrument_kind) read from market_assets, and
 // a CN on-exchange asset without any exchange identity must fail with a
 // definite error instead of creating a task that would guess the exchange.

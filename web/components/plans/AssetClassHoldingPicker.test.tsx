@@ -128,7 +128,7 @@ describe("AssetClassHoldingPicker", () => {
     expect(list).not.toHaveTextContent("目录基金1");
   });
 
-  it("hides assets selected anywhere in the plan via selectedAssetKeys (td/092)", async () => {
+  it("hides assets selected anywhere in the plan via selectedAssetKeys", async () => {
     pool = Array.from({ length: 3 }, (_, i) => makeMarketAsset(i + 1));
     // Asset 2 is owned by another picker (e.g. the bond tab); this picker's
     // own selection is empty but the plan-wide set still blocks it.

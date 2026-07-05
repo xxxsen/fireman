@@ -153,8 +153,8 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 	pendingSnaps := make([]pendingHoldingSnap, 0)
 	built := make([]repository.PlanHolding, 0, len(req.Holdings))
 	for _, item := range req.Holdings {
-		// Plan-level rule (td/092): one market asset may only be owned by a
-		// single asset_class/region within a plan, so asset_key alone is the
+		// Plan-level rule: one market asset may only be owned by a single
+		// asset_class/region within a plan, so asset_key alone is the
 		// uniqueness key.
 		if _, ok := seen[item.AssetKey]; ok {
 			return nil, newErr("holding_duplicate",
