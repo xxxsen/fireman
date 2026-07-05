@@ -63,7 +63,7 @@ function filterPool(params: ListParams) {
   return Promise.resolve({ assets: page, syncs: [], total: items.length });
 }
 
-function renderPicker(selected: unknown[] = []) {
+function renderPicker(selected: unknown[] = [], selectedAssetKeys?: Set<string>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onSelectedChange = vi.fn();
   render(
@@ -76,6 +76,7 @@ function renderPicker(selected: unknown[] = []) {
         totalAssetsMinor={1_000_000}
         selected={selected as never}
         onSelectedChange={onSelectedChange}
+        selectedAssetKeys={selectedAssetKeys}
       />
     </QueryClientProvider>,
   );
@@ -126,6 +127,19 @@ describe("AssetClassHoldingPicker", () => {
     const list = screen.getByTestId("wizard-library-results");
     expect(list).not.toHaveTextContent("目录基金1");
   });
+
+  it("hides assets selected anywhere in the plan via selectedAssetKeys (td/092)", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeMarketAsset(i + 1));
+    // Asset 2 is owned by another picker (e.g. the bond tab); this picker's
+    // own selection is empty but the plan-wide set still blocks it.
+    renderPicker([], new Set([makeMarketAsset(2).asset_key]));
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    expect(await screen.findByRole("button", { name: /目录基金1/ })).toBeInTheDocument();
+    const list = screen.getByTestId("wizard-library-results");
+    expect(list).not.toHaveTextContent("目录基金2");
+    expect(list).toHaveTextContent("目录基金3");
+  });
+
 
   it("searches by symbol_q for code-like queries after the debounce", async () => {
     renderPicker();

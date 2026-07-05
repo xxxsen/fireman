@@ -78,7 +78,8 @@ func wizardHoldingsGap(params repository.PlanParameters, req PlanWizardRequest) 
 
 // validateWizardAssets checks every wizard holding against the market asset
 // directory: existence, active status and user-chosen classification, plus
-// the plan-level asset_key + asset_class + region uniqueness rule.
+// the plan-level asset_key uniqueness rule — one market asset may only be
+// owned by a single asset_class/region within a plan (td/092).
 func (s *PlanService) validateWizardAssets(
 	ctx context.Context,
 	holdings []WizardHoldingItem,
@@ -90,13 +91,12 @@ func (s *PlanService) validateWizardAssets(
 				"asset_class must be equity/bond/cash and region must be domestic/foreign",
 				map[string]any{"asset_key": item.AssetKey})
 		}
-		dupKey := item.AssetKey + "|" + item.AssetClass + "|" + item.Region
-		if _, ok := seen[dupKey]; ok {
+		if _, ok := seen[item.AssetKey]; ok {
 			return newErr("holding_duplicate",
-				"duplicate asset_key + asset_class + region within the plan",
+				"duplicate asset_key within the plan",
 				map[string]any{"asset_key": item.AssetKey})
 		}
-		seen[dupKey] = struct{}{}
+		seen[item.AssetKey] = struct{}{}
 		asset, err := s.assetRepo.GetByKey(ctx, item.AssetKey)
 		if err != nil {
 			if errors.Is(err, repository.ErrMarketAssetNotFound) {
@@ -168,12 +168,12 @@ func buildWizardHoldings(
 	}
 	if req.ApplyUnallocatedToCash && gap > 100 {
 		// Merge into an existing base-currency cash row so the plan-level
-		// asset_key+asset_class+region uniqueness holds.
+		// asset_key uniqueness holds (td/092): validateWizardAssets already
+		// guarantees at most one row per asset_key, so matching by asset_key
+		// alone can never merge into the wrong row.
 		merged := false
 		for i := range built {
-			if built[i].AssetKey == repository.SystemCashAssetKey &&
-				built[i].AssetClass == domain.AssetClassCash &&
-				built[i].Region == domain.RegionDomestic {
+			if built[i].AssetKey == repository.SystemCashAssetKey {
 				built[i].CurrentAmountMinor += gap
 				built[i].Enabled = true
 				merged = true

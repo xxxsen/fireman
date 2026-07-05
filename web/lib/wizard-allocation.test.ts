@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  addInstrumentToGroup,
   buildRegionTargetsPayload,
   buildWizardPortfolioReview,
   complementRegionWeight,
   computeExpectedAmountMinor,
+  dedupeWizardSelectionsByAssetKey,
   defaultWizardRegionTargets,
   getWizardAllocationGroups,
   isWizardRegionEnabled,
@@ -11,7 +13,7 @@ import {
   redistributeGroupWeights,
   updateInstrumentWeightInGroup,
 } from "./wizard-allocation";
-import type { WizardHoldingSelection } from "./wizard-allocation";
+import type { WizardAsset, WizardHoldingSelection } from "./wizard-allocation";
 
 const holding = (
   id: string,
@@ -71,6 +73,63 @@ describe("redistributeGroupWeights", () => {
     expect(byId2.C).toBeCloseTo(0.4);
     expect(byId2.A).toBeCloseTo(0.1);
     expect(byId2.B).toBeCloseTo(0.1);
+  });
+});
+
+describe("dedupeWizardSelectionsByAssetKey", () => {
+  it("keeps the first selection when the same asset_key appears under two asset classes", () => {
+    const first = holding("CN|cn_exchange_fund|sz|159007", "equity", "domestic");
+    const second = holding("CN|cn_exchange_fund|sz|159007", "bond", "domestic");
+    const out = dedupeWizardSelectionsByAssetKey([first, second]);
+    expect(out).toEqual([first]);
+    expect(out[0]?.inst.asset_class).toBe("equity");
+    const keys = out.map((s) => s.inst.id);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("keeps the first selection when the same asset_key appears under two regions", () => {
+    const first = holding("CN|cn_exchange_fund|sz|159007", "equity", "domestic");
+    const second = holding("CN|cn_exchange_fund|sz|159007", "equity", "foreign");
+    const out = dedupeWizardSelectionsByAssetKey([first, second]);
+    expect(out).toEqual([first]);
+    expect(out[0]?.inst.region).toBe("domestic");
+  });
+
+  it("keeps distinct asset_keys untouched in order", () => {
+    const a = holding("A", "equity", "domestic");
+    const b = holding("B", "bond", "domestic");
+    expect(dedupeWizardSelectionsByAssetKey([a, b])).toEqual([a, b]);
+  });
+});
+
+describe("addInstrumentToGroup", () => {
+  const asset = (id: string): WizardAsset => ({
+    id,
+    code: id,
+    name: id,
+    asset_class: "equity",
+    region: "domestic",
+    has_history: true,
+  });
+
+  it("adds a new asset and redistributes auto weights", () => {
+    const out = addInstrumentToGroup(
+      [{ inst: asset("A"), weight: 1, amount: 0, weightManual: false }],
+      asset("B"),
+    );
+    expect(out.map((s) => s.inst.id)).toEqual(["A", "B"]);
+    expect(out.map((s) => s.weight)).toEqual([0.5, 0.5]);
+  });
+
+  it("is a no-op for an asset_key already in the group: no growth, no reweighting", () => {
+    const items: WizardHoldingSelection[] = [
+      { inst: asset("A"), weight: 0.7, amount: 0, weightManual: true },
+      { inst: asset("B"), weight: 0.3, amount: 0, weightManual: false },
+    ];
+    const out = addInstrumentToGroup(items, asset("A"));
+    expect(out).toBe(items);
+    expect(out).toHaveLength(2);
+    expect(out.map((s) => s.weight)).toEqual([0.7, 0.3]);
   });
 });
 

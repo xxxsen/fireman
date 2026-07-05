@@ -249,6 +249,58 @@ describe("NewPlanWizardPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps one plan-wide owner per asset_key across class pickers (td/092)", async () => {
+    const shared = makeDirectoryAsset("159007", "深红利ETF");
+    searchPool = [shared, makeDirectoryAsset("B1", "测试债券基金")];
+    const consoleError = vi.spyOn(console, "error");
+
+    renderWizard();
+    await goToInstrumentStep("scn_conservative");
+
+    // 权益 owns the shared asset first.
+    const equitySearch = screen.getByLabelText("权益国内搜索");
+    fireEvent.change(equitySearch, { target: { value: "159007" } });
+    fireEvent.click(await screen.findByRole("button", { name: /深红利ETF/ }));
+
+    // 债券 candidates no longer offer the asset owned by 权益.
+    fireEvent.click(screen.getByRole("tab", { name: /债券/ }));
+    const bondSearch = screen.getByLabelText("债券国内搜索");
+    fireEvent.change(bondSearch, { target: { value: "159007" } });
+    expect(
+      await screen.findByText(/未在本地资产目录中找到匹配标的/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /深红利ETF/ })).not.toBeInTheDocument();
+
+    // Pick a distinct bond so group weights pass, then confirm.
+    fireEvent.change(bondSearch, { target: { value: "B1" } });
+    fireEvent.click(await screen.findByRole("button", { name: /测试债券基金/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByText(/已选标的：/)).toBeInTheDocument());
+
+    // The confirm table renders the shared asset exactly once and React never
+    // reports a duplicate row key.
+    const table = screen.getByRole("table", { name: "组合确认明细" });
+    expect(within(table).getAllByText("159007")).toHaveLength(1);
+    expect(
+      consoleError.mock.calls.some((args) =>
+        args.some(
+          (a) =>
+            typeof a === "string" &&
+            a.includes("Encountered two children with the same key"),
+        ),
+      ),
+    ).toBe(false);
+
+    // The created plan carries the asset_key exactly once.
+    fireEvent.click(screen.getByRole("button", { name: "创建计划" }));
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalled());
+    const req = createPlanWizard.mock.calls[0]![0] as {
+      holdings: { asset_key: string }[];
+    };
+    expect(req.holdings.filter((h) => h.asset_key === shared.asset_key)).toHaveLength(1);
+    consoleError.mockRestore();
+  });
+
   it("auto-complements region allocation when editing domestic", async () => {
     renderWizard();
     await waitFor(() =>
@@ -454,10 +506,11 @@ describe("NewPlanWizardPage", () => {
     );
   });
 
-  it("constrains holdings and confirm content and keeps a single panel border", async () => {
+  it("lets step content fill the card width and keeps a single panel border", async () => {
     renderWizard();
     await goToInstrumentStep("scn_a");
-    expect(screen.getByTestId("wizard-holdings-step")).toHaveClass("max-w-6xl");
+    // Step content must fill the card: no max-width cap on the step wrapper.
+    expect(screen.getByTestId("wizard-holdings-step").className).not.toMatch(/max-w-/);
 
     // The tab panel draws the only border; the top-level picker inside is
     // borderless so panel width and content width stay in sync.
@@ -465,12 +518,12 @@ describe("NewPlanWizardPage", () => {
     expect(panel).toHaveClass("border");
     const picker = screen.getByRole("region", { name: "权益选标" });
     expect(picker).not.toHaveClass("border");
-    expect(picker).not.toHaveClass("max-w-6xl");
+    expect(picker.className).not.toMatch(/max-w-/);
 
     await selectEquityInstrument();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     await screen.findByText(/已选标的：/);
-    expect(screen.getByTestId("wizard-confirm-step")).toHaveClass("max-w-6xl");
+    expect(screen.getByTestId("wizard-confirm-step").className).not.toMatch(/max-w-/);
   });
 
   it("shows visible labels for selected holding weight, amount and expected funds", async () => {

@@ -153,24 +153,21 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 	pendingSnaps := make([]pendingHoldingSnap, 0)
 	built := make([]repository.PlanHolding, 0, len(req.Holdings))
 	for _, item := range req.Holdings {
-		dupKey := item.AssetKey + "|" + item.AssetClass + "|" + item.Region
-		if _, ok := seen[dupKey]; ok {
+		// Plan-level rule (td/092): one market asset may only be owned by a
+		// single asset_class/region within a plan, so asset_key alone is the
+		// uniqueness key.
+		if _, ok := seen[item.AssetKey]; ok {
 			return nil, newErr("holding_duplicate",
-				"duplicate asset_key + asset_class + region within the plan",
+				"duplicate asset_key within the plan",
 				map[string]any{"asset_key": item.AssetKey})
 		}
-		seen[dupKey] = struct{}{}
+		seen[item.AssetKey] = struct{}{}
 		holding, pending, err := s.buildOnePreparedHolding(ctx, plan, item, existingSnap)
 		if err != nil {
 			return nil, err
 		}
 		if pending != nil {
 			pendingSnaps = append(pendingSnaps, *pending)
-		}
-		// Rows sharing one asset_key (different classification) share the
-		// snapshot; record it so later rows in this request reuse it.
-		if holding.SimulationSnapshotID != "" {
-			existingSnap[item.AssetKey] = holding.SimulationSnapshotID
 		}
 		built = append(built, holding)
 	}

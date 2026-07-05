@@ -144,10 +144,34 @@ export function addInstrumentToGroup(
   items: WizardHoldingSelection[],
   inst: WizardAsset,
 ): WizardHoldingSelection[] {
+  // Adding an already-present asset_key is a no-op: the list keeps its
+  // length and existing weights are not redistributed. Cross-group
+  // uniqueness is enforced by the parent via
+  // dedupeWizardSelectionsByAssetKey, not here.
+  if (items.some((s) => s.inst.id === inst.id)) return items;
   return redistributeGroupWeights([
     ...items,
     { inst, weight: 0, amount: 0, weightManual: false },
   ]);
+}
+
+/**
+ * Plan-level defence for the "one asset_key per plan" rule (td/092): keeps
+ * the first selection of each asset_key and drops later duplicates, whatever
+ * their asset_class/region. UI candidate filtering should prevent duplicates
+ * up front; this guards merges against races and future refactors.
+ */
+export function dedupeWizardSelectionsByAssetKey(
+  selected: WizardHoldingSelection[],
+): WizardHoldingSelection[] {
+  const seen = new Set<string>();
+  const out: WizardHoldingSelection[] = [];
+  for (const item of selected) {
+    if (seen.has(item.inst.id)) continue;
+    seen.add(item.inst.id);
+    out.push(item);
+  }
+  return out;
 }
 
 export function updateInstrumentWeightInGroup(

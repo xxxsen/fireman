@@ -20,6 +20,7 @@ import {
   buildRegionTargetsPayload,
   buildWizardPortfolioReview,
   complementRegionWeight,
+  dedupeWizardSelectionsByAssetKey,
   defaultWizardRegionTargets,
   formatPendingAmount,
   formatRegionTargetsSummary,
@@ -372,6 +373,13 @@ export default function NewPlanWizardPage() {
     [selectedInstruments],
   );
 
+  // Plan-wide selected asset_keys shared by every picker: once an asset is
+  // owned by any class/region it stops being a candidate everywhere (td/092).
+  const selectedAssetKeys = useMemo(
+    () => new Set(selectedInstruments.map((s) => s.inst.id)),
+    [selectedInstruments],
+  );
+
   // Validation that runs when leaving 计划目标: ages must satisfy the backend
   // rule 0 < current <= retirement < end <= 120, a scenario must be chosen,
   // region splits must sum to 100%, and incompatible already-picked instruments
@@ -456,7 +464,7 @@ export default function NewPlanWizardPage() {
         className="mt-8 w-full space-y-4 rounded-lg border border-line p-6"
       >
         {step === GOAL_STEP && (
-          <div className="max-w-6xl space-y-8">
+          <div className="space-y-8">
             <section className="space-y-5">
               <h2 className="text-sm font-semibold text-ink">基本资料</h2>
               <label className="block text-sm">
@@ -651,7 +659,7 @@ export default function NewPlanWizardPage() {
         )}
 
         {step === HOLDINGS_STEP && (
-          <div className="max-w-6xl space-y-4" data-testid="wizard-holdings-step">
+          <div className="space-y-4" data-testid="wizard-holdings-step">
             {removedByTargets.length > 0 && (
               <div
                 className="flex items-start justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning"
@@ -739,7 +747,11 @@ export default function NewPlanWizardPage() {
                         (s) => s.inst.asset_class !== assetClass,
                       );
                       setRemovedByTargets([]);
-                      setSelectedInstruments([...other, ...next]);
+                      // Earlier owners win: an asset already held by another
+                      // class/region drops the incoming duplicate (td/092).
+                      setSelectedInstruments(
+                        dedupeWizardSelectionsByAssetKey([...other, ...next]),
+                      );
                     };
 
                     const rt =
@@ -766,6 +778,7 @@ export default function NewPlanWizardPage() {
                             totalAssetsMinor={totalAssets}
                             selected={classSelected}
                             onSelectedChange={mergeSelected}
+                            selectedAssetKeys={selectedAssetKeys}
                           />
                         ) : (
                           <>
@@ -785,6 +798,7 @@ export default function NewPlanWizardPage() {
                                 );
                                 mergeSelected([...domesticNext, ...foreign]);
                               }}
+                              selectedAssetKeys={selectedAssetKeys}
                               subTitle={`国内（占${assetClassLabel(assetClass)} ${formatPercent(rt.domestic)}）`}
                               nested
                             />
@@ -801,6 +815,7 @@ export default function NewPlanWizardPage() {
                                 );
                                 mergeSelected([...domestic, ...foreignNext]);
                               }}
+                              selectedAssetKeys={selectedAssetKeys}
                               subTitle={`国外（占${assetClassLabel(assetClass)} ${formatPercent(rt.foreign)}）`}
                               nested
                             />
@@ -815,7 +830,7 @@ export default function NewPlanWizardPage() {
         )}
 
         {step === CONFIRM_STEP && (
-          <div className="max-w-6xl space-y-4" data-testid="wizard-confirm-step">
+          <div className="space-y-4" data-testid="wizard-confirm-step">
             <ul className="list-disc pl-5 text-sm text-ink">
               <li>组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}</li>
               <li>全组合目标权重：{portfolioReview?.passed ? "通过" : "未通过"}</li>

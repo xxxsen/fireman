@@ -112,6 +112,13 @@ export interface AssetClassHoldingPickerProps {
   totalAssetsMinor: number;
   selected: WizardHoldingSelection[];
   onSelectedChange: (next: WizardHoldingSelection[]) => void;
+  /**
+   * Every asset_key already selected anywhere in the plan (all asset
+   * classes/regions). Candidates in this set are hidden so one market asset
+   * can only be owned by a single class+region (td/092). Falls back to this
+   * picker's own selection when omitted.
+   */
+  selectedAssetKeys?: Set<string>;
   /** Sub-container title; omit for top-level single container. */
   subTitle?: string;
   /** When true, omit outer section border (nested under parent). */
@@ -126,6 +133,7 @@ export function AssetClassHoldingPicker({
   totalAssetsMinor,
   selected,
   onSelectedChange,
+  selectedAssetKeys,
   subTitle,
   nested = false,
 }: AssetClassHoldingPickerProps) {
@@ -137,7 +145,10 @@ export function AssetClassHoldingPicker({
   const [instrumentType, setInstrumentType] = useState("");
   const [open, setOpen] = useState(false);
 
-  const selectedKeys = useMemo(() => new Set(selected.map((s) => s.inst.id)), [selected]);
+  const localSelectedKeys = useMemo(() => new Set(selected.map((s) => s.inst.id)), [selected]);
+  // Plan-wide blocked set: an asset picked in any class/region never shows up
+  // as a candidate again anywhere.
+  const blockedAssetKeys = selectedAssetKeys ?? localSelectedKeys;
 
   const effectiveRegion = region ?? "domestic";
 
@@ -197,10 +208,10 @@ export function AssetClassHoldingPicker({
       orderCandidates(
         (listQuery.data?.pages ?? [])
           .flatMap((page) => page.assets)
-          .filter((asset) => !selectedKeys.has(asset.asset_key)),
+          .filter((asset) => !blockedAssetKeys.has(asset.asset_key)),
         symbolQ ?? "",
       ),
-    [listQuery.data, selectedKeys, symbolQ],
+    [listQuery.data, blockedAssetKeys, symbolQ],
   );
 
   // Same code under several instrument types: surface the ambiguity instead
@@ -230,12 +241,17 @@ export function AssetClassHoldingPicker({
   }, [listQuery.hasNextPage, listQuery.isFetchingNextPage, listQuery, results.length]);
 
   const addAsset = (asset: MarketAsset) => {
-    onSelectedChange(
-      addInstrumentToGroup(
-        selected,
-        marketAssetToWizardAsset(asset, assetClass, effectiveRegion),
-      ),
-    );
+    // Defence against stale candidate lists (race between pickers): never
+    // add an asset the plan already owns, or group weights would be
+    // redistributed for an item the parent merge immediately drops.
+    if (!blockedAssetKeys.has(asset.asset_key)) {
+      onSelectedChange(
+        addInstrumentToGroup(
+          selected,
+          marketAssetToWizardAsset(asset, assetClass, effectiveRegion),
+        ),
+      );
+    }
     setFilter("");
     setOpen(false);
   };
