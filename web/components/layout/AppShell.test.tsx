@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "./AppShell";
 
 const mockPathname = vi.fn(() => "/");
@@ -8,11 +8,17 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockPathname(),
 }));
 
+const mockConfirmLeave = vi.fn(() => true);
+
 vi.mock("@/lib/unsavedGuard", () => ({
-  confirmLeaveIfDirty: () => true,
+  confirmLeaveIfDirty: () => mockConfirmLeave(),
 }));
 
 describe("AppShell", () => {
+  beforeEach(() => {
+    mockConfirmLeave.mockReturnValue(true);
+  });
+
   it("highlights 计划 on home, new plan, and plan detail routes", () => {
     for (const pathname of ["/", "/plans/new", "/plans/plan_1/overview"]) {
       mockPathname.mockReturnValue(pathname);
@@ -41,7 +47,7 @@ describe("AppShell", () => {
     expect(screen.getAllByRole("link", { name: "配置模板" }).length).toBeGreaterThan(0);
   });
 
-  it("keeps the desktop sidebar sticky with its own scroll", () => {
+  it("keeps the desktop sidebar sticky with a scrollable nav area", () => {
     mockPathname.mockReturnValue("/");
     render(
       <AppShell>
@@ -52,7 +58,10 @@ describe("AppShell", () => {
     expect(aside).toHaveClass("md:sticky");
     expect(aside).toHaveClass("md:top-0");
     expect(aside).toHaveClass("md:h-screen");
-    expect(aside).toHaveClass("md:overflow-y-auto");
+    expect(aside).toHaveClass("md:flex-col");
+    // The main nav scrolls independently while the admin entry stays pinned.
+    const scrollArea = aside.querySelector(".flex-1.overflow-y-auto");
+    expect(scrollArea).not.toBeNull();
   });
 
   it("does not highlight 计划 on assets or settings", () => {
@@ -70,5 +79,58 @@ describe("AppShell", () => {
 
       unmount();
     }
+  });
+
+  it("renders the admin entry in the sidebar bottom area and the mobile nav", () => {
+    mockPathname.mockReturnValue("/");
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    const desktopEntry = screen.getByTestId("sidebar-admin-entry");
+    const desktopLink = desktopEntry.querySelector("a");
+    expect(desktopLink).toHaveAttribute("href", "/admin");
+    expect(desktopLink).not.toHaveAttribute("aria-current", "page");
+
+    const mobileEntry = screen.getByTestId("mobile-admin-entry");
+    expect(mobileEntry).toHaveAttribute("href", "/admin");
+  });
+
+  it("marks the admin entry active on /admin routes without touching 计划", () => {
+    for (const pathname of ["/admin", "/admin/worker-tasks", "/admin/data-versions"]) {
+      mockPathname.mockReturnValue(pathname);
+      const { unmount } = render(
+        <AppShell>
+          <div>content</div>
+        </AppShell>,
+      );
+
+      for (const link of screen.getAllByRole("link", { name: /管理/ })) {
+        expect(link).toHaveAttribute("aria-current", "page");
+      }
+      for (const link of screen.getAllByRole("link", { name: "计划" })) {
+        expect(link).not.toHaveAttribute("aria-current", "page");
+      }
+
+      unmount();
+    }
+  });
+
+  it("honors the unsaved-changes guard on the admin entry", () => {
+    mockPathname.mockReturnValue("/");
+    mockConfirmLeave.mockReturnValue(false);
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    const desktopLink = screen.getByTestId("sidebar-admin-entry").querySelector("a")!;
+    const clickEvent = fireEvent.click(desktopLink);
+    // preventDefault() called → fireEvent returns false.
+    expect(clickEvent).toBe(false);
+    expect(mockConfirmLeave).toHaveBeenCalled();
   });
 });

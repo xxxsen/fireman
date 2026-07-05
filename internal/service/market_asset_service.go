@@ -207,7 +207,11 @@ type MarketAssetListParams struct {
 	Offset          int
 }
 
-func (s *MarketAssetService) buildSyncView(ctx context.Context, scope string) (MarketAssetSyncView, error) {
+// BuildSyncView assembles the sync status block for one directory/FX scope:
+// last success facts from market_asset_sync_state plus the latest task read
+// live from worker_tasks. Shared by the asset listing API and the admin
+// overview so the two never drift apart.
+func (s *MarketAssetService) BuildSyncView(ctx context.Context, scope string) (MarketAssetSyncView, error) {
 	view := MarketAssetSyncView{Scope: scope}
 	st, ok, err := s.assets.GetSyncState(ctx, scope)
 	if err != nil {
@@ -259,7 +263,7 @@ func (s *MarketAssetService) ListAssets(
 	// fixed and must not react to list filters.
 	scopes := []string{ScopeCNAll, ScopeHKAll, ScopeUSAll}
 	for _, scope := range scopes {
-		view, err := s.buildSyncView(ctx, scope)
+		view, err := s.BuildSyncView(ctx, scope)
 		if err != nil {
 			return MarketAssetListResult{}, err
 		}
@@ -268,7 +272,7 @@ func (s *MarketAssetService) ListAssets(
 	if len(out.Syncs) > 0 {
 		out.Sync = &out.Syncs[0]
 	}
-	fxView, err := s.buildSyncView(ctx, ScopeFXRates)
+	fxView, err := s.BuildSyncView(ctx, ScopeFXRates)
 	if err != nil {
 		return MarketAssetListResult{}, err
 	}

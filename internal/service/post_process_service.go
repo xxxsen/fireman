@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/repository"
@@ -49,6 +50,19 @@ func retryableErr(code, message string) *postProcessError {
 	return &postProcessError{class: PostProcessRetryableError, code: code, message: message}
 }
 
+// postProcessRecordStore is the observation sink for callback records. It is
+// an interface so tests can inject failing fakes and prove that recording
+// failures never change the returned classification.
+type postProcessRecordStore interface {
+	Insert(ctx context.Context, rec repository.PostProcessRecord) error
+	DeleteBefore(ctx context.Context, cutoff int64) (int64, error)
+}
+
+// postProcessRecordRetention is how long callback records stay before the
+// per-insert cleanup removes them. Kept as a service constant so it can be
+// promoted to configuration later.
+const postProcessRecordRetention = 30 * 24 * time.Hour
+
 // PostProcessService applies pre_complete worker task results to business
 // tables. Every handler is re-entrant: the market_data_versions table gates
 // writes so repeated notifications (or lost success responses) are safe.
@@ -59,6 +73,8 @@ type PostProcessService struct {
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
 	resources  *resourcedb.DB
+	records    postProcessRecordStore
+	now        func() time.Time
 }
 
 func NewPostProcessService(
@@ -68,18 +84,31 @@ func NewPostProcessService(
 	instRepo *repository.InstrumentRepo,
 	marketRepo *repository.MarketDataRepo,
 	resources *resourcedb.DB,
+	records postProcessRecordStore,
 ) *PostProcessService {
 	return &PostProcessService{
 		sql: sqlDB, tasks: tasks, assets: assets,
 		instRepo: instRepo, marketRepo: marketRepo,
-		resources: resources,
+		resources: resources, records: records,
+		now: time.Now,
 	}
 }
 
 // Process runs the post-process pipeline for one task id and returns the
 // outcome classification. It never mutates worker_tasks.status; terminal
-// transitions belong to the sidecar.
+// transitions belong to the sidecar. Every callback is appended to
+// post_process_records for admin observability; recording failures only warn
+// and never change the classification (observation faults must not amplify
+// into business faults).
 func (s *PostProcessService) Process(ctx context.Context, taskID string) PostProcessResult {
+	start := s.now()
+	res := s.classify(ctx, taskID)
+	s.recordCallback(ctx, taskID, res, s.now().Sub(start))
+	return res
+}
+
+// classify runs the pipeline and maps errors onto the outcome classes.
+func (s *PostProcessService) classify(ctx context.Context, taskID string) PostProcessResult {
 	res, err := s.process(ctx, taskID)
 	if err == nil {
 		return res
@@ -97,6 +126,39 @@ func (s *PostProcessService) Process(ctx context.Context, taskID string) PostPro
 		Result:       PostProcessRetryableError,
 		ErrorCode:    "internal_error",
 		ErrorMessage: err.Error(),
+	}
+}
+
+// recordCallback appends one observation row and runs retention cleanup.
+// task_type / attempt_no are snapshots from the task row; a missing task
+// (task_not_found permanent branch) still gets a record — receiving an
+// invalid callback is itself an observable fact.
+func (s *PostProcessService) recordCallback(
+	ctx context.Context, taskID string, res PostProcessResult, took time.Duration,
+) {
+	if s.records == nil {
+		return
+	}
+	rec := repository.PostProcessRecord{
+		TaskID:       taskID,
+		Result:       res.Result,
+		ErrorCode:    res.ErrorCode,
+		ErrorMessage: res.ErrorMessage,
+		DurationMs:   took.Milliseconds(),
+		CreatedAt:    s.now().UnixMilli(),
+	}
+	if task, err := s.tasks.GetByID(ctx, taskID); err == nil {
+		rec.TaskType = task.Type
+		rec.AttemptNo = task.PostProcessAttempts
+	}
+	if err := s.records.Insert(ctx, rec); err != nil {
+		slog.WarnContext(ctx, "post-process callback record insert failed",
+			"task_id", taskID, "error", err)
+		return
+	}
+	cutoff := s.now().Add(-postProcessRecordRetention).UnixMilli()
+	if _, err := s.records.DeleteBefore(ctx, cutoff); err != nil {
+		slog.WarnContext(ctx, "post-process callback record cleanup failed", "error", err)
 	}
 }
 

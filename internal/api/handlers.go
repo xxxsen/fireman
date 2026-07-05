@@ -11,34 +11,40 @@ import (
 	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
+	"github.com/fireman/fireman/internal/resourcedb"
 	"github.com/fireman/fireman/internal/service"
 )
 
 // Services groups business services.
 type Services struct {
-	Plans                *service.PlanService
-	Allocation           *service.AllocationService
-	Holdings             *service.HoldingsService
-	Targets              *service.TargetService
-	Rebalance            *service.RebalanceService
-	RebalanceDrafts      *service.RebalanceDraftService
-	RebalanceExecutions  *service.RebalanceExecutionService
-	AssetRefresh         *service.AssetRefreshService
-	MarketAssets         *service.MarketAssetService
-	HoldingSnapshots     *service.HoldingSnapshotService
-	Simulations          *service.SimulationService
-	SimulationReadiness  *service.SimulationReadinessService
-	Assumptions          *service.AssumptionService
-	Stress               *service.StressService
-	Sensitivity          *service.SensitivityService
-	Jobs                 *service.JobService
-	Dashboard            *service.DashboardService
-	System               *service.SystemService
-	EventHub             *jobs.EventHub
-	Maintenance          *service.MaintenanceGate
+	Plans               *service.PlanService
+	Allocation          *service.AllocationService
+	Holdings            *service.HoldingsService
+	Targets             *service.TargetService
+	Rebalance           *service.RebalanceService
+	RebalanceDrafts     *service.RebalanceDraftService
+	RebalanceExecutions *service.RebalanceExecutionService
+	AssetRefresh        *service.AssetRefreshService
+	MarketAssets        *service.MarketAssetService
+	HoldingSnapshots    *service.HoldingSnapshotService
+	Simulations         *service.SimulationService
+	SimulationReadiness *service.SimulationReadinessService
+	Assumptions         *service.AssumptionService
+	Stress              *service.StressService
+	Sensitivity         *service.SensitivityService
+	Jobs                *service.JobService
+	Dashboard           *service.DashboardService
+	System              *service.SystemService
+	Admin               *service.AdminService
+	EventHub            *jobs.EventHub
+	Maintenance         *service.MaintenanceGate
 }
 
-func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate) Services {
+// NewServices wires the business service graph. resources may be nil (tests,
+// router fallback); the admin overview then reports zero resource storage.
+func NewServices(
+	db *sql.DB, dbPath string, maintenance *service.MaintenanceGate, resources *resourcedb.DB,
+) Services {
 	plans := repository.NewPlanRepo(db)
 	params := repository.NewParametersRepo(db)
 	alloc := repository.NewAllocationRepo(db)
@@ -81,6 +87,10 @@ func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate
 	)
 
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, marketAssetRepo, hash, snapSvc)
+	adminSvc := service.NewAdminService(
+		workerTaskRepo, jobRepo, repository.NewPostProcessRecordRepo(db),
+		marketAssetRepo, marketAssetSvc, resources, dbPath,
+	)
 	return Services{
 		Plans:               planSvc,
 		Allocation:          service.NewAllocationService(db, plans, params, alloc, scenario),
@@ -102,6 +112,7 @@ func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate
 		Jobs:                service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),
 		Dashboard:           dashboardSvc,
 		System:              service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
+		Admin:               adminSvc,
 		EventHub:            eventHub,
 		Maintenance:         maintenance,
 	}

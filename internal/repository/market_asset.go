@@ -688,6 +688,68 @@ func (r *MarketAssetRepo) GetDetailProjection(
 
 // --- market data versions (post-process re-entrancy) ---
 
+// MarketDataVersion mirrors one market_data_versions row: the post-process
+// idempotency version key for one business impact scope.
+type MarketDataVersion struct {
+	VersionKey string `json:"version_key"`
+	VersionNo  int64  `json:"version_no"`
+	TaskID     string `json:"task_id"`
+	UpdatedAt  int64  `json:"updated_at"`
+}
+
+// ListDataVersions returns one page of market_data_versions filtered by an
+// optional version_key prefix, newest first, plus the filtered total count.
+func (r *MarketAssetRepo) ListDataVersions(
+	ctx context.Context, prefix string, limit, offset int,
+) ([]MarketDataVersion, int, error) {
+	where := ""
+	var args []any
+	if p := strings.TrimSpace(prefix); p != "" {
+		where = `WHERE version_key LIKE ? ESCAPE '\'`
+		args = append(args, escapeLike(p)+"%")
+	}
+	return queryPage(ctx, r.db,
+		`SELECT COUNT(*) FROM market_data_versions `+where,
+		`SELECT version_key, version_no, task_id, updated_at
+		FROM market_data_versions `+where+`
+		ORDER BY updated_at DESC, version_key ASC
+		LIMIT ? OFFSET ?`,
+		args, limit, offset,
+		func(rows *sql.Rows) (MarketDataVersion, error) {
+			var v MarketDataVersion
+			if err := rows.Scan(&v.VersionKey, &v.VersionNo, &v.TaskID, &v.UpdatedAt); err != nil {
+				return MarketDataVersion{}, wrapSQL("scan market data version", err)
+			}
+			return v, nil
+		},
+		"count market data versions", "query market data versions",
+		"scan market data version", "iterate market data versions",
+	)
+}
+
+// HistoryStateAggregate summarizes market_asset_history_state for the admin
+// overview: dimension count, dimensions whose last success is older than
+// staleBefore, and dimensions that never synced successfully.
+type HistoryStateAggregate struct {
+	Total       int `json:"total"`
+	StaleBefore int `json:"stale_over_7d"`
+	NeverSynced int `json:"never_synced"`
+}
+
+// AggregateHistoryStates computes the history dimension summary in SQL.
+func (r *MarketAssetRepo) AggregateHistoryStates(
+	ctx context.Context, staleBefore int64,
+) (HistoryStateAggregate, error) {
+	var agg HistoryStateAggregate
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+			COALESCE(SUM(CASE WHEN last_success_at IS NOT NULL AND last_success_at < ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN last_success_at IS NULL THEN 1 ELSE 0 END), 0)
+		FROM market_asset_history_state`, staleBefore).
+		Scan(&agg.Total, &agg.StaleBefore, &agg.NeverSynced)
+	return agg, wrapSQL("aggregate market asset history states", err)
+}
+
 // GetDataVersionTx returns the stored version for a version_key (0 when none).
 func (r *MarketAssetRepo) GetDataVersionTx(ctx context.Context, tx *sql.Tx, versionKey string) (int64, error) {
 	var v int64

@@ -171,3 +171,111 @@ func (r *WorkerTaskRepo) FindActiveByDedupeTx(
 		WorkerTaskStatusPending, WorkerTaskStatusRunning, WorkerTaskStatusPreComplete)
 	return scanWorkerTask(row)
 }
+
+// --- admin listing & aggregation ---
+
+// WorkerTaskFilter narrows the admin task listing. New filter dimensions are
+// added as fields; the List signature stays stable.
+type WorkerTaskFilter struct {
+	Type     string
+	Statuses []string
+	// Query matches a task id prefix or a dedupe_key substring.
+	Query  string
+	Limit  int
+	Offset int
+}
+
+// Column list for the slim admin projection: payload_json / result_data can
+// be large and never appear in list responses, so they are not read at all.
+const workerTaskListColumns = `
+	id, version_no, type, status, dedupe_key, '' AS payload_json, '' AS result_data,
+	heartbeat_at, error_code, error_message,
+	post_process_attempts, next_post_process_at,
+	created_at, started_at, pre_completed_at, finished_at`
+
+func buildWorkerTaskWhere(f WorkerTaskFilter) (string, []any) {
+	var (
+		conds []string
+		args  []any
+	)
+	if f.Type != "" {
+		conds = append(conds, "type = ?")
+		args = append(args, f.Type)
+	}
+	if len(f.Statuses) > 0 {
+		ph := make([]string, len(f.Statuses))
+		for i, s := range f.Statuses {
+			ph[i] = "?"
+			args = append(args, s)
+		}
+		conds = append(conds, "status IN ("+strings.Join(ph, ",")+")")
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		escaped := escapeLike(q)
+		conds = append(conds, `(id LIKE ? ESCAPE '\' OR dedupe_key LIKE ? ESCAPE '\')`)
+		args = append(args, escaped+"%", "%"+escaped+"%")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+	return where, args
+}
+
+// List returns one filtered page of tasks (created_at DESC, payload/result
+// omitted) plus the filtered total count.
+func (r *WorkerTaskRepo) List(ctx context.Context, f WorkerTaskFilter) ([]WorkerTask, int, error) {
+	where, args := buildWorkerTaskWhere(f)
+	return queryPage(ctx, r.db,
+		`SELECT COUNT(*) FROM worker_tasks `+where,
+		`SELECT `+workerTaskListColumns+`
+		FROM worker_tasks `+where+`
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`,
+		args, f.Limit, f.Offset,
+		func(rows *sql.Rows) (WorkerTask, error) { return scanWorkerTask(rows) },
+		"count worker tasks", "query worker tasks", "scan worker task", "iterate worker tasks",
+	)
+}
+
+// CountByStatus returns task counts grouped by status.
+func (r *WorkerTaskRepo) CountByStatus(ctx context.Context) (map[string]int, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT status, COUNT(*) FROM worker_tasks GROUP BY status`)
+	if err != nil {
+		return nil, wrapSQL("count worker tasks by status", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, wrapSQL("scan worker task status count", err)
+		}
+		out[status] = n
+	}
+	return out, wrapSQL("iterate worker task status counts", rows.Err())
+}
+
+// CountFinishedSince counts tasks of one terminal status finished at or after
+// since (epoch ms).
+func (r *WorkerTaskRepo) CountFinishedSince(ctx context.Context, status string, since int64) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM worker_tasks
+		WHERE status=? AND finished_at IS NOT NULL AND finished_at >= ?`,
+		status, since).Scan(&n)
+	return n, wrapSQL("count finished worker tasks", err)
+}
+
+// CountStaleRunning counts running tasks whose heartbeat is older than
+// heartbeatBefore (epoch ms) — likely stuck, awaiting janitor recovery.
+func (r *WorkerTaskRepo) CountStaleRunning(ctx context.Context, heartbeatBefore int64) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM worker_tasks
+		WHERE status=? AND heartbeat_at IS NOT NULL AND heartbeat_at < ?`,
+		WorkerTaskStatusRunning, heartbeatBefore).Scan(&n)
+	return n, wrapSQL("count stale running worker tasks", err)
+}

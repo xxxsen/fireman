@@ -13,7 +13,7 @@ import (
 
 func TestSystemBackupDownload(t *testing.T) {
 	db, dbPath := testutil.OpenTestDBPath(t)
-	services := NewServices(db, dbPath, nil)
+	services := NewServices(db, dbPath, nil, nil)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, DBPath: dbPath, Services: services}))
 	defer srv.Close()
 

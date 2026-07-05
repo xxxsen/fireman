@@ -44,6 +44,7 @@ func newInternalStack(t *testing.T) internalStack {
 		repository.NewInstrumentRepo(db),
 		repository.NewMarketDataRepo(db),
 		resources,
+		repository.NewPostProcessRecordRepo(db),
 	)
 	srv := httptest.NewServer(NewInternalRouter(InternalDeps{
 		PostProcess: postProcess, Resources: resources,

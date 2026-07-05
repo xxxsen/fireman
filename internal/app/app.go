@@ -70,7 +70,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	maintenance := &service.MaintenanceGate{}
-	services := api.NewServices(pool, cfg.DBPath, maintenance)
+	services := api.NewServices(pool, cfg.DBPath, maintenance, resources)
 	jobRepo := repository.NewJobRepo(pool)
 	simRepo := repository.NewSimulationRepo(pool)
 	runner := jobs.NewSimulationRunner(pool, simRepo)
@@ -93,16 +93,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		DB: pool, DBPath: cfg.DBPath, Logger: logger, Services: services,
 	})
 
-	postProcess := service.NewPostProcessService(
-		pool,
-		repository.NewWorkerTaskRepo(pool),
-		repository.NewMarketAssetRepo(pool),
-		repository.NewInstrumentRepo(pool),
-		repository.NewMarketDataRepo(pool),
-		resources,
-	)
 	internalRouter := api.NewInternalRouter(api.InternalDeps{
-		Logger: logger, PostProcess: postProcess, Resources: resources,
+		Logger: logger, PostProcess: newPostProcessService(pool, resources), Resources: resources,
 	})
 
 	server := &http.Server{
@@ -117,6 +109,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	return runServer(ctx, server, internalServer, pool, resources, logger, workerCancel, workerDone)
+}
+
+func newPostProcessService(pool *sql.DB, resources *resourcedb.DB) *service.PostProcessService {
+	return service.NewPostProcessService(
+		pool,
+		repository.NewWorkerTaskRepo(pool),
+		repository.NewMarketAssetRepo(pool),
+		repository.NewInstrumentRepo(pool),
+		repository.NewMarketDataRepo(pool),
+		resources,
+		repository.NewPostProcessRecordRepo(pool),
+	)
 }
 
 func runServer(

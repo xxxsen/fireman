@@ -165,6 +165,24 @@ func gunzipLimited(payload []byte) ([]byte, error) {
 	return out, nil
 }
 
+// Stats summarizes stored resources for the admin overview.
+type Stats struct {
+	Count      int   `json:"count"`
+	TotalBytes int64 `json:"total_bytes"`
+}
+
+// StatsSummary returns the stored resource count and the summed payload size.
+func (d *DB) StatsSummary(ctx context.Context) (Stats, error) {
+	var st Stats
+	err := d.pool.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM resource_tab`).
+		Scan(&st.Count, &st.TotalBytes)
+	if err != nil {
+		return Stats{}, fmt.Errorf("resourcedb: stats: %w", err)
+	}
+	return st, nil
+}
+
 // DeleteExpired removes all resources whose expires_at is strictly before now.
 // It never inspects worker_tasks: resource lifetime is governed solely by the
 // expires_at written at insert time.

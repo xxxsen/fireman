@@ -243,6 +243,7 @@ source = { editable = "." }
 dependencies = [
     { name = "akshare" },
     { name = "fastapi" },
+    { name = "openpyxl" },
     { name = "pydantic" },
     { name = "requests" },
     { name = "tickflow", extra = ["pandas"] },
@@ -260,6 +261,7 @@ dev = [
 requires-dist = [
     { name = "akshare", specifier = ">=1.16.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "tickflow", extras = ["pandas"], specifier = ">=0.1.24" },

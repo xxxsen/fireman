@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,10 +14,10 @@ const (
 	JobTypeStress      = "stress"
 	JobTypeSensitivity = "sensitivity"
 	JobStatusQueued    = "queued"
-	JobStatusRunning       = "running"
-	JobStatusSucceeded     = "succeeded"
-	JobStatusFailed        = "failed"
-	JobStatusCanceled      = "canceled"
+	JobStatusRunning   = "running"
+	JobStatusSucceeded = "succeeded"
+	JobStatusFailed    = "failed"
+	JobStatusCanceled  = "canceled"
 )
 
 // JobErrSupersededByNewerAnalysis marks an attached-analysis job canceled because
@@ -330,6 +331,140 @@ func (r *JobRepo) ListByPlanAndType(ctx context.Context, planID, jobType string,
 		return nil, fmt.Errorf("iterate jobs: %w", err)
 	}
 	return out, nil
+}
+
+// --- admin listing & aggregation ---
+
+// JobFilter narrows the admin job listing. New filter dimensions are added
+// as fields; the List signature stays stable.
+type JobFilter struct {
+	Type     string
+	Statuses []string
+	PlanID   string
+	Limit    int
+	Offset   int
+}
+
+// JobWithPlan is one admin listing row: the job plus the (possibly deleted)
+// plan's display name. payload_json is intentionally not read.
+type JobWithPlan struct {
+	Job
+	PlanName string `json:"plan_name"`
+}
+
+func buildJobWhere(f JobFilter) (string, []any) {
+	var (
+		conds []string
+		args  []any
+	)
+	if f.Type != "" {
+		conds = append(conds, "j.type = ?")
+		args = append(args, f.Type)
+	}
+	if len(f.Statuses) > 0 {
+		ph := make([]string, len(f.Statuses))
+		for i, s := range f.Statuses {
+			ph[i] = "?"
+			args = append(args, s)
+		}
+		conds = append(conds, "j.status IN ("+strings.Join(ph, ",")+")")
+	}
+	if f.PlanID != "" {
+		conds = append(conds, "j.plan_id = ?")
+		args = append(args, f.PlanID)
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+	return where, args
+}
+
+// List returns one filtered page of jobs (created_at DESC) with the plan name
+// attached via LEFT JOIN (plans can be deleted; plan_id can be empty for
+// system jobs), plus the filtered total count.
+func (r *JobRepo) List(ctx context.Context, f JobFilter) ([]JobWithPlan, int, error) {
+	where, args := buildJobWhere(f)
+	return queryPage(ctx, r.db,
+		`SELECT COUNT(*) FROM jobs j `+where,
+		`SELECT j.id, j.plan_id, j.type, j.status, j.input_hash, '' AS payload_json,
+			j.progress_current, j.progress_total, j.phase, j.cancel_requested, j.retry_count,
+			j.heartbeat_at, j.error_code, j.error_message, j.created_at, j.started_at, j.finished_at,
+			COALESCE(p.name, '') AS plan_name
+		FROM jobs j
+		LEFT JOIN plans p ON p.id = j.plan_id
+		`+where+`
+		ORDER BY j.created_at DESC, j.id DESC
+		LIMIT ? OFFSET ?`,
+		args, f.Limit, f.Offset,
+		scanJobWithPlan,
+		"count jobs", "query jobs", "scan job list row", "iterate job list rows",
+	)
+}
+
+func scanJobWithPlan(rows *sql.Rows) (JobWithPlan, error) {
+	var item JobWithPlan
+	var cancel int
+	var hb, started, finished sql.NullInt64
+	var payload, planID sql.NullString
+	if err := rows.Scan(
+		&item.ID, &planID, &item.Type, &item.Status, &item.InputHash, &payload,
+		&item.ProgressCurrent, &item.ProgressTotal, &item.Phase, &cancel, &item.RetryCount,
+		&hb, &item.ErrorCode, &item.ErrorMessage, &item.CreatedAt, &started, &finished,
+		&item.PlanName,
+	); err != nil {
+		return JobWithPlan{}, fmt.Errorf("scan job list row: %w", err)
+	}
+	if planID.Valid {
+		item.PlanID = planID.String
+	}
+	item.CancelRequested = cancel == 1
+	if hb.Valid {
+		v := hb.Int64
+		item.HeartbeatAt = &v
+	}
+	if started.Valid {
+		v := started.Int64
+		item.StartedAt = &v
+	}
+	if finished.Valid {
+		v := finished.Int64
+		item.FinishedAt = &v
+	}
+	return item, nil
+}
+
+// CountByStatus returns job counts grouped by status.
+func (r *JobRepo) CountByStatus(ctx context.Context) (map[string]int, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("count jobs by status: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("scan job status count: %w", err)
+		}
+		out[status] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate job status counts: %w", err)
+	}
+	return out, nil
+}
+
+// CountFinishedSince counts jobs of one terminal status finished at or after
+// since (epoch ms).
+func (r *JobRepo) CountFinishedSince(ctx context.Context, status string, since int64) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM jobs
+		WHERE status=? AND finished_at IS NOT NULL AND finished_at >= ?`,
+		status, since).Scan(&n)
+	return n, wrapSQL("count finished jobs", err)
 }
 
 func scanJob(row *sql.Row) (Job, error) {

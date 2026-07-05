@@ -20,6 +20,34 @@ func queryCollect[T any](
 	return collectRows(rows, scan, scanMsg, iterMsg)
 }
 
+// queryPage runs the shared COUNT + paged SELECT pattern behind every admin
+// listing. countSQL and selectSQL already contain their WHERE clause and
+// share args; selectSQL must end with `LIMIT ? OFFSET ?`. A non-positive
+// limit falls back to 20.
+func queryPage[T any](
+	ctx context.Context,
+	db *sql.DB,
+	countSQL, selectSQL string,
+	args []any,
+	limit, offset int,
+	scan func(*sql.Rows) (T, error),
+	countMsg, queryMsg, scanMsg, iterMsg string,
+) ([]T, int, error) {
+	var total int
+	if err := db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, wrapSQL(countMsg, err)
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	pagedArgs := append(append([]any{}, args...), limit, offset)
+	items, err := queryCollect(ctx, db, selectSQL, pagedArgs, scan, queryMsg, scanMsg, iterMsg)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func collectRows[T any](
 	rows *sql.Rows,
 	scan func(*sql.Rows) (T, error),

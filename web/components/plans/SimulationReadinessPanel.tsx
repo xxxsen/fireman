@@ -115,13 +115,15 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
       void qc.invalidateQueries({ queryKey: ["holdings", planId] });
       void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
     }
-    // Release the local lock once readiness reflects reality again: either
-    // the tasks now show up as active_tasks (activeCount disables the button)
-    // or everything became ready.
-    if (data.ready || data.active_tasks.length > 0) {
-      setSyncLocked(false);
-    }
   }, [data, planId, qc]);
+
+  // Release the local lock once readiness reflects reality again: either
+  // the tasks now show up as active_tasks (activeCount disables the button)
+  // or everything became ready. Render-time state adjustment instead of an
+  // effect so the release happens in the same pass.
+  if (syncLocked && data && (data.ready || data.active_tasks.length > 0)) {
+    setSyncLocked(false);
+  }
 
   const syncMut = useMutation({
     mutationFn: () => syncMissingAssetHistory(planId),

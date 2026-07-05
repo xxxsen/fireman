@@ -24,7 +24,7 @@ import (
 func setupFullStackIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client, string) {
 	t.Helper()
 	db, dbPath := testutil.OpenTestDBPath(t)
-	services := NewServices(db, dbPath, nil)
+	services := NewServices(db, dbPath, nil, nil)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
 	worker := jobs.NewWorker(
