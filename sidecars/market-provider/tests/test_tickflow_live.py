@@ -12,15 +12,15 @@ in the local environment; the key must never be written into the repository.
 import os
 
 import pytest
-from fastapi.testclient import TestClient
 
-from fireman_market_provider import create_app
 from fireman_market_provider.adapters.tickflow import (
     fetch_tickflow_instruments,
     reset_tickflow_client,
     try_tickflow_klines,
 )
 from fireman_market_provider.schemas import FetchRequest
+
+from .fetch_compat import fetch
 
 pytestmark = [
     pytest.mark.live,
@@ -138,11 +138,11 @@ def test_live_reconciliation_tickflow_vs_akshare(monkeypatch: pytest.MonkeyPatch
         tf_tail = tf_df.tail(60)
         tf_close = {str(d): float(c) for d, c in zip(tf_tail["日期"], tf_tail["收盘"])}
 
+        # The reference series uses the same fetch chain asset_history_sync's
+        # unpinned path runs (the sync HTTP endpoint no longer exists).
         monkeypatch.setenv("MARKET_PROVIDER_TICKFLOW_ENABLED", "false")
-        client = TestClient(create_app())
-        response = client.post(
-            "/v1/instruments/fetch",
-            json={
+        response = fetch(
+            {
                 "market": "CN",
                 "instrument_type": instrument_type,
                 "source_code": bare,
@@ -150,7 +150,7 @@ def test_live_reconciliation_tickflow_vs_akshare(monkeypatch: pytest.MonkeyPatch
                 "start_date": "2024-01-01",
                 "end_date": "2026-12-31",
                 "adjust_policy": "none",
-            },
+            }
         )
         monkeypatch.setenv("MARKET_PROVIDER_TICKFLOW_ENABLED", "true")
         if response.status_code != 200 or response.json().get("code") != 0:
@@ -185,10 +185,8 @@ def test_live_unreachable_tickflow_falls_back_to_akshare(
     monkeypatch.setenv("MARKET_PROVIDER_TICKFLOW_ENABLED", "true")
     monkeypatch.setenv("MARKET_PROVIDER_TICKFLOW_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("MARKET_PROVIDER_TICKFLOW_TIMEOUT", "2")
-    client = TestClient(create_app())
-    response = client.post(
-        "/v1/instruments/fetch",
-        json={
+    response = fetch(
+        {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
             "source_code": "510300",
@@ -196,7 +194,7 @@ def test_live_unreachable_tickflow_falls_back_to_akshare(
             "start_date": "2024-01-01",
             "end_date": "2026-07-04",
             "adjust_policy": "none",
-        },
+        }
     )
     assert response.status_code == 200
     body = response.json()

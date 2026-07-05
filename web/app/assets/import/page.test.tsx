@@ -85,6 +85,49 @@ describe("ImportAssetPage", () => {
     );
   });
 
+  it("lists and selects HK/US ETF candidates with type labels", async () => {
+    const hkETF: MarketAsset = {
+      ...ASSET,
+      asset_key: "hk:hk_etf:hk:02800",
+      market: "HK",
+      instrument_type: "hk_etf",
+      region_code: "hk",
+      symbol: "02800",
+      name: "盈富基金",
+      exchange: "HK",
+      currency: "HKD",
+      source_name: "em.hk_fund_list",
+    };
+    const usETF: MarketAsset = {
+      ...ASSET,
+      asset_key: "us:us_etf:us:SPY",
+      market: "US",
+      instrument_type: "us_etf",
+      region_code: "us",
+      symbol: "SPY",
+      name: "标普500ETF-SPDR",
+      exchange: "US",
+      currency: "USD",
+      source_name: "em.us_etf_list",
+    };
+    listMarketAssetsMock.mockResolvedValue({ assets: [hkETF, usETF], syncs: [], total: 2 });
+    renderPage();
+    fireEvent.change(screen.getByTestId("import-search-input"), {
+      target: { value: "ETF" },
+    });
+
+    const hkCandidate = await screen.findByTestId(`import-candidate-${hkETF.asset_key}`);
+    expect(hkCandidate).toHaveTextContent("盈富基金");
+    expect(hkCandidate).toHaveTextContent("香港 ETF");
+    const usCandidate = screen.getByTestId(`import-candidate-${usETF.asset_key}`);
+    expect(usCandidate).toHaveTextContent("美国 ETF");
+
+    // Selecting the HK ETF advances to the confirm stage with its identity.
+    fireEvent.click(hkCandidate);
+    await screen.findByTestId("confirm-import");
+    expect(screen.getByText(/HK \/ 香港 ETF/)).toBeInTheDocument();
+  });
+
   it("shows the directory hint when the local search has no hits", async () => {
     listMarketAssetsMock.mockResolvedValue({ assets: [], syncs: [], total: 0 });
     renderPage();

@@ -120,6 +120,7 @@ func (s *PostProcessService) processDirectory(
 		}
 	}
 	counts := map[category]int{}
+	catSources := map[category]map[string]bool{}
 	accepted := make([]directoryResultAsset, 0, len(result.Assets))
 	for _, a := range result.Assets {
 		if a.Market == "" || a.InstrumentType == "" || strings.TrimSpace(a.Symbol) == "" {
@@ -135,6 +136,10 @@ func (s *PostProcessService) processDirectory(
 			a.Name = a.Symbol
 		}
 		counts[cat]++
+		if catSources[cat] == nil {
+			catSources[cat] = map[string]bool{}
+		}
+		catSources[cat][a.SourceName] = true
 		accepted = append(accepted, a)
 	}
 
@@ -154,14 +159,21 @@ func (s *PostProcessService) processDirectory(
 
 		// Minimum coverage validation before any write: every required
 		// category must be non-empty and not fall below 90% of the previous
-		// successful count. First sync only requires non-empty.
+		// successful count. First sync only requires non-empty. The previous
+		// count is restricted to rows from the same listing sources as this
+		// sync, so a listing-source/taxonomy migration behaves like a first
+		// sync instead of failing the 90% gate forever.
 		for cat := range required {
 			incoming := counts[cat]
 			if incoming == 0 {
 				return permanentErr("directory_data_incomplete",
 					fmt.Sprintf("required category %s/%s returned no assets", cat.market, cat.instrumentType))
 			}
-			prev, err := s.assets.CountActiveByTypeTx(ctx, tx, cat.market, cat.instrumentType)
+			sources := make([]string, 0, len(catSources[cat]))
+			for s := range catSources[cat] {
+				sources = append(sources, s)
+			}
+			prev, err := s.assets.CountActiveByTypeSourcesTx(ctx, tx, cat.market, cat.instrumentType, sources)
 			if err != nil {
 				return err
 			}
@@ -676,6 +688,7 @@ func (s *PostProcessService) processFXRates(
 
 	now := time.Now().UnixMilli()
 	return s.withPostProcessTx(ctx, func(tx *sql.Tx) error {
+		processedAny := false
 		for _, rawPair := range payload.Pairs {
 			pair := strings.ToUpper(rawPair)
 			versionKey := "fx_rate|" + pair
@@ -711,6 +724,10 @@ func (s *PostProcessService) processFXRates(
 			if err := s.assets.SetDataVersionTx(ctx, tx, versionKey, task.VersionNo, task.ID); err != nil {
 				return err
 			}
+			processedAny = true
+		}
+		if processedAny {
+			return s.assets.SetSyncSuccessTx(ctx, tx, ScopeFXRates, task.ID, now)
 		}
 		return nil
 	})

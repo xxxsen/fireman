@@ -58,6 +58,7 @@ export interface MarketAssetListResult {
   assets: MarketAsset[];
   sync?: MarketAssetSyncView | null;
   syncs: MarketAssetSyncView[];
+  fx_sync?: MarketAssetSyncView | null;
   total: number;
 }
 

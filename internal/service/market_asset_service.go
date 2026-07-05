@@ -19,9 +19,10 @@ import (
 // Directory sync scopes. Each scope normalizes to a fixed markets +
 // instrument_types combination so synonymous requests share one dedupe key.
 const (
-	ScopeCNAll = "cn_all"
-	ScopeHKAll = "hk_all"
-	ScopeUSAll = "us_all"
+	ScopeCNAll   = "cn_all"
+	ScopeHKAll   = "hk_all"
+	ScopeUSAll   = "us_all"
+	ScopeFXRates = "fx_rates"
 )
 
 // scopeDefinition pins the normalized markets and required instrument types
@@ -40,11 +41,11 @@ var scopeDefinitions = map[string]scopeDefinition{
 	},
 	ScopeHKAll: {
 		Markets:         []string{"HK"},
-		InstrumentTypes: []string{"hk_stock"},
+		InstrumentTypes: []string{"hk_stock", "hk_etf"},
 	},
 	ScopeUSAll: {
 		Markets:         []string{"US"},
-		InstrumentTypes: []string{"us_stock"},
+		InstrumentTypes: []string{"us_stock", "us_etf"},
 	},
 }
 
@@ -170,6 +171,7 @@ type MarketAssetListResult struct {
 	Assets []repository.MarketAsset `json:"assets"`
 	Sync   *MarketAssetSyncView     `json:"sync,omitempty"`
 	Syncs  []MarketAssetSyncView    `json:"syncs"`
+	FXSync *MarketAssetSyncView     `json:"fx_sync,omitempty"`
 	Total  int                      `json:"total"`
 }
 
@@ -243,6 +245,11 @@ func (s *MarketAssetService) ListAssets(
 	if len(out.Syncs) > 0 {
 		out.Sync = &out.Syncs[0]
 	}
+	fxView, err := s.buildSyncView(ctx, ScopeFXRates)
+	if err != nil {
+		return MarketAssetListResult{}, err
+	}
+	out.FXSync = &fxView
 	return out, nil
 }
 
@@ -380,11 +387,11 @@ type MarketAssetPointView struct {
 
 // MarketAssetDetail is the GET /market-assets/by-key response.
 type MarketAssetDetail struct {
-	Asset           repository.MarketAsset  `json:"asset"`
-	History         MarketAssetHistoryView  `json:"history"`
-	Points          []MarketAssetPointView  `json:"points"`
-	AnnualReturns   json.RawMessage         `json:"annual_returns"`
-	TrailingReturns json.RawMessage         `json:"trailing_returns,omitempty"`
+	Asset           repository.MarketAsset `json:"asset"`
+	History         MarketAssetHistoryView `json:"history"`
+	Points          []MarketAssetPointView `json:"points"`
+	AnnualReturns   json.RawMessage        `json:"annual_returns"`
+	TrailingReturns json.RawMessage        `json:"trailing_returns,omitempty"`
 }
 
 // DefaultPointType picks the history point type for an asset. Mutual money
@@ -741,5 +748,8 @@ func (s *MarketAssetService) SyncFXRates(ctx context.Context) (TaskCreateResult,
 		return TaskCreateResult{}, fmt.Errorf("marshal fx payload: %w", err)
 	}
 	return s.createTask(ctx, repository.WorkerTaskTypeFXRateSync,
-		fxDedupeKey(payload), string(payloadJSON), nil)
+		fxDedupeKey(payload), string(payloadJSON),
+		func(ctx context.Context, tx *sql.Tx, taskID string) error {
+			return s.assets.SetSyncLastTaskTx(ctx, tx, ScopeFXRates, taskID)
+		})
 }

@@ -61,6 +61,15 @@ def dispatch_upstream_call(call: UpstreamCall) -> Any:
         _time.sleep(call.args[0])
         return None
 
+    # Custom Eastmoney directory listings (categories AKShare does not expose).
+    if call.operation.startswith("em_"):
+        from .adapters import em_directory
+
+        fn = getattr(em_directory, call.operation, None)
+        if fn is None:
+            raise ValueError(f"unsupported upstream operation: {call.operation}")
+        return fn(*call.args, **_kwargs_dict(call))
+
     import akshare as ak
 
     if call.operation == "fund_lof_code_id_map_em":

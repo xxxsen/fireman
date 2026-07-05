@@ -97,6 +97,7 @@ echo "[fireman] starting market-provider worker on :18081"
   FIREMAN_DB_PATH="${FIREMAN_DB_PATH:-$DEV_DATA_DIR/fireman.db}" \
   FIREMAN_INTERNAL_API_URL="${FIREMAN_INTERNAL_API_URL:-http://127.0.0.1:8081}" \
   MARKET_PROVIDER_FETCH_TIMEOUT="${MARKET_PROVIDER_FETCH_TIMEOUT:-240}" \
+  MARKET_PROVIDER_TICKFLOW_ENABLED="${MARKET_PROVIDER_TICKFLOW_ENABLED:-true}" \
   uv run uvicorn fireman_market_provider.app:app --host 0.0.0.0 --port 18081 --reload
 ) &
 record_pid "$!" "market-provider"

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MarketAsset, MarketAssetSyncView } from "@/lib/api/market-assets";
+import { formatDateTimeFromMs } from "@/lib/format";
 import MarketAssetsPage from "./page";
 
 const listMarketAssetsMock = vi.hoisted(() => vi.fn());
@@ -72,6 +73,7 @@ describe("MarketAssetsPage", () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset()],
       syncs: makeSyncs(),
+      fx_sync: { scope: "fx_rates", last_success_at: null, last_success_task_id: "" },
       total: 1,
     });
   });
@@ -83,8 +85,8 @@ describe("MarketAssetsPage", () => {
 
     const panel = screen.getByTestId("directory-sync-panel");
     expect(within(panel).getByText("A 股 / 场内基金")).toBeInTheDocument();
-    expect(within(panel).getByText("港股")).toBeInTheDocument();
-    expect(within(panel).getByText("美股")).toBeInTheDocument();
+    expect(within(panel).getByText("港股 / 港股 ETF")).toBeInTheDocument();
+    expect(within(panel).getByText("美股 / 美股 ETF")).toBeInTheDocument();
 
     const row = screen.getByTestId("market-asset-row");
     expect(within(row).getByRole("link", { name: "510300" })).toHaveAttribute(
@@ -225,6 +227,60 @@ describe("MarketAssetsPage", () => {
     );
   });
 
+  it("displays HK/US ETF directory entries with type labels and import links", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [
+        makeAsset({
+          asset_key: "hk:hk_etf:hk:02800",
+          market: "HK",
+          instrument_type: "hk_etf",
+          region_code: "hk",
+          symbol: "02800",
+          name: "盈富基金",
+          exchange: "HK",
+          instrument_kind: "etf",
+          currency: "HKD",
+          source_name: "em.hk_fund_list",
+        }),
+        makeAsset({
+          asset_key: "us:us_etf:us:SPY",
+          market: "US",
+          instrument_type: "us_etf",
+          region_code: "us",
+          symbol: "SPY",
+          name: "标普500ETF-SPDR",
+          exchange: "US",
+          instrument_kind: "etf",
+          currency: "USD",
+          source_name: "em.us_etf_list",
+        }),
+      ],
+      syncs: makeSyncs(),
+      total: 2,
+    });
+    renderPage();
+    const rows = await screen.findAllByTestId("market-asset-row");
+    expect(rows).toHaveLength(2);
+
+    const hkRow = rows[0];
+    expect(within(hkRow).getByText("香港 ETF")).toBeInTheDocument();
+    expect(within(hkRow).getByRole("link", { name: "02800" })).toHaveAttribute(
+      "href",
+      `/assets/market/${encodeURIComponent("hk:hk_etf:hk:02800")}`,
+    );
+    expect(within(hkRow).getByRole("link", { name: "录入" })).toHaveAttribute(
+      "href",
+      `/assets/import?asset_key=${encodeURIComponent("hk:hk_etf:hk:02800")}`,
+    );
+
+    const usRow = rows[1];
+    expect(within(usRow).getByText("美国 ETF")).toBeInTheDocument();
+    expect(within(usRow).getByRole("link", { name: "录入" })).toHaveAttribute(
+      "href",
+      `/assets/import?asset_key=${encodeURIComponent("us:us_etf:us:SPY")}`,
+    );
+  });
+
   it("marks inactive assets as delisted in the table", async () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset({ active: false })],
@@ -267,6 +323,32 @@ describe("MarketAssetsPage", () => {
         expect.objectContaining({ onComplete: expect.any(Function) }),
       ),
     );
+  });
+
+  it("hydrates the FX row last success time from the API after page reload", async () => {
+    const lastSuccessAt = 1751300000000;
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: makeSyncs(),
+      fx_sync: {
+        scope: "fx_rates",
+        last_success_at: lastSuccessAt,
+        last_success_task_id: "wt_fx_done",
+        task: {
+          id: "wt_fx_done",
+          type: "fx_rate_sync",
+          status: "complete",
+          created_at: lastSuccessAt - 1000,
+          finished_at: lastSuccessAt,
+        },
+      },
+      total: 1,
+    });
+
+    renderPage();
+    const row = await screen.findByTestId("fx-sync-row");
+    expect(within(row).getByText(formatDateTimeFromMs(lastSuccessAt))).toBeInTheDocument();
+    expect(within(row).getByTestId("task-status-badge")).toBeInTheDocument();
   });
 
   it("surfaces polling errors without hiding the sync row", async () => {

@@ -231,6 +231,10 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00005",
 				"name": "汇丰控股", "instrument_kind": "stock", "currency": "HKD",
 				"source_name": "ak_hk", "source_as_of": "2026-07-04"},
+			// hk_all requires the ETF category as well (td/079).
+			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
+				"source_name": "ak_hk_fund", "source_as_of": "2026-07-04"},
 			// Out-of-scope entry must be ignored, never written.
 			{"market": "CN", "instrument_type": "cn_exchange_stock", "symbol": "600000",
 				"name": "浦发银行", "currency": "CNY", "source_name": "ak_cn", "source_as_of": ""},
@@ -243,8 +247,12 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
 
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 2 {
-		t.Fatalf("active HK assets = %d, want 2", n)
+		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 3 {
+		t.Fatalf("active HK assets = %d, want 3", n)
+	}
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_etf' AND active=1`); n != 1 {
+		t.Fatalf("active hk_etf assets = %d, want 1", n)
 	}
 	if n := countRows(t, st.db,
 		`SELECT COUNT(*) FROM market_assets WHERE symbol='09999' AND active=0`); n != 1 {
@@ -267,7 +275,7 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	// duplicate writes.
 	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 2 {
+		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 3 {
 		t.Fatalf("re-notify duplicated writes: active HK assets = %d", n)
 	}
 
@@ -276,7 +284,7 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
 
 	// Coverage gate: a later sync returning below 90% of the previous count
-	// is rejected without touching the directory.
+	// for a same-source category is rejected without touching the directory.
 	created2, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: "hk_all"})
 	if err != nil {
 		t.Fatal(err)
@@ -286,6 +294,9 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 		"assets": []map[string]any{
 			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
 				"name": "腾讯控股", "currency": "HKD", "source_name": "ak_hk", "source_as_of": ""},
+			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
+				"source_name": "ak_hk_fund", "source_as_of": ""},
 		},
 	}
 	raw2, _ := json.Marshal(shrunk)
@@ -294,8 +305,40 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	assertOutcome(t, notifyPostProcess(t, st, created2.Task.ID),
 		"permanent_error", "directory_data_incomplete")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 2 {
+		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 3 {
 		t.Fatalf("failed sync mutated the directory: active HK assets = %d", n)
+	}
+	finishTask(t, st.db, created2.Task.ID, "failed")
+
+	// Listing-source migration: the same category served by a brand-new
+	// source compares against zero previous rows (first-sync semantics), so
+	// a smaller snapshot still commits instead of tripping the 90% gate.
+	created3, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: "hk_all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := map[string]any{
+		"type": "asset_directory_sync", "scope": "hk_all",
+		"assets": []map[string]any{
+			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+				"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
+				"source_name": "em.hk_equity_list", "source_as_of": ""},
+			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
+				"source_name": "em.hk_fund_list", "source_as_of": ""},
+		},
+	}
+	raw3, _ := json.Marshal(migrated)
+	env3 := uploadResult(t, st, raw3)
+	markPreComplete(t, st.db, created3.Task.ID, env3)
+	assertOutcome(t, notifyPostProcess(t, st, created3.Task.ID), "success", "")
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 2 {
+		t.Fatalf("migrated sync active HK assets = %d, want 2", n)
+	}
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE symbol='00005' AND active=0`); n != 1 {
+		t.Fatal("asset absent from the migrated listing was not marked inactive")
 	}
 }
 
@@ -480,6 +523,18 @@ func TestInternalPostProcess_FXRates(t *testing.T) {
 			t.Fatalf("%s fx points = %d, want 2", instID, n)
 		}
 	}
+	var lastSuccessTaskID string
+	var lastSuccessAt int64
+	if err := st.db.QueryRow(`
+		SELECT last_success_task_id, last_success_at
+		FROM market_asset_sync_state WHERE scope='fx_rates'`).
+		Scan(&lastSuccessTaskID, &lastSuccessAt); err != nil {
+		t.Fatal(err)
+	}
+	if lastSuccessTaskID != taskID || lastSuccessAt == 0 {
+		t.Fatalf("fx sync success state = task %s at %d, want %s and non-zero time",
+			lastSuccessTaskID, lastSuccessAt, taskID)
+	}
 
 	// Reentrancy.
 	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
@@ -501,6 +556,72 @@ func TestInternalPostProcess_FXRates(t *testing.T) {
 	markPreComplete(t, st.db, created2.Task.ID, env)
 	assertOutcome(t, notifyPostProcess(t, st, created2.Task.ID),
 		"permanent_error", "provider_data_incomplete")
+}
+
+// TestInternalPostProcess_ETFSearchableViaPublicAPI covers the td/079
+// acceptance path: after a directory sync post-process commits HK/US ETF
+// entries, the public market-assets API can find them by market and query.
+func TestInternalPostProcess_ETFSearchableViaPublicAPI(t *testing.T) {
+	st := newInternalStack(t)
+	ctx := context.Background()
+	pub := httptest.NewServer(NewRouter(ctx, Deps{DB: st.db, Services: buildServices(st.db)}))
+	t.Cleanup(pub.Close)
+	client := pub.Client()
+
+	runDirectory := func(scope string, assets []map[string]any) {
+		created, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: scope})
+		if err != nil {
+			t.Fatalf("create %s sync: %v", scope, err)
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"type": "asset_directory_sync", "scope": scope, "assets": assets,
+		})
+		env := uploadResult(t, st, raw)
+		markPreComplete(t, st.db, created.Task.ID, env)
+		assertOutcome(t, notifyPostProcess(t, st, created.Task.ID), "success", "")
+		finishTask(t, st.db, created.Task.ID, "complete")
+	}
+
+	runDirectory("hk_all", []map[string]any{
+		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
+			"source_name": "em.hk_equity_list", "source_as_of": "2026-07-05"},
+		{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+			"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
+			"source_name": "em.hk_fund_list", "source_as_of": "2026-07-05"},
+	})
+	runDirectory("us_all", []map[string]any{
+		{"market": "US", "instrument_type": "us_stock", "symbol": "AAPL",
+			"name": "苹果", "instrument_kind": "stock", "currency": "USD",
+			"source_name": "em.us_equity_list", "source_as_of": "2026-07-05"},
+		{"market": "US", "instrument_type": "us_etf", "symbol": "SPY",
+			"name": "标普500ETF-SPDR", "instrument_kind": "etf", "currency": "USD",
+			"source_name": "em.us_etf_list", "source_as_of": "2026-07-05"},
+	})
+
+	assertSearchable := func(url, wantType, wantSymbol string) {
+		resp, body := getJSON(t, client, url)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status=%d body=%s", url, resp.StatusCode, body)
+		}
+		assets := decodeEnvelope(t, body)["data"].(map[string]any)["assets"].([]any)
+		for _, a := range assets {
+			m := a.(map[string]any)
+			if m["instrument_type"] == wantType && m["symbol"] == wantSymbol {
+				if m["instrument_kind"] != "etf" && wantType != "hk_stock" && wantType != "us_stock" {
+					t.Fatalf("%s %s instrument_kind = %v, want etf", wantType, wantSymbol, m["instrument_kind"])
+				}
+				return
+			}
+		}
+		t.Fatalf("GET %s did not return %s/%s: %s", url, wantType, wantSymbol, body)
+	}
+
+	assertSearchable(pub.URL+"/api/v1/market-assets?market=HK", "hk_etf", "02800")
+	assertSearchable(pub.URL+"/api/v1/market-assets?market=US", "us_etf", "SPY")
+	// Local search hits the ETF entries by name/code as well.
+	assertSearchable(pub.URL+"/api/v1/market-assets?q=盈富", "hk_etf", "02800")
+	assertSearchable(pub.URL+"/api/v1/market-assets?q=SPY", "us_etf", "SPY")
 }
 
 func TestInternalPostProcess_ErrorClassification(t *testing.T) {

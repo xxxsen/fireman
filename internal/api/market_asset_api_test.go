@@ -119,6 +119,38 @@ func TestMarketAssetDirectorySync_CreatesAndDedupes(t *testing.T) {
 	}
 }
 
+func TestMarketAssetDirectorySync_ScopeInstrumentTypes(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+
+	cases := map[string][]string{
+		"hk_all": {"hk_stock", "hk_etf"},
+		"us_all": {"us_stock", "us_etf"},
+		"cn_all": {"cn_exchange_stock", "cn_exchange_fund", "cn_mutual_fund"},
+	}
+	for scope, wantTypes := range cases {
+		resp, body := postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+			map[string]any{"scope": scope})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sync %s status=%d body=%s", scope, resp.StatusCode, body)
+		}
+		task, _ := taskFromResult(t, body)
+		payload := taskPayload(t, db, task["id"].(string))
+		got := map[string]bool{}
+		for _, v := range payload["instrument_types"].([]any) {
+			got[v.(string)] = true
+		}
+		if len(got) != len(wantTypes) {
+			t.Fatalf("scope %s instrument_types = %v, want %v", scope, payload["instrument_types"], wantTypes)
+		}
+		for _, want := range wantTypes {
+			if !got[want] {
+				t.Fatalf("scope %s payload is missing instrument type %s (got %v)",
+					scope, want, payload["instrument_types"])
+			}
+		}
+	}
+}
+
 func TestGetWorkerTask(t *testing.T) {
 	srv, _, client := testRouterWithDB(t)
 
@@ -314,6 +346,14 @@ func TestFXSync_CreatesTask(t *testing.T) {
 	pairs := payload["pairs"].([]any)
 	if len(pairs) != 2 || pairs[0] != "HKDCNY" || pairs[1] != "USDCNY" {
 		t.Fatalf("fx pairs = %v", pairs)
+	}
+	var lastTaskID string
+	if err := db.QueryRow(
+		`SELECT last_task_id FROM market_asset_sync_state WHERE scope='fx_rates'`).Scan(&lastTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if lastTaskID != task["id"].(string) {
+		t.Fatalf("fx sync last_task_id = %s, want %s", lastTaskID, task["id"].(string))
 	}
 
 	// Duplicate returns the existing active task.

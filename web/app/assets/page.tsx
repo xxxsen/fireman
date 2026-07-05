@@ -30,8 +30,8 @@ const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SCOPE_LABELS: Record<string, string> = {
   cn_all: "A 股 / 场内基金",
-  hk_all: "港股",
-  us_all: "美股",
+  hk_all: "港股 / 港股 ETF",
+  us_all: "美股 / 美股 ETF",
 };
 
 const MARKET_FILTERS: { value: string; label: string }[] = [
@@ -124,14 +124,26 @@ function DirectorySyncRow({
  * FX sync entry. FX pairs live outside market_assets so there is no sync-state
  * row to hydrate from; status comes from the created task's polling only.
  */
-function FXSyncRow({ onChanged }: { onChanged: () => void }) {
-  const [taskId, setTaskId] = useState<string | null>(null);
+function FXSyncRow({
+  view,
+  onChanged,
+}: {
+  view?: MarketAssetSyncView | null;
+  onChanged: () => void;
+}) {
+  const serverTask = view?.task ?? null;
+  const [manualTaskId, setManualTaskId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const { task, pollError } = useWorkerTaskPolling(taskId, {
+  const serverActiveId = serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
+  const trackedTaskId = serverActiveId ?? manualTaskId;
+
+  const { task: polledTask, pollError } = useWorkerTaskPolling(trackedTaskId, {
+    initialTask: serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
     onComplete: onChanged,
     onFailed: onChanged,
   });
+  const task = polledTask ?? serverTask;
   const active = isTaskActive(task?.status);
 
   return (
@@ -148,6 +160,12 @@ function FXSyncRow({ onChanged }: { onChanged: () => void }) {
         )}
         {pollError && <span className="text-danger">任务状态查询失败：{pollError}</span>}
       </span>
+      <span className="text-xs text-ink-muted">
+        最近成功：
+        <span className="font-mono-numeric text-ink">
+          {formatDateTimeFromMs(view?.last_success_at)}
+        </span>
+      </span>
       <span className="ml-auto flex items-center gap-2">
         {createError && <span className="text-xs text-danger">{createError}</span>}
         <RefreshTaskButton
@@ -158,7 +176,7 @@ function FXSyncRow({ onChanged }: { onChanged: () => void }) {
             setCreateError(null);
             return syncFXRates();
           }}
-          onTask={(t: WorkerTask) => setTaskId(t.id)}
+          onTask={(t: WorkerTask) => setManualTaskId(t.id)}
           onError={setCreateError}
           activeTask={task}
         >
@@ -221,7 +239,7 @@ export default function MarketAssetsPage() {
       {syncs.map((view) => (
         <DirectorySyncRow key={view.scope} view={view} onChanged={invalidateDirectory} />
       ))}
-      <FXSyncRow onChanged={invalidateDirectory} />
+      <FXSyncRow view={data?.fx_sync} onChanged={invalidateDirectory} />
     </section>
   );
 

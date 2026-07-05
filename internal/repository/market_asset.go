@@ -138,17 +138,29 @@ func (r *MarketAssetRepo) MarkUnseenInactiveTx(
 	return wrapSQL("mark unseen market assets inactive", err)
 }
 
-// CountActiveByTypeTx counts currently-active directory rows for coverage
-// validation before the sync overwrites them.
-func (r *MarketAssetRepo) CountActiveByTypeTx(
-	ctx context.Context, tx *sql.Tx, market, instrumentType string,
+// CountActiveByTypeSourcesTx counts active directory rows of one category that
+// were produced by any of the given listing sources. The directory coverage
+// gate compares like-for-like: counts from a listing source the current sync
+// no longer uses (taxonomy/source migrations) must not block the sync forever.
+func (r *MarketAssetRepo) CountActiveByTypeSourcesTx(
+	ctx context.Context, tx *sql.Tx, market, instrumentType string, sources []string,
 ) (int, error) {
+	if len(sources) == 0 {
+		return 0, nil
+	}
+	ph := make([]string, len(sources))
+	args := []any{market, instrumentType}
+	for i, s := range sources {
+		ph[i] = "?"
+		args = append(args, s)
+	}
 	var n int
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM market_assets
-		WHERE market=? AND instrument_type=? AND active=1`,
-		market, instrumentType).Scan(&n)
-	return n, wrapSQL("count active market assets", err)
+		WHERE market=? AND instrument_type=? AND active=1
+		  AND source_name IN (`+strings.Join(ph, ",")+`)`,
+		args...).Scan(&n)
+	return n, wrapSQL("count active market assets by sources", err)
 }
 
 const marketAssetColumns = `

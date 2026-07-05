@@ -344,6 +344,10 @@ const DATA_SOURCE_MAP: Record<string, string> = {
   "ak.fund_money_fund_info_em": "东方财富 · 货币基金",
   "ak.stock_us_daily": "美股 · 日线",
   "ak.currency_boc_sina": "新浪 · 外汇",
+  "em.hk_equity_list": "东方财富 · 港股列表",
+  "em.hk_fund_list": "东方财富 · 港股基金列表",
+  "em.us_equity_list": "东方财富 · 美股列表",
+  "em.us_etf_list": "东方财富 · 美股 ETF 列表",
   test_fixture: "测试数据",
 };
 
