@@ -59,6 +59,8 @@ body {
 /* Unified form control styles */
 .input-base {
   width: 100%;
+  /* Allow shrinking inside flex/grid tracks instead of forcing overflow. */
+  min-width: 0;
   border-radius: 0.375rem;
   border: 1px solid var(--line);
   background: var(--surface);

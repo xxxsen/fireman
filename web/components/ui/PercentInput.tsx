@@ -19,21 +19,21 @@ export function PercentInput({
 }: PercentInputProps) {
   return (
     <label className={`block ${className ?? ""}`}>
-      {label && <span className="mb-1 block text-sm text-ink-muted">{label}</span>}
+      {label && <span className="mb-1 block text-sm text-ink">{label}</span>}
       <div className="flex items-center gap-1">
         <input
           type="text"
           inputMode="decimal"
           disabled={disabled}
           data-testid="percent-input"
-          className="input-base font-mono-numeric"
+          className="input-base min-w-0 font-mono-numeric"
           value={decimalToPercentString(value)}
           onChange={(e) => {
             const d = percentToDecimal(e.target.value);
             if (d !== null) onChange(d);
           }}
         />
-        <span className="text-sm text-ink-muted">%</span>
+        <span className="shrink-0 text-sm text-ink-muted">%</span>
       </div>
     </label>
   );

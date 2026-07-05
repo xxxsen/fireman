@@ -202,12 +202,12 @@ export function AssetClassHoldingPicker({
     ? `${subTitle}搜索`
     : `${assetClassLabel(assetClass)}${region ? regionLabel(region) : ""}搜索`;
 
-  // Constrain the picker content (search box, selected list and candidate lists)
-  // to a readable width inside the 96rem wizard so the search input is not
-  // stretched edge to edge. All inner elements use w-full and stay box-aligned.
+  // The top-level picker fills its parent (the wizard tab panel already draws
+  // the border), so panel border and content width always match. Nested
+  // domestic/foreign sub-containers keep their own inner border.
   const sectionClass = nested
-    ? "mt-3 w-full max-w-6xl rounded-md border border-line bg-surface p-3"
-    : "w-full max-w-6xl rounded-lg border border-line p-4";
+    ? "mt-3 w-full rounded-md border border-line bg-surface p-3"
+    : "w-full";
 
   const sectionAriaLabel = nested ? undefined : (subTitle ?? `${assetClassLabel(assetClass)}选标`);
 
@@ -218,7 +218,10 @@ export function AssetClassHoldingPicker({
     <section ref={rootRef} className={sectionClass} aria-label={sectionAriaLabel}>
       {subTitle && <h4 className="text-sm font-medium text-ink">{subTitle}</h4>}
       {selected.length > 0 && (
-        <ul className={`${subTitle ? "mt-2" : "mt-3"} space-y-1`} data-testid="wizard-selected-rows">
+        <ul
+          className={`${subTitle ? "mt-2" : nested ? "mt-3" : ""} space-y-2`}
+          data-testid="wizard-selected-rows"
+        >
           {selected.map((s) => {
             const expectedMinor = computeExpectedAmountMinor(
               totalAssetsMinor,
@@ -242,7 +245,7 @@ export function AssetClassHoldingPicker({
       )}
       <div
         className={`flex flex-col gap-2 sm:flex-row sm:items-center ${
-          subTitle || selected.length > 0 ? "mt-2" : "mt-3"
+          subTitle || selected.length > 0 ? "mt-2" : nested ? "mt-3" : ""
         }`}
       >
         <input

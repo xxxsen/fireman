@@ -257,10 +257,12 @@ describe("AssetRefreshPage", () => {
     expect(await screen.findByText("确认范围")).toBeInTheDocument();
   });
 
-  it("shows inline money unit on entry step", async () => {
+  it("shows inline money unit and magnitude hint on entry step", async () => {
     await goToEntryStep();
     const units = screen.getAllByTestId("money-inline-unit");
-    expect(units.some((unit) => unit.textContent === "CNY(万)")).toBe(true);
+    expect(units.some((unit) => unit.textContent === "元")).toBe(true);
+    const hints = screen.getAllByTestId("money-unit-hint");
+    expect(hints.some((hint) => hint.textContent?.includes("万"))).toBe(true);
   });
 
   it("opens centered dialog to add instrument", async () => {

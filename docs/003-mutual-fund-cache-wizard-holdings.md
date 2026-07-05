@@ -28,7 +28,7 @@
 - 并发刷新：`threading.Lock` + `Event` singleflight， follower 等待 leader 完成后共享结果
 - 状态查询：`cn_mutual_fund_name_cache_status()` 返回 `ttl_seconds`、`expires_at`、`is_fresh`
 - Resolve 路径：`get_cn_mutual_fund_name()` 传播上游错误；`lookup_cn_mutual_fund_name()` 为 best-effort 吞异常
-- 手动刷新：`POST /v1/metadata/refresh` body `{"target":"cn_mutual_fund_names"}` → `refresh_cn_mutual_fund_names()`
+- 强制刷新：`refresh_cn_mutual_fund_names()` 供进程内调用（sidecar 已无对外同步 HTTP 面，旧 `POST /v1/metadata/refresh` 端点已移除）；启动预热可用 `MARKET_PROVIDER_STARTUP_WARM_ENABLED=false` / `FIREMAN_DISABLE_STARTUP_WARM=1` 关闭
 
 ### 单测
 
@@ -36,20 +36,9 @@
 
 ---
 
-## 2. 删除资产后资料库列表刷新
+## 2. 删除资产后资料库列表刷新（已废弃）
 
-### 行为
-
-删除成功后：
-
-1. `removeQueries(["instrument-detail", id])` 清除详情缓存
-2. `await invalidateQueries({ queryKey: ["instruments"] })` 失效列表
-3. `router.push("/assets")` 跳转资料库
-
-### 实现
-
-- `web/app/assets/[id]/page.tsx` — `deleteMut.onSuccess`
-- 单测：`web/app/assets/[id]/page.test.tsx`
+原“用户资产库删除 + 列表刷新”交互已随用户资产库移除而下线：`/assets` 现为全市场资产目录只读视图，`/assets/market/{assetKey}` 详情页只提供历史同步操作，无删除入口。见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。
 
 ---
 
@@ -57,12 +46,12 @@
 
 ### 范围
 
-**仅** `web/app/plans/new/page.tsx` 及抽取组件；计划内 `/plans/[id]/instruments` 编辑页未改。
+**仅** `web/app/plans/new/page.tsx` 及抽取组件；旧计划内 `/plans/[id]/instruments` 路由现重定向到调仓工作台。
 
 ### UI 行为
 
 1. 按 **权益 → 债券 → 现金/其他** 顺序渲染容器；场景大类权重为 0 的容器不显示
-2. 每容器内搜索仅匹配对应 `asset_class` 的 active 标的
+2. 每容器内搜索直接查询全市场资产目录（`GET /api/v1/market-assets`，代码走 `symbol_q`、名称走 `name_q`），选中后按所在容器写入 `asset_class` 与 `region`
 3. **预期资金** = `round(总资产 × 场景大类权重 × 组内占比)`
 4. **组内权重**按大类（非大类+地区）合计须 100% 方可进入 step 3
 5. **全组合目标权重**在 step 3 由 `buildWizardPortfolioReview` 校验，通过后方可创建计划

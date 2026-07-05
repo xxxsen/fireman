@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
 import { Button } from "@/components/ui/Button";
 import { MetricHelp } from "@/components/ui/MetricHelp";
@@ -112,6 +112,37 @@ function validateAdvancedParams(a: AdvancedFireParams): string[] {
   return errs;
 }
 
+/**
+ * Client mirror of the backend age rule `0 < current_age <= retirement_age <
+ * end_age <= 120` (end_age = retirement_age + duration), so invalid ages are
+ * rejected with a Chinese message before submit instead of a server error.
+ */
+function validateWizardAges(
+  currentAge: number,
+  retirementAge: number,
+  fireDurationYears: number,
+): string | null {
+  if (!Number.isInteger(currentAge) || currentAge <= 0) {
+    return "当前年龄需为大于 0 的整数。";
+  }
+  if (!Number.isInteger(retirementAge)) {
+    return "退休年龄需为整数。";
+  }
+  if (retirementAge < currentAge) {
+    return "退休年龄不能小于当前年龄。";
+  }
+  if (!Number.isInteger(fireDurationYears)) {
+    return "预计 FIRE 时长需为整数（年）。";
+  }
+  if (fireDurationYears < 1) {
+    return "预计 FIRE 时长至少为 1 年。";
+  }
+  if (retirementAge + fireDurationYears > 120) {
+    return "退休年龄加 FIRE 时长不能超过 120 岁。";
+  }
+  return null;
+}
+
 const WITHDRAWAL_TYPE_LABEL: Record<string, string> = {
   fixed_real: "固定实际支出",
   fixed_portfolio: "组合百分比",
@@ -171,6 +202,9 @@ function buildParameters(
 
 export default function NewPlanWizardPage() {
   const router = useRouter();
+  const fieldIdPrefix = useId();
+  const currentAgeId = `${fieldIdPrefix}-current-age`;
+  const retirementAgeId = `${fieldIdPrefix}-retirement-age`;
   const [step, setStep] = useState(0);
   const [name, setName] = useState(defaultPlanName);
   const [valuationDate] = useState(new Date().toISOString().slice(0, 10));
@@ -338,10 +372,29 @@ export default function NewPlanWizardPage() {
     [selectedInstruments],
   );
 
-  // Validation that runs when leaving 计划目标: a scenario must be chosen, region
-  // splits must sum to 100%, and incompatible already-picked instruments are
-  // pruned by scenario/region. Returns false (with an error set) to block.
+  // Validation that runs when leaving 计划目标: ages must satisfy the backend
+  // rule 0 < current <= retirement < end <= 120, a scenario must be chosen,
+  // region splits must sum to 100%, and incompatible already-picked instruments
+  // are pruned by scenario/region. Returns false (with an error set) to block.
   const leaveGoalStep = (): boolean => {
+    const ageError = validateWizardAges(currentAge, retirementAge, fireDurationYears);
+    if (ageError) {
+      setError(ageError);
+      return false;
+    }
+    // Mirror of the backend rule "total_assets and annual_spending must be > 0".
+    if (totalAssets <= 0) {
+      setError("基准规模需大于 0。");
+      return false;
+    }
+    if (annualSpending <= 0) {
+      setError("当前年支出需大于 0。");
+      return false;
+    }
+    if (annualSavings < 0) {
+      setError("年储蓄不能为负数。");
+      return false;
+    }
     if (!scenarioId) {
       setError("请选择配置模板。");
       return false;
@@ -404,12 +457,12 @@ export default function NewPlanWizardPage() {
       >
         {step === GOAL_STEP && (
           <div className="max-w-6xl space-y-8">
-            <section className="space-y-6">
+            <section className="space-y-5">
               <h2 className="text-sm font-semibold text-ink">基本资料</h2>
               <label className="block text-sm">
-                计划名称
+                <span className="mb-1 block text-ink">计划名称</span>
                 <input
-                  className="input-base mt-1 max-w-3xl"
+                  className="input-base max-w-3xl"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
@@ -419,28 +472,40 @@ export default function NewPlanWizardPage() {
                   FIRE 模拟参数
                   <MetricHelp termKey="fire_params_for_simulation" />
                 </h3>
-                <div className="mt-2 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                  <label className="text-sm">
-                    当前年龄
-                    <input
-                      type="number"
-                      className="input-base mt-1"
-                      value={currentAge}
-                      onChange={(e) => setCurrentAge(Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="text-sm">
-                    退休年龄
-                    <input
-                      type="number"
-                      className="input-base mt-1"
-                      value={retirementAge}
-                      onChange={(e) => setRetirementAge(Number(e.target.value))}
-                    />
-                  </label>
-                  <label className="text-sm">
-                    预计 FIRE 时长
-                    <div className="mt-1 space-y-1">
+                <div className="mt-3 grid items-start gap-x-6 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="text-sm">
+                    <label htmlFor={currentAgeId} className="mb-1 block text-ink">
+                      当前年龄
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id={currentAgeId}
+                        type="number"
+                        className="input-base"
+                        value={currentAge}
+                        onChange={(e) => setCurrentAge(Number(e.target.value))}
+                      />
+                      <span className="shrink-0 text-sm text-ink-muted">岁</span>
+                    </div>
+                  </div>
+                  <div className="text-sm">
+                    <label htmlFor={retirementAgeId} className="mb-1 block text-ink">
+                      退休年龄
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id={retirementAgeId}
+                        type="number"
+                        className="input-base"
+                        value={retirementAge}
+                        onChange={(e) => setRetirementAge(Number(e.target.value))}
+                      />
+                      <span className="shrink-0 text-sm text-ink-muted">岁</span>
+                    </div>
+                  </div>
+                  <div className="text-sm">
+                    <span className="mb-1 block text-ink">预计 FIRE 时长</span>
+                    <div className="flex items-center gap-2">
                       <input
                         type="number"
                         min={1}
@@ -449,60 +514,71 @@ export default function NewPlanWizardPage() {
                         onChange={(e) => setFireDurationYears(Number(e.target.value))}
                         aria-label="预计 FIRE 时长（年）"
                       />
-                      <select
-                        className="input-base text-xs text-ink-muted"
-                        aria-label="常用 FIRE 时长预设"
-                        value={
-                          FIRE_DURATION_PRESETS.includes(
-                            fireDurationYears as (typeof FIRE_DURATION_PRESETS)[number],
-                          )
-                            ? String(fireDurationYears)
-                            : ""
-                        }
-                        onChange={(e) => {
-                          if (e.target.value) setFireDurationYears(Number(e.target.value));
-                        }}
-                      >
-                        <option value="">选择常用时长</option>
-                        {FIRE_DURATION_PRESETS.map((years) => (
-                          <option key={years} value={years}>
-                            {years} 年
-                          </option>
-                        ))}
-                      </select>
+                      <span className="shrink-0 text-sm text-ink-muted">年</span>
                     </div>
-                  </label>
+                    <div
+                      className="mt-1.5 flex flex-wrap gap-1.5"
+                      role="group"
+                      aria-label="常用 FIRE 时长预设"
+                    >
+                      {FIRE_DURATION_PRESETS.map((years) => {
+                        const active = fireDurationYears === years;
+                        return (
+                          <button
+                            key={years}
+                            type="button"
+                            aria-pressed={active}
+                            className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                              active
+                                ? "border-brand bg-brand/10 font-medium text-brand-strong"
+                                : "border-line text-ink-muted hover:text-ink"
+                            }`}
+                            onClick={() => setFireDurationYears(years)}
+                          >
+                            {years} 年
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <MoneyInput
+                    label={
+                      <span className="flex items-center">
+                        基准规模
+                        <MetricHelp termKey="configured_total_assets" />
+                      </span>
+                    }
+                    valueMinor={totalAssets}
+                    onChange={setTotalAssets}
+                    plain
+                  />
+                  <MoneyInput
+                    label="当前年支出"
+                    valueMinor={annualSpending}
+                    onChange={setAnnualSpending}
+                    plain
+                  />
+                  <MoneyInput
+                    label={
+                      <span className="flex items-center">
+                        年储蓄
+                        <MetricHelp termKey="annual_savings_wizard" />
+                      </span>
+                    }
+                    valueMinor={annualSavings}
+                    onChange={setAnnualSavings}
+                    plain
+                  />
                 </div>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                <MoneyInput
-                  label={
-                    <span className="flex items-center">
-                      基准规模
-                      <MetricHelp termKey="configured_total_assets" />
-                    </span>
-                  }
-                  valueMinor={totalAssets}
-                  onChange={setTotalAssets}
-                  plain
-                />
-                <MoneyInput label="当前年支出" valueMinor={annualSpending} onChange={setAnnualSpending} plain />
-                <label className="block text-sm">
-                  <span className="mb-1 flex items-center gap-1">
-                    年储蓄
-                    <MetricHelp termKey="annual_savings_wizard" />
-                  </span>
-                  <MoneyInput valueMinor={annualSavings} onChange={setAnnualSavings} plain />
-                </label>
               </div>
             </section>
 
             <section className="space-y-4">
               <h2 className="text-sm font-semibold text-ink">目标配置</h2>
               <label className="block max-w-3xl text-sm">
-                配置模板
+                <span className="mb-1 block text-ink">配置模板</span>
                 <select
-                  className="input-base mt-1"
+                  className="input-base"
                   value={scenarioId}
                   onChange={(e) => setScenarioId(e.target.value)}
                 >
@@ -528,7 +604,7 @@ export default function NewPlanWizardPage() {
                       return (
                         <div key={ac} className="space-y-2 rounded-md border border-line p-3">
                           <p className="text-sm font-medium">{check.label}</p>
-                          <div className="flex flex-wrap items-end gap-4">
+                          <div className="grid grid-cols-2 gap-3">
                             <PercentInput
                               label="国内"
                               value={rt.domestic}
@@ -575,7 +651,7 @@ export default function NewPlanWizardPage() {
         )}
 
         {step === HOLDINGS_STEP && (
-          <div className="space-y-4">
+          <div className="max-w-6xl space-y-4" data-testid="wizard-holdings-step">
             {removedByTargets.length > 0 && (
               <div
                 className="flex items-start justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning"
@@ -739,7 +815,7 @@ export default function NewPlanWizardPage() {
         )}
 
         {step === CONFIRM_STEP && (
-          <>
+          <div className="max-w-6xl space-y-4" data-testid="wizard-confirm-step">
             <ul className="list-disc pl-5 text-sm text-ink">
               <li>组内权重：{groupWeightChecks.every((g) => g.passed) ? "通过" : "未通过"}</li>
               <li>全组合目标权重：{portfolioReview?.passed ? "通过" : "未通过"}</li>
@@ -914,7 +990,7 @@ export default function NewPlanWizardPage() {
               创建后运行 FIRE 模拟（{DEFAULT_RUNS.toLocaleString()} 次）
               <MetricHelp termKey="fire_simulation_optional" />
             </label>
-          </>
+          </div>
         )}
       </div>
 
@@ -1012,11 +1088,11 @@ function AdvancedFireParamsSection({
           </span>
         )}
       </summary>
-      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+      <div className="mt-3 grid items-start gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
         <label className="block text-sm">
-          通胀模式
+          <span className="mb-1 block text-ink">通胀模式</span>
           <select
-            className="input-base mt-1"
+            className="input-base"
             value={advanced.inflation_mode}
             onChange={(e) => onChange("inflation_mode", e.target.value)}
           >
@@ -1030,7 +1106,7 @@ function AdvancedFireParamsSection({
           onChange={(v) => onChange("fixed_inflation_rate", v)}
         />
         {advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION && (
-          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+          <label className="flex items-center gap-2 text-sm sm:col-span-full">
             <input
               type="checkbox"
               checked={highInflationConfirmed}
@@ -1052,13 +1128,13 @@ function AdvancedFireParamsSection({
               onChange={(v) => onChange("inflation_sigma", v)}
             />
             <label className="block text-sm">
-              通胀自回归 φ
+              <span className="mb-1 block text-ink">通胀自回归 φ</span>
               <input
                 type="number"
                 step={0.01}
                 min={0}
                 max={1}
-                className="input-base mt-1"
+                className="input-base"
                 value={advanced.inflation_phi}
                 onChange={(e) => onChange("inflation_phi", Number(e.target.value))}
               />
@@ -1066,9 +1142,9 @@ function AdvancedFireParamsSection({
           </>
         )}
         <label className="block text-sm">
-          提取策略
+          <span className="mb-1 block text-ink">提取策略</span>
           <select
-            className="input-base mt-1"
+            className="input-base"
             value={advanced.withdrawal_type}
             onChange={(e) => onChange("withdrawal_type", e.target.value)}
           >
@@ -1097,7 +1173,7 @@ function AdvancedFireParamsSection({
               value={advanced.withdrawal_ceiling_ratio}
               onChange={(v) => onChange("withdrawal_ceiling_ratio", v)}
             />
-            <p className="text-xs text-ink-muted sm:col-span-2">
+            <p className="text-xs text-ink-muted sm:col-span-full">
               系统在退休周年按当前提取率相对初始提取率调整年度支出（过高下调、过低上调），再受上下限约束。
             </p>
           </>
@@ -1114,7 +1190,7 @@ function AdvancedFireParamsSection({
         />
         {errors.length > 0 && (
           <ul
-            className="space-y-1 text-xs text-danger sm:col-span-2"
+            className="space-y-1 text-xs text-danger sm:col-span-full"
             data-testid="wizard-advanced-errors"
           >
             {errors.map((msg) => (

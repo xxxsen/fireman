@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0019） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0021） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -44,7 +44,7 @@
 
 ---
 
-## 3. 资产资料库与市场数据
+## 3. 市场资产目录与市场数据
 
 | 能力 | 说明 |
 | --- | --- |
@@ -163,9 +163,9 @@ Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-arc
 以下主题已经完成主要实现并纳入当前代码：
 
 - 原子计划向导与配置持久化
-- 异步资产导入、解析票据与抓取状态管理
+- 任务化资产目录同步、历史同步与模拟 readiness 检查
 - 中国场内代码规范化、LOF 解析与硬超时
-- 公募基金名称缓存与资料库删除刷新
+- 公募基金名称缓存与目录同步刷新
 - 组合优先 UI、结构偏差与规模偏差分拆
 - 调仓工作台 / 持仓校正 / 全局配置模板收拢
 
@@ -176,7 +176,7 @@ Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-arc
 1. **人工浏览器验收**：主链路验收记录仍有待签字项，需产品负责人在发布前补齐。
 2. **无 E2E**：依赖 Go 集成测试 + Vitest + 人工浏览器。
 3. **单用户本地优先**：无账号、权限、多租户。
-4. **数据源**：除系统 FX/现金外，用户资产仅经 AKShare sidecar 录入。
+4. **数据源**：除系统 FX/现金外，市场资产目录与历史数据均由任务化 worker sidecar（AKShare/TickFlow）同步。
 
 ---
 

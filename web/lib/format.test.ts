@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annualCompletenessLabel, compressYears, dataSourceLabel, formatAnnualPeriod, formatDateFromMs, formatMoneyInlineUnit, formatMoneyScaled, formatMoneyUnitHint, formatMoneyWan, representativePercentileRank, sortRepresentativePaths } from "./format";
+import { annualCompletenessLabel, compressYears, dataSourceLabel, formatAnnualPeriod, formatDateFromMs, formatMoneyScaled, formatMoneyUnitHint, formatMoneyWan, representativePercentileRank, sortRepresentativePaths } from "./format";
 
 describe("formatMoneyWan", () => {
   it("converts minor to 万元 with two decimals and no separators", () => {
@@ -63,20 +63,24 @@ describe("formatAnnualPeriod", () => {
   });
 });
 
-describe("formatMoneyInlineUnit", () => {
-  it("shows inline unit without converting the raw value", () => {
-    expect(formatMoneyInlineUnit("CNY", "150")).toBe("CNY(百)");
-    expect(formatMoneyInlineUnit("CNY", "1500")).toBe("CNY(千)");
-    expect(formatMoneyInlineUnit("CNY", "15000")).toBe("CNY(万)");
-    expect(formatMoneyInlineUnit("CNY", "1500000")).toBe("CNY(百万)");
-    expect(formatMoneyInlineUnit("CNY", "")).toBe("CNY");
-  });
-});
-
 describe("formatMoneyUnitHint", () => {
   it("shows wan hint for plain numeric amounts", () => {
     expect(formatMoneyUnitHint(15000)).toBe("约 1.50 万");
     expect(formatMoneyUnitHint(2500000)).toBe("约 250.00 万");
+  });
+
+  it("shows yi hint for very large amounts", () => {
+    expect(formatMoneyUnitHint(250_000_000)).toBe("约 2.50 亿");
+  });
+
+  it("returns null for small, zero and negative-small amounts", () => {
+    expect(formatMoneyUnitHint(0)).toBeNull();
+    expect(formatMoneyUnitHint(9_999)).toBeNull();
+    expect(formatMoneyUnitHint(-9_999)).toBeNull();
+  });
+
+  it("keeps the sign for negative large amounts", () => {
+    expect(formatMoneyUnitHint(-15000)).toBe("约 -1.50 万");
   });
 });
 

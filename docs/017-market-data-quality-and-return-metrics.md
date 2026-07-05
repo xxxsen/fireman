@@ -1,6 +1,6 @@
 # 市场数据质量、收益指标与模拟准入
 
-> **注**：本文中「资产资料库 / `instruments` API / `instrument_library_metrics` 投影」相关内容已被市场资产目录模型取代——计划持仓直接引用 `market_assets.asset_key`，收益投影迁移至 `market_asset_detail_projections`；最终架构见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。完整自然年、质量指标与模拟准入口径仍然有效。
+> 资产数据统一来自全局市场资产目录：行情点位存于 `market_asset_points`，收益投影存于 `market_asset_detail_projections`，模拟输入使用 `market_asset_simulation_snapshots`；完整架构见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。
 
 ## 目的
 
@@ -12,9 +12,9 @@ Fireman 的资产目录、计划持仓和 FIRE 模拟共用同一套行情质量
 
 - 年内有足够的月末点位，可以构造连续月度收益。
 - 起止点覆盖完整年度边界；成立首年和当前未结束年份通常不计入完整年。
-- 非连续完整年份可以同时保留，但会在 UI 中压缩显示为区间串，例如 `2006-2012、2014-2025`。
+- 非连续完整年份可以同时保留，快照按实际可用年份取样，不要求年份连续。
 
-模拟快照最多纳入最近 20 个完整自然年。历史不足时，资产可以继续留在资料库，但会按质量状态影响模拟准入。
+模拟快照最多纳入最近 20 个完整自然年。历史不足时，资产仍保留在市场资产目录中，但会在模拟 readiness 检查中被拦截。
 
 ## 收益与风险指标
 
@@ -26,43 +26,37 @@ Fireman 的资产目录、计划持仓和 FIRE 模拟共用同一套行情质量
 | 最大回撤 | 基于点位序列计算峰谷回撤 |
 | 近 1/3/5 年收益 | 以该标的自身最后可用交易日为终点，按实际起点累计/年化 |
 
-系统现金和系统 FX 有独立快照来源；用户资产通过 market data points 和 annual returns 计算指标。
+系统现金和系统 FX 有内置零收益/汇率快照来源；市场资产通过 `market_asset_points` 计算指标并落入 `market_asset_detail_projections`。
 
-## 资料库列表投影
+## 资产详情投影
 
-`instrument_library_metrics` 是资产资料库列表的预计算投影，包含：
+`market_asset_detail_projections` 是资产详情的预计算投影，按 `(asset_key, adjust_policy, point_type)` 存储：
 
-- `data_as_of`、来源和点位类型；
-- CAGR、年化波动率、最大回撤、完整年份数量；
-- 近 1/3/5 年年化收益；
-- 数据质量状态与模拟资格。
+- `annual_returns_json`：逐年收益（年份、收益率、起止日期与点位、观测数、是否不完整年 `is_partial`）；
+- `trailing_returns_json`：近 1/3/5 年收益，以该标的自身最后可用交易日为终点。
 
-资料库列表通过一次 JOIN 读取投影，不在每个 HTTP 请求中逐资产同步计算全量行情。导入、重试、手工刷新或来源切换会在同一事务内同步投影：
-
-- 非空历史：upsert 最新投影；
-- 空历史：删除旧投影，避免保留过期收益和资格；
-- 投影写入失败：整笔行情写入回滚。
+历史同步任务的 post-process 在落库行情点位的同一事务内重算投影，详情页读取时不重算；全量替换（含来源切换）会先删除旧点位再写入并重算投影，替换后序列为空视为数据不完整而失败，投影写入失败会使整笔行情写入回滚。
 
 ## 模拟准入
 
-计划持仓进入 FIRE 模拟前必须满足：
+计划持仓进入 FIRE 模拟前，由 `GET /api/v1/plans/:plan_id/simulation-readiness` 统一检查：
 
-- 标的状态为 active；
-- 有足够质量的历史数据或系统现金/FX 特例；
-- 持仓冻结的资产分类和地区仍可被当前计划目标接受；
+- 每个持仓的 `asset_key` 在 `market_assets` 中存在且可用；
+- 本地存在足够历史数据（或系统现金/FX 特例），缺历史的持仓在 readiness 结果中标记 `history_missing`，模拟创建被 `market_asset_history_missing` 错误阻断；
+- 懒保存的持仓在 readiness 检查时试算快照（不落库）；模拟创建前再统一构建并持久化 `market_asset_simulation_snapshots`；
 - 对外币资产，模拟快照必须能解析对应 FX 因子。
 
-不满足准入时，计划创建、持仓校正或模拟启动会在服务层返回明确错误，而不是让引擎在中途失败。
+缺历史时可通过 `POST /api/v1/plans/:plan_id/sync-missing-asset-history` 一键创建历史同步任务，完成后重新检查 readiness。不满足准入时在服务层返回明确错误，而不是让引擎在中途失败。
 
 ## API 与前端展示
 
-- `GET /api/v1/instruments` 在资料库列表中返回投影指标；缺失、抓取中、抓取失败和系统占位统一展示 `—`。
-- `GET /api/v1/instruments/:instrument_id/return-series?range=...` 返回归一化累计收益曲线，支持 `3d/1w/1m/3m/6m/1y/3y/5y/all`。
-- 资产详情页按最新年份优先展示年度收益，并展示历史样本区间、质量状态和模拟资格。
+- `GET /api/v1/market-assets` 返回目录列表并附带每个资产的历史就绪状态（已同步的数据截至日/点位数/来源，或最近同步任务的进行中/失败状态）。
+- `GET /api/v1/market-assets/by-key` 返回资产详情：元信息、历史状态、行情点位与投影中的年度/区间收益。
+- 资产详情页按最新年份优先展示年度收益，并基于本地点位渲染归一化累计收益曲线。
 
 ## 验证重点
 
 - 月度收益、年化波动率、CAGR、最大回撤和近 1/3/5 年收益的纯函数测试。
-- 空历史刷新会删除投影，投影失败会回滚行情写入。
-- 资料库列表不退回逐资产同步计算。
+- post-process 在同一事务内更新行情与投影；全量替换后空序列会使任务失败并回滚，不留下过期收益。
+- 缺历史持仓被 readiness 拦截，`sync-missing-asset-history` 完成后可通过。
 - 短历史、非连续年份、停更资产和系统现金/FX 均有稳定展示与准入结果。

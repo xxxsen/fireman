@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
@@ -375,21 +375,113 @@ describe("NewPlanWizardPage", () => {
     expect(await screen.findByText(/已选标的：1 个/)).toBeInTheDocument();
   });
 
-  it("fire duration: one editable input with preset回填", async () => {
+  it("fire duration: one editable input with preset chips", async () => {
     renderWizard();
     const durationInputs = screen.getAllByLabelText("预计 FIRE 时长（年）");
     expect(durationInputs).toHaveLength(1);
     const input = durationInputs[0]!;
 
+    // Default 30 matches a preset chip, which shows as pressed.
+    expect(screen.getByRole("button", { name: "30 年", pressed: true })).toBeInTheDocument();
+
     fireEvent.change(input, { target: { value: "37" } });
     expect(input).toHaveValue(37);
-    // Custom value is not a preset, so the suggestion select shows its placeholder.
-    const preset = screen.getByLabelText("常用 FIRE 时长预设");
-    expect(preset).toHaveValue("");
+    // Custom value is not a preset, so no chip is pressed.
+    expect(screen.queryByRole("button", { pressed: true })).not.toBeInTheDocument();
 
-    fireEvent.change(preset, { target: { value: "40" } });
+    fireEvent.click(screen.getByRole("button", { name: "40 年" }));
     expect(screen.getByLabelText("预计 FIRE 时长（年）")).toHaveValue(40);
-    expect(screen.getByLabelText("常用 FIRE 时长预设")).toHaveValue("40");
+    expect(screen.getByRole("button", { name: "40 年", pressed: true })).toBeInTheDocument();
+  });
+
+  it("blocks leaving goal step when ages or duration are invalid", async () => {
+    renderWizard();
+    await selectScenario("scn_a");
+
+    fireEvent.change(screen.getByLabelText("退休年龄"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("退休年龄不能小于当前年龄。")).toBeInTheDocument();
+    expect(screen.queryByText(/按大类分标签页搜索并添加标的/)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("退休年龄"), { target: { value: "40" } });
+    fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("预计 FIRE 时长至少为 1 年。")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), { target: { value: "90" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(
+      await screen.findByText("退休年龄加 FIRE 时长不能超过 120 岁。"),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("当前年龄"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("预计 FIRE 时长（年）"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("当前年龄需为大于 0 的整数。")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("当前年龄"), { target: { value: "35" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() =>
+      expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
+    );
+  });
+
+  it("blocks leaving goal step when base amounts are invalid", async () => {
+    renderWizard();
+    await selectScenario("scn_a");
+
+    // Money inputs on the goal step in DOM order: 基准规模, 当前年支出, 年储蓄.
+    const [totalAssets, annualSpending, annualSavings] = screen.getAllByTestId("money-input");
+
+    fireEvent.change(totalAssets!, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("基准规模需大于 0。")).toBeInTheDocument();
+
+    fireEvent.change(totalAssets!, { target: { value: "4000000" } });
+    fireEvent.change(annualSpending!, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("当前年支出需大于 0。")).toBeInTheDocument();
+
+    fireEvent.change(annualSpending!, { target: { value: "120000" } });
+    fireEvent.change(annualSavings!, { target: { value: "-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByText("年储蓄不能为负数。")).toBeInTheDocument();
+
+    fireEvent.change(annualSavings!, { target: { value: "100000" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() =>
+      expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
+    );
+  });
+
+  it("constrains holdings and confirm content and keeps a single panel border", async () => {
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    expect(screen.getByTestId("wizard-holdings-step")).toHaveClass("max-w-6xl");
+
+    // The tab panel draws the only border; the top-level picker inside is
+    // borderless so panel width and content width stay in sync.
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveClass("border");
+    const picker = screen.getByRole("region", { name: "权益选标" });
+    expect(picker).not.toHaveClass("border");
+    expect(picker).not.toHaveClass("max-w-6xl");
+
+    await selectEquityInstrument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await screen.findByText(/已选标的：/);
+    expect(screen.getByTestId("wizard-confirm-step")).toHaveClass("max-w-6xl");
+  });
+
+  it("shows visible labels for selected holding weight, amount and expected funds", async () => {
+    renderWizard();
+    await goToInstrumentStep("scn_a");
+    await selectEquityInstrument();
+
+    const row = await screen.findByLabelText("测试权益基金 T1");
+    expect(within(row).getByText("组内占比")).toBeInTheDocument();
+    expect(within(row).getByText("已分配金额")).toBeInTheDocument();
+    expect(within(row).getByText("预期资金")).toBeInTheDocument();
   });
 
   it("keeps a custom fire duration after switching scenario", async () => {

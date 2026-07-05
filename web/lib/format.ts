@@ -76,32 +76,6 @@ export function formatMoneyPlain(minor: number): string {
   return String(minor / 100);
 }
 
-const MONEY_UNIT_HINTS: { threshold: number; unit: string; divisor: number }[] = [
-  { threshold: 1_000_000_000_000, unit: "十亿", divisor: 1_000_000_000_000 },
-  { threshold: 100_000_000, unit: "亿", divisor: 100_000_000 },
-  { threshold: 10_000_000, unit: "千万", divisor: 10_000_000 },
-  { threshold: 1_000_000, unit: "百万", divisor: 1_000_000 },
-  { threshold: 100_000, unit: "十万", divisor: 100_000 },
-  { threshold: 10_000, unit: "万", divisor: 10_000 },
-  { threshold: 1_000, unit: "千", divisor: 1_000 },
-  { threshold: 100, unit: "百", divisor: 100 },
-];
-
-/** Inline unit label for plain money input: `CNY(万)` — no value conversion. */
-export function formatMoneyInlineUnit(currency: string, rawValue: string): string {
-  const cleaned = rawValue.replace(/,/g, "").trim();
-  if (cleaned === "" || cleaned === "0") return currency;
-  const n = Number(cleaned);
-  if (!Number.isFinite(n) || n === 0) return currency;
-  const abs = Math.abs(n);
-  for (const item of MONEY_UNIT_HINTS) {
-    if (abs >= item.threshold) {
-      return `${currency}(${item.unit})`;
-    }
-  }
-  return `${currency}(元)`;
-}
-
 /**
  * Format a minor-unit amount with an automatic magnitude unit (元 / 万元 / 亿元)
  * so large balances stay readable, e.g. `¥1,234.56 万元`.
@@ -126,34 +100,16 @@ export function formatMoneyScaled(minor: number, currency = "CNY"): string {
   return `${symbol}${formatted} ${unit}`;
 }
 
-/** Auxiliary unit hint for plain numeric money input (major units, yuan). */
+/**
+ * Auxiliary magnitude hint for plain numeric money input (major units, yuan).
+ * Only 万 / 亿 magnitudes are hinted — that is where users misread zeros;
+ * smaller amounts return null so inputs stay uncluttered.
+ */
 export function formatMoneyUnitHint(major: number): string | null {
   if (!Number.isFinite(major) || major === 0) return null;
   const abs = Math.abs(major);
-
-  if (abs >= 10_000) {
-    const wan = major / 10_000;
-    if (Math.abs(wan) >= 1 && Math.abs(wan) < 10_000) {
-      return `约 ${wan.toFixed(2)} 万`;
-    }
-  }
-
-  for (const item of [...MONEY_UNIT_HINTS].reverse()) {
-    if (item.unit === "万") continue;
-    if (abs < item.threshold) continue;
-    const scaled = major / item.divisor;
-    if (Math.abs(scaled) >= 1 && Math.abs(scaled) < 10_000) {
-      return `约 ${scaled.toFixed(2)} ${item.unit}`;
-    }
-  }
-
-  for (const item of MONEY_UNIT_HINTS) {
-    if (abs >= item.threshold) {
-      const scaled = major / item.divisor;
-      return `约 ${scaled.toFixed(2)} ${item.unit}`;
-    }
-  }
-
+  if (abs >= 100_000_000) return `约 ${(major / 100_000_000).toFixed(2)} 亿`;
+  if (abs >= 10_000) return `约 ${(major / 10_000).toFixed(2)} 万`;
   return null;
 }
 

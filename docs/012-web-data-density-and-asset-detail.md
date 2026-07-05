@@ -1,25 +1,22 @@
 # 012 · Web 数据密度与资产详情重排
 
-> 本文自洽描述页面宽度与数据密度、资产选择分页、资产资料库分类与刷新、金额单位与配置 tooltip、资产详情重排、场景卡片权限等统一约定。除资料库分类的受控编辑与新增 `GET /api/v1/instruments/:id/return-series`、扩展 `GET /api/v1/instruments` 的分页/搜索、Dashboard allocation bar 明细外，不改变任何金额 / 权重 / 调仓 / 模拟计算口径。
+> 本文自洽描述页面宽度与数据密度、资产选择分页、金额单位与配置 tooltip、资产详情重排、场景卡片权限等统一约定，不改变任何金额 / 权重 / 调仓 / 模拟计算口径。
 >
-> **注**：本文中「用户资产资料库 / `instruments` API / `instrument_library_metrics` 投影」相关章节已被市场资产目录模型取代——计划持仓直接引用 `market_assets.asset_key`，相关表与 API 已移除；最终架构见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。页面宽度、金额单位、tooltip、场景卡片等 UI 约定仍然有效。
+> 资产数据统一来自全局市场资产目录：候选与详情读取 `market_assets` / `market_asset_points` / `market_asset_detail_projections`，模拟输入使用 `market_asset_simulation_snapshots`；完整架构见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。
 
 ## 1. 新建计划向导与页面容器宽度
 
-- 向导根容器使用 `max-w-[96rem]`；计划基础、目标配置、建立持仓、确认组合四个步骤卡片及导航区均使用相同的 `w-full` 有效宽度。表单可读性通过卡片内响应式网格和局部 `max-w` 控制，而不再收窄步骤容器。
+- 向导根容器使用 `max-w-[96rem]`；步骤卡片及导航区均使用相同的 `w-full` 有效宽度。卡片内各步骤内容统一收敛到 `max-w-6xl` 可读宽度：计划目标、建立持仓、确认组合三步的表单、标签页面板与确认表格共用同一内容宽度，边框容器与内容宽度保持一致（选标 picker 顶层不再自带边框，由标签页面板提供单层边框）。
 - 卡片以 `data-testid="wizard-step-card"` 标识便于测试定位。
 - 宽表在移动端仍保留横向滚动，不破坏窄屏可读性。
 
 ## 2. 资产选择分页与滚动加载
 
-- 后端 `GET /api/v1/instruments` 在带 `limit`/`q`/`cursor`/`offset` 任一参数时进入分页搜索分支，返回 `{ instruments, next_cursor, total }`；不带这些参数时保持旧的全量列表行为（资产资料库页、资产刷新页等沿用旧契约不受影响）。
-- 仓储 `InstrumentRepo.Search` 支持按 `q`（代码/名称）、`asset_class`、`region`、`status`、`exclude_ids`、`exclude_system` 过滤，统一按 `created_at DESC, id DESC` 排序并 `LIMIT/OFFSET` 分页；无分页的资料库列表与分页搜索都通过 `LEFT JOIN instrument_library_metrics` 读取行情元数据、模拟资格及近 1/3/5 年年化收益，不在 HTTP 请求中逐资产读取全量行情。服务层补全引用计数，并在 `offset + 本页数量 < total` 时给出 `next_cursor`（offset 语义）。
-- `instrument_library_metrics` 是资料库列表投影：包含 `data_as_of`、来源、点类型、质量、模拟资格、历史样本指标和近 1/3/5 年年化收益。收益以该标的自身最后交易日为截止日，因此停更标的仍按其实际可用历史展示收益；投影缺失、抓取中、抓取失败和系统标的统一展示 `—`，不会回退到同步计算。
-- 异步导入、重试抓取和手工刷新在与 `market_data_points`、`instrument_annual_returns` 相同的事务内调用 `libmetrics.SyncTx`：非空历史更新投影，空历史删除投影。强制刷新或来源切换清空行情时，资料库不会保留旧日期、收益或模拟资格；投影 SQL 失败会使整笔写入回滚。
-- 前端 `AssetClassHoldingPicker` 改用 `useInfiniteQuery`：聚焦即加载首页（默认 10 条最近标的），输入经 250ms 去抖后作为搜索词并重置游标，已选标的通过 `exclude_ids` 从候选中剔除；底部哨兵元素经 `IntersectionObserver` 触底加载下一页。
+- 候选数据来自 `GET /api/v1/market-assets`：形似证券代码的输入走 `symbol_q`（匹配代码，含 `region_code+symbol` 形式），其余输入走 `name_q` 名称匹配，支持 `market` / `instrument_type` 过滤与 `limit`/`offset` 分页，返回 `{ assets, total, syncs }`。
+- 前端 `AssetClassHoldingPicker` 使用 `useInfiniteQuery`：聚焦即加载首页，输入经去抖后作为搜索词并重置游标，已选资产在前端从候选中剔除；底部哨兵元素经 `IntersectionObserver` 触底加载下一页。
+- 每条候选展示历史数据就绪状态：已同步显示「数据截至 + 来源」；同步中 / 同步失败 / 未同步分别有独立提示，缺历史不阻塞选择，模拟前由 readiness 检查拦截。
 - 本地候选使用 48px 单行行高和固定 `30rem`（10 行）滚动视口；长名称截断，翻页不会改变下拉高度或挤压周边内容。已选资产显示在搜索框上方。
-- 候选层遵循 combobox 关闭规则：点击 picker 外部或按 Escape 会同时收起本地候选、AKShare 候选、解析状态与错误；保留输入词，重新聚焦后可继续检索。
-- AKShare 兜底解析仅在「输入形似基金代码」且「本地分页搜索已完成（非加载/刷新中）后仍无精确命中」时触发，避免在本地查询返回前发起无谓的三方请求或闪现无关错误。
+- 候选层遵循 combobox 关闭规则：点击 picker 外部或按 Escape 收起候选与错误提示；保留输入词，重新聚焦后可继续检索。
 
 ## 3. 金额单位与大类配置 tooltip
 
@@ -37,11 +34,12 @@
 
 ## 6. 资产详情页重排与收益曲线
 
-- 顶部改为左右布局：左侧返回入口、资产名称、代码与关键元信息；右上角仅呈现刷新 / 删除操作（按权限与系统标的规则禁用或隐藏）。手工刷新统一立即执行并跳过 24 小时限制，不再向用户暴露“强制刷新”概念。基础信息归入独立分区卡片，主体由窄单列调整为 `max-w-6xl` 宽容器分区。
-- 数据来源通过可读映射显示；例如 `ak.fund_open_fund_info_em:累计净值走势` 显示为“东方财富 · 公募基金 · 累计净值走势”，未知 adapter ID 不直接展示给用户。
-- 普通非系统资产可在详情页编辑大类和地区，使用 `PATCH /api/v1/instruments/:instrument_id/classification` 和 `expected_updated_at` 乐观锁。资料库编辑只影响后续新建/新增资产；既有 `plan_holdings`、调仓和模拟输入保持计划级冻结分类。抓取中的资产禁止编辑，抓取失败的资产仍可编辑，重试会使用其当前分类。
-- 新增 `compressYears(years)`：将纳入模拟的年份数组压缩为区间串（如 `2006-2009`），不连续年份展示为多个区间（如 `2006-2012、2014-2025`）。
-- 新增 `GET /api/v1/instruments/:instrument_id/return-series?range=...`：基于行情点位计算归一化累计收益序列，支持 `3d/1w/1m/3m/6m/1y/3y/5y/all`；历史不足时返回 `insufficient_history` 状态。前端 `ReturnSeriesChart`（ECharts 折线）在「区间收益」分区附近渲染收益曲线，并提供区间切换；切换区间只重新请求曲线数据，不刷新整页详情。
+- 市场资产详情页路由为 `/assets/market/[assetKey]`，数据来自 `GET /api/v1/market-assets/by-key`，返回资产元信息、历史同步状态（`market_asset_history_state` + 最近任务）、行情点位与 `market_asset_detail_projections` 投影（区间年化、年度收益）。
+- 顶部为左右布局：左侧返回入口、资产名称、代码与关键元信息；右上角提供「刷新历史数据」与（可切换来源时的）「切换数据源」操作，均通过 `POST /api/v1/market-assets/history-sync` 创建异步任务，页面轮询任务状态直至终态。
+- 数据来源通过可读映射显示；例如 TickFlow adapter 显示为用户友好 label，未知 adapter ID 不直接展示原始字符串给用户。
+- 历史状态面板展示最近成功时间、数据截至日、点位数量、来源与点类型；无历史时给出引导文案，提示先创建同步任务。
+- 收益曲线由 `ReturnSeriesChart`（ECharts 折线）基于本地行情点位渲染归一化累计收益；年度收益表按 `year` 倒序展示。
+- 资产大类与地区不再在目录详情页编辑：分类属于计划持仓（`plan_holdings.asset_class` / `region`），在选择资产进入计划时由用户指定或按目录推断。
 
 ## 7. FIRE 计划列表更新时间修正
 
@@ -55,5 +53,5 @@
 
 ## 9. 测试与门禁
 
-- 为每个改动点补 / 改 Vitest 与 Go 单测，覆盖：分页/滚动加载、10 行视口、候选层关闭与已选剔除、AKShare 兜底触发条件、资料库分类乐观锁与计划冻结、抓取中编辑保护、资料库投影读取/停更资产收益/空历史清理/事务回滚、allocation bar 排序与聚合、return-series 归一化与历史不足、毫秒日期与年份压缩、场景卡片权限与文案、向导宽度与侧栏 sticky。
+- 为每个改动点补 / 改 Vitest 与 Go 单测，覆盖：分页/滚动加载、10 行视口、候选层关闭与已选剔除、候选历史状态展示（已同步/同步中/失败/未同步）、allocation bar 排序与聚合、收益曲线渲染与年度收益倒序、毫秒日期格式化、场景卡片权限与文案、向导宽度与侧栏 sticky。
 - 交付门禁：`go test ./...`、`make web-lint`、`make web-test`、`make web-build` 均通过。
