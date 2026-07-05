@@ -79,8 +79,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Async on purpose: a sync `def` endpoint would go through AnyIO's
+    # thread pool, which hangs in-process ASGI contract tests in some
+    # environments. This zero-I/O health check never needs a thread.
     @app.get("/healthz", response_model=HealthResponse)
-    def healthz() -> HealthResponse:
+    async def healthz() -> HealthResponse:
         return HealthResponse(status="ok")
 
     return app

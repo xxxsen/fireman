@@ -199,8 +199,8 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 	}
 
 	// Simulation readiness gate: lazily-saved holdings get their snapshots
-	// built now that history may have arrived; assets still missing history
-	// block the run with market_asset_history_missing.
+	// built now that history may have arrived; assets that still cannot build
+	// a snapshot block the run with market_asset_history_missing.
 	if s.readiness != nil {
 		if err := s.readiness.EnsureHoldingSnapshots(ctx, req.PlanID); err != nil {
 			return CreateSimulationResponse{}, err
@@ -211,8 +211,8 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 		}
 		if !readiness.Ready {
 			return CreateSimulationResponse{}, newErr("market_asset_history_missing",
-				"部分计划资产尚未同步历史数据",
-				map[string]any{"missing_history": readiness.MissingHistory})
+				"部分计划持仓的市场资产暂时无法用于模拟",
+				map[string]any{"blocking_assets": readiness.BlockingAssets})
 		}
 	}
 

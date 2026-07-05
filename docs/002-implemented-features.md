@@ -86,8 +86,8 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | 全局资产目录 | `market_assets` 由后台任务同步；无“用户录入/资产库”中间层 |
 | 持仓引用 | `plan_holdings.asset_key` 直接引用目录；系统现金为内置资产（`SYS\|cash\|\|CNY` 等） |
 | 用户指定分类 | 持仓的 `asset_class`（equity/bond/cash）与 `region` 由用户选择，不从资产类型硬编码推断 |
-| 懒快照 | 缺历史的资产可先保存到计划；模拟前由 readiness 检查拦截（`market_asset_history_missing`） |
-| 一键补历史 | `POST /plans/{id}/sync-missing-asset-history` 批量创建/复用历史同步任务 |
+| 懒快照 | 缺历史的资产可先保存到计划；模拟前由 readiness 检查拦截（`market_asset_history_missing`，准入以快照试算为准并按原因细分，含资产身份冲突提示） |
+| 一键补历史 | `POST /plans/{id}/sync-missing-asset-history` 仅为真正缺历史的资产创建/复用同步任务；已同步但不可模拟的资产返回 `blocked` |
 
 详见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。
 

@@ -78,12 +78,12 @@ HK 分类规则：基金板（`m:116 t:1`）中名称含 `信托/房托/房产` 
 | `GET /api/v1/tasks/{id}` | 任务状态轮询 |
 | `GET /api/v1/market-assets` | 本地目录搜索（`symbol_q/name_q/market/instrument_types/include_inactive/limit/offset`），响应固定携带全部 scope 同步状态块与每个资产的历史就绪状态（`has_history`、最新同步任务状态） |
 | `GET /api/v1/market-assets/by-key?asset_key=` | 资产详情（目录条目 + 历史状态 + 点位 + 收益投影） |
-| `GET /api/v1/plans/{id}/simulation-readiness` | 计划模拟就绪检查（缺历史持仓列表 + 进行中的同步任务） |
-| `POST /api/v1/plans/{id}/sync-missing-asset-history` | 为计划缺历史资产批量创建/复用历史同步任务 |
+| `GET /api/v1/plans/{id}/simulation-readiness` | 计划模拟就绪检查（`blocking_assets` 按原因细分 + 进行中的同步任务） |
+| `POST /api/v1/plans/{id}/sync-missing-asset-history` | 仅为真正缺历史的资产批量创建/复用历史同步任务；已同步但不可模拟的资产返回 `blocked` |
 
 计划持仓直接引用 `market_assets.asset_key`（系统现金为内置资产 `SYS|cash||CNY` 等），
 不存在“用户资产库/录入”中间层；缺历史的持仓可先保存，模拟创建前由 readiness 检查拦截
-（错误码 `market_asset_history_missing`）。
+（错误码 `market_asset_history_missing`，准入以快照试算为准，细分原因见 `docs/017`）。
 
 ## Web 页面
 

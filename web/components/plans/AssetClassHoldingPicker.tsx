@@ -4,7 +4,12 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
-import { assetClassLabel, dataSourceLabel, regionLabel } from "@/lib/format";
+import {
+  assetClassLabel,
+  dataSourceLabel,
+  instrumentTypeLabel,
+  regionLabel,
+} from "@/lib/format";
 import { isTaskActive, listMarketAssets, type MarketAsset } from "@/lib/api/market-assets";
 import {
   addInstrumentToGroup,
@@ -37,6 +42,49 @@ const PICKER_TYPE_FILTERS: { value: string; label: string }[] = [
 /** A query that is only letters/digits/dots is treated as a symbol search. */
 function looksLikeSymbolQuery(q: string): boolean {
   return /^[A-Za-z0-9.]+$/.test(q);
+}
+
+/**
+ * Orders same-code identity candidates: mutual funds first (money-market and
+ * open-end funds are usually the intended asset), then exchange funds and
+ * stocks, then everything else.
+ */
+function instrumentTypePriority(t: string): number {
+  switch (t) {
+    case "cn_mutual_fund":
+      return 0;
+    case "cn_exchange_fund":
+      return 1;
+    case "cn_exchange_stock":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+/**
+ * Puts exact-symbol hits before fuzzy matches and orders the exact-hit group
+ * (same code, several identities) by instrument type priority. Fuzzy results
+ * keep the API order. Never auto-selects.
+ */
+function orderCandidates(assets: MarketAsset[], query: string): MarketAsset[] {
+  const q = query.trim().toUpperCase();
+  if (!q) return assets;
+  const exact: MarketAsset[] = [];
+  const rest: MarketAsset[] = [];
+  for (const asset of assets) {
+    (asset.symbol.toUpperCase() === q ? exact : rest).push(asset);
+  }
+  exact.sort(
+    (a, b) => instrumentTypePriority(a.instrument_type) - instrumentTypePriority(b.instrument_type),
+  );
+  return [...exact, ...rest];
+}
+
+/** Full identity line: market plus exchange/board when known, e.g. CN / SZ. */
+function marketIdentityLabel(asset: MarketAsset): string {
+  const region = (asset.region_code || "").toUpperCase();
+  return region ? `${asset.market} / ${region}` : asset.market;
 }
 
 export function marketAssetToWizardAsset(
@@ -146,11 +194,22 @@ export function AssetClassHoldingPicker({
 
   const results = useMemo(
     () =>
-      (listQuery.data?.pages ?? [])
-        .flatMap((page) => page.assets)
-        .filter((asset) => !selectedKeys.has(asset.asset_key)),
-    [listQuery.data, selectedKeys],
+      orderCandidates(
+        (listQuery.data?.pages ?? [])
+          .flatMap((page) => page.assets)
+          .filter((asset) => !selectedKeys.has(asset.asset_key)),
+        symbolQ ?? "",
+      ),
+    [listQuery.data, selectedKeys, symbolQ],
   );
+
+  // Same code under several instrument types: surface the ambiguity instead
+  // of letting the user silently pick the wrong identity.
+  const identityConflict = useMemo(() => {
+    if (!symbolQ) return false;
+    const q = symbolQ.toUpperCase();
+    return results.filter((asset) => asset.symbol.toUpperCase() === q).length >= 2;
+  }, [results, symbolQ]);
 
   // Auto-load the next page when the sentinel scrolls into view.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -269,32 +328,41 @@ export function AssetClassHoldingPicker({
           aria-label={searchAriaLabel}
           data-testid="wizard-holding-search"
         />
-        <select
-          value={market}
-          onChange={(e) => setMarket(e.target.value)}
-          className="input-base w-auto shrink-0 text-xs"
-          aria-label="按市场筛选候选"
-          data-testid="wizard-picker-market-filter"
-        >
-          {PICKER_MARKET_FILTERS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={instrumentType}
-          onChange={(e) => setInstrumentType(e.target.value)}
-          className="input-base w-auto shrink-0 text-xs"
-          aria-label="按资产类型筛选候选"
-          data-testid="wizard-picker-type-filter"
-        >
-          {PICKER_TYPE_FILTERS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+        {/* Width utilities on the selects themselves lose to the unlayered
+            .input-base { width: 100% } rule (Tailwind utilities live in
+            @layer utilities), which stretched each select to the full row
+            width and squeezed the search input to nothing. The fixed widths
+            therefore live on shrink-0 wrappers; the selects fill them. */}
+        <div className="w-full shrink-0 sm:w-28">
+          <select
+            value={market}
+            onChange={(e) => setMarket(e.target.value)}
+            className="input-base text-xs"
+            aria-label="按市场筛选候选"
+            data-testid="wizard-picker-market-filter"
+          >
+            {PICKER_MARKET_FILTERS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="w-full shrink-0 sm:w-44">
+          <select
+            value={instrumentType}
+            onChange={(e) => setInstrumentType(e.target.value)}
+            className="input-base text-xs"
+            aria-label="按资产类型筛选候选"
+            data-testid="wizard-picker-type-filter"
+          >
+            {PICKER_TYPE_FILTERS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       {open && (results.length > 0 || listQuery.isLoading) && (
         <div
@@ -305,6 +373,15 @@ export function AssetClassHoldingPicker({
           className="mt-2 h-[30rem] overflow-y-auto rounded-md border border-line"
           data-testid="wizard-library-results"
         >
+          {identityConflict && (
+            <p
+              className="border-b border-line bg-warning/10 px-3 py-2 text-xs text-warning"
+              role="note"
+              data-testid="picker-identity-conflict-hint"
+            >
+              该代码存在多个资产类型，请按实际持仓选择。货币基金/场外基金通常应选择「公募基金」。
+            </p>
+          )}
           <ul className="divide-y divide-line text-sm">
             {results.map((asset) => (
               <li
@@ -320,7 +397,12 @@ export function AssetClassHoldingPicker({
                 >
                   <span className="truncate font-medium">{asset.name}</span>
                   <span className="shrink-0 text-ink-muted">{asset.symbol}</span>
-                  <span className="shrink-0 text-xs text-ink-muted">{asset.market}</span>
+                  <span className="shrink-0 text-xs text-ink-muted">
+                    {instrumentTypeLabel(asset.instrument_type)}
+                  </span>
+                  <span className="shrink-0 text-xs text-ink-muted">
+                    {marketIdentityLabel(asset)}
+                  </span>
                   {asset.has_history ? (
                     <span className="shrink-0 text-xs text-ink-muted">
                       数据截至 {asset.history_data_as_of || "—"} ·{" "}

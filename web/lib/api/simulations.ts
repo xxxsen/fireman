@@ -70,19 +70,32 @@ export function deleteReturnOverride(
   );
 }
 
-// ---- Simulation readiness (missing asset history gate) ----
+// ---- Simulation readiness (snapshot admission gate) ----
 
-export interface MissingHistoryItem {
+export type ReadinessReason =
+  | "history_missing"
+  | "history_sync_running"
+  | "simulation_insufficient_history"
+  | "provider_data_anomaly"
+  | "asset_identity_conflict";
+
+/**
+ * One plan holding whose market asset blocks simulation. Not every blocked
+ * asset is missing history: it can be synced yet fail snapshot admission.
+ */
+export interface BlockingAsset {
   holding_id: string;
   asset_key: string;
   symbol: string;
   name: string;
-  reason: string;
+  reason: ReadinessReason | string;
+  message?: string;
+  candidate_asset_keys?: string[];
 }
 
 export interface SimulationReadiness {
   ready: boolean;
-  missing_history: MissingHistoryItem[];
+  blocking_assets: BlockingAsset[];
   active_tasks: import("@/lib/api/market-assets").WorkerTask[];
 }
 
@@ -95,10 +108,19 @@ export interface SyncMissingAssetEntry {
   task?: import("@/lib/api/market-assets").WorkerTask | null;
 }
 
+/** An asset for which a new sync task would not make it simulatable. */
+export interface SyncMissingBlockedEntry {
+  asset_key: string;
+  reason: ReadinessReason | string;
+  message?: string;
+  candidate_asset_keys?: string[];
+}
+
 export interface SyncMissingHistoryResult {
   created: SyncMissingAssetEntry[];
   existing: SyncMissingAssetEntry[];
   ready: SyncMissingAssetEntry[];
+  blocked: SyncMissingBlockedEntry[];
 }
 
 export function syncMissingAssetHistory(planId: string): Promise<SyncMissingHistoryResult> {

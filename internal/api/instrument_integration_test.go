@@ -354,9 +354,12 @@ func TestLazyHoldingThenReadinessSyncIntegration(t *testing.T) {
 	if readiness["ready"].(bool) {
 		t.Fatal("plan with missing history must not be ready")
 	}
-	missing := readiness["missing_history"].([]any)
-	if len(missing) != 1 {
-		t.Fatalf("missing_history=%v want 1 item", missing)
+	blocking := readiness["blocking_assets"].([]any)
+	if len(blocking) != 1 {
+		t.Fatalf("blocking_assets=%v want 1 item", blocking)
+	}
+	if reason := blocking[0].(map[string]any)["reason"]; reason != "history_missing" {
+		t.Fatalf("blocking reason=%v want history_missing", reason)
 	}
 
 	// Creating a simulation is blocked while history is missing.

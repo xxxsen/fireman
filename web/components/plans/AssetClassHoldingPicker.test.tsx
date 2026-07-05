@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import type { MarketAsset } from "@/lib/api/market-assets";
 import { AssetClassHoldingPicker, marketAssetToWizardAsset } from "./AssetClassHoldingPicker";
@@ -167,6 +167,23 @@ describe("AssetClassHoldingPicker", () => {
     );
   });
 
+  it("keeps filter selects at fixed width so they cannot squeeze the search input", () => {
+    renderPicker();
+    const market = screen.getByTestId("wizard-picker-market-filter");
+    const type = screen.getByTestId("wizard-picker-type-filter");
+    // Regression: width utilities on the select itself are overridden by the
+    // unlayered .input-base { width: 100% } rule, which stretched each select
+    // to the full row width and squeezed the search input to nothing. Fixed
+    // widths must therefore live on shrink-0 wrapper elements.
+    expect(market).not.toHaveClass("w-auto");
+    expect(type).not.toHaveClass("w-auto");
+    expect(market.parentElement).toHaveClass("shrink-0");
+    expect(market.parentElement).toHaveClass("sm:w-28");
+    expect(type.parentElement).toHaveClass("shrink-0");
+    expect(type.parentElement).toHaveClass("sm:w-44");
+    expect(screen.getByTestId("wizard-holding-search")).toHaveClass("flex-1");
+  });
+
   it("adds a selected asset with the group's classification", async () => {
     const { onSelectedChange } = renderPicker();
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));
@@ -297,6 +314,109 @@ describe("AssetClassHoldingPicker", () => {
     expect(
       selectedRows.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("shows full asset identity (type + market/board) for each candidate", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        asset_key: "CN|cn_mutual_fund||150015",
+        instrument_type: "cn_mutual_fund",
+        region_code: "",
+        symbol: "150015",
+        name: "银河银富货币B",
+      }),
+    ];
+    renderPicker();
+    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
+      target: { value: "150015" },
+    });
+    const option = await screen.findByRole("button", { name: /银河银富货币B/ });
+    expect(option).toHaveTextContent("公募基金");
+    expect(option).toHaveTextContent("CN");
+    expect(option).not.toHaveTextContent("CN /");
+  });
+
+  it("shows the conflict hint and orders identities when one code has several types", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        asset_key: "CN|cn_exchange_fund|sz|150015",
+        instrument_type: "cn_exchange_fund",
+        region_code: "sz",
+        symbol: "150015",
+        name: "银河银富货币B",
+      }),
+      makeMarketAsset(2, {
+        asset_key: "CN|cn_mutual_fund||150015",
+        instrument_type: "cn_mutual_fund",
+        region_code: "",
+        symbol: "150015",
+        name: "银河银富货币B",
+      }),
+    ];
+    const { onSelectedChange } = renderPicker();
+    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
+      target: { value: "150015" },
+    });
+
+    expect(await screen.findByTestId("picker-identity-conflict-hint")).toHaveTextContent(
+      "该代码存在多个资产类型，请按实际持仓选择",
+    );
+    // Mutual fund identity ranks above the exchange-traded one.
+    const options = within(screen.getByTestId("wizard-library-results")).getAllByRole("option");
+    expect(options[0]).toHaveTextContent("公募基金");
+    expect(options[1]).toHaveTextContent("场内 ETF / LOF");
+    // Nothing is auto-selected: the user must pick explicitly.
+    expect(onSelectedChange).not.toHaveBeenCalled();
+    for (const option of options) {
+      expect(option).toHaveAttribute("aria-selected", "false");
+    }
+  });
+
+  it("hides the conflict hint when only one identity matches the code", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        asset_key: "CN|cn_mutual_fund||150015",
+        instrument_type: "cn_mutual_fund",
+        region_code: "",
+        symbol: "150015",
+        name: "银河银富货币B",
+      }),
+    ];
+    renderPicker();
+    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
+      target: { value: "150015" },
+    });
+    await screen.findByRole("button", { name: /银河银富货币B/ });
+    expect(screen.queryByTestId("picker-identity-conflict-hint")).not.toBeInTheDocument();
+  });
+
+  it("puts exact symbol hits before fuzzy matches", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        asset_key: "CN|cn_exchange_fund|sh|5100150",
+        symbol: "5100150",
+        name: "模糊命中ETF",
+      }),
+      makeMarketAsset(2, {
+        asset_key: "CN|cn_exchange_fund|sz|510015",
+        region_code: "sz",
+        symbol: "510015",
+        name: "精确命中ETF",
+      }),
+    ];
+    renderPicker();
+    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
+      target: { value: "510015" },
+    });
+    await screen.findByRole("button", { name: /精确命中ETF/ });
+    // The exact-first ordering applies once the debounced symbol query lands.
+    await waitFor(() => {
+      const options = within(screen.getByTestId("wizard-library-results")).getAllByRole(
+        "option",
+      );
+      expect(options[0]).toHaveTextContent("精确命中ETF");
+      expect(options[1]).toHaveTextContent("模糊命中ETF");
+    });
   });
 
   it("renders the dropdown at a fixed 10-row height with single-line rows", async () => {

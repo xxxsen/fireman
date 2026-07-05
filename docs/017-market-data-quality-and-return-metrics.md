@@ -39,14 +39,15 @@ Fireman 的资产目录、计划持仓和 FIRE 模拟共用同一套行情质量
 
 ## 模拟准入
 
-计划持仓进入 FIRE 模拟前，由 `GET /api/v1/plans/:plan_id/simulation-readiness` 统一检查：
+计划持仓进入 FIRE 模拟前，由 `GET /api/v1/plans/:plan_id/simulation-readiness` 统一检查，快照试算（`BuildSnapshotForHolding`，不落库）是唯一准入标准——仅有历史点位（`point_count > 0`）不代表可模拟：
 
 - 每个持仓的 `asset_key` 在 `market_assets` 中存在且可用；
-- 本地存在足够历史数据（或系统现金/FX 特例），缺历史的持仓在 readiness 结果中标记 `history_missing`，模拟创建被 `market_asset_history_missing` 错误阻断；
+- 无法通过快照试算的持仓进入 `blocking_assets`，按原因细分：`history_missing`（未同步历史）、`history_sync_running`（同步任务进行中）、`simulation_insufficient_history`（历史已同步但完整年度不足）、`provider_data_anomaly`（历史已同步但指标/数据质量异常）、`asset_identity_conflict`（同 market+symbol 存在更匹配的其他资产身份，附 `candidate_asset_keys`，如场内 `150015` 应切换为场外基金身份）；
+- readiness 未通过时模拟创建被 `market_asset_history_missing` 错误阻断（details 携带 `blocking_assets`）；
 - 懒保存的持仓在 readiness 检查时试算快照（不落库）；模拟创建前再统一构建并持久化 `market_asset_simulation_snapshots`；
 - 对外币资产，模拟快照必须能解析对应 FX 因子。
 
-缺历史时可通过 `POST /api/v1/plans/:plan_id/sync-missing-asset-history` 一键创建历史同步任务，完成后重新检查 readiness。不满足准入时在服务层返回明确错误，而不是让引擎在中途失败。
+`POST /api/v1/plans/:plan_id/sync-missing-asset-history` 同样以快照试算为准入：可试算的资产返回 `ready`；仅对 `history_missing` 创建（或复用 active）`default_refresh` 历史同步任务；`history_sync_running` 归入 `existing`；`simulation_insufficient_history`/`provider_data_anomaly`/`asset_identity_conflict` 归入 `blocked` 并附原因与建议，不再反复创建无效任务。不满足准入时在服务层返回明确错误，而不是让引擎在中途失败。
 
 ## API 与前端展示
 
@@ -58,5 +59,5 @@ Fireman 的资产目录、计划持仓和 FIRE 模拟共用同一套行情质量
 
 - 月度收益、年化波动率、CAGR、最大回撤和近 1/3/5 年收益的纯函数测试。
 - post-process 在同一事务内更新行情与投影；全量替换后空序列会使任务失败并回滚，不留下过期收益。
-- 缺历史持仓被 readiness 拦截，`sync-missing-asset-history` 完成后可通过。
+- 缺历史持仓被 readiness 拦截，`sync-missing-asset-history` 完成后可通过；已有历史但快照不可构建的持仓返回细分原因并在一键同步中 `blocked`，不创建新任务。
 - 短历史、非连续年份、停更资产和系统现金/FX 均有稳定展示与准入结果。

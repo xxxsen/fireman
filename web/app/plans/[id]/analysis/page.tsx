@@ -703,7 +703,7 @@ export function AnalysisContent() {
           </div>
           <Button
             disabled={startMut.isPending || simBusy || readinessBlocked}
-            title={readinessBlocked ? "存在缺失历史数据的持仓，请先同步" : undefined}
+            title={readinessBlocked ? "部分持仓暂时无法用于模拟，请先按提示处理" : undefined}
             onClick={() => startMut.mutate()}
           >
             运行模拟
