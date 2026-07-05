@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 
@@ -7,7 +7,7 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "plan_1" }),
 }));
 
-const updateParameters = vi.fn();
+const updatePlanSettings = vi.fn();
 
 vi.mock("@/hooks/usePlanResultStale", () => ({
   usePlanResultStale: () => ({ stale: false }),
@@ -16,7 +16,7 @@ vi.mock("@/hooks/usePlanResultStale", () => ({
 const markDirty = vi.fn();
 const markClean = vi.fn();
 
-vi.mock("../layout", () => ({
+vi.mock("@/hooks/usePlanEdit", () => ({
   usePlanEdit: () => ({
     dirty: true,
     markDirty,
@@ -72,7 +72,7 @@ vi.mock("@/lib/api/plans", () => ({
         updated_at: 0,
       },
     }),
-  updateParameters: (...args: unknown[]) => updateParameters(...args),
+  updatePlanSettings: (...args: unknown[]) => updatePlanSettings(...args),
 }));
 
 vi.mock("@/lib/api/assumptions", () => ({
@@ -154,10 +154,9 @@ const getAllocationMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api/allocation", () => ({
   getAllocation: (...args: unknown[]) => getAllocationMock(...args),
   listScenarios: () => Promise.resolve({ scenarios: [] }),
-  updateAllocation: vi.fn(),
 }));
 
-import { ParametersContent as ParametersPage } from "./page";
+import { ParametersContent as ParametersPage } from "./ParametersContent";
 
 describe("ParametersPage strategy enums", () => {
   beforeEach(() => {
@@ -189,8 +188,8 @@ describe("ParametersPage strategy enums", () => {
         ],
       }),
     );
-    updateParameters.mockReset();
-    updateParameters.mockResolvedValue({});
+    updatePlanSettings.mockReset();
+    updatePlanSettings.mockResolvedValue({});
     getAllocationMock.mockReset();
     getAllocationMock.mockResolvedValue(defaultAllocation);
   });
@@ -299,12 +298,69 @@ describe("ParametersPage strategy enums", () => {
     expect(screen.getByLabelText("通胀模式")).toHaveValue("random_ar1");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(updateParameters).toHaveBeenCalledTimes(1));
-    const req = updateParameters.mock.calls[0]![1] as {
+    await waitFor(() => expect(updatePlanSettings).toHaveBeenCalledTimes(1));
+    const req = updatePlanSettings.mock.calls[0]![1] as {
       parameters: { withdrawal_type: string; inflation_mode: string };
     };
     expect(req.parameters.withdrawal_type).toBe("fixed_portfolio");
     expect(req.parameters.inflation_mode).toBe("random_ar1");
+  });
+
+  it("saves name + allocation + parameters with exactly one request", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    const nameInput = await screen.findByTestId("plan-name-input");
+    fireEvent.change(nameInput, { target: { value: "合并保存计划" } });
+
+    const classHeading = await screen.findByText("大类目标权重");
+    const classInputs = within(classHeading.parentElement as HTMLElement).getAllByTestId(
+      "percent-input",
+    );
+    expect(classInputs).toHaveLength(3);
+    fireEvent.change(classInputs[0]!, { target: { value: "60" } });
+    fireEvent.change(classInputs[1]!, { target: { value: "40" } });
+
+    fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "fixed_portfolio" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(updatePlanSettings).toHaveBeenCalledTimes(1));
+    const req = updatePlanSettings.mock.calls[0]![1] as {
+      config_version: number;
+      plan?: { name: string };
+      allocation?: { asset_class_targets: { asset_class: string; weight: number }[] };
+      parameters: { withdrawal_type: string };
+    };
+    expect(req.config_version).toBe(1);
+    expect(req.plan).toEqual({ name: "合并保存计划" });
+    expect(req.allocation?.asset_class_targets).toEqual([
+      { asset_class: "equity", weight: 0.6 },
+      { asset_class: "bond", weight: 0.4 },
+      { asset_class: "cash", weight: 0 },
+    ]);
+    expect(req.parameters.withdrawal_type).toBe("fixed_portfolio");
+  });
+
+  it("omits plan and allocation patches when only parameters changed", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("提取与通胀");
+    fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "fixed_portfolio" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(updatePlanSettings).toHaveBeenCalledTimes(1));
+    const req = updatePlanSettings.mock.calls[0]![1] as Record<string, unknown>;
+    expect(req.plan).toBeUndefined();
+    expect(req.allocation).toBeUndefined();
   });
 
   it("requires confirmation before switching the return-assumption mode", async () => {
@@ -323,18 +379,41 @@ describe("ParametersPage strategy enums", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(screen.getByText(/切换收益假设来源需先勾选确认/)).toBeInTheDocument();
-    expect(updateParameters).not.toHaveBeenCalled();
+    expect(updatePlanSettings).not.toHaveBeenCalled();
 
     fireEvent.click(
       screen.getByRole("checkbox", { name: /我确认切换收益假设来源/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(updateParameters).toHaveBeenCalledTimes(1));
-    const req = updateParameters.mock.calls[0]![1] as {
+    await waitFor(() => expect(updatePlanSettings).toHaveBeenCalledTimes(1));
+    const req = updatePlanSettings.mock.calls[0]![1] as {
       parameters: { return_assumption_mode: string };
     };
     expect(req.parameters.return_assumption_mode).toBe("historical_cagr");
+  });
+
+  it("blocks save with a Chinese message when core params are invalid (no request)", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("资金与现金流");
+    // End age not greater than retirement age (55 in fixture).
+    fireEvent.change(screen.getByLabelText("规划终止年龄"), { target: { value: "50" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("规划终止年龄需大于退休年龄。")).toBeInTheDocument();
+    expect(updatePlanSettings).not.toHaveBeenCalled();
+
+    // Fix the age, then break the budget: zero annual spending.
+    fireEvent.change(screen.getByLabelText("规划终止年龄"), { target: { value: "90" } });
+    fireEvent.change(screen.getByLabelText(/退休后首年支出/), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("当前年支出需大于 0。")).toBeInTheDocument();
+    expect(updatePlanSettings).not.toHaveBeenCalled();
   });
 
   it("renders the plan baseline help inline with its label", async () => {
@@ -380,8 +459,8 @@ describe("ParametersPage strategy enums", () => {
     expect(seedInput).toHaveValue(maxSeed);
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(updateParameters).toHaveBeenCalledTimes(1));
-    const req = updateParameters.mock.calls[0]![1] as {
+    await waitFor(() => expect(updatePlanSettings).toHaveBeenCalledTimes(1));
+    const req = updatePlanSettings.mock.calls[0]![1] as {
       parameters: { seed: unknown };
     };
     expect(typeof req.parameters.seed).toBe("string");

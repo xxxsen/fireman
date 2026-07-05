@@ -18,10 +18,10 @@ vi.mock("@/components/plans/AllocationSettings", () => ({
   PlanTargetsContent: () => <div>目标配置内容</div>,
   AllocationSettings: () => <div>目标配置内容</div>,
 }));
-vi.mock("../parameters/page", () => ({
+vi.mock("@/components/plans/settings/ParametersContent", () => ({
   ParametersContent: () => <div>参数内容</div>,
 }));
-vi.mock("../analysis/page", () => ({
+vi.mock("@/components/plans/settings/AnalysisContent", () => ({
   AnalysisContent: () => <div>模拟内容</div>,
 }));
 

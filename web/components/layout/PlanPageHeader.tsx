@@ -10,7 +10,7 @@ export interface PlanPageHeaderProps {
 
 /**
  * Unified header for plan sub-pages rendered below the plan breadcrumb and
- * tabs (持仓校正、调仓执行、调仓计划 …): one h1 level, optional description and
+ * tabs (持仓校正、调仓执行 …): one h1 level, optional description and
  * a right-aligned action group.
  */
 export function PlanPageHeader({ title, description, actions, children }: PlanPageHeaderProps) {

@@ -66,11 +66,25 @@ func TestProjectToPSDRepairsNonPSD(t *testing.T) {
 	}
 }
 
-func TestBuildFactorModelPriorOnlyWarning(t *testing.T) {
+func TestAssembleFactorModelPriorOnlyWarning(t *testing.T) {
+	// Two factors with no common history: the pairwise correlation collapses
+	// to the prior with priorOnly=true, and the assembled model must carry
+	// the correlation_prior_only warning.
 	a := FactorSpec{Key: "asset:equity:domestic", Mu: 0.005, MonthlySigma: 0.04, Months: map[string]float64{}}
 	b := FactorSpec{Key: "asset:bond:domestic", Mu: 0.002, MonthlySigma: 0.02, Months: map[string]float64{}}
-	prior := func(_, _ string) (float64, bool) { return 0.15, true }
-	model, ok := BuildFactorModel([]FactorSpec{a, b}, prior, 36)
+	rhoHist, m, histOK := PairwiseCorrelation(a, b)
+	rho, _, priorOnly := ShrinkCorrelation(rhoHist, m, histOK, 0.15, 36)
+	if !priorOnly {
+		t.Fatal("expected prior-only correlation with no common months")
+	}
+	rRaw := [][]float64{{1, rho}, {rho, 1}}
+	model, ok := AssembleFactorModel(
+		[]string{a.Key, b.Key},
+		[]float64{a.Mu, b.Mu},
+		[]float64{a.MonthlySigma, b.MonthlySigma},
+		rRaw,
+		[]string{PairKey(a.Key, b.Key)},
+	)
 	if !ok {
 		t.Fatal("expected a valid factor model")
 	}

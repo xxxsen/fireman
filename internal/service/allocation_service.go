@@ -80,6 +80,20 @@ func (s *AllocationService) GetAllocation(ctx context.Context, planID string) (r
 	return out, nil
 }
 
+// validateAllocationWeights runs the shared domain weight checks against a
+// candidate allocation, returning a plan_weights_invalid AppError on failure.
+func validateAllocationWeights(alloc repository.PlanAllocation, holds []repository.PlanHolding) error {
+	check := domain.ValidateAllWeights(toDomainAllocation(alloc), holdingsToDomain(holds))
+	if check.Passed {
+		return nil
+	}
+	msg := "allocation weights invalid"
+	if len(check.Checks) > 0 && check.Checks[0].Message != "" {
+		msg = check.Checks[0].Message
+	}
+	return newErr("plan_weights_invalid", msg, map[string]any{"checks": check.Checks})
+}
+
 func (s *AllocationService) UpdateAllocation(
 	ctx context.Context,
 	planID string,
@@ -99,20 +113,14 @@ func (s *AllocationService) UpdateAllocation(
 		AssetClassTargets: req.AssetClassTargets,
 		RegionTargets:     req.RegionTargets,
 	}
-	da := toDomainAllocation(alloc)
 	holdingsRepo := repository.NewHoldingsRepo(s.sql)
 	holds, _ := holdingsRepo.ListByPlan(ctx, planID)
-	check := domain.ValidateAllWeights(da, holdingsToDomain(holds))
-	if !check.Passed {
-		msg := "allocation weights invalid"
-		if len(check.Checks) > 0 && check.Checks[0].Message != "" {
-			msg = check.Checks[0].Message
-		}
-		return repository.PlanAllocation{}, newErr("plan_weights_invalid", msg, map[string]any{"checks": check.Checks})
+	if err := validateAllocationWeights(alloc, holds); err != nil {
+		return repository.PlanAllocation{}, err
 	}
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.alloc.Replace(ctx, tx, planID, alloc); err != nil {
-			return fmt.Errorf("replace allocation: %w", err)
+		if err := applyAllocationUpdateTx(ctx, tx, s.alloc, planID, alloc); err != nil {
+			return err
 		}
 		if _, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion); err != nil {
 			return fmt.Errorf("bump plan version: %w", err)

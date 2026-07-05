@@ -175,8 +175,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 23 {
-		t.Errorf("expected 23 migration records after idempotent re-run, got %d", migrationCount)
+	if migrationCount != 24 {
+		t.Errorf("expected 24 migration records after idempotent re-run, got %d", migrationCount)
 	}
 }
 
@@ -263,6 +263,66 @@ func testMigrate0004To0005Deduplicates(t *testing.T, createdAtFirst, createdAtSe
 	if err := pool.QueryRowContext(context.Background(),
 		`SELECT name FROM sqlite_master WHERE type='index' AND name='uq_jobs_instrument_fetch_active'`).Scan(&idxName); err != nil {
 		t.Fatalf("expected unique index: %v", err)
+	}
+}
+
+// td/096-E: 0024 must drop the retired rebalance draft tables even when they
+// still hold historical draft data, without touching unrelated tables.
+func TestMigrate_0024_DropsRebalanceDraftTablesWithData(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fireman.db")
+	pool, err := Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pool.Close()
+
+	applyMigrationsThrough(t, pool, dbPath, 23)
+
+	ctx := context.Background()
+	now := int64(1_750_000_000_000)
+	if _, err := pool.ExecContext(ctx, `
+		INSERT INTO plans (id, name, valuation_date, created_at, updated_at)
+		VALUES ('plan_legacy', '遗留计划', '2026-01-01', ?, ?)`, now, now); err != nil {
+		t.Fatalf("seed legacy plan: %v", err)
+	}
+	if _, err := pool.ExecContext(ctx, `
+		INSERT INTO rebalance_drafts (
+			id, plan_id, status, config_version, baseline_holdings_total_minor, created_at, updated_at
+		) VALUES ('rbd_legacy', 'plan_legacy', 'draft', 1, 100000, ?, ?)`, now, now); err != nil {
+		t.Fatalf("seed legacy draft: %v", err)
+	}
+	if _, err := pool.ExecContext(
+		ctx, `
+		INSERT INTO rebalance_draft_lines (
+			id, draft_id, holding_id, asset_key, baseline_current_minor, planned_current_minor,
+			frozen_target_minor, frozen_gap_minor, frozen_gap_weight, frozen_action,
+			frozen_suggested_trade_minor
+		) VALUES ('rbdl_legacy', 'rbd_legacy', 'hold_x', 'CN|x', 100000, 90000, 95000, -5000, -0.05, 'decrease', -5000)`,
+	); err != nil {
+		t.Fatalf("seed legacy draft line: %v", err)
+	}
+
+	if err := Migrate(ctx, pool, dbPath, nil); err != nil {
+		t.Fatalf("Migrate through 0024: %v", err)
+	}
+
+	var draftTableCount int
+	if err := pool.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name LIKE 'rebalance_draft%'`).Scan(&draftTableCount); err != nil {
+		t.Fatal(err)
+	}
+	if draftTableCount != 0 {
+		t.Fatalf("expected all rebalance_draft* tables dropped, %d remain", draftTableCount)
+	}
+
+	for _, keep := range []string{"asset_refresh_events", "plan_holdings", "rebalance_executions"} {
+		var name string
+		if err := pool.QueryRowContext(ctx,
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, keep).Scan(&name); err != nil {
+			t.Fatalf("expected table %s to survive 0024: %v", keep, err)
+		}
 	}
 }
 

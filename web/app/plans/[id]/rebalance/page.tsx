@@ -13,10 +13,6 @@ import {
   createRebalanceExecution,
   getActiveRebalanceExecution,
 } from "@/lib/api/rebalance-executions";
-import {
-  createRebalanceDraft,
-  getActiveRebalanceDraft,
-} from "@/lib/api/rebalance-drafts";
 import { assetClassLabel, formatMoney, regionLabel } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
@@ -39,7 +35,7 @@ function lineStatusHint(status: string, remainingMinor: number): string | null {
   }
 }
 
-type PendingCreate = "draft" | "execution" | null;
+type PendingCreate = "execution" | null;
 
 export default function RebalancePage() {
   const planId = useParams().id as string;
@@ -62,10 +58,6 @@ export default function RebalancePage() {
     queryKey: ["rebalance-execution-active", planId],
     queryFn: () => getActiveRebalanceExecution(planId),
   });
-  const activeDraft = useQuery({
-    queryKey: ["rebalance-draft-active", planId],
-    queryFn: () => getActiveRebalanceDraft(planId),
-  });
 
   const createExecution = useMutation({
     mutationFn: () => createRebalanceExecution(planId),
@@ -76,21 +68,10 @@ export default function RebalancePage() {
     },
   });
 
-  const createDraft = useMutation({
-    mutationFn: () => createRebalanceDraft(planId),
-    onSuccess: (detail) => {
-      setPendingCreate(null);
-      void queryClient.invalidateQueries({ queryKey: ["rebalance-draft-active", planId] });
-      router.push(`/plans/${planId}/rebalance/plan/${detail.draft.id}`);
-    },
-  });
-
   const summary = rebalance.data?.summary;
   const hasEnabledHoldings = (summary?.holdings_total_minor ?? 0) > 0;
   const active = activeExecution.data;
   const executionInProgress = !!active?.execution;
-  const draft = activeDraft.data;
-  const draftInProgress = !!draft?.draft;
 
   const executionLineByAsset = useMemo(() => {
     const map = new Map<string, { status: string; remaining_delta_minor: number }>();
@@ -110,8 +91,7 @@ export default function RebalancePage() {
 
   if (
     ((targets.isError || rebalance.isError) && (!targets.data || !rebalance.data)) ||
-    (activeExecution.isError && active == null) ||
-    (activeDraft.isError && draft == null)
+    (activeExecution.isError && active == null)
   ) {
     return (
       <ErrorState
@@ -120,12 +100,11 @@ export default function RebalancePage() {
           if (targets.isError) void targets.refetch();
           if (rebalance.isError) void rebalance.refetch();
           if (activeExecution.isError) void activeExecution.refetch();
-          if (activeDraft.isError) void activeDraft.refetch();
         }}
         backHref={`/plans/${planId}/overview`}
         backLabel="返回总览"
         technicalDetail={queryErrorMessage(
-          targets.error ?? rebalance.error ?? activeExecution.error ?? activeDraft.error,
+          targets.error ?? rebalance.error ?? activeExecution.error,
         )}
       />
     );
@@ -135,7 +114,6 @@ export default function RebalancePage() {
     targets.isLoading ||
     rebalance.isLoading ||
     activeExecution.isLoading ||
-    activeDraft.isLoading ||
     !targets.data ||
     !rebalance.data
   ) {
@@ -317,11 +295,11 @@ export default function RebalancePage() {
         <div>
           <h1 className="text-xl font-semibold text-ink">调仓工作台</h1>
           <p className="mt-1 text-sm text-ink-muted">
-            对比当前持仓与目标结构；可在此更新真实持仓（持仓校正）、生成调仓计划或登记调仓执行。
+            对比当前持仓与目标结构；可在此更新真实持仓（持仓校正）或登记调仓执行。
           </p>
           {executionInProgress && (
             <p className="mt-2 text-sm text-warning" data-testid="execution-blocking-hint">
-              当前有进行中的调仓执行。请先完成或放弃调仓，再进行持仓校正或创建调仓计划。
+              当前有进行中的调仓执行。请先完成或放弃调仓，再进行持仓校正。
             </p>
           )}
           {executionInProgress && active && (
@@ -329,13 +307,6 @@ export default function RebalancePage() {
               进行中 · 已完成 {active.stats.done_line_count}/{active.stats.line_count} 个资产
               {active.stats.skipped_line_count ? ` · 跳过 ${active.stats.skipped_line_count} 个` : ""} · 现金池{" "}
               {formatMoney(active.execution.cash_pool_minor)}
-            </p>
-          )}
-          {!executionInProgress && draftInProgress && draft && (
-            <p className="mt-2 text-sm text-info" data-testid="draft-in-progress-hint">
-              有进行中的调仓计划（创建于{" "}
-              {new Date(draft.draft.created_at).toLocaleDateString("zh-CN")}
-              ），可继续编辑或在计划内放弃。
             </p>
           )}
         </div>
@@ -359,30 +330,6 @@ export default function RebalancePage() {
               </Button>
             )}
             {executionInProgress ? (
-              <span
-                className="inline-flex min-h-10 cursor-not-allowed items-center rounded-md border border-line bg-surface-muted px-4 text-sm font-medium text-ink-muted"
-                data-testid="create-rebalance-plan-disabled"
-                aria-disabled="true"
-              >
-                创建调仓计划
-              </span>
-            ) : draftInProgress && draft ? (
-              <Button
-                href={`/plans/${planId}/rebalance/plan/${draft.draft.id}`}
-                data-testid="continue-rebalance-plan"
-              >
-                继续调仓计划
-              </Button>
-            ) : (
-              <Button
-                variant="secondary"
-                data-testid="create-rebalance-plan"
-                onClick={() => setPendingCreate("draft")}
-              >
-                创建调仓计划
-              </Button>
-            )}
-            {executionInProgress ? (
               <Button
                 href={executionHref}
                 data-testid="continue-rebalance-execution"
@@ -391,7 +338,7 @@ export default function RebalancePage() {
               </Button>
             ) : (
               <Button
-                variant={draftInProgress ? "secondary" : "primary"}
+                variant="primary"
                 data-testid="start-rebalance-execution"
                 onClick={() => setPendingCreate("execution")}
               >
@@ -505,24 +452,6 @@ export default function RebalancePage() {
           </div>
         </section>
       )}
-
-      <ConfirmDialog
-        open={pendingCreate === "draft"}
-        title="创建调仓计划"
-        description="将基于当前持仓与目标结构生成参考调仓方案（草稿）。草稿不会直接修改持仓，提交前可随时放弃。"
-        confirmLabel="创建调仓计划"
-        pending={createDraft.isPending}
-        error={
-          createDraft.error
-            ? queryErrorMessage(createDraft.error, "创建调仓计划失败")
-            : null
-        }
-        onConfirm={() => createDraft.mutate()}
-        onClose={() => {
-          setPendingCreate(null);
-          createDraft.reset();
-        }}
-      />
 
       <ConfirmDialog
         open={pendingCreate === "execution"}

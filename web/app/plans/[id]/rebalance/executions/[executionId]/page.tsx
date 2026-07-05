@@ -22,7 +22,7 @@ import {
   sellRebalanceExecution,
   skipRebalanceExecutionLine,
 } from "@/lib/api/rebalance-executions";
-import { formatMoney, rebalanceActionLabel } from "@/lib/format";
+import { formatDateTimeFromMs, formatMoney, rebalanceActionLabel } from "@/lib/format";
 import { ApiError } from "@/lib/api/client";
 import { queryErrorMessage } from "@/lib/query-error";
 import type { RebalanceExecutionEvent, RebalanceExecutionLine } from "@/types/api";
@@ -485,7 +485,7 @@ export default function RebalanceExecutionWorkspacePage() {
             {[...events].reverse().map((event) => (
               <li key={event.id} className="border-l-2 border-line pl-4">
                 <p className="text-xs text-ink-muted">
-                  {new Date(event.created_at).toLocaleString("zh-CN")}
+                  {formatDateTimeFromMs(event.created_at)}
                 </p>
                 <p className="text-sm text-ink">{parseEventSummary(event)}</p>
                 {event.amount_minor > 0 && (

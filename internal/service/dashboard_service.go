@@ -336,6 +336,7 @@ func (s *DashboardService) sensitivitySummary(ctx context.Context, planID string
 	return sum
 }
 
+//nolint:dupl // same group-and-sum skeleton as buildRegionBars, but over distinct bar types/keys
 func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 	type barAgg struct {
 		bar      DashboardAllocationBar
@@ -357,25 +358,13 @@ func buildAllocationBars(targets TargetView) []DashboardAllocationBar {
 		agg.bar.CurrentWeight += line.StructuralCurrentWeight
 		agg.bar.CurrentAmountMinor += line.CurrentAmountMinor
 		agg.bar.TargetAmountMinor += line.TargetAmountMinor
-		agg.holdings = append(agg.holdings, DashboardAllocationHolding{
-			InstrumentName:     line.InstrumentName,
-			InstrumentCode:     line.InstrumentCode,
-			CurrentAmountMinor: line.CurrentAmountMinor,
-			TargetAmountMinor:  line.TargetAmountMinor,
-			CurrentWeight:      line.StructuralCurrentWeight,
-			TargetWeight:       line.PortfolioTargetWeight,
-		})
+		agg.holdings = append(agg.holdings, holdingDetail(line))
 	}
 
 	out := make([]DashboardAllocationBar, 0, len(order))
 	for _, ac := range order {
 		agg := byClass[ac]
-		// Largest holdings first so the front-end "top N" truncation stays meaningful.
-		sort.SliceStable(agg.holdings, func(i, j int) bool {
-			ai := agg.holdings[i].TargetAmountMinor + agg.holdings[i].CurrentAmountMinor
-			aj := agg.holdings[j].TargetAmountMinor + agg.holdings[j].CurrentAmountMinor
-			return ai > aj
-		})
+		sortHoldingsByAmount(agg.holdings)
 		agg.bar.Holdings = agg.holdings
 		out = append(out, agg.bar)
 	}
@@ -407,6 +396,8 @@ func sortHoldingsByAmount(holdings []DashboardAllocationHolding) {
 
 // buildRegionBars aggregates full-portfolio domestic/foreign exposure: target uses
 // portfolio target weights, current uses structural current weights.
+//
+//nolint:dupl // same group-and-sum skeleton as buildAllocationBars, but over distinct bar types/keys
 func buildRegionBars(targets TargetView) []DashboardRegionBar {
 	type regionAgg struct {
 		bar      DashboardRegionBar

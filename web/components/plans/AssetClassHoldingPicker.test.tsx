@@ -21,8 +21,16 @@ interface ListParams {
   offset?: number;
 }
 
+// Mirrors the backend's instrument_type_priority so mocked list responses
+// carry the same ordering facts as GET /market-assets.
+const BACKEND_TYPE_PRIORITY: Record<string, number> = {
+  cn_mutual_fund: 0,
+  cn_exchange_fund: 1,
+  cn_exchange_stock: 2,
+};
+
 function makeMarketAsset(i: number, overrides: Partial<MarketAsset> = {}): MarketAsset {
-  return {
+  const base: MarketAsset = {
     asset_key: `CN|cn_exchange_fund|sh|51030${i}`,
     market: "CN",
     instrument_type: "cn_exchange_fund",
@@ -45,6 +53,9 @@ function makeMarketAsset(i: number, overrides: Partial<MarketAsset> = {}): Marke
     history_source_name: "ak.fund_etf_hist_em",
     ...overrides,
   };
+  base.instrument_type_priority ??=
+    BACKEND_TYPE_PRIORITY[base.instrument_type] ?? 3;
+  return base;
 }
 
 let pool: MarketAsset[] = [makeMarketAsset(1)];

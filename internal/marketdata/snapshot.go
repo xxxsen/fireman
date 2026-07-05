@@ -37,15 +37,27 @@ func (s *SnapshotService) BuildSnapshotForHolding(
 	ctx context.Context,
 	planID, assetKey, valuationDate string,
 ) (repository.SimulationSnapshot, error) {
+	return s.BuildSnapshotForHoldingTx(ctx, nil, planID, assetKey, valuationDate)
+}
+
+// BuildSnapshotForHoldingTx is BuildSnapshotForHolding with all reads routed
+// through an existing transaction (tx may be nil for pool reads). Required by
+// flows that must read and write in one atomic transaction on the
+// single-connection pool.
+func (s *SnapshotService) BuildSnapshotForHoldingTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	planID, assetKey, valuationDate string,
+) (repository.SimulationSnapshot, error) {
 	if cashSnapID, ok := repository.SystemCashSnapshotIDForAsset(assetKey); ok {
 		return repository.SimulationSnapshot{ID: cashSnapID}, nil
 	}
-	asset, err := s.assetRepo.GetByKey(ctx, assetKey)
+	asset, err := s.assetByKey(ctx, tx, assetKey)
 	if err != nil {
 		return repository.SimulationSnapshot{}, fmt.Errorf("load market asset: %w", err)
 	}
 
-	points, err := s.LoadAssetPoints(ctx, asset)
+	points, err := s.LoadAssetPointsTx(ctx, tx, asset)
 	if err != nil {
 		return repository.SimulationSnapshot{}, err
 	}
@@ -186,8 +198,16 @@ func (s *SnapshotService) CreateForHolding(
 func (s *SnapshotService) LoadAssetPoints(
 	ctx context.Context, asset repository.MarketAsset,
 ) ([]DataPoint, error) {
+	return s.LoadAssetPointsTx(ctx, nil, asset)
+}
+
+// LoadAssetPointsTx is LoadAssetPoints with reads routed through an existing
+// transaction (tx may be nil for pool reads).
+func (s *SnapshotService) LoadAssetPointsTx(
+	ctx context.Context, tx *sql.Tx, asset repository.MarketAsset,
+) ([]DataPoint, error) {
 	adjustPolicy, pointType := "none", defaultPointTypeForAsset(asset)
-	states, err := s.assetRepo.ListHistoryStatesByAsset(ctx, asset.AssetKey)
+	states, err := s.listHistoryStates(ctx, tx, asset.AssetKey)
 	if err != nil {
 		return nil, fmt.Errorf("list history states: %w", err)
 	}
@@ -198,7 +218,7 @@ func (s *SnapshotService) LoadAssetPoints(
 			adjustPolicy, pointType = st.AdjustPolicy, st.PointType
 		}
 	}
-	rows, err := s.assetRepo.ListPoints(ctx, asset.AssetKey, adjustPolicy, pointType)
+	rows, err := s.listPoints(ctx, tx, asset.AssetKey, adjustPolicy, pointType)
 	if err != nil {
 		return nil, fmt.Errorf("list market asset points: %w", err)
 	}
@@ -210,6 +230,56 @@ func (s *SnapshotService) LoadAssetPoints(
 		}
 	}
 	return out, nil
+}
+
+// assetByKey routes the directory read through tx when provided.
+// %w keeps repository sentinel errors visible to errors.Is upstream.
+func (s *SnapshotService) assetByKey(
+	ctx context.Context, tx *sql.Tx, assetKey string,
+) (repository.MarketAsset, error) {
+	var asset repository.MarketAsset
+	var err error
+	if tx != nil {
+		asset, err = s.assetRepo.GetByKeyTx(ctx, tx, assetKey)
+	} else {
+		asset, err = s.assetRepo.GetByKey(ctx, assetKey)
+	}
+	if err != nil {
+		return repository.MarketAsset{}, fmt.Errorf("get market asset: %w", err)
+	}
+	return asset, nil
+}
+
+func (s *SnapshotService) listHistoryStates(
+	ctx context.Context, tx *sql.Tx, assetKey string,
+) ([]repository.MarketAssetHistoryState, error) {
+	var states []repository.MarketAssetHistoryState
+	var err error
+	if tx != nil {
+		states, err = s.assetRepo.ListHistoryStatesByAssetTx(ctx, tx, assetKey)
+	} else {
+		states, err = s.assetRepo.ListHistoryStatesByAsset(ctx, assetKey)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list history states: %w", err)
+	}
+	return states, nil
+}
+
+func (s *SnapshotService) listPoints(
+	ctx context.Context, tx *sql.Tx, assetKey, adjustPolicy, pointType string,
+) ([]repository.MarketAssetPoint, error) {
+	var points []repository.MarketAssetPoint
+	var err error
+	if tx != nil {
+		points, err = s.assetRepo.ListPointsTx(ctx, tx, assetKey, adjustPolicy, pointType)
+	} else {
+		points, err = s.assetRepo.ListPoints(ctx, assetKey, adjustPolicy, pointType)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list points: %w", err)
+	}
+	return points, nil
 }
 
 // defaultPointTypeForAsset mirrors the history-sync default: mutual money

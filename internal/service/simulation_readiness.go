@@ -274,21 +274,6 @@ func (s *SimulationReadinessService) identityCandidates(
 	return current, out
 }
 
-// instrumentTypePriority orders identity-conflict candidates: mutual funds
-// first, then exchange funds and stocks, then everything else.
-func instrumentTypePriority(t string) int {
-	switch t {
-	case "cn_mutual_fund":
-		return 0
-	case "cn_exchange_fund":
-		return 1
-	case "cn_exchange_stock":
-		return 2
-	default:
-		return 3
-	}
-}
-
 func candidateKeys(assets []repository.MarketAsset) []string {
 	keys := make([]string, len(assets))
 	for i, a := range assets {
@@ -308,30 +293,6 @@ func identityConflictMessage(current repository.MarketAsset, candidates []reposi
 		"该代码存在多个资产身份，当前「%s」历史已同步但无法用于模拟，建议在持仓校正中切换为：%s",
 		curLabel, candDesc,
 	)
-}
-
-// instrumentTypeLabelZH renders a user-facing label for a directory
-// instrument type inside backend messages. Labels match the web UI's
-// instrumentTypeLabel so advice and pickers use the same wording.
-func instrumentTypeLabelZH(t string) string {
-	switch t {
-	case "cn_mutual_fund":
-		return "公募基金"
-	case "cn_exchange_fund":
-		return "场内 ETF / LOF"
-	case "cn_exchange_stock":
-		return "A 股"
-	case "hk_stock":
-		return "港股"
-	case "hk_etf":
-		return "香港 ETF"
-	case "us_stock":
-		return "美国股票"
-	case "us_etf":
-		return "美国 ETF"
-	default:
-		return t
-	}
 }
 
 // normalizeAssetName strips whitespace and upper-cases for a tolerant

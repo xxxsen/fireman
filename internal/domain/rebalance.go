@@ -40,7 +40,7 @@ func ComputeFullRebalance(
 	holdings []HoldingWeightInput,
 	meta []struct {
 		ID, AssetKey, SimulationSnapshotID string
-		SortOrder                              int
+		SortOrder                          int
 	},
 	totalAssetsMinor int64,
 	threshold float64,
@@ -110,7 +110,7 @@ func ComputeNewCashRebalance(
 	holdings []HoldingWeightInput,
 	meta []struct {
 		ID, AssetKey, SimulationSnapshotID string
-		SortOrder                              int
+		SortOrder                          int
 	},
 	totalAssetsMinor int64,
 	newCashMinor int64,

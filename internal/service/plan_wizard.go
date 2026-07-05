@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/repository"
 )
 
@@ -113,6 +114,36 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 		return PlanDetail{}, wrapRepo("create wizard tx", err)
 	}
 	return s.Get(ctx, planID)
+}
+
+func (s *PlanService) saveWizardPlanTx(
+	ctx context.Context,
+	plan repository.Plan,
+	params repository.PlanParameters,
+	alloc repository.PlanAllocation,
+	pending []wizardPendingSnap,
+	built []repository.PlanHolding,
+) error {
+	return wrapRepo("create wizard tx", fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.plans.CreateTx(ctx, tx, plan); err != nil {
+			return wrapRepo("create plan in wizard", err)
+		}
+		for _, ps := range pending {
+			if ps.skip {
+				continue
+			}
+			if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, ps.snap); err != nil {
+				return wrapRepo("create wizard snapshot", err)
+			}
+		}
+		if err := s.params.Upsert(ctx, tx, params); err != nil {
+			return wrapRepo("upsert wizard parameters", err)
+		}
+		if err := s.alloc.Replace(ctx, tx, plan.ID, alloc); err != nil {
+			return wrapRepo("replace wizard allocation", err)
+		}
+		return s.holdings.Replace(ctx, tx, plan.ID, built)
+	}))
 }
 
 // applyNewPlanAssumptionDefaults fills the return-assumption selection for a newly

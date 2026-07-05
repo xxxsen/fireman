@@ -12,6 +12,11 @@ type WithdrawalPlanner struct {
 	WealthAtRetire int64
 	InitialRate    float64
 	ProposedAnnual float64
+	// lastAnnualReal is the previous year's guardrail spending expressed in
+	// retirement-start purchasing power (inflation stripped). Anniversary
+	// adjustments compound on it, so consecutive ±10% cuts/raises accumulate
+	// across years instead of resetting to the inflation baseline.
+	lastAnnualReal float64
 }
 
 func NewWithdrawalPlanner(wType string, annualSpending int64, rate, floor, ceiling float64) WithdrawalPlanner {
@@ -26,6 +31,7 @@ func (w *WithdrawalPlanner) InitAtRetirement(wealth int64) {
 	if w.WealthAtRetire > 0 {
 		w.InitialRate = float64(w.AnnualSpending) / float64(w.WealthAtRetire)
 	}
+	w.lastAnnualReal = float64(w.AnnualSpending)
 }
 
 func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthStartWealth int64, inflCumulative float64,
@@ -38,29 +44,28 @@ func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthSta
 	case "fixed_portfolio":
 		return int64(math.Round(float64(monthStartWealth) * w.WithdrawalRate / 12))
 	case "guardrail":
-		inflBase := float64(w.AnnualSpending) * inflCumulative
-		if isRetirementAnniversary || w.ProposedAnnual == 0 {
-			w.ProposedAnnual = inflBase
+		if w.ProposedAnnual == 0 { // first retirement month
+			w.ProposedAnnual = float64(w.AnnualSpending) * inflCumulative
+			w.lastAnnualReal = float64(w.AnnualSpending)
 		}
 		if isRetirementAnniversary && w.WealthAtRetire > 0 {
+			// Guyton-Klinger style: previous year's spending + inflation is the
+			// base; the ±10% guardrail adjustment compounds on it across years.
+			proposed := w.lastAnnualReal * inflCumulative
 			yearStartWealth := float64(monthStartWealth)
 			if yearStartWealth > 0 {
-				currentRate := w.ProposedAnnual / yearStartWealth
+				currentRate := proposed / yearStartWealth
 				switch {
 				case currentRate > 1.2*w.InitialRate:
-					w.ProposedAnnual *= 0.90
+					proposed *= 0.90
 				case currentRate < 0.8*w.InitialRate:
-					w.ProposedAnnual *= 1.10
+					proposed *= 1.10
 				}
 			}
-			floor := inflBase * w.FloorRatio
-			ceil := inflBase * w.CeilingRatio
-			if w.ProposedAnnual < floor {
-				w.ProposedAnnual = floor
-			}
-			if w.ProposedAnnual > ceil {
-				w.ProposedAnnual = ceil
-			}
+			inflBase := float64(w.AnnualSpending) * inflCumulative
+			proposed = math.Max(inflBase*w.FloorRatio, math.Min(inflBase*w.CeilingRatio, proposed))
+			w.ProposedAnnual = proposed
+			w.lastAnnualReal = proposed / inflCumulative
 		}
 		return int64(math.Round(w.ProposedAnnual / 12))
 	default: // fixed_real

@@ -5,9 +5,15 @@ import (
 	"database/sql"
 )
 
+// rowQuerier is satisfied by both *sql.DB and *sql.Tx so read helpers can run
+// inside or outside a transaction.
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 func queryCollect[T any](
 	ctx context.Context,
-	db *sql.DB,
+	db rowQuerier,
 	query string,
 	args []any,
 	scan func(*sql.Rows) (T, error),

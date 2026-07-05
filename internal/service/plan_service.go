@@ -231,7 +231,16 @@ func (s *PlanService) Update(ctx context.Context, planID string, req UpdatePlanR
 	if req.Status != "" {
 		plan.Status = req.Status
 	}
-	if err := s.plans.Update(ctx, plan, req.ConfigVersion); err != nil {
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := applyPlanUpdateTx(ctx, tx, s.plans, plan); err != nil {
+			return err
+		}
+		if _, err := s.plans.BumpVersionTx(ctx, tx, planID, req.ConfigVersion); err != nil {
+			return fmt.Errorf("bump plan version: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return PlanDetail{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 		}

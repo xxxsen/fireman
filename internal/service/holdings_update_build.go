@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/google/uuid"
@@ -17,6 +18,7 @@ import (
 // check gates simulation until their history is synced.
 func (s *HoldingsService) buildOnePreparedHolding(
 	ctx context.Context,
+	tx *sql.Tx,
 	plan repository.Plan,
 	item HoldingWriteItem,
 	existingSnap map[string]string,
@@ -35,7 +37,13 @@ func (s *HoldingsService) buildOnePreparedHolding(
 			map[string]any{"asset_key": item.AssetKey},
 		)
 	}
-	asset, err := s.assetRepo.GetByKey(ctx, item.AssetKey)
+	var asset repository.MarketAsset
+	var err error
+	if tx != nil {
+		asset, err = s.assetRepo.GetByKeyTx(ctx, tx, item.AssetKey)
+	} else {
+		asset, err = s.assetRepo.GetByKey(ctx, item.AssetKey)
+	}
 	if err != nil {
 		if errors.Is(err, repository.ErrMarketAssetNotFound) {
 			return repository.PlanHolding{}, nil, newErr("market_asset_not_found",
@@ -53,7 +61,7 @@ func (s *HoldingsService) buildOnePreparedHolding(
 	snapID, ok := existingSnap[item.AssetKey]
 	var pending *pendingHoldingSnap
 	if !ok {
-		snapID, pending, err = s.tryBuildHoldingSnapshot(ctx, plan, item.AssetKey)
+		snapID, pending, err = s.tryBuildHoldingSnapshot(ctx, tx, plan, item.AssetKey)
 		if err != nil {
 			return repository.PlanHolding{}, nil, err
 		}
@@ -72,9 +80,9 @@ func (s *HoldingsService) buildOnePreparedHolding(
 // plan. Missing or insufficient history is not an error at save time: the
 // holding is stored with an empty snapshot id (lazy) and readiness reports it.
 func (s *HoldingsService) tryBuildHoldingSnapshot(
-	ctx context.Context, plan repository.Plan, assetKey string,
+	ctx context.Context, tx *sql.Tx, plan repository.Plan, assetKey string,
 ) (string, *pendingHoldingSnap, error) {
-	snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, plan.ID, assetKey, plan.ValuationDate)
+	snap, err := s.snapSvc.BuildSnapshotForHoldingTx(ctx, tx, plan.ID, assetKey, plan.ValuationDate)
 	if err != nil {
 		var snapErr *marketdata.SnapshotError
 		if errors.As(err, &snapErr) {

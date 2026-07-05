@@ -46,7 +46,7 @@ func validateSnapshotHoldings(holds []repository.PlanHolding, totalAssetsMinor i
 	if enabledCount == 0 {
 		return newErr("simulation_input_invalid", "at least one enabled holding is required", nil)
 	}
-	if abs64(enabledSum-totalAssetsMinor) > 100 {
+	if absInt64(enabledSum-totalAssetsMinor) > 100 {
 		return newErr("simulation_input_invalid", "total assets must match enabled holdings within 1 CNY",
 			map[string]any{
 				"total_assets_minor": totalAssetsMinor, "holdings_sum_minor": enabledSum,
@@ -410,7 +410,8 @@ func buildInputSnapshotStruct(
 	in.AssumptionProfileContentHash = contentHash
 	if resolved.Profile.OwnerScope == assumptions.OwnerSystem {
 		variant, ok := assumptions.LookupSystemContent(
-			resolved.Profile.ID, resolved.Profile.Version, contentHash)
+			resolved.Profile.ID, resolved.Profile.Version, contentHash,
+		)
 		if !ok {
 			return nil, newErr("system_profile_identity_conflict",
 				"system assumption profile content is not a recognized published identity",

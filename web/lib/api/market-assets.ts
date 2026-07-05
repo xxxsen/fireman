@@ -44,6 +44,12 @@ export interface MarketAsset {
   refreshed_at: number;
   created_at: number;
   updated_at: number;
+  /**
+   * Backend-owned instrument-type presentation (Chinese label and identity
+   * ordering priority); pickers must use these instead of local mappings.
+   */
+  instrument_type_label?: string;
+  instrument_type_priority?: number;
   /** Local history readiness attached by the listing API. */
   has_history?: boolean;
   history_data_as_of?: string;

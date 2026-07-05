@@ -264,7 +264,21 @@ func (r *RebalanceExecutionRepo) CreateTx(
 }
 
 func (r *RebalanceExecutionRepo) ListLines(ctx context.Context, executionID string) ([]RebalanceExecutionLine, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return r.listLines(ctx, r.db, executionID)
+}
+
+// ListLinesTx reads execution lines inside an existing transaction so the
+// complete flow can validate against a consistent snapshot.
+func (r *RebalanceExecutionRepo) ListLinesTx(
+	ctx context.Context, tx *sql.Tx, executionID string,
+) ([]RebalanceExecutionLine, error) {
+	return r.listLines(ctx, tx, executionID)
+}
+
+func (r *RebalanceExecutionRepo) listLines(
+	ctx context.Context, q rowQuerier, executionID string,
+) ([]RebalanceExecutionLine, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT `+executionLineSelectCols+`
 		FROM rebalance_execution_lines l
 		LEFT JOIN market_assets a ON a.asset_key = l.asset_key

@@ -48,11 +48,6 @@ type FactorModel struct {
 	Audit        FactorAudit `json:"audit"`
 }
 
-// CorrelationPriorLookup returns the prior correlation between two factor keys.
-// The second return is false when no prior is configured (which must block a
-// profile from being published).
-type CorrelationPriorLookup func(a, b string) (float64, bool)
-
 func pairKey(a, b string) string {
 	if a <= b {
 		return a + "|" + b
@@ -117,81 +112,14 @@ func CheckCorrelationPSD(rRaw [][]float64) CorrelationPSDResult {
 	}
 }
 
-// BuildFactorModel assembles the frozen joint risk model: pairwise shrinkage
-// correlations, PSD repair, covariance scaling and Cholesky. It is pure (no RNG,
-// no DB) so the same frozen factors + profile always produce the same model
-// byte-for-byte.
-func BuildFactorModel(
-	factors []FactorSpec, priorRho CorrelationPriorLookup, strengthMonths int,
-) (FactorModel, bool) {
-	n := len(factors)
-	keys := make([]string, n)
-	mu := make([]float64, n)
-	sigma := make([]float64, n)
-	for i, f := range factors {
-		keys[i] = f.Key
-		mu[i] = f.Mu
-		sigma[i] = f.MonthlySigma
-	}
-	audit := FactorAudit{
-		Factors:    keys,
-		PairMonths: map[string]int{},
-		Lambda:     map[string]float64{},
-	}
-	rRaw := identityMatrix(n)
-	buildRawCorrelation(factors, priorRho, strengthMonths, rRaw, &audit)
-	audit.RRaw = cloneMatrix(rRaw)
-
-	psd, minEig, maxRepair := projectToPSD(rRaw)
-	audit.RPSD = psd
-	audit.MinEigenvalue = minEig
-	audit.MaxRepairDelta = maxRepair
-	if maxRepair > PSDRepairWarnThreshold {
-		audit.Warnings = append(audit.Warnings, "correlation_psd_repair_significant")
-	}
-
-	cov := covarianceFromCorrelation(psd, sigma)
-	l, ok := cholesky(cov)
-	if !ok {
-		return FactorModel{}, false
-	}
-	return FactorModel{
-		Factors: keys, Mu: mu, MonthlySigma: sigma, Sigma: cov, L: l, Audit: audit,
-	}, true
-}
-
 // AssembleFactorModel builds the frozen joint model from a caller-supplied raw
-// correlation matrix (used when the per-asset correlations come from profile
-// priors keyed by asset type rather than instrument-level history). It performs
-// the PSD repair, covariance scaling and Cholesky, and records the audit.
+// correlation matrix without per-pair audit detail (a simplified signature kept
+// for tests and callers that have no pair-month/λ bookkeeping). It is a thin
+// delegate to AssembleFactorModelDetailed.
 func AssembleFactorModel(
 	keys []string, mu, sigma []float64, rRaw [][]float64, priorOnlyPairs []string,
 ) (FactorModel, bool) {
-	audit := FactorAudit{
-		Factors:        keys,
-		PairMonths:     map[string]int{},
-		Lambda:         map[string]float64{},
-		PriorOnlyPairs: priorOnlyPairs,
-		RRaw:           cloneMatrix(rRaw),
-	}
-	if len(priorOnlyPairs) > 0 {
-		audit.Warnings = append(audit.Warnings, "correlation_prior_only")
-	}
-	psd, minEig, maxRepair := projectToPSD(rRaw)
-	audit.RPSD = psd
-	audit.MinEigenvalue = minEig
-	audit.MaxRepairDelta = maxRepair
-	if maxRepair > PSDRepairWarnThreshold {
-		audit.Warnings = append(audit.Warnings, "correlation_psd_repair_significant")
-	}
-	cov := covarianceFromCorrelation(psd, sigma)
-	l, ok := cholesky(cov)
-	if !ok {
-		return FactorModel{}, false
-	}
-	return FactorModel{
-		Factors: keys, Mu: mu, MonthlySigma: sigma, Sigma: cov, L: l, Audit: audit,
-	}, true
+	return AssembleFactorModelDetailed(keys, mu, sigma, rRaw, nil, nil, priorOnlyPairs)
 }
 
 // AssembleFactorModelDetailed builds the frozen model from a caller-computed raw
@@ -240,34 +168,6 @@ func AssembleFactorModelDetailed(
 // PairKey returns the canonical sorted "a|b" identifier for a factor pair so the
 // service and engine record audit entries under the same key.
 func PairKey(a, b string) string { return pairKey(a, b) }
-
-func buildRawCorrelation(
-	factors []FactorSpec, priorRho CorrelationPriorLookup, strengthMonths int,
-	rRaw [][]float64, audit *FactorAudit,
-) {
-	n := len(factors)
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			rhoHist, m, histOK := PairwiseCorrelation(factors[i], factors[j])
-			prior, hasPrior := priorRho(factors[i].Key, factors[j].Key)
-			if !hasPrior {
-				prior = 0
-			}
-			rho, lambda, priorOnly := ShrinkCorrelation(rhoHist, m, histOK, prior, strengthMonths)
-			rRaw[i][j] = rho
-			rRaw[j][i] = rho
-			pk := pairKey(factors[i].Key, factors[j].Key)
-			audit.PairMonths[pk] = m
-			audit.Lambda[pk] = lambda
-			if priorOnly {
-				audit.PriorOnlyPairs = append(audit.PriorOnlyPairs, pk)
-			}
-		}
-	}
-	if len(audit.PriorOnlyPairs) > 0 {
-		audit.Warnings = append(audit.Warnings, "correlation_prior_only")
-	}
-}
 
 func covarianceFromCorrelation(r [][]float64, sigma []float64) [][]float64 {
 	n := len(r)

@@ -322,40 +322,30 @@ func needsRebalance(slots []assetSlot, threshold float64) bool {
 	return false
 }
 
+// rebalanceToTarget charges transaction cost on the first-pass trade volume
+// (distance from current balances to total*weight), then distributes the
+// post-cost total by target weights. This closed form is the exact semantics
+// of the former 50-iteration loop, which always converged on its first pass
+// because reassigning balances to newTotal*weight made the residual check
+// trivially true (golden tests pin bit-for-bit equivalence).
 func rebalanceToTarget(slots []assetSlot, txRate float64) int64 {
-	const cent = 0.005
-	var recorded int64
-	for iter := 0; iter < 50; iter++ {
-		total := 0.0
-		for _, s := range slots {
-			total += s.balance
-		}
-		var tradeVolume float64
-		targets := make([]float64, len(slots))
-		for i := range slots {
-			targets[i] = total * slots[i].targetWeight
-			tradeVolume += math.Abs(targets[i] - slots[i].balance)
-		}
-		cost := int64(math.Round(tradeVolume * txRate))
-		if cost == 0 {
-			for i := range slots {
-				slots[i].balance = targets[i]
-			}
-			return recorded
-		}
-		newTotal := total - float64(cost)
-		if newTotal < 0 {
-			newTotal = 0
-		}
-		recorded += cost
-		for i := range slots {
-			slots[i].balance = newTotal * slots[i].targetWeight
-		}
-		if math.Abs(total-float64(recorded)-sumBalances(slots)) <= cent {
-			return recorded
-		}
+	total := 0.0
+	for _, s := range slots {
+		total += s.balance
 	}
-	return recorded
+	var tradeVolume float64
+	for i := range slots {
+		tradeVolume += math.Abs(total*slots[i].targetWeight - slots[i].balance)
+	}
+	cost := int64(math.Round(tradeVolume * txRate))
+	newTotal := total - float64(cost)
+	if newTotal < 0 {
+		newTotal = 0
+	}
+	for i := range slots {
+		slots[i].balance = newTotal * slots[i].targetWeight
+	}
+	return cost
 }
 
 func sumBalances(slots []assetSlot) float64 {

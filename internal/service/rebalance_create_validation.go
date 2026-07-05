@@ -35,3 +35,16 @@ func loadStructuralRebalanceForCreate(
 	}
 	return result, nil
 }
+
+func maxStructuralGapWeight(lines []domain.RebalanceLine) float64 {
+	var maxGap float64
+	for _, line := range lines {
+		if !line.Enabled {
+			continue
+		}
+		if w := math.Abs(line.StructuralGapWeight); w > maxGap {
+			maxGap = w
+		}
+	}
+	return maxGap
+}

@@ -160,15 +160,16 @@ vi.mock("@/components/charts/WealthPathChart", () => ({
   WealthPathChart: () => <div data-testid="wealth-chart" />,
 }));
 
-import { AnalysisContent as AnalysisPage } from "./page";
+import { AnalysisContent as AnalysisPage } from "./AnalysisContent";
 
 function renderAnalysis() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <AnalysisPage />
     </QueryClientProvider>,
   );
+  return { qc, view };
 }
 
 describe("AnalysisPage zero success", () => {
@@ -567,5 +568,106 @@ describe("AnalysisPage zero success", () => {
 
     expect(await screen.findByText("模拟结果")).toBeInTheDocument();
     expect(screen.getAllByText(/成功率 90%/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rebuilds the sim job from a persisted pending run after refresh", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        {
+          ...defaultSimulations.simulations[0],
+          id: "run_pending",
+          job_id: "job_resume",
+          summary_json: {},
+        },
+      ],
+    });
+
+    renderAnalysis();
+
+    // The page adopts the persisted job and shows progress + cancel again.
+    await waitFor(() =>
+      expect(useJobStatusMock).toHaveBeenCalledWith("job_resume", expect.anything()),
+    );
+    expect(await screen.findByText(/running… 40%/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+  });
+
+  it("re-attaches running stress and sensitivity jobs from persisted lists", async () => {
+    const baseView = {
+      plan_id: "plan_1",
+      input_hash: "",
+      current_config_hash: "",
+      result_stale: false,
+      simulation_run_id: "run_1",
+      created_at: 0,
+    };
+    listStressTestsMock.mockReset();
+    listStressTestsMock.mockResolvedValue({
+      stress_tests: [
+        { ...baseView, job_id: "job_stress_done", status: "succeeded" },
+        { ...baseView, job_id: "job_stress_running", status: "running" },
+      ],
+    });
+    listSensitivityTestsMock.mockReset();
+    listSensitivityTestsMock.mockResolvedValue({
+      sensitivity_tests: [{ ...baseView, job_id: "job_sens_queued", status: "queued" }],
+    });
+
+    renderAnalysis();
+
+    await waitFor(() =>
+      expect(useJobStatusMock).toHaveBeenCalledWith(
+        "job_stress_running",
+        expect.anything(),
+      ),
+    );
+    await waitFor(() =>
+      expect(useJobStatusMock).toHaveBeenCalledWith("job_sens_queued", expect.anything()),
+    );
+    // Terminal records are never adopted.
+    expect(useJobStatusMock).not.toHaveBeenCalledWith(
+      "job_stress_done",
+      expect.anything(),
+    );
+  });
+
+  it("keeps the freshly started job when the list still contains an older unfinished run", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({ simulations: [] });
+    createSimulation.mockReset();
+    createSimulation.mockResolvedValue({
+      job_id: "job_new",
+      run_id: "run_new",
+      status: "queued",
+    });
+
+    const { qc } = renderAnalysis();
+
+    fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
+    await waitFor(() => expect(createSimulation).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(useJobStatusMock).toHaveBeenCalledWith("job_new", expect.anything()),
+    );
+
+    // A stale refetch still lists an older unfinished run; it must not steal
+    // the slot from the job the user just started.
+    listSimulationsMock.mockResolvedValue({
+      simulations: [
+        {
+          ...defaultSimulations.simulations[0],
+          id: "run_old",
+          job_id: "job_old",
+          summary_json: {},
+        },
+      ],
+    });
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ["simulations", "plan_1"] });
+    });
+
+    expect(useJobStatusMock).not.toHaveBeenCalledWith("job_old", expect.anything());
+    const lastRenderJobIds = useJobStatusMock.mock.calls.slice(-3).map((c) => c[0]);
+    expect(lastRenderJobIds).toContain("job_new");
   });
 });

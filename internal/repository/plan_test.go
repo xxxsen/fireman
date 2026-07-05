@@ -17,7 +17,18 @@ func TestPlanRepo_VersionConflict(t *testing.T) {
 	if err := repo.Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Update(ctx, p, 1); err != nil {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Name = "updated"
+	if err := repo.UpdateFieldsTx(ctx, tx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BumpVersionTx(ctx, tx, p.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.GetByID(ctx, p.ID)
@@ -27,7 +38,10 @@ func TestPlanRepo_VersionConflict(t *testing.T) {
 	if got.ConfigVersion != 2 {
 		t.Fatalf("version=%d", got.ConfigVersion)
 	}
-	if err := repo.Update(ctx, p, 1); !errors.Is(err, ErrVersionConflict) {
+	if got.Name != "updated" {
+		t.Fatalf("name=%s", got.Name)
+	}
+	if _, err := repo.BumpVersion(ctx, p.ID, 1); !errors.Is(err, ErrVersionConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
 }

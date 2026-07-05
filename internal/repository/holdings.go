@@ -39,7 +39,17 @@ const holdingSelectColumns = `
 	LEFT JOIN market_asset_simulation_snapshots s ON s.id = h.simulation_snapshot_id`
 
 func (r *HoldingsRepo) ListByPlan(ctx context.Context, planID string) ([]PlanHolding, error) {
-	rows, err := r.db.QueryContext(ctx, holdingSelectColumns+`
+	return r.listByPlan(ctx, r.db, planID)
+}
+
+// ListByPlanTx reads plan holdings inside an existing transaction so callers
+// can keep read-check-write sequences atomic.
+func (r *HoldingsRepo) ListByPlanTx(ctx context.Context, tx *sql.Tx, planID string) ([]PlanHolding, error) {
+	return r.listByPlan(ctx, tx, planID)
+}
+
+func (r *HoldingsRepo) listByPlan(ctx context.Context, q rowQuerier, planID string) ([]PlanHolding, error) {
+	rows, err := q.QueryContext(ctx, holdingSelectColumns+`
 		WHERE h.plan_id=? ORDER BY h.sort_order, h.created_at`, planID)
 	if err != nil {
 		return nil, fmt.Errorf("query plan holdings: %w", err)

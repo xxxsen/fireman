@@ -102,7 +102,7 @@ func SuggestAction(enabled bool, deviationWeight float64, deviationAmountMinor i
 // HoldingTargetLine is a computed target line for one holding.
 type HoldingTargetLine struct {
 	HoldingID                   string  `json:"holding_id"`
-	AssetKey                string  `json:"asset_key"`
+	AssetKey                    string  `json:"asset_key"`
 	InstrumentName              string  `json:"instrument_name,omitempty"`
 	InstrumentCode              string  `json:"instrument_code,omitempty"`
 	AssetClass                  string  `json:"asset_class"`
@@ -130,7 +130,7 @@ type HoldingTargetLine struct {
 // ComputeHoldingTargets expands all holdings into target lines with structural and plan-scale deviations.
 func ComputeHoldingTargets(alloc AllocationWeights, holdings []HoldingWeightInput, holdingMeta []struct {
 	ID, AssetKey, SimulationSnapshotID string
-	SortOrder                              int
+	SortOrder                          int
 }, totalAssetsMinor int64,
 ) []HoldingTargetLine {
 	holdingsTotal := HoldingsTotalMinor(holdings)

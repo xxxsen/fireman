@@ -352,7 +352,12 @@ func medianInt64(vals []int64) int64 {
 	}
 	cp := append([]int64(nil), vals...)
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
-	return cp[len(cp)/2]
+	n := len(cp)
+	if n%2 == 1 {
+		return cp[n/2]
+	}
+	// Even length: mean of the middle pair (integer truncation).
+	return (cp[n/2-1] + cp[n/2]) / 2
 }
 
 func pickRepresentativePaths(paths []PathSummary, q map[string]int64) map[string]int {

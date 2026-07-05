@@ -2,11 +2,6 @@ package service
 
 import (
 	"context"
-	"log/slog"
-
-	"github.com/google/uuid"
-
-	"github.com/fireman/fireman/internal/repository"
 )
 
 func computeInvestedRatio(investedMinor, totalAssetsMinor int64) float64 {
@@ -37,38 +32,4 @@ func (s *DashboardService) loadLatestSimulationRun(ctx context.Context, planID s
 		return nil
 	}
 	return &view
-}
-
-func (s *RebalanceDraftService) recordCommitSnapshot(
-	ctx context.Context,
-	planID, draftID string,
-	plan repository.Plan,
-	req CommitRebalanceDraftRequest,
-	existing []repository.PlanHolding,
-	plannedByHolding map[string]int64,
-) {
-	items := make([]repository.PortfolioSnapshotItem, 0, len(existing))
-	var total int64
-	for _, h := range existing {
-		amount := h.CurrentAmountMinor
-		if planned, ok := plannedByHolding[h.ID]; ok {
-			amount = planned
-		}
-		items = append(items, repository.PortfolioSnapshotItem{
-			AssetKey: h.AssetKey, AmountMinor: amount,
-		})
-		total += amount
-	}
-	note := req.SnapshotNote
-	if note == "" {
-		note = "调仓计划提交后记录"
-	}
-	snap := repository.PortfolioSnapshot{
-		ID: "psnap_" + uuid.New().String(), PlanID: planID,
-		SnapshotDate: plan.ValuationDate, TotalAmountMinor: total, Note: note, Items: items,
-	}
-	if err := s.snapRepo.Create(ctx, snap); err != nil {
-		slog.WarnContext(ctx, "rebalance draft commit snapshot failed",
-			"plan_id", planID, "draft_id", draftID, "error", err)
-	}
 }

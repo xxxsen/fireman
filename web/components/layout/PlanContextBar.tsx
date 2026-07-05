@@ -17,7 +17,6 @@ import { Button } from "@/components/ui/Button";
 const SUB_PAGE_CRUMBS: ReadonlyArray<{ prefix: string; label: string }> = [
   { prefix: "/asset-refresh", label: "持仓校正" },
   { prefix: "/rebalance/executions", label: "调仓执行" },
-  { prefix: "/rebalance/plan/", label: "调仓计划" },
   { prefix: "/analysis/", label: "模拟路径详情" },
 ];
 

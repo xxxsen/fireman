@@ -1,14 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-
-export default function PlanScenariosRedirectPage() {
-  const router = useRouter();
-
-  useEffect(() => {
-    router.replace("/scenarios");
-  }, [router]);
-
-  return <p className="text-ink-muted">正在前往配置模板…</p>;
+export default async function PlanScenariosRedirect() {
+  redirect("/scenarios");
 }

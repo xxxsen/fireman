@@ -4,8 +4,8 @@ import { useEffect } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { PlanTargetsContent } from "@/components/plans/AllocationSettings";
 import { usePlanEdit } from "@/hooks/usePlanEdit";
-import { ParametersContent } from "../parameters/page";
-import { AnalysisContent } from "../analysis/page";
+import { ParametersContent } from "@/components/plans/settings/ParametersContent";
+import { AnalysisContent } from "@/components/plans/settings/AnalysisContent";
 
 const SECTIONS = [
   { key: "plan-targets", label: "目标配置" },

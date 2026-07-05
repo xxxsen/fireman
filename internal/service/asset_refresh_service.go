@@ -137,7 +137,7 @@ func (s *AssetRefreshService) prepareAssetRefresh(
 
 	updateReq := buildAssetRefreshHoldingsReq(req, existing, amountByInstrument, out.pendingVersionBumps)
 	out.prep, err = s.holdings.prepareHoldingsUpdateWithPendingBumps(
-		ctx, planID, updateReq, out.pendingVersionBumps, validationAlloc,
+		ctx, nil, planID, updateReq, out.pendingVersionBumps, validationAlloc,
 	)
 	if err != nil {
 		return nil, err

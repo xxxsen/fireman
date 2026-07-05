@@ -7,13 +7,13 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
-import { Dialog } from "@/components/ui/Dialog";
 import { Stepper } from "@/components/ui/Stepper";
 import { PlanPageHeader } from "@/components/layout/PlanPageHeader";
+import { MarketAssetPickerDialog } from "@/components/plans/MarketAssetPickerDialog";
 import { getHoldings, getTargets } from "@/lib/api/holdings";
 import { getActiveRebalanceExecution } from "@/lib/api/rebalance-executions";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
-import { listMarketAssets, type MarketAsset } from "@/lib/api/market-assets";
+import { type MarketAsset } from "@/lib/api/market-assets";
 import { getPlan, getParameters } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
 import {
@@ -48,11 +48,6 @@ function isSystemAssetKey(assetKey: string): boolean {
   return assetKey.startsWith("SYS|");
 }
 
-/** A query that is only letters/digits/dots is treated as a symbol search. */
-function looksLikeSymbolQuery(q: string): boolean {
-  return /^[A-Za-z0-9.]+$/.test(q);
-}
-
 export default function AssetRefreshPage() {
   const planId = useParams().id as string;
   const router = useRouter();
@@ -61,7 +56,6 @@ export default function AssetRefreshPage() {
   const [holdingsDraft, setHoldingsDraft] = useState<AssetRefreshHolding[] | null>(null);
   const [totalOverride, setTotalOverride] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [filter, setFilter] = useState("");
   const [addAssetClass, setAddAssetClass] = useState("equity");
   const [addRegion, setAddRegion] = useState("domestic");
   const [error, setError] = useState<string | null>(null);
@@ -86,18 +80,6 @@ export default function AssetRefreshPage() {
   const activeExecution = useQuery({
     queryKey: ["rebalance-execution-active", planId],
     queryFn: () => getActiveRebalanceExecution(planId),
-  });
-
-  const trimmedFilter = filter.trim();
-  const assetSearch = useQuery({
-    queryKey: ["asset-refresh-market-assets", trimmedFilter],
-    queryFn: () =>
-      listMarketAssets({
-        symbolQ: looksLikeSymbolQuery(trimmedFilter) ? trimmedFilter : undefined,
-        nameQ: looksLikeSymbolQuery(trimmedFilter) ? undefined : trimmedFilter,
-        limit: 20,
-      }),
-    enabled: dialogOpen && trimmedFilter.length > 0,
   });
 
   const defaultHoldings = useMemo(
@@ -199,14 +181,6 @@ export default function AssetRefreshPage() {
     [draftHoldings],
   );
 
-  const candidateAssets = useMemo(
-    () =>
-      (assetSearch.data?.assets ?? []).filter(
-        (asset) => !selectedAssetKeys.has(asset.asset_key),
-      ),
-    [assetSearch.data, selectedAssetKeys],
-  );
-
   const updateDraft = (next: AssetRefreshHolding[]) => {
     setHoldingsDraft(next);
   };
@@ -242,7 +216,6 @@ export default function AssetRefreshPage() {
         is_system: false,
       },
     ]);
-    setFilter("");
     setDialogOpen(false);
   };
 
@@ -623,19 +596,14 @@ export default function AssetRefreshPage() {
         </section>
       )}
 
-      <Dialog
+      <MarketAssetPickerDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
-        title="选择标的"
-        className="max-w-md"
+        onSelect={addAsset}
+        excludeAssetKeys={selectedAssetKeys}
+        inputTestId="asset-refresh-instrument-filter"
+        resultsTestId="asset-refresh-instrument-results"
       >
-        <input
-          className="input-base text-sm"
-          placeholder="按代码或名称搜索市场资产目录"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          data-testid="asset-refresh-instrument-filter"
-        />
         <div className="mt-2 flex gap-2">
           <label className="flex flex-1 flex-col gap-1 text-xs text-ink-muted">
             资产大类
@@ -668,31 +636,7 @@ export default function AssetRefreshPage() {
         <Link href="/assets" className="mt-2 block text-sm underline">
           目录中不存在？前往资产页同步资产列表
         </Link>
-        {assetSearch.isFetching && (
-          <p className="mt-2 text-xs text-ink-muted" role="status">
-            搜索中…
-          </p>
-        )}
-        <ul className="mt-4 divide-y divide-line" data-testid="asset-refresh-instrument-results">
-          {candidateAssets.map((asset) => (
-            <li key={asset.asset_key}>
-              <button
-                type="button"
-                className="w-full px-1 py-3 text-left hover:bg-surface-muted"
-                onClick={() => addAsset(asset)}
-              >
-                <div className="font-medium">{asset.name}</div>
-                <div className="text-xs text-ink-muted">
-                  {asset.symbol} · {asset.market}
-                  {asset.has_history
-                    ? ` · 数据截至 ${asset.history_data_as_of || "—"}`
-                    : " · 未同步历史，模拟前需要同步"}
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </Dialog>
+      </MarketAssetPickerDialog>
     </div>
   );
 }

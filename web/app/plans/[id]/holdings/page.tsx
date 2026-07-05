@@ -1,19 +1,23 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { useEffect } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-
-export default function HoldingsRedirectPage() {
-  const planId = useParams().id as string;
-  const router = useRouter();
-  const searchParams = useSearchParams();
-
-  useEffect(() => {
-    const query = searchParams.toString();
-    router.replace(
-      query ? `/plans/${planId}/rebalance?${query}` : `/plans/${planId}/rebalance`,
-    );
-  }, [planId, router, searchParams]);
-
-  return <p className="text-ink-muted">正在前往调仓工作台…</p>;
+export default async function HoldingsRedirect({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const { id } = await params;
+  const entries = await searchParams;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(entries)) {
+    if (value === undefined) continue;
+    for (const v of Array.isArray(value) ? value : [value]) {
+      query.append(key, v);
+    }
+  }
+  const suffix = query.toString();
+  redirect(
+    suffix ? `/plans/${id}/rebalance?${suffix}` : `/plans/${id}/rebalance`,
+  );
 }

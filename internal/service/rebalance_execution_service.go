@@ -74,7 +74,7 @@ type ExecutionStats struct {
 
 type CreateRebalanceExecutionRequest struct {
 	AssetKeys []string `json:"asset_keys"`
-	ForceNew      bool     `json:"force_new"`
+	ForceNew  bool     `json:"force_new"`
 }
 
 type ExecutionTradeRequest struct {
@@ -267,46 +267,15 @@ func (s *RebalanceExecutionService) AddNote(
 	return s.Get(ctx, planID, executionID)
 }
 
+// Complete finalizes an execution. All reads (execution status, plan version,
+// lines, holdings) happen inside the same transaction as the writes, so a
+// concurrent Sell/Buy or a double-click Complete can never make the final
+// holdings diverge from the event stream. Only parameter validation and error
+// mapping live outside the transaction.
 func (s *RebalanceExecutionService) Complete(
 	ctx context.Context, planID, executionID string, req CompleteRebalanceExecutionRequest,
 ) (RebalanceExecutionDetail, error) {
-	execution, err := s.loadEditableExecution(ctx, planID, executionID)
-	if err != nil {
-		return RebalanceExecutionDetail{}, err
-	}
-	plan, err := s.plans.GetByID(ctx, planID)
-	if err != nil {
-		return RebalanceExecutionDetail{}, wrapRepo("get plan for complete", err)
-	}
-	if req.ConfigVersion != plan.ConfigVersion {
-		return RebalanceExecutionDetail{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
-	}
-	if req.ConfigVersion != execution.BaselineConfigVersion {
-		return RebalanceExecutionDetail{}, newErr("plan_version_conflict",
-			"plan configuration changed since execution creation; abandon and recreate", nil)
-	}
-
-	lines, err := s.executions.ListLines(ctx, executionID)
-	if err != nil {
-		return RebalanceExecutionDetail{}, wrapRepo("list execution lines for complete", err)
-	}
-	existing, err := s.holdings.ListByPlan(ctx, planID)
-	if err != nil {
-		return RebalanceExecutionDetail{}, wrapRepo("list holdings for complete", err)
-	}
-
-	finalByHolding, cashPool, err := buildExecutionFinalAmounts(lines, existing, execution.CashPoolMinor)
-	if err != nil {
-		return RebalanceExecutionDetail{}, err
-	}
-	holdingsReq := buildExecutionCompleteHoldingsRequest(req, existing, finalByHolding)
-
-	prep, err := s.holdingsSvc.prepareHoldingsUpdate(ctx, planID, holdingsReq)
-	if err != nil {
-		return RebalanceExecutionDetail{}, err
-	}
-
-	err = s.completeExecutionTx(ctx, planID, executionID, execution, req, prep, cashPool)
+	err := s.completeExecutionTx(ctx, planID, executionID, req)
 	if err != nil {
 		if errors.Is(err, repository.ErrVersionConflict) {
 			return RebalanceExecutionDetail{}, newErr("plan_version_conflict", "plan configuration version mismatch", nil)

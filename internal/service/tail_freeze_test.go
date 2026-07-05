@@ -34,7 +34,7 @@ func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 		t.Fatalf("build snapshot: %v", err)
 	}
 	if in.EngineVersion != simulation.EngineVersion {
-		t.Fatalf("forward run must be 3.0.0, got %s", in.EngineVersion)
+		t.Fatalf("forward run must use current EngineVersion %s, got %s", simulation.EngineVersion, in.EngineVersion)
 	}
 	if in.TailStudentTDf != 11 {
 		t.Fatalf("frozen df = %d, want 11 (profile)", in.TailStudentTDf)

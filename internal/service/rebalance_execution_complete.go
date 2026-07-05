@@ -66,15 +66,53 @@ func buildExecutionCompleteHoldingsRequest(
 	return holdingsReq
 }
 
+// completeExecutionTx performs the whole complete flow inside one
+// transaction: re-check execution editability and plan version, read lines
+// and holdings via Tx variants, derive final amounts, then apply the
+// holdings update and status flip. Any interleaved trade or a second
+// Complete fails the in-transaction checks instead of committing on stale
+// reads.
 func (s *RebalanceExecutionService) completeExecutionTx(
 	ctx context.Context,
 	planID, executionID string,
-	execution repository.RebalanceExecution,
 	req CompleteRebalanceExecutionRequest,
-	prep *preparedHoldingsUpdate,
-	cashPool int64,
 ) error {
 	return wrapRepo("complete execution tx", fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		execution, err := s.loadEditableExecutionTx(ctx, tx, planID, executionID)
+		if err != nil {
+			return err
+		}
+		plan, err := s.plans.GetByIDTx(ctx, tx, planID)
+		if err != nil {
+			return wrapRepo("get plan for complete", err)
+		}
+		if req.ConfigVersion != plan.ConfigVersion {
+			return newErr("plan_version_conflict", "plan configuration version mismatch", nil)
+		}
+		if req.ConfigVersion != execution.BaselineConfigVersion {
+			return newErr("plan_version_conflict",
+				"plan configuration changed since execution creation; abandon and recreate", nil)
+		}
+
+		lines, err := s.executions.ListLinesTx(ctx, tx, executionID)
+		if err != nil {
+			return wrapRepo("list execution lines for complete", err)
+		}
+		existing, err := s.holdings.ListByPlanTx(ctx, tx, planID)
+		if err != nil {
+			return wrapRepo("list holdings for complete", err)
+		}
+
+		finalByHolding, cashPool, err := buildExecutionFinalAmounts(lines, existing, execution.CashPoolMinor)
+		if err != nil {
+			return err
+		}
+		holdingsReq := buildExecutionCompleteHoldingsRequest(req, existing, finalByHolding)
+		prep, err := s.holdingsSvc.prepareHoldingsUpdateTx(ctx, tx, planID, holdingsReq)
+		if err != nil {
+			return err
+		}
+
 		if err := s.holdingsSvc.applyHoldingsUpdateTx(ctx, tx, planID, req.ConfigVersion, prep); err != nil {
 			return wrapRepo("apply holdings update for execution complete", err)
 		}

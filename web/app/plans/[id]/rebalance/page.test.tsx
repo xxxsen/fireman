@@ -71,7 +71,9 @@ const getRebalance = vi.hoisted(() =>
   ),
 );
 
-const getActiveRebalanceExecution = vi.hoisted(() => vi.fn(() => Promise.resolve(null)));
+const getActiveRebalanceExecution = vi.hoisted(() =>
+  vi.fn((): Promise<unknown> => Promise.resolve(null)),
+);
 const createRebalanceExecution = vi.hoisted(() =>
   vi.fn(() =>
     Promise.resolve({
@@ -79,18 +81,6 @@ const createRebalanceExecution = vi.hoisted(() =>
       lines: [],
       events: [],
       stats: { line_count: 0, done_line_count: 0, sold_total_minor: 0, bought_total_minor: 0 },
-    }),
-  ),
-);
-
-const getActiveRebalanceDraft = vi.hoisted(() =>
-  vi.fn((): Promise<unknown> => Promise.resolve(null)),
-);
-const createRebalanceDraft = vi.hoisted(() =>
-  vi.fn(() =>
-    Promise.resolve({
-      draft: { id: "rbd_1", created_at: "2026-07-04T00:00:00Z" },
-      lines: [],
     }),
   ),
 );
@@ -113,11 +103,6 @@ vi.mock("@/lib/api/rebalance-executions", () => ({
   createRebalanceExecution: (...args: unknown[]) => createRebalanceExecution(...args),
 }));
 
-vi.mock("@/lib/api/rebalance-drafts", () => ({
-  getActiveRebalanceDraft: (...args: unknown[]) => getActiveRebalanceDraft(...args),
-  createRebalanceDraft: (...args: unknown[]) => createRebalanceDraft(...args),
-}));
-
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -133,8 +118,6 @@ describe("RebalancePage (调仓工作台)", () => {
   beforeEach(() => {
     mockSearchParams.set(new URLSearchParams());
     getActiveRebalanceExecution.mockResolvedValue(null);
-    getActiveRebalanceDraft.mockReset();
-    getActiveRebalanceDraft.mockResolvedValue(null);
     getRebalance.mockImplementation(() =>
       Promise.resolve({
         mode: "full",
@@ -152,7 +135,7 @@ describe("RebalancePage (调仓工作台)", () => {
     );
   });
 
-  it("shows dual primary actions: asset refresh and rebalance execution", async () => {
+  it("offers exactly two workspace actions: asset refresh and rebalance execution", async () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "调仓工作台" })).toBeInTheDocument();
@@ -161,58 +144,10 @@ describe("RebalancePage (调仓工作台)", () => {
       "/plans/plan_1/asset-refresh",
     );
     expect(screen.getByTestId("start-rebalance-execution")).toBeInTheDocument();
-    expect(screen.getByTestId("create-rebalance-plan")).toBeInTheDocument();
-  });
-
-  it("shows continue button when a draft is active", async () => {
-    getActiveRebalanceDraft.mockResolvedValue({
-      draft: { id: "rbd_active", created_at: "2026-07-01T00:00:00Z" },
-      lines: [],
-    });
-
-    renderPage();
-
-    expect(await screen.findByTestId("continue-rebalance-plan")).toHaveAttribute(
-      "href",
-      "/plans/plan_1/rebalance/plan/rbd_active",
-    );
-    expect(screen.getByTestId("draft-in-progress-hint")).toBeInTheDocument();
-    expect(screen.queryByTestId("create-rebalance-plan")).not.toBeInTheDocument();
-  });
-
-  it("shows error state without action entries when active draft check fails, and retries", async () => {
-    getActiveRebalanceDraft.mockRejectedValue(new Error("draft check down"));
-
-    renderPage();
-
-    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+    // The draft (rebalance plan) entry is gone for good.
     expect(screen.queryByTestId("create-rebalance-plan")).not.toBeInTheDocument();
     expect(screen.queryByTestId("continue-rebalance-plan")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("start-rebalance-execution")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("asset-refresh-primary")).not.toBeInTheDocument();
-
-    const callsBeforeRetry = getActiveRebalanceDraft.mock.calls.length;
-    fireEvent.click(screen.getByTestId("error-state-retry"));
-    expect(getActiveRebalanceDraft.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
-  });
-
-  it("keeps page skeleton until active draft check resolves", async () => {
-    let resolveDraft: (v: unknown) => void = () => {};
-    getActiveRebalanceDraft.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveDraft = resolve;
-        }),
-    );
-
-    renderPage();
-
-    expect(await screen.findByTestId("page-skeleton")).toBeInTheDocument();
-    expect(screen.queryByTestId("create-rebalance-plan")).not.toBeInTheDocument();
-
-    resolveDraft(null);
-    expect(await screen.findByTestId("create-rebalance-plan")).toBeInTheDocument();
-    expect(screen.queryByTestId("page-skeleton")).not.toBeInTheDocument();
+    expect(screen.queryByText("创建调仓计划")).not.toBeInTheDocument();
   });
 
   it("shows error state (not open refresh) when active execution check fails", async () => {
@@ -223,6 +158,11 @@ describe("RebalancePage (调仓工作台)", () => {
 
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
     expect(screen.queryByTestId("asset-refresh-primary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("start-rebalance-execution")).not.toBeInTheDocument();
+
+    const callsBeforeRetry = getActiveRebalanceExecution.mock.calls.length;
+    fireEvent.click(screen.getByTestId("error-state-retry"));
+    expect(getActiveRebalanceExecution.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
   });
 
   it("disables asset refresh and shows continue when execution is active", async () => {
@@ -247,6 +187,18 @@ describe("RebalancePage (调仓工作台)", () => {
       "href",
       "/plans/plan_1/rebalance/executions/rbx_active",
     );
+  });
+
+  it("opens the execution confirm dialog and navigates after creation", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("start-rebalance-execution"));
+    const confirmButton = await screen.findByRole("button", { name: "创建调仓执行" });
+
+    fireEvent.click(confirmButton);
+    expect(await screen.findByRole("heading", { name: "调仓工作台" })).toBeInTheDocument();
+    expect(createRebalanceExecution).toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith("/plans/plan_1/rebalance/executions/rbx_1");
   });
 
   it("shows asset refreshed banner from query param", async () => {

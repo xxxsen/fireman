@@ -16,7 +16,16 @@ func NewAllocationRepo(db *sql.DB) *AllocationRepo {
 }
 
 func (r *AllocationRepo) Get(ctx context.Context, planID string) (PlanAllocation, error) {
-	acRows, err := r.db.QueryContext(ctx, `
+	return r.get(ctx, r.db, planID)
+}
+
+// GetTx reads the plan allocation inside an existing transaction.
+func (r *AllocationRepo) GetTx(ctx context.Context, tx *sql.Tx, planID string) (PlanAllocation, error) {
+	return r.get(ctx, tx, planID)
+}
+
+func (r *AllocationRepo) get(ctx context.Context, q rowQuerier, planID string) (PlanAllocation, error) {
+	acRows, err := q.QueryContext(ctx, `
 		SELECT asset_class, weight FROM plan_asset_class_targets WHERE plan_id=? ORDER BY asset_class`, planID)
 	if err != nil {
 		return PlanAllocation{}, fmt.Errorf("query asset class targets: %w", err)
@@ -34,7 +43,7 @@ func (r *AllocationRepo) Get(ctx context.Context, planID string) (PlanAllocation
 		return PlanAllocation{}, fmt.Errorf("iterate asset class targets: %w", err)
 	}
 
-	regRows, err := r.db.QueryContext(ctx, `
+	regRows, err := q.QueryContext(ctx, `
 		SELECT asset_class, region, weight_within_class FROM plan_region_targets
 		WHERE plan_id=? ORDER BY asset_class, region`, planID)
 	if err != nil {

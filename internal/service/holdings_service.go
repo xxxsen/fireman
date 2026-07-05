@@ -89,7 +89,7 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string,
 	if err != nil {
 		return nil, fmt.Errorf("load allocation: %w", err)
 	}
-	prep, err := s.prepareHoldingsUpdateWithPendingBumps(ctx, planID, req, 0, alloc)
+	prep, err := s.prepareHoldingsUpdateWithPendingBumps(ctx, nil, planID, req, 0, alloc)
 	if err != nil {
 		return nil, err
 	}
@@ -109,21 +109,29 @@ func (s *HoldingsService) UpdateHoldings(ctx context.Context, planID string,
 	return out, nil
 }
 
-func (s *HoldingsService) prepareHoldingsUpdate(ctx context.Context, planID string,
+// prepareHoldingsUpdateTx routes all reads through tx (nil for pool reads) so
+// validation and the subsequent write can share one atomic transaction.
+func (s *HoldingsService) prepareHoldingsUpdateTx(ctx context.Context, tx *sql.Tx, planID string,
 	req HoldingsUpdateRequest,
 ) (*preparedHoldingsUpdate, error) {
 	allocRepo := repository.NewAllocationRepo(s.sql)
-	alloc, err := allocRepo.Get(ctx, planID)
+	var alloc repository.PlanAllocation
+	var err error
+	if tx != nil {
+		alloc, err = allocRepo.GetTx(ctx, tx, planID)
+	} else {
+		alloc, err = allocRepo.Get(ctx, planID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load allocation: %w", err)
 	}
-	return s.prepareHoldingsUpdateWithPendingBumps(ctx, planID, req, 0, alloc)
+	return s.prepareHoldingsUpdateWithPendingBumps(ctx, tx, planID, req, 0, alloc)
 }
 
-func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Context, planID string,
+func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Context, tx *sql.Tx, planID string,
 	req HoldingsUpdateRequest, pendingVersionBumps int, alloc repository.PlanAllocation,
 ) (*preparedHoldingsUpdate, error) {
-	plan, err := s.plans.GetByID(ctx, planID)
+	plan, err := s.planByID(ctx, tx, planID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return nil, newErr("plan_not_found", "plan not found", nil)
@@ -135,7 +143,7 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 		return nil, newErr("plan_version_conflict", "plan configuration version mismatch", nil)
 	}
 
-	existing, err := s.holdings.ListByPlan(ctx, planID)
+	existing, err := s.holdingsByPlan(ctx, tx, planID)
 	if err != nil {
 		return nil, fmt.Errorf("list existing holdings: %w", err)
 	}
@@ -162,7 +170,7 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 				map[string]any{"asset_key": item.AssetKey})
 		}
 		seen[item.AssetKey] = struct{}{}
-		holding, pending, err := s.buildOnePreparedHolding(ctx, plan, item, existingSnap)
+		holding, pending, err := s.buildOnePreparedHolding(ctx, tx, plan, item, existingSnap)
 		if err != nil {
 			return nil, err
 		}
@@ -186,6 +194,37 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 		return nil, newErr("plan_weights_invalid", msg, map[string]any{"checks": check.Checks})
 	}
 	return &preparedHoldingsUpdate{built: built, pendingSnaps: pendingSnaps}, nil
+}
+
+func (s *HoldingsService) planByID(ctx context.Context, tx *sql.Tx, planID string) (repository.Plan, error) {
+	var plan repository.Plan
+	var err error
+	if tx != nil {
+		plan, err = s.plans.GetByIDTx(ctx, tx, planID)
+	} else {
+		plan, err = s.plans.GetByID(ctx, planID)
+	}
+	if err != nil {
+		// %w keeps errors.Is(err, repository.ErrPlanNotFound) working upstream.
+		return repository.Plan{}, fmt.Errorf("get plan: %w", err)
+	}
+	return plan, nil
+}
+
+func (s *HoldingsService) holdingsByPlan(
+	ctx context.Context, tx *sql.Tx, planID string,
+) ([]repository.PlanHolding, error) {
+	var out []repository.PlanHolding
+	var err error
+	if tx != nil {
+		out, err = s.holdings.ListByPlanTx(ctx, tx, planID)
+	} else {
+		out, err = s.holdings.ListByPlan(ctx, planID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list plan holdings: %w", err)
+	}
+	return out, nil
 }
 
 func (s *HoldingsService) applyHoldingsUpdateTx(ctx context.Context, tx *sql.Tx, planID string, configVersion int,

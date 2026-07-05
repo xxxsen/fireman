@@ -61,26 +61,12 @@ export const TERMS: Record<string, string> = {
     "更新账户真实资产金额；可选同步计划基准；不等同于新建计划",
   annual_savings_wizard:
     "指 FIRE 之前，你每年预计还能新增积攒多少资金。",
-  asset_refresh_vs_rebalance_plan:
-    "持仓校正=刷新事实基准；调仓计划=按冻结建议调整持仓，编辑时不重算其他行目标",
   config_template:
     "跨计划复用的资产大类目标权重模板（权益/债券/现金），在计划设置中选用；与模拟收益无关",
   assumption_scenario:
     "收益假设的三档情景（保守/基准/乐观），只影响 FIRE 模拟中的收益先验，不改变目标配置；与「配置模板」「压力场景」是三个互不相关的概念",
   gap_color_semantics:
     "「还差/待投入」（绿色）表示按目标结构还需买入的缺口，不代表盈利；「超出/待减配」（红色）表示超配需减仓，不代表亏损",
-  rebalance_plan_draft:
-    "进行中的调仓计划，分阶段保存，完成后才写入正式持仓",
-  rebalance_fund_pool:
-    "减配释放的资金可供增配使用；未在标的间分配的部分可在提交时转入现金持仓",
-  rebalance_reference_package:
-    "完整结构对齐参考方案，含未达调仓阈值的微调；与行内「不动」建议不同，仅作参考",
-  apply_recommended_one_line:
-    "仅将本行计划金额更新为推荐值，不影响其他标的；可配合分阶段暂存",
-  unallocated_sweep_to_cash:
-    "提交时若资金池仍有未分配金额，将计入计划中的现金持仓",
-  frozen_structural_gap:
-    "调仓计划创建时确定的结构还差，编辑过程中不变",
   current_amount_vs_target:
     "当前金额为您的真实持仓；目标金额由配置模板与权重自动计算。交易后请在此更新当前金额",
   fire_simulation_optional:
@@ -141,13 +127,6 @@ export const TERM_LABELS: Record<string, string> = {
   rebalance_mode_new_cash: "新增资金模式",
   asset_refresh: "持仓校正",
   annual_savings_wizard: "年储蓄",
-  asset_refresh_vs_rebalance_plan: "持仓校正与调仓计划",
-  rebalance_plan_draft: "调仓计划草稿",
-  rebalance_fund_pool: "调仓资金池",
-  rebalance_reference_package: "参考调仓方案",
-  apply_recommended_one_line: "应用推荐金额",
-  unallocated_sweep_to_cash: "未分配资金转现金",
-  frozen_structural_gap: "冻结结构还差",
   current_amount_vs_target: "当前金额与目标金额",
   fire_simulation_optional: "FIRE 模拟",
   fire_params_for_simulation: "FIRE 模拟参数",

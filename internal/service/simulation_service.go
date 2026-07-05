@@ -421,7 +421,7 @@ func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pat
 // AssetParticipationView summarizes which complete years each asset used in simulation.
 type AssetParticipationView struct {
 	HoldingID     string `json:"holding_id"`
-	AssetKey  string `json:"asset_key"`
+	AssetKey      string `json:"asset_key"`
 	CompleteYears []int  `json:"complete_years"`
 }
 
@@ -690,11 +690,4 @@ func randomSeed() (int64, error) {
 		return 0, fmt.Errorf("generate random seed: %w", err)
 	}
 	return n.Int64(), nil
-}
-
-func abs64(v int64) int64 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }

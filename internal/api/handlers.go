@@ -22,7 +22,6 @@ type Services struct {
 	Holdings            *service.HoldingsService
 	Targets             *service.TargetService
 	Rebalance           *service.RebalanceService
-	RebalanceDrafts     *service.RebalanceDraftService
 	RebalanceExecutions *service.RebalanceExecutionService
 	AssetRefresh        *service.AssetRefreshService
 	MarketAssets        *service.MarketAssetService
@@ -64,9 +63,6 @@ func NewServices(
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
 	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, marketAssetRepo)
-	rebalanceDraftSvc := service.NewRebalanceDraftService(
-		db, plans, repository.NewRebalanceDraftRepo(db), holdings, holdingsSvc, rebalanceSvc,
-	)
 	executionRepo := repository.NewRebalanceExecutionRepo(db)
 	rebalanceExecutionSvc := service.NewRebalanceExecutionService(
 		db, plans, executionRepo, holdings, holdingsSvc, rebalanceSvc,
@@ -97,7 +93,6 @@ func NewServices(
 		Holdings:            holdingsSvc,
 		Targets:             targetSvc,
 		Rebalance:           rebalanceSvc,
-		RebalanceDrafts:     rebalanceDraftSvc,
 		RebalanceExecutions: rebalanceExecutionSvc,
 		AssetRefresh: service.NewAssetRefreshService(
 			db, plans, params, alloc, scenario, holdingsSvc, repository.NewAssetRefreshEventRepo(db), executionRepo,
@@ -128,6 +123,7 @@ func (s Services) registerPlanRoutes(rg *gin.RouterGroup) {
 
 	rg.GET("/plans/:plan_id/parameters", s.getParameters)
 	rg.PUT("/plans/:plan_id/parameters", s.updateParameters)
+	rg.PUT("/plans/:plan_id/settings", s.updatePlanSettings)
 	rg.GET("/plans/:plan_id/allocation", s.getAllocation)
 	rg.PUT("/plans/:plan_id/allocation", s.updateAllocation)
 	rg.GET("/plans/:plan_id/holdings", s.getHoldings)
@@ -137,8 +133,22 @@ func (s Services) registerPlanRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans/:plan_id/portfolio-snapshots", s.createPortfolioSnapshot)
 	rg.POST("/plans/:plan_id/apply-scenario", s.applyScenario)
 	rg.GET("/plans/:plan_id/dashboard", s.getDashboard)
-	s.registerRebalanceDraftRoutes(rg)
+	rg.POST("/plans/:plan_id/asset-refresh", s.submitAssetRefresh)
 	s.registerRebalanceExecutionRoutes(rg)
+}
+
+func (s Services) submitAssetRefresh(c *gin.Context) {
+	var req service.AssetRefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.AssetRefresh.Submit(c.Request.Context(), c.Param("plan_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 func (s Services) getDashboard(c *gin.Context) {
@@ -269,6 +279,47 @@ func (s Services) updateParameters(c *gin.Context) {
 		return
 	}
 	OK(c, gin.H{"parameters": service.ParametersToAPI(updated)})
+}
+
+// planSettingsUpdateAPIRequest is the JSON body of PUT /plans/:plan_id/settings.
+// Parameters use the API DTO (string seed) and are converted before the
+// service call.
+type planSettingsUpdateAPIRequest struct {
+	ConfigVersion          int                                  `json:"config_version"`
+	Plan                   *service.PlanSettingsPlanPatch       `json:"plan,omitempty"`
+	Allocation             *service.PlanSettingsAllocationPatch `json:"allocation,omitempty"`
+	Parameters             service.PlanParametersAPI            `json:"parameters"`
+	ApplyUnallocatedToCash bool                                 `json:"apply_unallocated_to_cash,omitempty"`
+}
+
+func (s Services) updatePlanSettings(c *gin.Context) {
+	var req planSettingsUpdateAPIRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	params, err := service.ParametersFromAPI(req.Parameters)
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "parameters_invalid", err.Error(), nil)
+		return
+	}
+	out, err := s.Plans.UpdateSettings(c.Request.Context(), c.Param("plan_id"),
+		service.PlanSettingsUpdateRequest{
+			ConfigVersion:          req.ConfigVersion,
+			Plan:                   req.Plan,
+			Allocation:             req.Allocation,
+			Parameters:             params,
+			ApplyUnallocatedToCash: req.ApplyUnallocatedToCash,
+		})
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{
+		"plan":       out.Plan,
+		"parameters": service.ParametersToAPI(out.Parameters),
+		"allocation": out.Allocation,
+	})
 }
 
 func (s Services) getAllocation(c *gin.Context) {

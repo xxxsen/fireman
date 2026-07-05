@@ -92,37 +92,53 @@ func (r *PlanRepo) List(ctx context.Context) ([]Plan, error) {
 }
 
 func (r *PlanRepo) GetByID(ctx context.Context, id string) (Plan, error) {
+	return r.getByID(ctx, r.db, id)
+}
+
+// GetByIDTx reads the plan inside an existing transaction so version checks
+// stay consistent with subsequent writes.
+func (r *PlanRepo) GetByIDTx(ctx context.Context, tx *sql.Tx, id string) (Plan, error) {
+	return r.getByID(ctx, tx, id)
+}
+
+func (r *PlanRepo) getByID(ctx context.Context, q rowQuerier, id string) (Plan, error) {
 	var p Plan
-	err := r.db.QueryRowContext(ctx, `
+	rows, err := q.QueryContext(ctx, `
 		SELECT id, name, base_currency, valuation_date, status, config_version, created_at, updated_at
-		FROM plans WHERE id = ?`, id).Scan(
-		&p.ID, &p.Name, &p.BaseCurrency, &p.ValuationDate, &p.Status,
-		&p.ConfigVersion, &p.CreatedAt, &p.UpdatedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
+		FROM plans WHERE id = ?`, id)
+	if err != nil {
+		return Plan{}, wrapSQL("query plan", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return Plan{}, wrapSQL("iterate plan", err)
+		}
 		return Plan{}, ErrPlanNotFound
 	}
-	if err != nil {
+	if err := rows.Scan(
+		&p.ID, &p.Name, &p.BaseCurrency, &p.ValuationDate, &p.Status,
+		&p.ConfigVersion, &p.CreatedAt, &p.UpdatedAt,
+	); err != nil {
 		return Plan{}, wrapSQL("scan plan", err)
 	}
 	return p, nil
 }
 
-func (r *PlanRepo) Update(ctx context.Context, p Plan, expectedVersion int) error {
+// UpdateFieldsTx updates plan metadata fields inside a transaction without
+// touching config_version; callers bump the version once per logical save.
+func (r *PlanRepo) UpdateFieldsTx(ctx context.Context, tx *sql.Tx, p Plan) error {
 	now := time.Now().UnixMilli()
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE plans SET name=?, base_currency=?, valuation_date=?, status=?, config_version=?, updated_at=?
-		WHERE id=? AND config_version=?`,
-		p.Name, p.BaseCurrency, p.ValuationDate, p.Status, expectedVersion+1, now, p.ID, expectedVersion)
+	res, err := tx.ExecContext(ctx, `
+		UPDATE plans SET name=?, base_currency=?, valuation_date=?, status=?, updated_at=?
+		WHERE id=?`,
+		p.Name, p.BaseCurrency, p.ValuationDate, p.Status, now, p.ID)
 	if err != nil {
-		return wrapSQL("update plan", err)
+		return wrapSQL("update plan fields", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		if _, err := r.GetByID(ctx, p.ID); errors.Is(err, ErrPlanNotFound) {
-			return ErrPlanNotFound
-		}
-		return ErrVersionConflict
+		return ErrPlanNotFound
 	}
 	return nil
 }

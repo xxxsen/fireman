@@ -128,7 +128,8 @@ func TestMarketAssetDirectorySync_ScopeCreatesUnitTasks(t *testing.T) {
 		var lastTaskID, stateScope string
 		if err := db.QueryRow(
 			`SELECT last_task_id, scope FROM market_asset_sync_state WHERE sync_key=?`,
-			want).Scan(&lastTaskID, &stateScope); err != nil {
+			want,
+		).Scan(&lastTaskID, &stateScope); err != nil {
 			t.Fatal(err)
 		}
 		if lastTaskID != task["id"] || stateScope != "cn_all" {
@@ -311,6 +312,53 @@ func TestListMarketAssets_SearchAndSyncBlock(t *testing.T) {
 		if !scopes[want] {
 			t.Fatalf("syncs missing scope %s: %v", want, syncs)
 		}
+	}
+}
+
+// The backend is the single source of truth for instrument-type presentation:
+// every listed asset must carry the Chinese label and ordering priority so the
+// web pickers never re-derive them.
+func TestListMarketAssets_InstrumentTypeLabelAndPriority(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	seedMarketAssetWithHistory(t, db, cnETFAssetSeed())
+	seedMarketAssetWithHistory(t, db, hkStockAssetSeed())
+
+	resp, body := getJSON(t, client, srv.URL+"/api/v1/market-assets")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", resp.StatusCode, body)
+	}
+	data := decodeEnvelope(t, body)["data"].(map[string]any)
+	want := map[string]struct {
+		label    string
+		priority float64
+	}{
+		"cn_exchange_fund": {"场内 ETF / LOF", 1},
+		"hk_stock":         {"港股", 3},
+	}
+	checked := 0
+	for _, raw := range data["assets"].([]any) {
+		asset := raw.(map[string]any)
+		typ := asset["instrument_type"].(string)
+		label, ok := asset["instrument_type_label"].(string)
+		if !ok || label == "" {
+			t.Fatalf("asset %v missing instrument_type_label", asset["asset_key"])
+		}
+		priority, ok := asset["instrument_type_priority"].(float64)
+		if !ok {
+			t.Fatalf("asset %v missing instrument_type_priority", asset["asset_key"])
+		}
+		expect, known := want[typ]
+		if !known {
+			continue
+		}
+		if label != expect.label || priority != expect.priority {
+			t.Fatalf("type %s got (%q, %v), want (%q, %v)",
+				typ, label, priority, expect.label, expect.priority)
+		}
+		checked++
+	}
+	if checked < 2 {
+		t.Fatalf("expected both seeded asset types checked, got %d", checked)
 	}
 }
 
@@ -607,7 +655,8 @@ func TestFXSync_CreatesTask(t *testing.T) {
 	}
 	var lastTaskID string
 	if err := db.QueryRow(
-		`SELECT last_task_id FROM market_asset_sync_state WHERE scope='fx_rates'`).Scan(&lastTaskID); err != nil {
+		`SELECT last_task_id FROM market_asset_sync_state WHERE scope='fx_rates'`,
+	).Scan(&lastTaskID); err != nil {
 		t.Fatal(err)
 	}
 	if lastTaskID != task["id"].(string) {

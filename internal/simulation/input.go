@@ -8,11 +8,14 @@ import (
 	"sort"
 )
 
-// EngineVersion is bumped when simulation semantics change. 3.0.0 introduces the
+// EngineVersion is bumped when simulation semantics change. 3.0.0 introduced the
 // forward-return calibration and the joint (correlated, shared fat-tail) factor
-// model. 2.x snapshots continue to replay with the independent per-asset sampler
-// and their frozen ModeledAnnualReturn so old runs reproduce exactly.
-const EngineVersion = "3.0.0"
+// model. 3.1.0 fixes the guardrail withdrawal strategy so anniversary ±10%
+// adjustments compound on the previous year's spending instead of resetting to
+// the inflation baseline every year. 2.x snapshots continue to replay with the
+// independent per-asset sampler and their frozen ModeledAnnualReturn so old
+// runs reproduce exactly.
+const EngineVersion = "3.1.0"
 
 // LegacyEngineVersion is the legacy independent-factor engine. Snapshots
 // frozen at this version must keep replaying with the independent sampler.
@@ -44,7 +47,7 @@ type SnapshotYear struct {
 // SnapshotAsset is one simulated asset frozen at job creation.
 type SnapshotAsset struct {
 	HoldingID           string  `json:"holding_id"`
-	AssetKey        string  `json:"asset_key"`
+	AssetKey            string  `json:"asset_key"`
 	InstrumentName      string  `json:"instrument_name,omitempty"`
 	InstrumentCode      string  `json:"instrument_code,omitempty"`
 	SnapshotID          string  `json:"snapshot_id"`
@@ -225,7 +228,12 @@ func HashInput(in *InputSnapshot) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// CanonicalJSON marshals with sorted keys for stable hashing.
+// CanonicalJSON serializes for stable hashing. Determinism rests on two
+// encoding/json guarantees: struct fields are emitted in declaration order,
+// and map keys are sorted. That covers InputSnapshot's struct tree plus its
+// string-keyed maps (Months/FXMonths). Do NOT introduce interface-typed or
+// non-string-keyed map fields inside InputSnapshot — a contract test walks
+// the type tree and enforces this, keeping input_hash reproducible.
 func CanonicalJSON(v any) ([]byte, error) {
 	return json.Marshal(v)
 }

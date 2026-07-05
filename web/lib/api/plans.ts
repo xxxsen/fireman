@@ -1,4 +1,4 @@
-import type { Plan, PlanParameters, RegionTarget } from "@/types/api";
+import type { AssetClassTarget, Plan, PlanParameters, RegionTarget } from "@/types/api";
 import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export function listPlans(): Promise<Plan[]> {
@@ -71,6 +71,34 @@ export function updateParameters(
   },
 ): Promise<{ parameters: PlanParameters }> {
   return apiPut(`/api/v1/plans/${planId}/parameters`, body);
+}
+
+/**
+ * Atomic combined settings save: plan name / allocation are optional,
+ * parameters are required. The backend commits everything in one transaction
+ * and bumps config_version exactly once.
+ */
+export function updatePlanSettings(
+  planId: string,
+  body: {
+    config_version: number;
+    plan?: { name: string };
+    allocation?: {
+      asset_class_targets: AssetClassTarget[];
+      region_targets: RegionTarget[];
+    };
+    parameters: PlanParameters;
+    apply_unallocated_to_cash?: boolean;
+  },
+): Promise<{
+  plan: Plan;
+  parameters: PlanParameters;
+  allocation: {
+    asset_class_targets: AssetClassTarget[];
+    region_targets: RegionTarget[];
+  };
+}> {
+  return apiPut(`/api/v1/plans/${planId}/settings`, body);
 }
 
 export function createPortfolioSnapshot(

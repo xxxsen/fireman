@@ -16,6 +16,7 @@ import { listScenarios } from "@/lib/api/allocation";
 import { createSimulation } from "@/lib/api/simulations";
 import { assetClassLabel, formatMoney, formatPercent } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
+import { validateAges, validatePositiveMoneyFields } from "@/lib/plan-validation";
 import {
   buildRegionTargetsPayload,
   buildWizardPortfolioReview,
@@ -111,37 +112,6 @@ function validateAdvancedParams(a: AdvancedFireParams): string[] {
   if (a.withdrawal_tax_rate * a.taxable_withdrawal_ratio >= 1)
     errs.push("有效提取税率 × 应税提取比例需小于 1。");
   return errs;
-}
-
-/**
- * Client mirror of the backend age rule `0 < current_age <= retirement_age <
- * end_age <= 120` (end_age = retirement_age + duration), so invalid ages are
- * rejected with a Chinese message before submit instead of a server error.
- */
-function validateWizardAges(
-  currentAge: number,
-  retirementAge: number,
-  fireDurationYears: number,
-): string | null {
-  if (!Number.isInteger(currentAge) || currentAge <= 0) {
-    return "当前年龄需为大于 0 的整数。";
-  }
-  if (!Number.isInteger(retirementAge)) {
-    return "退休年龄需为整数。";
-  }
-  if (retirementAge < currentAge) {
-    return "退休年龄不能小于当前年龄。";
-  }
-  if (!Number.isInteger(fireDurationYears)) {
-    return "预计 FIRE 时长需为整数（年）。";
-  }
-  if (fireDurationYears < 1) {
-    return "预计 FIRE 时长至少为 1 年。";
-  }
-  if (retirementAge + fireDurationYears > 120) {
-    return "退休年龄加 FIRE 时长不能超过 120 岁。";
-  }
-  return null;
 }
 
 const WITHDRAWAL_TYPE_LABEL: Record<string, string> = {
@@ -385,22 +355,18 @@ export default function NewPlanWizardPage() {
   // region splits must sum to 100%, and incompatible already-picked instruments
   // are pruned by scenario/region. Returns false (with an error set) to block.
   const leaveGoalStep = (): boolean => {
-    const ageError = validateWizardAges(currentAge, retirementAge, fireDurationYears);
-    if (ageError) {
-      setError(ageError);
+    const ageCheck = validateAges({ currentAge, retirementAge, fireDurationYears });
+    if (!ageCheck.ok) {
+      setError(ageCheck.message!);
       return false;
     }
-    // Mirror of the backend rule "total_assets and annual_spending must be > 0".
-    if (totalAssets <= 0) {
-      setError("基准规模需大于 0。");
-      return false;
-    }
-    if (annualSpending <= 0) {
-      setError("当前年支出需大于 0。");
-      return false;
-    }
-    if (annualSavings < 0) {
-      setError("年储蓄不能为负数。");
+    const moneyCheck = validatePositiveMoneyFields({
+      totalAssetsMinor: totalAssets,
+      annualSpendingMinor: annualSpending,
+      annualSavingsMinor: annualSavings,
+    });
+    if (!moneyCheck.ok) {
+      setError(moneyCheck.message!);
       return false;
     }
     if (!scenarioId) {
@@ -697,15 +663,13 @@ export default function NewPlanWizardPage() {
               </div>
               <div className="space-y-1 rounded-md border border-line p-3 text-sm md:text-right">
                 <p className="text-ink-muted">持仓合计</p>
-                <p className="font-medium text-ink">
-                  {(holdingsSum / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
-                </p>
+                <p className="font-medium text-ink">{formatMoney(holdingsSum)}</p>
                 <p className="text-xs text-ink-muted">
-                  基准规模 {(totalAssets / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元
+                  基准规模 {formatMoney(totalAssets)}
                 </p>
                 {assetGap > 100 && (
                   <p className="text-xs text-ink-muted">
-                    未配置 {(assetGap / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元将自动计入现金/其他
+                    未配置 {formatMoney(assetGap)} 将自动计入现金/其他
                   </p>
                 )}
               </div>
@@ -976,9 +940,7 @@ export default function NewPlanWizardPage() {
 
             {assetGap > 100 && (
               <p className="mt-4 text-sm text-ink-muted">
-                未配置差额{" "}
-                {(assetGap / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元将自动计入
-                「现金/其他」。
+                未配置差额 {formatMoney(assetGap)} 将自动计入「现金/其他」。
               </p>
             )}
             {selectedInstruments

@@ -38,20 +38,34 @@ type DirectorySyncUnit struct {
 
 // directorySyncUnits is the full unit registry in display order.
 var directorySyncUnits = []DirectorySyncUnit{
-	{SyncKey: "cn_exchange_stock", Scope: ScopeCNAll, Label: "A 股股票",
-		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_exchange_stock"}},
-	{SyncKey: "cn_exchange_fund", Scope: ScopeCNAll, Label: "场内基金（ETF/LOF）",
-		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_exchange_fund"}},
-	{SyncKey: "cn_mutual_fund", Scope: ScopeCNAll, Label: "场外基金",
-		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_mutual_fund"}},
-	{SyncKey: "hk_stock", Scope: ScopeHKAll, Label: "港股股票",
-		Markets: []string{"HK"}, InstrumentTypes: []string{"hk_stock"}},
-	{SyncKey: "hk_etf", Scope: ScopeHKAll, Label: "港股 ETF",
-		Markets: []string{"HK"}, InstrumentTypes: []string{"hk_etf"}},
-	{SyncKey: "us_stock", Scope: ScopeUSAll, Label: "美股股票",
-		Markets: []string{"US"}, InstrumentTypes: []string{"us_stock"}},
-	{SyncKey: "us_etf", Scope: ScopeUSAll, Label: "美股 ETF",
-		Markets: []string{"US"}, InstrumentTypes: []string{"us_etf"}},
+	{
+		SyncKey: "cn_exchange_stock", Scope: ScopeCNAll, Label: "A 股股票",
+		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_exchange_stock"},
+	},
+	{
+		SyncKey: "cn_exchange_fund", Scope: ScopeCNAll, Label: "场内基金（ETF/LOF）",
+		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_exchange_fund"},
+	},
+	{
+		SyncKey: "cn_mutual_fund", Scope: ScopeCNAll, Label: "场外基金",
+		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_mutual_fund"},
+	},
+	{
+		SyncKey: "hk_stock", Scope: ScopeHKAll, Label: "港股股票",
+		Markets: []string{"HK"}, InstrumentTypes: []string{"hk_stock"},
+	},
+	{
+		SyncKey: "hk_etf", Scope: ScopeHKAll, Label: "港股 ETF",
+		Markets: []string{"HK"}, InstrumentTypes: []string{"hk_etf"},
+	},
+	{
+		SyncKey: "us_stock", Scope: ScopeUSAll, Label: "美股股票",
+		Markets: []string{"US"}, InstrumentTypes: []string{"us_stock"},
+	},
+	{
+		SyncKey: "us_etf", Scope: ScopeUSAll, Label: "美股 ETF",
+		Markets: []string{"US"}, InstrumentTypes: []string{"us_etf"},
+	},
 }
 
 // DirectoryScopes lists the directory scopes in display order.
@@ -292,12 +306,17 @@ func aggregateDirectoryScope(units []DirectorySyncUnitView) (string, *int64) {
 // task so pickers can render "syncing" and "failed" states.
 type MarketAssetListItem struct {
 	repository.MarketAsset
-	HasHistory        bool   `json:"has_history"`
-	HistoryDataAsOf   string `json:"history_data_as_of,omitempty"`
-	HistoryPointCount int    `json:"history_point_count,omitempty"`
-	HistorySourceName string `json:"history_source_name,omitempty"`
-	HistorySyncStatus string `json:"history_sync_status,omitempty"`
-	HistorySyncError  string `json:"history_sync_error,omitempty"`
+	// InstrumentTypeLabel / InstrumentTypePriority are the backend-owned
+	// presentation facts for the instrument type (Chinese label and
+	// identity-candidate ordering); the web pickers must not re-derive them.
+	InstrumentTypeLabel    string `json:"instrument_type_label"`
+	InstrumentTypePriority int    `json:"instrument_type_priority"`
+	HasHistory             bool   `json:"has_history"`
+	HistoryDataAsOf        string `json:"history_data_as_of,omitempty"`
+	HistoryPointCount      int    `json:"history_point_count,omitempty"`
+	HistorySourceName      string `json:"history_source_name,omitempty"`
+	HistorySyncStatus      string `json:"history_sync_status,omitempty"`
+	HistorySyncError       string `json:"history_sync_error,omitempty"`
 }
 
 // MarketAssetListResult is the GET /market-assets response. Total is the
@@ -430,7 +449,11 @@ func (s *MarketAssetService) attachHistoryStates(
 	items := make([]MarketAssetListItem, 0, len(assets))
 	keys := make([]string, 0, len(assets))
 	for _, a := range assets {
-		items = append(items, MarketAssetListItem{MarketAsset: a})
+		items = append(items, MarketAssetListItem{
+			MarketAsset:            a,
+			InstrumentTypeLabel:    instrumentTypeLabelZH(a.InstrumentType),
+			InstrumentTypePriority: instrumentTypePriority(a.InstrumentType),
+		})
 		keys = append(keys, a.AssetKey)
 	}
 	if len(keys) == 0 {
@@ -1048,7 +1071,7 @@ func (s *MarketAssetService) hasMixedSources(
 	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		summary, err := s.assets.PointsSummaryTx(ctx, tx, assetKey, adjustPolicy, pointType)
 		if err != nil {
-			return err
+			return fmt.Errorf("points summary: %w", err)
 		}
 		mixed = len(summary.SourceNames) > 1
 		return nil

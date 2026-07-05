@@ -299,7 +299,8 @@ func (r *MarketAssetRepo) Search(ctx context.Context, opts MarketAssetSearchOpti
 		limit = 50
 	}
 	pagedArgs := append(append([]any{}, args...), limit, opts.Offset)
-	assets, err := queryCollect(ctx, r.db,
+	assets, err := queryCollect(
+		ctx, r.db,
 		`SELECT `+marketAssetColumns+` FROM market_assets `+where+`
 		 ORDER BY market, instrument_type, symbol LIMIT ? OFFSET ?`,
 		pagedArgs,
@@ -412,7 +413,8 @@ func (r *MarketAssetRepo) UpsertPointsTx(ctx context.Context, tx *sql.Tx, points
 func (r *MarketAssetRepo) ListPoints(
 	ctx context.Context, assetKey, adjustPolicy, pointType string,
 ) ([]MarketAssetPoint, error) {
-	return queryCollect(ctx, r.db, `
+	return queryCollect(
+		ctx, r.db, `
 		SELECT asset_key, adjust_policy, point_type, trade_date, value, source_name, fetched_at
 		FROM market_asset_points
 		WHERE asset_key=? AND adjust_policy=? AND point_type=?
@@ -443,7 +445,8 @@ func (r *MarketAssetRepo) ListPointsTx(
 	if err != nil {
 		return nil, wrapSQL("query market asset points", err)
 	}
-	return collectRows(rows,
+	return collectRows(
+		rows,
 		func(rows *sql.Rows) (MarketAssetPoint, error) {
 			var p MarketAssetPoint
 			if err := rows.Scan(&p.AssetKey, &p.AdjustPolicy, &p.PointType,
@@ -554,7 +557,22 @@ func (r *MarketAssetRepo) GetHistoryStateTx(
 func (r *MarketAssetRepo) ListHistoryStatesByAsset(
 	ctx context.Context, assetKey string,
 ) ([]MarketAssetHistoryState, error) {
-	return queryCollect(ctx, r.db, `
+	return r.listHistoryStatesByAsset(ctx, r.db, assetKey)
+}
+
+// ListHistoryStatesByAssetTx reads history dimension states inside an
+// existing transaction.
+func (r *MarketAssetRepo) ListHistoryStatesByAssetTx(
+	ctx context.Context, tx *sql.Tx, assetKey string,
+) ([]MarketAssetHistoryState, error) {
+	return r.listHistoryStatesByAsset(ctx, tx, assetKey)
+}
+
+func (r *MarketAssetRepo) listHistoryStatesByAsset(
+	ctx context.Context, q rowQuerier, assetKey string,
+) ([]MarketAssetHistoryState, error) {
+	return queryCollect(
+		ctx, q, `
 		SELECT `+historyStateColumns+`
 		FROM market_asset_history_state
 		WHERE asset_key=?
@@ -586,7 +604,8 @@ func (r *MarketAssetRepo) ListHistoryStatesByAssetKeys(
 		ph[i] = "?"
 		args[i] = k
 	}
-	return queryCollect(ctx, r.db, `
+	return queryCollect(
+		ctx, r.db, `
 		SELECT `+historyStateColumns+`
 		FROM market_asset_history_state
 		WHERE asset_key IN (`+strings.Join(ph, ",")+`)
@@ -714,7 +733,8 @@ func (r *MarketAssetRepo) ListDataVersions(
 		where = `WHERE version_key LIKE ? ESCAPE '\'`
 		args = append(args, escapeLike(p)+"%")
 	}
-	return queryPage(ctx, r.db,
+	return queryPage(
+		ctx, r.db,
 		`SELECT COUNT(*) FROM market_data_versions `+where,
 		`SELECT version_key, version_no, task_id, updated_at
 		FROM market_data_versions `+where+`

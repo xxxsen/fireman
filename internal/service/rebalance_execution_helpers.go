@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,7 +15,38 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-//nolint:dupl // mirrors draft create validation with execution-specific active check
+// amountToleranceMinor is the cent-level slack applied when comparing amounts
+// (trade limits, cash-pool sweeps, asset-refresh totals).
+const amountToleranceMinor = 100
+
+func formatWan(minor int64) string {
+	yuan := float64(minor) / 100.0
+	if yuan >= 10_000 {
+		return fmt.Sprintf("%.0fw", yuan/10_000)
+	}
+	return fmt.Sprintf("%.0f", yuan)
+}
+
+// findCashSweepHolding picks enabled system cash, else enabled cash asset_class (min sort_order).
+func findCashSweepHolding(holdings []repository.PlanHolding) *repository.PlanHolding {
+	var fallback *repository.PlanHolding
+	for i := range holdings {
+		h := &holdings[i]
+		if !h.Enabled {
+			continue
+		}
+		if h.AssetKey == repository.SystemCashAssetKey {
+			return h
+		}
+		if h.AssetClass == domain.AssetClassCash {
+			if fallback == nil || h.SortOrder < fallback.SortOrder {
+				fallback = h
+			}
+		}
+	}
+	return fallback
+}
+
 func validateRebalanceExecutionCreate(
 	ctx context.Context,
 	s *RebalanceExecutionService,

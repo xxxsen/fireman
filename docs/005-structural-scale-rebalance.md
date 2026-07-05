@@ -59,7 +59,7 @@
 
 ---
 
-## 持仓校正与调仓计划
+## 持仓校正与调仓落地
 
 用户路径与提交流程摘要见 [007-asset-refresh-rebalance-plan.md](./007-asset-refresh-rebalance-plan.md)、[008-计划设置、调仓工作台与持仓校正](./008-plan-settings-holdings-preview.md) 与 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 
@@ -69,10 +69,12 @@
 - `POST /api/v1/plans/{id}/asset-refresh`：**单事务**更新 holdings，可选同步 `total_assets_minor`，写入 `asset_refresh_events` audit
 - 入口：调仓工作台、组合总览（规模偏差带 `?reason=scale`）、规模状态条
 
-### 调仓计划草稿
+### 调仓计划草稿（已废弃，td/096-E 移除）
 
-- 表：`rebalance_drafts` / `rebalance_draft_lines` / `rebalance_draft_events`（DB 持久化，禁止 localStorage 存草稿）
-- 每 plan 至多一条 `status=draft`（部分唯一索引）
-- 创建时冻结 structural 基准；编辑期不重算 frozen 目标/还差
-- 分阶段暂存、撤销、资金池；commit 与 holdings 更新同事务
-- 页面：`/plans/{id}/rebalance/plan/{draftId}`；调仓工作台「创建/继续调仓计划」
+> **已废弃**：调仓计划（draft）链路已于 td/096 批次 E 整体下线，
+> `rebalance_drafts` / `rebalance_draft_lines` / `rebalance_draft_events`
+> 三张表由迁移 `0024_drop_rebalance_drafts.sql` 删除。把持仓从当前结构调到
+> 目标结构请使用**调仓执行**（td/030，`/plans/{id}/rebalance/executions`）：
+> 冻结每行目标变动额，分多日登记真实卖出/买入事件，Complete 按实际执行
+> 增减推导最终持仓并自动归集剩余现金池。需要将持仓事实改成任意状态时，
+> 使用**持仓校正**（asset-refresh）。

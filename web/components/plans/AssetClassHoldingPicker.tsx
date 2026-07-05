@@ -1,16 +1,10 @@
 "use client";
 
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MarketAssetSearchPicker } from "@/components/plans/MarketAssetPickerDialog";
 import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
-import {
-  assetClassLabel,
-  dataSourceLabel,
-  instrumentTypeLabel,
-  regionLabel,
-} from "@/lib/format";
-import { isTaskActive, listMarketAssets, type MarketAsset } from "@/lib/api/market-assets";
+import { assetClassLabel, regionLabel } from "@/lib/format";
+import type { MarketAsset } from "@/lib/api/market-assets";
 import {
   addInstrumentToGroup,
   computeExpectedAmountMinor,
@@ -18,74 +12,6 @@ import {
   updateInstrumentWeightInGroup,
 } from "@/lib/wizard-allocation";
 import type { WizardAsset, WizardHoldingSelection } from "@/lib/wizard-allocation";
-
-const PAGE_SIZE = 10;
-
-const PICKER_MARKET_FILTERS: { value: string; label: string }[] = [
-  { value: "", label: "全部市场" },
-  { value: "CN", label: "CN" },
-  { value: "HK", label: "HK" },
-  { value: "US", label: "US" },
-];
-
-const PICKER_TYPE_FILTERS: { value: string; label: string }[] = [
-  { value: "", label: "全部类型" },
-  { value: "cn_exchange_stock", label: "A 股" },
-  { value: "cn_exchange_fund", label: "场内 ETF / LOF" },
-  { value: "cn_mutual_fund", label: "公募基金" },
-  { value: "hk_stock", label: "港股" },
-  { value: "hk_etf", label: "香港 ETF" },
-  { value: "us_stock", label: "美国股票" },
-  { value: "us_etf", label: "美国 ETF" },
-];
-
-/** A query that is only letters/digits/dots is treated as a symbol search. */
-function looksLikeSymbolQuery(q: string): boolean {
-  return /^[A-Za-z0-9.]+$/.test(q);
-}
-
-/**
- * Orders same-code identity candidates: mutual funds first (money-market and
- * open-end funds are usually the intended asset), then exchange funds and
- * stocks, then everything else.
- */
-function instrumentTypePriority(t: string): number {
-  switch (t) {
-    case "cn_mutual_fund":
-      return 0;
-    case "cn_exchange_fund":
-      return 1;
-    case "cn_exchange_stock":
-      return 2;
-    default:
-      return 3;
-  }
-}
-
-/**
- * Puts exact-symbol hits before fuzzy matches and orders the exact-hit group
- * (same code, several identities) by instrument type priority. Fuzzy results
- * keep the API order. Never auto-selects.
- */
-function orderCandidates(assets: MarketAsset[], query: string): MarketAsset[] {
-  const q = query.trim().toUpperCase();
-  if (!q) return assets;
-  const exact: MarketAsset[] = [];
-  const rest: MarketAsset[] = [];
-  for (const asset of assets) {
-    (asset.symbol.toUpperCase() === q ? exact : rest).push(asset);
-  }
-  exact.sort(
-    (a, b) => instrumentTypePriority(a.instrument_type) - instrumentTypePriority(b.instrument_type),
-  );
-  return [...exact, ...rest];
-}
-
-/** Full identity line: market plus exchange/board when known, e.g. CN / SZ. */
-function marketIdentityLabel(asset: MarketAsset): string {
-  const region = (asset.region_code || "").toUpperCase();
-  return region ? `${asset.market} / ${region}` : asset.market;
-}
 
 export function marketAssetToWizardAsset(
   asset: MarketAsset,
@@ -138,11 +64,6 @@ export function AssetClassHoldingPicker({
   nested = false,
 }: AssetClassHoldingPickerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
-  const listboxId = useId();
-  const [filter, setFilter] = useState("");
-  const [debouncedFilter, setDebouncedFilter] = useState("");
-  const [market, setMarket] = useState("");
-  const [instrumentType, setInstrumentType] = useState("");
   const [open, setOpen] = useState(false);
 
   const localSelectedKeys = useMemo(() => new Set(selected.map((s) => s.inst.id)), [selected]);
@@ -151,12 +72,6 @@ export function AssetClassHoldingPicker({
   const blockedAssetKeys = selectedAssetKeys ?? localSelectedKeys;
 
   const effectiveRegion = region ?? "domestic";
-
-  // Debounce the typed query to avoid one request per keystroke.
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedFilter(filter.trim()), 250);
-    return () => window.clearTimeout(timer);
-  }, [filter]);
 
   const closeDropdown = useCallback(() => {
     setOpen(false);
@@ -176,70 +91,6 @@ export function AssetClassHoldingPicker({
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [open, closeDropdown]);
 
-  const symbolQ = looksLikeSymbolQuery(debouncedFilter) ? debouncedFilter : undefined;
-  const nameQ = symbolQ ? undefined : debouncedFilter || undefined;
-
-  const listQuery = useInfiniteQuery({
-    queryKey: [
-      "market-asset-picker",
-      market,
-      instrumentType,
-      debouncedFilter,
-    ],
-    enabled: open,
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) =>
-      listMarketAssets({
-        market: market || undefined,
-        instrumentTypes: instrumentType ? [instrumentType] : undefined,
-        symbolQ,
-        nameQ,
-        limit: PAGE_SIZE,
-        offset: pageParam as number,
-      }),
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((sum, page) => sum + page.assets.length, 0);
-      return loaded < lastPage.total && lastPage.assets.length > 0 ? loaded : undefined;
-    },
-  });
-
-  const results = useMemo(
-    () =>
-      orderCandidates(
-        (listQuery.data?.pages ?? [])
-          .flatMap((page) => page.assets)
-          .filter((asset) => !blockedAssetKeys.has(asset.asset_key)),
-        symbolQ ?? "",
-      ),
-    [listQuery.data, blockedAssetKeys, symbolQ],
-  );
-
-  // Same code under several instrument types: surface the ambiguity instead
-  // of letting the user silently pick the wrong identity.
-  const identityConflict = useMemo(() => {
-    if (!symbolQ) return false;
-    const q = symbolQ.toUpperCase();
-    return results.filter((asset) => asset.symbol.toUpperCase() === q).length >= 2;
-  }, [results, symbolQ]);
-
-  // Auto-load the next page when the sentinel scrolls into view.
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((entries) => {
-      if (
-        entries[0]?.isIntersecting &&
-        listQuery.hasNextPage &&
-        !listQuery.isFetchingNextPage
-      ) {
-        void listQuery.fetchNextPage();
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [listQuery.hasNextPage, listQuery.isFetchingNextPage, listQuery, results.length]);
-
   const addAsset = (asset: MarketAsset) => {
     // Defence against stale candidate lists (race between pickers): never
     // add an asset the plan already owns, or group weights would be
@@ -252,7 +103,6 @@ export function AssetClassHoldingPicker({
         ),
       );
     }
-    setFilter("");
     setOpen(false);
   };
 
@@ -286,9 +136,6 @@ export function AssetClassHoldingPicker({
 
   const sectionAriaLabel = nested ? undefined : (subTitle ?? `${assetClassLabel(assetClass)}选标`);
 
-  const showEmptyHint =
-    open && !listQuery.isLoading && !listQuery.isFetching && results.length === 0;
-
   return (
     <section ref={rootRef} className={sectionClass} aria-label={sectionAriaLabel}>
       {subTitle && <h4 className="text-sm font-medium text-ink">{subTitle}</h4>}
@@ -319,155 +166,21 @@ export function AssetClassHoldingPicker({
         </ul>
       )}
       <div
-        className={`flex flex-col gap-2 sm:flex-row sm:items-center ${
+        className={
           subTitle || selected.length > 0 ? "mt-2" : nested ? "mt-3" : ""
-        }`}
+        }
       >
-        <input
-          className="input-base min-w-0 flex-1"
+        <MarketAssetSearchPicker
+          active={open}
+          resultsVisible={open}
+          excludeAssetKeys={blockedAssetKeys}
+          onSelect={addAsset}
+          onActivate={() => setOpen(true)}
+          onEscape={closeDropdown}
           placeholder={`搜索${assetClassLabel(assetClass)}标的（代码或名称）`}
-          value={filter}
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listboxId}
-          aria-autocomplete="list"
-          onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            setOpen(true);
-            setFilter(e.target.value);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              closeDropdown();
-            }
-          }}
-          aria-label={searchAriaLabel}
-          data-testid="wizard-holding-search"
+          searchAriaLabel={searchAriaLabel}
         />
-        {/* Width utilities on the selects themselves lose to the unlayered
-            .input-base { width: 100% } rule (Tailwind utilities live in
-            @layer utilities), which stretched each select to the full row
-            width and squeezed the search input to nothing. The fixed widths
-            therefore live on shrink-0 wrappers; the selects fill them. */}
-        <div className="w-full shrink-0 sm:w-28">
-          <select
-            value={market}
-            onChange={(e) => setMarket(e.target.value)}
-            className="input-base text-xs"
-            aria-label="按市场筛选候选"
-            data-testid="wizard-picker-market-filter"
-          >
-            {PICKER_MARKET_FILTERS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="w-full shrink-0 sm:w-44">
-          <select
-            value={instrumentType}
-            onChange={(e) => setInstrumentType(e.target.value)}
-            className="input-base text-xs"
-            aria-label="按资产类型筛选候选"
-            data-testid="wizard-picker-type-filter"
-          >
-            {PICKER_TYPE_FILTERS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
-      {open && (results.length > 0 || listQuery.isLoading) && (
-        <div
-          id={listboxId}
-          role="listbox"
-          // Fixed viewport of exactly 10 standard rows (10 × 3rem); content scrolls
-          // inside so paging never resizes the dropdown or shifts surrounding UI.
-          className="mt-2 h-[30rem] overflow-y-auto rounded-md border border-line"
-          data-testid="wizard-library-results"
-        >
-          {identityConflict && (
-            <p
-              className="border-b border-line bg-warning/10 px-3 py-2 text-xs text-warning"
-              role="note"
-              data-testid="picker-identity-conflict-hint"
-            >
-              该代码存在多个资产类型，请按实际持仓选择。货币基金/场外基金通常应选择「公募基金」。
-            </p>
-          )}
-          <ul className="divide-y divide-line text-sm">
-            {results.map((asset) => (
-              <li
-                key={asset.asset_key}
-                role="option"
-                aria-selected={false}
-                className="flex h-12 items-center gap-2 overflow-hidden whitespace-nowrap pr-3 hover:bg-surface-muted"
-              >
-                <button
-                  type="button"
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-3 text-left"
-                  onClick={() => addAsset(asset)}
-                >
-                  <span className="truncate font-medium">{asset.name}</span>
-                  <span className="shrink-0 text-ink-muted">{asset.symbol}</span>
-                  <span className="shrink-0 text-xs text-ink-muted">
-                    {instrumentTypeLabel(asset.instrument_type)}
-                  </span>
-                  <span className="shrink-0 text-xs text-ink-muted">
-                    {marketIdentityLabel(asset)}
-                  </span>
-                  {asset.has_history ? (
-                    <span className="shrink-0 text-xs text-ink-muted">
-                      数据截至 {asset.history_data_as_of || "—"} ·{" "}
-                      {dataSourceLabel(asset.history_source_name)}
-                    </span>
-                  ) : asset.history_sync_status === "failed" ? (
-                    <span className="shrink-0 text-xs text-danger">
-                      历史同步失败
-                      {asset.history_sync_error ? `：${asset.history_sync_error}` : ""}
-                      ，可在详情页重新同步
-                    </span>
-                  ) : isTaskActive(asset.history_sync_status) ? (
-                    <span className="shrink-0 text-xs text-ink-muted">
-                      历史同步中…
-                    </span>
-                  ) : (
-                    <span className="shrink-0 text-xs text-warning">
-                      未同步历史，模拟前需要同步
-                    </span>
-                  )}
-                </button>
-                <Link
-                  href={`/assets/market/${encodeURIComponent(asset.asset_key)}`}
-                  target="_blank"
-                  className="shrink-0 text-xs text-brand underline-offset-2 hover:underline"
-                >
-                  详情
-                </Link>
-              </li>
-            ))}
-          </ul>
-          {(listQuery.isLoading || listQuery.isFetchingNextPage) && (
-            <p className="px-3 py-2 text-xs text-ink-muted" role="status">
-              加载中…
-            </p>
-          )}
-          <div ref={sentinelRef} aria-hidden="true" />
-        </div>
-      )}
-      {open && listQuery.isError && (
-        <p className="mt-2 text-sm text-danger" role="alert">
-          资产目录查询失败，请稍后重试。
-        </p>
-      )}
-      {showEmptyHint && (
-        <p className="mt-2 text-sm text-ink-muted">
-          未在本地资产目录中找到匹配标的；若目录较旧，可先到资产页同步资产列表。
-        </p>
-      )}
     </section>
   );
 }
