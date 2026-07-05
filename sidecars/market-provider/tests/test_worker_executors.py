@@ -161,7 +161,7 @@ class TestDirectorySync:
             "em_cn_lof_list",
             pd.DataFrame({"代码": ["161725"], "名称": ["招商白酒LOF"], "市场标识": [0]}),
         )
-        tracked("stock_sh_a_spot_em", pd.DataFrame({"代码": ["600000"], "名称": ["浦发银行"]}))
+        tracked("em_cn_sh_a_list", pd.DataFrame({"代码": ["600000"], "名称": ["浦发银行"]}))
         tracked("fund_name_em", pd.DataFrame({"基金代码": ["000001"], "基金简称": ["华夏成长"]}))
 
         result = execute_directory_sync(_unit_payload("cn_exchange_fund", "cn_all"))
@@ -479,25 +479,58 @@ class TestHistorySync:
 class TestCNDirectorySync:
     def test_cn_stock_boards_provide_region_and_exchange(self) -> None:
         register_test_dispatch(
-            "stock_sh_a_spot_em",
+            "em_cn_sh_a_list",
             lambda **kwargs: pd.DataFrame({"代码": ["600036"], "名称": ["招商银行"]}),
         )
         register_test_dispatch(
-            "stock_sz_a_spot_em",
+            "em_cn_sz_a_list",
             lambda **kwargs: pd.DataFrame({"代码": ["000001"], "名称": ["平安银行"]}),
         )
         register_test_dispatch(
-            "stock_bj_a_spot_em",
+            "em_cn_bj_a_list",
             lambda **kwargs: pd.DataFrame({"代码": ["830799"], "名称": ["艾融软件"]}),
         )
         result = execute_directory_sync(_unit_payload("cn_exchange_stock", "cn_all"))
         by_symbol = {a["symbol"]: a for a in result["assets"]}
+        # region/exchange come from the queried board, never from row fields.
         assert by_symbol["600036"]["region_code"] == "sh"
         assert by_symbol["600036"]["exchange"] == "SH"
         assert by_symbol["000001"]["region_code"] == "sz"
         assert by_symbol["000001"]["exchange"] == "SZ"
         assert by_symbol["830799"]["region_code"] == "bj"
         assert by_symbol["830799"]["exchange"] == "BJ"
+        assert by_symbol["600036"]["source_name"] == "em.cn_sh_a_list"
+        assert by_symbol["000001"]["source_name"] == "em.cn_sz_a_list"
+        assert by_symbol["830799"]["source_name"] == "em.cn_bj_a_list"
+
+    def test_cn_stock_non_six_digit_codes_are_skipped(self) -> None:
+        register_test_dispatch(
+            "em_cn_sh_a_list",
+            lambda **kwargs: pd.DataFrame(
+                {"代码": ["600036", "12345", "ABCDEF"], "名称": ["招商银行", "坏码", "坏码2"]}
+            ),
+        )
+        register_test_dispatch(
+            "em_cn_sz_a_list",
+            lambda **kwargs: pd.DataFrame({"代码": ["000001"], "名称": ["平安银行"]}),
+        )
+        register_test_dispatch(
+            "em_cn_bj_a_list",
+            lambda **kwargs: pd.DataFrame({"代码": ["830799"], "名称": ["艾融软件"]}),
+        )
+        result = execute_directory_sync(_unit_payload("cn_exchange_stock", "cn_all"))
+        assert {a["symbol"] for a in result["assets"]} == {"600036", "000001", "830799"}
+
+    def test_cn_stock_empty_board_fails_whole_task(self) -> None:
+        register_test_dispatch(
+            "em_cn_sh_a_list",
+            lambda **kwargs: pd.DataFrame({"代码": ["600036"], "名称": ["招商银行"]}),
+        )
+        register_test_dispatch("em_cn_sz_a_list", lambda **kwargs: pd.DataFrame())
+        with pytest.raises(TaskFailure) as exc:
+            execute_directory_sync(_unit_payload("cn_exchange_stock", "cn_all"))
+        assert exc.value.error_code == "directory_data_incomplete"
+        assert "sync_key=cn_exchange_stock" in exc.value.message
 
     def test_cn_fund_market_id_drives_region_and_unknown_rows_skipped(self) -> None:
         register_test_dispatch(

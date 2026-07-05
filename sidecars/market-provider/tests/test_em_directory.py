@@ -113,6 +113,45 @@ def test_us_equity_frame_uses_market_prefixed_codes(
     assert list(us["代码"]) == ["105.AAPL", "106.BRK.B"]
 
 
+def test_cn_a_share_boards_query_their_own_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each CN A-share board hits its exchange-specific fs filter and returns
+    bare six-digit codes (no market prefix), matching the akshare spot shape."""
+    pages = {
+        em_directory._CN_SH_A_FS: load_json_gz("em_cn_sh_a_list.page1.json.gz"),
+        em_directory._CN_SZ_A_FS: load_json_gz("em_cn_sz_a_list.page1.json.gz"),
+        em_directory._CN_BJ_A_FS: load_json_gz("em_cn_bj_a_list.page1.json.gz"),
+    }
+    seen_fs: list[str] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen_fs.append(params["fs"])
+        return _FakeResponse(pages[params["fs"]])
+
+    monkeypatch.setattr(em_directory.requests, "get", fake_get)
+
+    sh = em_directory.em_cn_sh_a_list()
+    assert list(sh.columns) == ["代码", "名称"]
+    assert sh.iloc[0]["代码"] == "600000"
+    assert sh.iloc[0]["名称"] == "浦发银行"
+
+    sz = em_directory.em_cn_sz_a_list()
+    assert sz.iloc[0]["代码"] == "000001"
+
+    bj = em_directory.em_cn_bj_a_list()
+    assert not bj.empty
+    # BJ board rows carry f13=0 like SZ: codes must stay bare so the exchange
+    # can only come from the queried board, never from a market prefix.
+    assert all("." not in code for code in bj["代码"])
+
+    assert seen_fs == [
+        em_directory._CN_SH_A_FS,
+        em_directory._CN_SZ_A_FS,
+        em_directory._CN_BJ_A_FS,
+    ]
+
+
 def test_dispatcher_routes_em_operations(monkeypatch: pytest.MonkeyPatch) -> None:
     from fireman_market_provider.timeout_util import UpstreamCall, dispatch_upstream_call
 

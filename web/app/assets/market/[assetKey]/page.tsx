@@ -7,7 +7,6 @@ import {
   getMarketAssetDetail,
   isTaskActive,
   syncMarketAssetHistory,
-  type MarketAssetDetail,
   type WorkerTask,
 } from "@/lib/api/market-assets";
 import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
@@ -29,6 +28,15 @@ import { TaskErrorInline } from "@/components/ui/TaskErrorInline";
 import { LastRefreshMeta } from "@/components/ui/LastRefreshMeta";
 import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
 import { ReturnSeriesChart } from "@/components/charts/ReturnSeriesChart";
+import {
+  defaultHistoryRange,
+  filterHistoryPoints,
+  HISTORY_RANGE_OPTIONS,
+  historyRangeLabel,
+  isHistoryRangeAvailable,
+  toChartPoints,
+  type HistoryRangeKey,
+} from "@/lib/market-asset-history-range";
 
 const HISTORY_TASK_LABELS = {
   pending: "等待刷新",
@@ -37,17 +45,6 @@ const HISTORY_TASK_LABELS = {
   complete: "刷新成功",
   failed: "刷新失败",
 } as const;
-
-function toChartPoints(detail: MarketAssetDetail) {
-  const pts = detail.points ?? [];
-  if (!pts.length) return [];
-  const base = pts[0].value;
-  return pts.map((p) => ({
-    date: p.date,
-    value: p.value,
-    cumulative_return: base > 0 ? p.value / base - 1 : 0,
-  }));
-}
 
 export default function MarketAssetDetailPage() {
   const rawKey = useParams().assetKey as string;
@@ -81,7 +78,37 @@ export default function MarketAssetDetailPage() {
   const task = polledTask ?? serverTask;
   const taskActive = isTaskActive(task?.status);
 
-  const chartPoints = useMemo(() => (data ? toChartPoints(data) : []), [data]);
+  const rawPoints = useMemo(() => data?.points ?? [], [data?.points]);
+
+  // Availability is O(points) per range; memoize so task polling re-renders
+  // don't refilter a multi-thousand-point series for every button.
+  const availableRanges = useMemo(() => {
+    const set = new Set<HistoryRangeKey>();
+    for (const option of HISTORY_RANGE_OPTIONS) {
+      if (isHistoryRangeAvailable(rawPoints, option.key)) set.add(option.key);
+    }
+    return set;
+  }, [rawPoints]);
+
+  // User-picked range, or null until the user touches the control. The
+  // effective range derives from it so a data refresh that shrinks coverage
+  // automatically falls back instead of leaving an empty chart.
+  const [selectedRange, setSelectedRange] = useState<HistoryRangeKey | null>(null);
+  const historyRange: HistoryRangeKey = useMemo(() => {
+    if (selectedRange) {
+      return availableRanges.has(selectedRange) ? selectedRange : "all";
+    }
+    return defaultHistoryRange(rawPoints);
+  }, [selectedRange, availableRanges, rawPoints]);
+  // A picked range that lost coverage after a refresh renders as 全部 with a hint.
+  const rangeFellBack =
+    selectedRange !== null && selectedRange !== "all" && historyRange === "all";
+
+  const filteredRawPoints = useMemo(
+    () => filterHistoryPoints(rawPoints, historyRange),
+    [rawPoints, historyRange],
+  );
+  const chartPoints = useMemo(() => toChartPoints(filteredRawPoints), [filteredRawPoints]);
 
   if (isLoading && !data) {
     return <LoadingState label="加载资产详情…" />;
@@ -263,12 +290,51 @@ export default function MarketAssetDetailPage() {
       ) : (
         <>
           <section className="mt-6 rounded-lg border border-line bg-surface p-4 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-medium text-ink">历史曲线</h2>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-medium text-ink">历史曲线</h2>
+                <p className="mt-1 text-xs text-ink-muted" data-testid="history-range-summary">
+                  {rangeFellBack
+                    ? "当前区间历史数据不足，已显示全部区间。"
+                    : `当前区间 ${historyRangeLabel(historyRange)} · ${chartPoints.length} / ${rawPoints.length} 个点`}
+                </p>
+              </div>
               <span className="text-xs text-ink-muted">
                 {pointTypeLabel(history.point_type)} · 来源 {dataSourceLabel(history.source_name)}
                 {isFetching && <span className="ml-2">刷新中…</span>}
               </span>
+            </div>
+            <div className="mt-3 overflow-x-auto">
+              <div
+                className="inline-flex min-w-max gap-1 rounded-md border border-line bg-surface-muted/40 p-1"
+                role="group"
+                aria-label="历史曲线时间范围"
+              >
+                {HISTORY_RANGE_OPTIONS.map((option) => {
+                  const active = option.key === historyRange;
+                  const available = availableRanges.has(option.key);
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      data-testid={`history-range-${option.key}`}
+                      disabled={!available}
+                      title={available ? undefined : "该区间历史数据不足"}
+                      aria-pressed={active}
+                      onClick={() => setSelectedRange(option.key)}
+                      className={
+                        active
+                          ? "rounded border border-brand bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand-strong"
+                          : available
+                            ? "rounded border border-transparent px-2.5 py-1 text-xs text-ink-muted hover:bg-surface hover:text-ink"
+                            : "cursor-not-allowed rounded border border-transparent px-2.5 py-1 text-xs text-ink-muted opacity-50"
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="mt-3" data-testid="market-asset-chart">
               {chartPoints.length > 0 ? (

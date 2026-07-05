@@ -36,6 +36,23 @@ def test_live_cn_etf_smoke() -> None:
 
 
 @pytest.mark.skipif(os.getenv("FIREMAN_LIVE_AKSHARE") != "1", reason="set FIREMAN_LIVE_AKSHARE=1 to run")
+def test_live_cn_a_share_directory_boards_smoke() -> None:
+    """CN A-share listings must come through the delayed-quote host chain;
+    plausibility floors catch a silently shrunken or misfiltered board."""
+    from fireman_market_provider.adapters import em_directory
+
+    sh = em_directory.em_cn_sh_a_list()
+    sz = em_directory.em_cn_sz_a_list()
+    bj = em_directory.em_cn_bj_a_list()
+    assert len(sh) > 1500, f"SH A board too small: {len(sh)}"
+    assert len(sz) > 2000, f"SZ A board too small: {len(sz)}"
+    assert len(bj) > 100, f"BJ board too small: {len(bj)}"
+    for frame in (sh, sz, bj):
+        assert list(frame.columns) == ["代码", "名称"]
+        assert all("." not in code for code in frame["代码"])
+
+
+@pytest.mark.skipif(os.getenv("FIREMAN_LIVE_AKSHARE") != "1", reason="set FIREMAN_LIVE_AKSHARE=1 to run")
 def test_live_cn_mutual_fund_000001_smoke() -> None:
     response = fetch(
         {

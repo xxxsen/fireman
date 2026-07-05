@@ -21,6 +21,23 @@ vi.mock("@/hooks/useWorkerTaskPolling", () => ({
   useWorkerTaskPolling: (...args: unknown[]) => useWorkerTaskPollingMock(...args),
 }));
 
+// ECharts does not render in jsdom; the stub exposes what the page passed in
+// so range filtering and cumulative-return re-zeroing are observable.
+vi.mock("@/components/charts/ReturnSeriesChart", () => ({
+  ReturnSeriesChart: ({
+    points,
+  }: {
+    points: { date: string; cumulative_return: number }[];
+  }) => (
+    <div
+      data-testid="return-chart"
+      data-count={points.length}
+      data-first-date={points[0]?.date}
+      data-first-cr={points[0]?.cumulative_return}
+    />
+  ),
+}));
+
 const LONG_ERROR =
   "market_provider_unavailable: history fetch failed: " +
   "ak.fund_open_fund_info_em:累计净值走势: unsupported fund classification; " +
@@ -79,6 +96,103 @@ function renderPage() {
     </QueryClientProvider>,
   );
 }
+
+/** Monthly points on the 1st, ascending; last one is 2026-07-01 when count=24 starting 2024-08. */
+function monthlyPoints(startYear: number, startMonth: number, count: number) {
+  return Array.from({ length: count }, (_, i) => {
+    const d = new Date(startYear, startMonth - 1 + i, 1);
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    return { date: `${d.getFullYear()}-${mm}-01`, value: 100 + i };
+  });
+}
+
+function makeDetailWithHistory(): MarketAssetDetail {
+  const detail = makeDetail();
+  const points = monthlyPoints(2024, 8, 24);
+  return {
+    ...detail,
+    history: {
+      ...detail.history,
+      task: null,
+      point_count: points.length,
+      data_as_of: points[points.length - 1]!.date,
+      source_name: "ak.fund_etf_hist_em",
+    },
+    points,
+  };
+}
+
+describe("MarketAssetDetailPage history range shortcuts (td/093)", () => {
+  beforeEach(() => {
+    getMarketAssetDetailMock.mockReset();
+    useWorkerTaskPollingMock.mockReset();
+    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+    getMarketAssetDetailMock.mockResolvedValue(makeDetailWithHistory());
+  });
+
+  it("renders every range shortcut", async () => {
+    renderPage();
+    await screen.findByTestId("return-chart");
+    for (const key of ["7d", "1m", "3m", "6m", "1y", "3y", "5y", "all"]) {
+      expect(screen.getByTestId(`history-range-${key}`)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId("history-range-1y")).toHaveTextContent("近 1 年");
+    expect(screen.getByTestId("history-range-all")).toHaveTextContent("全部");
+  });
+
+  it("defaults to 近 1 年 when coverage exceeds one year", async () => {
+    renderPage();
+    const chart = await screen.findByTestId("return-chart");
+    // 2024-08-01..2026-07-01 monthly; the 1y window 2025-07-01.. holds 13 points.
+    expect(chart).toHaveAttribute("data-count", "13");
+    expect(chart).toHaveAttribute("data-first-date", "2025-07-01");
+    expect(screen.getByTestId("history-range-1y")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("history-range-summary")).toHaveTextContent(
+      "当前区间 近 1 年 · 13 / 24 个点",
+    );
+  });
+
+  it("re-zeroes cumulative return on the first visible point after switching", async () => {
+    renderPage();
+    await screen.findByTestId("return-chart");
+    fireEvent.click(screen.getByTestId("history-range-1m"));
+    const chart = screen.getByTestId("return-chart");
+    expect(chart).toHaveAttribute("data-count", "2");
+    expect(chart).toHaveAttribute("data-first-date", "2026-06-01");
+    // Base is the range's own first point, not the full-series first point.
+    expect(chart).toHaveAttribute("data-first-cr", "0");
+  });
+
+  it("returns to the full series when 全部 is clicked", async () => {
+    renderPage();
+    await screen.findByTestId("return-chart");
+    fireEvent.click(screen.getByTestId("history-range-all"));
+    const chart = screen.getByTestId("return-chart");
+    expect(chart).toHaveAttribute("data-count", "24");
+    expect(chart).toHaveAttribute("data-first-date", "2024-08-01");
+    expect(screen.getByTestId("history-range-all")).toHaveAttribute("aria-pressed", "true");
+    // And back to a shorter window.
+    fireEvent.click(screen.getByTestId("history-range-1y"));
+    expect(screen.getByTestId("return-chart")).toHaveAttribute("data-count", "13");
+  });
+
+  it("disables ranges without enough points and titles the reason", async () => {
+    renderPage();
+    await screen.findByTestId("return-chart");
+    // Monthly data leaves at most 1 point in the last 7 days.
+    const btn = screen.getByTestId("history-range-7d");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "该区间历史数据不足");
+    expect(screen.getByTestId("history-range-3y")).toBeEnabled();
+  });
+
+  it("hides the range control when there is no history", async () => {
+    getMarketAssetDetailMock.mockResolvedValue(makeDetail());
+    renderPage();
+    await screen.findByTestId("history-current-task");
+    expect(screen.queryByTestId("history-range-all")).not.toBeInTheDocument();
+  });
+});
 
 describe("MarketAssetDetailPage failed-task error display", () => {
   beforeEach(() => {

@@ -58,6 +58,16 @@ _US_ETF_FS = ",".join(f"m:{m} t:5" for m in (105, 106, 107))
 # which replaces any code-prefix exchange inference in directory sync.
 _CN_ETF_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827"
 _CN_LOF_FS = "b:MK0404,b:MK0405,b:MK0406,b:MK0407"
+# CN A-share equity boards (the exact filters akshare's per-exchange spot
+# functions use). akshare targets the realtime push2 hosts, which drop
+# connections from some networks at the TLS layer regardless of headers;
+# these listings go through the delayed-quote host chain above instead.
+# The exchange is a property of the queried board, never of per-row fields:
+# BJ board rows carry f13=0 (same as SZ), so f13 must not be used for stock
+# exchange identity.
+_CN_SH_A_FS = "m:1 t:2,m:1 t:23"
+_CN_SZ_A_FS = "m:0 t:6,m:0 t:80"
+_CN_BJ_A_FS = "m:0 t:81 s:2048"
 
 
 def _fetch_page(url: str, fs: str, page: int) -> dict[str, Any]:
@@ -175,3 +185,18 @@ def em_cn_etf_list() -> pd.DataFrame:
 def em_cn_lof_list() -> pd.DataFrame:
     """CN exchange LOF board with the authoritative per-code market id."""
     return _to_frame_with_market_id(_fetch_board(_CN_LOF_FS))
+
+
+def em_cn_sh_a_list() -> pd.DataFrame:
+    """SSE A-share equities (main board + STAR)."""
+    return _to_frame(_fetch_board(_CN_SH_A_FS), with_market_prefix=False)
+
+
+def em_cn_sz_a_list() -> pd.DataFrame:
+    """SZSE A-share equities (main board + ChiNext)."""
+    return _to_frame(_fetch_board(_CN_SZ_A_FS), with_market_prefix=False)
+
+
+def em_cn_bj_a_list() -> pd.DataFrame:
+    """BSE listings from the Eastmoney BJ board."""
+    return _to_frame(_fetch_board(_CN_BJ_A_FS), with_market_prefix=False)

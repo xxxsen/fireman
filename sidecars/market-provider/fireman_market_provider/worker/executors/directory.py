@@ -95,12 +95,15 @@ def _asset(
     }
 
 
-# Per-exchange spot boards: the exchange is a property of the queried board
+# Per-exchange boards: the exchange is a property of the queried board
 # (an upstream structural fact), so no code-prefix inference is needed.
+# Served by the in-repo Eastmoney clist wrapper (delayed-quote hosts);
+# akshare's spot functions hit realtime push2 hosts that reject connections
+# from some networks at the TLS layer.
 _CN_STOCK_BOARDS = (
-    ("stock_sh_a_spot_em", "ak.stock_sh_a_spot_em", "sh", "SH"),
-    ("stock_sz_a_spot_em", "ak.stock_sz_a_spot_em", "sz", "SZ"),
-    ("stock_bj_a_spot_em", "ak.stock_bj_a_spot_em", "bj", "BJ"),
+    ("em_cn_sh_a_list", "em.cn_sh_a_list", "sh", "SH"),
+    ("em_cn_sz_a_list", "em.cn_sz_a_list", "sz", "SZ"),
+    ("em_cn_bj_a_list", "em.cn_bj_a_list", "bj", "BJ"),
 )
 
 # Eastmoney market ids as returned by the CN fund boards (f13).
