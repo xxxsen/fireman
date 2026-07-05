@@ -37,9 +37,21 @@ function makeOverview(): AdminOverview {
       directory_scopes: [
         {
           scope: "cn_all",
+          label: "中国市场目录",
+          status: "complete",
           last_success_at: Date.now() - 3600_000,
           active_task_status: "",
           stale: false,
+          units: [
+            {
+              sync_key: "cn_exchange_stock",
+              label: "A 股股票",
+              last_success_at: Date.now() - 3600_000,
+              active_task_status: "",
+              latest_task_failed: false,
+              stale: false,
+            },
+          ],
         },
       ],
       fx_pairs: [{ pair: "USDCNY", last_success_at: Date.now() - 7200_000 }],
@@ -51,7 +63,7 @@ function makeOverview(): AdminOverview {
 
 function makeVersion(overrides: Partial<AdminDataVersion> = {}): AdminDataVersion {
   return {
-    version_key: "asset_directory|cn_all",
+    version_key: "asset_directory|cn_exchange_stock",
     version_no: 812,
     task_id: "wt_1",
     updated_at: Date.now() - 3600_000,
@@ -89,7 +101,7 @@ describe("AdminDataVersionsPage", () => {
     renderPage();
     expect(await screen.findByTestId("sync-health-panel")).toBeInTheDocument();
     const row = await screen.findByTestId("data-version-row");
-    expect(within(row).getByText("asset_directory|cn_all")).toBeInTheDocument();
+    expect(within(row).getByText("asset_directory|cn_exchange_stock")).toBeInTheDocument();
     expect(within(row).getByText("812")).toBeInTheDocument();
     expect(within(row).getByRole("link")).toHaveAttribute(
       "href",

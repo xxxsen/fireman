@@ -44,9 +44,10 @@ type directoryResultAsset struct {
 }
 
 type directoryResult struct {
-	Type   string                 `json:"type"`
-	Scope  string                 `json:"scope"`
-	Assets []directoryResultAsset `json:"assets"`
+	Type    string                 `json:"type"`
+	SyncKey string                 `json:"sync_key"`
+	Scope   string                 `json:"scope"`
+	Assets  []directoryResultAsset `json:"assets"`
 }
 
 type historyResultPoint struct {
@@ -106,6 +107,14 @@ func (s *PostProcessService) processDirectory(
 	if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
 		return permanentErr("invalid_task_payload", "directory task payload is invalid: "+err.Error())
 	}
+	if payload.SyncKey == "" {
+		return permanentErr("invalid_task_payload", "directory task payload has no sync_key")
+	}
+	if result.SyncKey != payload.SyncKey {
+		return permanentErr("result_task_mismatch",
+			fmt.Sprintf("result sync_key %q does not match task sync_key %q",
+				result.SyncKey, payload.SyncKey))
+	}
 	if result.Scope != payload.Scope {
 		return permanentErr("result_task_mismatch",
 			fmt.Sprintf("result scope %q does not match task scope %q", result.Scope, payload.Scope))
@@ -142,7 +151,9 @@ func (s *PostProcessService) processDirectory(
 		accepted = append(accepted, a)
 	}
 
-	versionKey := "asset_directory|" + payload.Scope
+	// The unit is the idempotency and commit boundary: sibling units of the
+	// same scope never share a version key or block each other.
+	versionKey := "asset_directory|" + payload.SyncKey
 	now := time.Now().UnixMilli()
 
 	return s.withPostProcessTx(ctx, func(tx *sql.Tx) error {
@@ -206,7 +217,7 @@ func (s *PostProcessService) processDirectory(
 				return err
 			}
 		}
-		if err := s.assets.SetSyncSuccessTx(ctx, tx, payload.Scope, task.ID, now); err != nil {
+		if err := s.assets.SetSyncSuccessTx(ctx, tx, payload.SyncKey, payload.Scope, task.ID, now); err != nil {
 			return err
 		}
 		return s.assets.SetDataVersionTx(ctx, tx, versionKey, task.VersionNo, task.ID)
@@ -682,7 +693,7 @@ func (s *PostProcessService) processFXRates(
 			processedAny = true
 		}
 		if processedAny {
-			return s.assets.SetSyncSuccessTx(ctx, tx, ScopeFXRates, task.ID, now)
+			return s.assets.SetSyncSuccessTx(ctx, tx, ScopeFXRates, ScopeFXRates, task.ID, now)
 		}
 		return nil
 	})

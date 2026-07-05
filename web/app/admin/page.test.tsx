@@ -26,15 +26,47 @@ function makeOverview(overrides: Partial<AdminOverview> = {}): AdminOverview {
       directory_scopes: [
         {
           scope: "cn_all",
+          label: "中国市场目录",
+          status: "complete",
           last_success_at: Date.now() - 2 * 3600_000,
           active_task_status: "",
           stale: false,
+          units: [
+            {
+              sync_key: "cn_exchange_stock",
+              label: "A 股股票",
+              last_success_at: Date.now() - 2 * 3600_000,
+              active_task_status: "",
+              latest_task_failed: false,
+              stale: false,
+            },
+          ],
         },
         {
           scope: "us_all",
+          label: "美股市场目录",
+          status: "running",
           last_success_at: Date.now() - 8 * 24 * 3600_000,
           active_task_status: "running",
           stale: true,
+          units: [
+            {
+              sync_key: "us_stock",
+              label: "美股股票",
+              last_success_at: Date.now() - 8 * 24 * 3600_000,
+              active_task_status: "running",
+              latest_task_failed: false,
+              stale: true,
+            },
+            {
+              sync_key: "us_etf",
+              label: "美股 ETF",
+              last_success_at: Date.now() - 8 * 24 * 3600_000,
+              active_task_status: "",
+              latest_task_failed: true,
+              stale: true,
+            },
+          ],
         },
       ],
       fx_pairs: [{ pair: "USDCNY", last_success_at: null }],
@@ -105,11 +137,22 @@ describe("AdminOverviewPage", () => {
     const scopes = within(panel).getAllByTestId("sync-health-scope");
     expect(scopes).toHaveLength(2);
     expect(within(scopes[0]).getByText("中国市场目录")).toBeInTheDocument();
-    expect(within(scopes[1]).getByText("超 7 天未成功")).toBeInTheDocument();
-    expect(within(scopes[1]).getByTestId("task-status-badge")).toHaveAttribute(
+    expect(within(scopes[0]).getByTestId("scope-health-status-cn_all")).toHaveTextContent(
+      "已同步",
+    );
+    expect(within(scopes[1]).getByTestId("scope-health-status-us_all")).toHaveTextContent(
+      "同步中",
+    );
+    expect(within(scopes[1]).getAllByText("超 7 天未成功").length).toBeGreaterThan(0);
+
+    // Unit-level details render under the scope.
+    const usStock = within(scopes[1]).getByTestId("sync-health-unit-us_stock");
+    expect(within(usStock).getByTestId("task-status-badge")).toHaveAttribute(
       "data-status",
       "running",
     );
+    const usEtf = within(scopes[1]).getByTestId("sync-health-unit-us_etf");
+    expect(within(usEtf).getByText("最近失败")).toBeInTheDocument();
 
     const fx = within(panel).getByTestId("sync-health-fx");
     expect(within(fx).getByText("USDCNY")).toBeInTheDocument();

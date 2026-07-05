@@ -68,6 +68,7 @@ Admin API 挂载在 `/api/v1/admin/*`，第一期全部为只读 `GET`：
 - worker task 活跃状态：`pending`、`running`、`pre_complete`。
 - stale running：`running` 且 heartbeat 早于当前时间 60 秒。
 - 24h 统计：按 `finished_at >= now - 24h` 或 `created_at >= now - 24h` 的对应口径聚合。
+- 目录同步健康：按 scope 展示聚合状态（`running/complete/partial/failed/never`），并展开每个目录同步单元（`sync_key`）的活跃任务、最近失败与最近成功时间；scope 级 `last_success_at` 为全部单元成功时间的最小值，任一单元未成功则为空。
 - 目录和历史数据 stale：最近成功时间超过 7 天。
 - worker task 列表不返回 `payload_json` / `result_data`；只有任务详情接口返回完整原始字段。
 

@@ -86,13 +86,21 @@ def _register_hk_boards(hkex: pd.DataFrame | None = None) -> None:
     )
 
 
+def _unit_payload(sync_key: str, scope: str, **extra) -> dict:
+    return {
+        "sync_key": sync_key,
+        "scope": scope,
+        "instrument_types": [sync_key],
+        **extra,
+    }
+
+
 class TestDirectorySync:
     def test_hk_stock_uses_hkex_categories_for_equities_and_reits(self) -> None:
         _register_hk_boards()
-        result = execute_directory_sync(
-            {"scope": "hk_all", "instrument_types": ["hk_stock"]}
-        )
+        result = execute_directory_sync(_unit_payload("hk_stock", "hk_all"))
         assert result["type"] == "asset_directory_sync"
+        assert result["sync_key"] == "hk_stock"
         assert result["scope"] == "hk_all"
         by_symbol = {a["symbol"]: a for a in result["assets"]}
         # Equity + REIT categories from HKEX; ETPs and debt stay out.
@@ -112,9 +120,8 @@ class TestDirectorySync:
 
     def test_hk_etf_uses_hkex_trading_currency_not_name_suffix(self) -> None:
         _register_hk_boards()
-        result = execute_directory_sync(
-            {"scope": "hk_all", "instrument_types": ["hk_etf"]}
-        )
+        result = execute_directory_sync(_unit_payload("hk_etf", "hk_all"))
+        assert result["sync_key"] == "hk_etf"
         by_symbol = {a["symbol"]: a for a in result["assets"]}
         # Only Exchange Traded Products enter hk_etf; REITs/debt stay out.
         assert set(by_symbol) == {"02800", "09801", "83403"}
@@ -131,18 +138,36 @@ class TestDirectorySync:
         frame = _hkex_frame()
         frame.loc[frame["symbol"] == "09801", "currency"] = ""
         _register_hk_boards(hkex=frame)
-        result = execute_directory_sync(
-            {"scope": "hk_all", "instrument_types": ["hk_etf"]}
-        )
+        result = execute_directory_sync(_unit_payload("hk_etf", "hk_all"))
         assert {a["symbol"] for a in result["assets"]} == {"02800", "83403"}
 
-    def test_hk_all_scope_returns_both_categories(self) -> None:
-        _register_hk_boards()
-        result = execute_directory_sync(
-            {"scope": "hk_all", "instrument_types": ["hk_stock", "hk_etf"]}
+    def test_single_unit_only_calls_its_own_lister(self) -> None:
+        """A cn_exchange_fund unit task must not touch stock or mutual-fund
+        listers (090: unit-level retry granularity)."""
+        calls: set[str] = set()
+
+        def tracked(operation, frame):
+            def handler(**kwargs):
+                calls.add(operation)
+                return frame
+
+            register_test_dispatch(operation, handler)
+
+        tracked(
+            "em_cn_etf_list",
+            pd.DataFrame({"代码": ["510300"], "名称": ["沪深300ETF"], "市场标识": [1]}),
         )
-        types = {a["instrument_type"] for a in result["assets"]}
-        assert types == {"hk_stock", "hk_etf"}
+        tracked(
+            "em_cn_lof_list",
+            pd.DataFrame({"代码": ["161725"], "名称": ["招商白酒LOF"], "市场标识": [0]}),
+        )
+        tracked("stock_sh_a_spot_em", pd.DataFrame({"代码": ["600000"], "名称": ["浦发银行"]}))
+        tracked("fund_name_em", pd.DataFrame({"基金代码": ["000001"], "基金简称": ["华夏成长"]}))
+
+        result = execute_directory_sync(_unit_payload("cn_exchange_fund", "cn_all"))
+        assert result["sync_key"] == "cn_exchange_fund"
+        assert {a["symbol"] for a in result["assets"]} == {"510300", "161725"}
+        assert calls == {"em_cn_etf_list", "em_cn_lof_list"}
 
     def test_us_listing_strips_eastmoney_prefix(self) -> None:
         register_test_dispatch(
@@ -151,47 +176,25 @@ class TestDirectorySync:
                 {"代码": ["105.AAPL", "106.BRK_A"], "名称": ["苹果", "伯克希尔"]}
             ),
         )
-        result = execute_directory_sync(
-            {"scope": "us_all", "instrument_types": ["us_stock"]}
-        )
+        result = execute_directory_sync(_unit_payload("us_stock", "us_all"))
         assert {a["symbol"] for a in result["assets"]} == {"AAPL", "BRK_A"}
         first = result["assets"][0]
         assert first["instrument_type"] == "us_stock"
         assert first["instrument_kind"] == "stock"
         assert first["source_name"] == "em.us_equity_list"
 
-    def test_us_all_scope_returns_stock_and_etf(self) -> None:
-        register_test_dispatch(
-            "em_us_equity_list",
-            lambda **kwargs: pd.DataFrame({"代码": ["105.AAPL"], "名称": ["苹果"]}),
-        )
-        register_test_dispatch(
-            "em_us_etf_list",
-            lambda **kwargs: pd.DataFrame(
-                {"代码": ["107.SPY", "105.QQQ"], "名称": ["标普500ETF-SPDR", "纳指100ETF"]}
-            ),
-        )
-        result = execute_directory_sync(
-            {"scope": "us_all", "instrument_types": ["us_stock", "us_etf"]}
-        )
-        etfs = [a for a in result["assets"] if a["instrument_type"] == "us_etf"]
-        stocks = [a for a in result["assets"] if a["instrument_type"] == "us_stock"]
-        assert {a["symbol"] for a in etfs} == {"SPY", "QQQ"}
-        assert {a["symbol"] for a in stocks} == {"AAPL"}
-        assert all(a["instrument_kind"] == "etf" for a in etfs)
-        assert all(a["currency"] == "USD" for a in etfs)
-        assert all(a["source_name"] == "em.us_etf_list" for a in etfs)
-
     def test_empty_listing_fails_whole_task(self) -> None:
         register_test_dispatch("hkex_list_of_securities", lambda **kwargs: pd.DataFrame())
         with pytest.raises(TaskFailure) as exc:
-            execute_directory_sync({"scope": "hk_all", "instrument_types": ["hk_stock"]})
+            execute_directory_sync(_unit_payload("hk_stock", "hk_all"))
         assert exc.value.error_code == "directory_data_incomplete"
+        # Failures carry the sync_key for admin/task-detail triage.
+        assert "sync_key=hk_stock" in exc.value.message
 
     def test_empty_etf_listing_fails_whole_task(self) -> None:
         register_test_dispatch("em_us_etf_list", lambda **kwargs: pd.DataFrame())
         with pytest.raises(TaskFailure) as exc:
-            execute_directory_sync({"scope": "us_all", "instrument_types": ["us_etf"]})
+            execute_directory_sync(_unit_payload("us_etf", "us_all"))
         assert exc.value.error_code == "directory_data_incomplete"
 
     def test_upstream_error_maps_to_unavailable(self) -> None:
@@ -200,7 +203,7 @@ class TestDirectorySync:
 
         register_test_dispatch("hkex_list_of_securities", boom)
         with pytest.raises(TaskFailure) as exc:
-            execute_directory_sync({"scope": "hk_all", "instrument_types": ["hk_stock"]})
+            execute_directory_sync(_unit_payload("hk_stock", "hk_all"))
         assert exc.value.error_code == "market_provider_unavailable"
 
     def test_cache_serves_repeat_and_force_bypasses(self) -> None:
@@ -212,7 +215,7 @@ class TestDirectorySync:
 
         _register_hk_boards()
         register_test_dispatch("hkex_list_of_securities", hkex_listing)
-        payload = {"scope": "hk_all", "instrument_types": ["hk_stock"]}
+        payload = _unit_payload("hk_stock", "hk_all")
         execute_directory_sync(payload)
         execute_directory_sync(payload)
         assert calls["hkex"] == 1
@@ -222,6 +225,12 @@ class TestDirectorySync:
     def test_missing_payload_fields_rejected(self) -> None:
         with pytest.raises(TaskFailure) as exc:
             execute_directory_sync({"scope": "", "instrument_types": []})
+        assert exc.value.error_code == "invalid_task_payload"
+
+    def test_missing_sync_key_rejected(self) -> None:
+        _register_hk_boards()
+        with pytest.raises(TaskFailure) as exc:
+            execute_directory_sync({"scope": "hk_all", "instrument_types": ["hk_stock"]})
         assert exc.value.error_code == "invalid_task_payload"
 
 
@@ -481,9 +490,7 @@ class TestCNDirectorySync:
             "stock_bj_a_spot_em",
             lambda **kwargs: pd.DataFrame({"代码": ["830799"], "名称": ["艾融软件"]}),
         )
-        result = execute_directory_sync(
-            {"scope": "cn_all", "instrument_types": ["cn_exchange_stock"]}
-        )
+        result = execute_directory_sync(_unit_payload("cn_exchange_stock", "cn_all"))
         by_symbol = {a["symbol"]: a for a in result["assets"]}
         assert by_symbol["600036"]["region_code"] == "sh"
         assert by_symbol["600036"]["exchange"] == "SH"
@@ -509,9 +516,7 @@ class TestCNDirectorySync:
                 {"代码": ["166009"], "名称": ["中欧价值LOF"], "市场标识": [0]}
             ),
         )
-        result = execute_directory_sync(
-            {"scope": "cn_all", "instrument_types": ["cn_exchange_fund"]}
-        )
+        result = execute_directory_sync(_unit_payload("cn_exchange_fund", "cn_all"))
         by_symbol = {a["symbol"]: a for a in result["assets"]}
         # The row without a market id is skipped, never guessed from prefix.
         assert set(by_symbol) == {"510300", "159915", "166009"}

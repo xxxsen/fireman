@@ -31,11 +31,25 @@ export interface AdminCallbackStats {
   failed_last_24h: number;
 }
 
+export interface AdminDirectoryUnitHealth {
+  sync_key: string;
+  label: string;
+  last_success_at: number | null;
+  active_task_status: string;
+  latest_task_failed: boolean;
+  stale: boolean;
+}
+
 export interface AdminDirectoryScopeHealth {
   scope: string;
+  label: string;
+  /** Scope aggregate: running | complete | partial | failed | never. */
+  status: string;
+  /** Oldest full-success time; null while any unit has never succeeded. */
   last_success_at: number | null;
   active_task_status: string;
   stale: boolean;
+  units: AdminDirectoryUnitHealth[];
 }
 
 export interface AdminFXPairHealth {
@@ -283,12 +297,24 @@ export function listAdminDataVersions(
 
 export const DIRECTORY_SCOPE_LABELS: Record<string, string> = {
   cn_all: "中国市场目录",
-  hk_all: "香港市场目录",
-  us_all: "美国市场目录",
+  hk_all: "港股市场目录",
+  us_all: "美股市场目录",
 };
 
 export function directoryScopeLabel(scope: string): string {
   return DIRECTORY_SCOPE_LABELS[scope] ?? scope;
+}
+
+export const DIRECTORY_SCOPE_STATUS_LABELS: Record<string, string> = {
+  running: "同步中",
+  complete: "已同步",
+  partial: "部分未同步",
+  failed: "同步失败",
+  never: "从未同步",
+};
+
+export function directoryScopeStatusLabel(status: string): string {
+  return DIRECTORY_SCOPE_STATUS_LABELS[status] ?? status;
 }
 
 export const CALLBACK_RESULT_LABELS: Record<CallbackResult, string> = {

@@ -1,10 +1,11 @@
-"""asset_directory_sync executor: full listing snapshots per market scope.
+"""asset_directory_sync executor: full listing snapshots per directory unit.
 
-Every instrument_type in the payload is a required category: any category
-failing upstream fails the whole task (no partial success, matching Go's
-post-process contract). Listings are cached in memory for a short TTL so
-repeated syncs do not hammer the full-list endpoints; force=true bypasses
-the cache.
+Each task carries a sync_key identifying one directory sync unit (Go owns
+the unit registry and task splitting). Every instrument_type in the payload
+is a required category: any category failing upstream fails the whole task
+(no partial success, matching Go's post-process contract). Listings are
+cached in memory for a short TTL so repeated syncs do not hammer the
+full-list endpoints; force=true bypasses the cache.
 """
 
 from __future__ import annotations
@@ -466,16 +467,34 @@ def _list_category(instrument_type: str, force: bool) -> list[dict[str, Any]]:
 
 
 def execute_directory_sync(payload: dict[str, Any]) -> dict[str, Any]:
+    sync_key = str(payload.get("sync_key", "")).strip()
     scope = str(payload.get("scope", "")).strip()
     instrument_types = payload.get("instrument_types") or []
     force = bool(payload.get("force", False))
-    if not scope or not instrument_types:
-        raise TaskFailure("invalid_task_payload", "directory payload needs scope and instrument_types")
+    if not sync_key or not scope or not instrument_types:
+        raise TaskFailure(
+            "invalid_task_payload",
+            "directory payload needs sync_key, scope and instrument_types",
+        )
 
     assets: list[dict[str, Any]] = []
     for instrument_type in instrument_types:
-        entries = _list_category(str(instrument_type), force)
-        logger.info("directory %s: %d assets", instrument_type, len(entries))
+        try:
+            entries = _list_category(str(instrument_type), force)
+        except TaskFailure as exc:
+            # Tag failures with the unit so admin/task detail shows which
+            # directory unit broke.
+            raise TaskFailure(
+                exc.error_code, f"{exc.message} (sync_key={sync_key})"
+            ) from exc
+        logger.info(
+            "directory %s (%s): %d assets", instrument_type, sync_key, len(entries)
+        )
         assets.extend(entries)
 
-    return {"type": "asset_directory_sync", "scope": scope, "assets": assets}
+    return {
+        "type": "asset_directory_sync",
+        "sync_key": sync_key,
+        "scope": scope,
+        "assets": assets,
+    }

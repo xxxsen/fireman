@@ -57,7 +57,28 @@ func taskPayload(t *testing.T, db *sql.DB, taskID string) map[string]any {
 	return payload
 }
 
-func TestMarketAssetDirectorySync_CreatesAndDedupes(t *testing.T) {
+// syncTasksFromResult decodes the POST /market-assets/sync response: the
+// scope plus one entry per directory sync unit.
+func syncTasksFromResult(t *testing.T, body []byte) (string, []map[string]any) {
+	t.Helper()
+	data := decodeEnvelope(t, body)["data"].(map[string]any)
+	scope, _ := data["scope"].(string)
+	rawTasks, ok := data["tasks"].([]any)
+	if !ok {
+		t.Fatalf("response has no tasks array: %s", body)
+	}
+	tasks := make([]map[string]any, 0, len(rawTasks))
+	for _, rt := range rawTasks {
+		tasks = append(tasks, rt.(map[string]any))
+	}
+	return scope, tasks
+}
+
+func syncTaskID(item map[string]any) string {
+	return item["task"].(map[string]any)["id"].(string)
+}
+
+func TestMarketAssetDirectorySync_ScopeCreatesUnitTasks(t *testing.T) {
 	srv, db, client := testRouterWithDB(t)
 
 	resp, body := postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
@@ -65,51 +86,61 @@ func TestMarketAssetDirectorySync_CreatesAndDedupes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sync status=%d body=%s", resp.StatusCode, body)
 	}
-	task, existed := taskFromResult(t, body)
-	if existed {
-		t.Fatal("first sync reported existed=true")
+	scope, tasks := syncTasksFromResult(t, body)
+	if scope != "cn_all" || len(tasks) != 3 {
+		t.Fatalf("scope=%s tasks=%d, want cn_all with 3 unit tasks", scope, len(tasks))
 	}
-	if task["type"] != "asset_directory_sync" || task["status"] != "pending" {
-		t.Fatalf("unexpected task: %v", task)
-	}
-	taskID := task["id"].(string)
-
-	payload := taskPayload(t, db, taskID)
-	if payload["scope"] != "cn_all" {
-		t.Fatalf("payload scope = %v", payload["scope"])
-	}
-	types := payload["instrument_types"].([]any)
-	if len(types) != 3 {
-		t.Fatalf("cn_all should require 3 instrument types, got %v", types)
-	}
-
-	// Duplicate request returns the existing active task without creating a
-	// second one.
-	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
-		map[string]any{"scope": "cn_all"})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("dup sync status=%d body=%s", resp.StatusCode, body)
-	}
-	dupTask, dupExisted := taskFromResult(t, body)
-	if !dupExisted || dupTask["id"] != taskID {
-		t.Fatalf("dedupe failed: existed=%v id=%v want %s", dupExisted, dupTask["id"], taskID)
+	wantUnits := []string{"cn_exchange_stock", "cn_exchange_fund", "cn_mutual_fund"}
+	for i, want := range wantUnits {
+		item := tasks[i]
+		if item["sync_key"] != want {
+			t.Fatalf("tasks[%d].sync_key = %v, want %s", i, item["sync_key"], want)
+		}
+		if item["existed"] != false {
+			t.Fatalf("tasks[%d].existed = %v, want false", i, item["existed"])
+		}
+		if item["label"] == "" {
+			t.Fatalf("tasks[%d] has no label", i)
+		}
+		task := item["task"].(map[string]any)
+		if task["type"] != "asset_directory_sync" || task["status"] != "pending" {
+			t.Fatalf("tasks[%d].task = %v", i, task)
+		}
+		// Dedupe key is asset_directory_sync|{sync_key}.
+		var dedupeKey string
+		if err := db.QueryRow(`SELECT dedupe_key FROM worker_tasks WHERE id=?`,
+			task["id"]).Scan(&dedupeKey); err != nil {
+			t.Fatal(err)
+		}
+		if dedupeKey != "asset_directory_sync|"+want {
+			t.Fatalf("dedupe_key = %s, want asset_directory_sync|%s", dedupeKey, want)
+		}
+		// Payload carries sync_key and registry markets/instrument_types.
+		payload := taskPayload(t, db, task["id"].(string))
+		if payload["sync_key"] != want || payload["scope"] != "cn_all" {
+			t.Fatalf("payload = %v", payload)
+		}
+		types := payload["instrument_types"].([]any)
+		if len(types) != 1 || types[0] != want {
+			t.Fatalf("payload instrument_types = %v, want [%s]", types, want)
+		}
+		// Each unit tracks its own sync-state row grouped under the scope.
+		var lastTaskID, stateScope string
+		if err := db.QueryRow(
+			`SELECT last_task_id, scope FROM market_asset_sync_state WHERE sync_key=?`,
+			want).Scan(&lastTaskID, &stateScope); err != nil {
+			t.Fatal(err)
+		}
+		if lastTaskID != task["id"] || stateScope != "cn_all" {
+			t.Fatalf("sync state for %s = (%s,%s)", want, lastTaskID, stateScope)
+		}
 	}
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM worker_tasks`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("worker_tasks rows = %d, want 1", count)
-	}
-
-	// sync state records the last task id for the scope.
-	var lastTaskID string
-	if err := db.QueryRow(
-		`SELECT last_task_id FROM market_asset_sync_state WHERE scope='cn_all'`).Scan(&lastTaskID); err != nil {
-		t.Fatal(err)
-	}
-	if lastTaskID != taskID {
-		t.Fatalf("sync state last_task_id = %s, want %s", lastTaskID, taskID)
+	if count != 3 {
+		t.Fatalf("worker_tasks rows = %d, want 3", count)
 	}
 
 	// Unknown scope is rejected.
@@ -120,35 +151,83 @@ func TestMarketAssetDirectorySync_CreatesAndDedupes(t *testing.T) {
 	}
 }
 
-func TestMarketAssetDirectorySync_ScopeInstrumentTypes(t *testing.T) {
+func TestMarketAssetDirectorySync_SingleUnitAndDedupe(t *testing.T) {
 	srv, db, client := testRouterWithDB(t)
 
-	cases := map[string][]string{
-		"hk_all": {"hk_stock", "hk_etf"},
-		"us_all": {"us_stock", "us_etf"},
-		"cn_all": {"cn_exchange_stock", "cn_exchange_fund", "cn_mutual_fund"},
+	// sync_key creates exactly one unit task.
+	resp, body := postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+		map[string]any{"sync_key": "cn_exchange_fund"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unit sync status=%d body=%s", resp.StatusCode, body)
 	}
-	for scope, wantTypes := range cases {
-		resp, body := postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
-			map[string]any{"scope": scope})
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("sync %s status=%d body=%s", scope, resp.StatusCode, body)
-		}
-		task, _ := taskFromResult(t, body)
-		payload := taskPayload(t, db, task["id"].(string))
-		got := map[string]bool{}
-		for _, v := range payload["instrument_types"].([]any) {
-			got[v.(string)] = true
-		}
-		if len(got) != len(wantTypes) {
-			t.Fatalf("scope %s instrument_types = %v, want %v", scope, payload["instrument_types"], wantTypes)
-		}
-		for _, want := range wantTypes {
-			if !got[want] {
-				t.Fatalf("scope %s payload is missing instrument type %s (got %v)",
-					scope, want, payload["instrument_types"])
-			}
-		}
+	scope, tasks := syncTasksFromResult(t, body)
+	if scope != "cn_all" || len(tasks) != 1 || tasks[0]["sync_key"] != "cn_exchange_fund" {
+		t.Fatalf("scope=%s tasks=%v", scope, tasks)
+	}
+	fundTaskID := syncTaskID(tasks[0])
+
+	// Re-syncing the active unit returns existed=true without inserting.
+	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+		map[string]any{"sync_key": "cn_exchange_fund", "force": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dup unit sync status=%d body=%s", resp.StatusCode, body)
+	}
+	_, tasks = syncTasksFromResult(t, body)
+	if tasks[0]["existed"] != true || syncTaskID(tasks[0]) != fundTaskID {
+		t.Fatalf("unit dedupe failed: %v", tasks[0])
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM worker_tasks`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("worker_tasks rows = %d, want 1", count)
+	}
+
+	// Batch sync while one unit is active: the active unit is returned as
+	// existed, the sibling units still get new tasks.
+	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+		map[string]any{"scope": "cn_all"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("batch sync status=%d body=%s", resp.StatusCode, body)
+	}
+	_, tasks = syncTasksFromResult(t, body)
+	if len(tasks) != 3 {
+		t.Fatalf("batch tasks = %d, want 3", len(tasks))
+	}
+	byKey := map[string]map[string]any{}
+	for _, item := range tasks {
+		byKey[item["sync_key"].(string)] = item
+	}
+	if byKey["cn_exchange_fund"]["existed"] != true ||
+		syncTaskID(byKey["cn_exchange_fund"]) != fundTaskID {
+		t.Fatalf("active unit not deduped in batch: %v", byKey["cn_exchange_fund"])
+	}
+	if byKey["cn_exchange_stock"]["existed"] != false ||
+		byKey["cn_mutual_fund"]["existed"] != false {
+		t.Fatalf("sibling units were not created: %v", tasks)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM worker_tasks`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("worker_tasks rows after batch = %d, want 3", count)
+	}
+
+	// Unknown sync_key and scope mismatch are rejected.
+	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+		map[string]any{"sync_key": "moon_etf"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid sync_key status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+		map[string]any{"scope": "hk_all", "sync_key": "cn_exchange_fund"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("scope mismatch status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync", map[string]any{})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty request status=%d body=%s", resp.StatusCode, body)
 	}
 }
 
@@ -156,9 +235,9 @@ func TestGetWorkerTask(t *testing.T) {
 	srv, _, client := testRouterWithDB(t)
 
 	_, body := postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
-		map[string]any{"scope": "hk_all"})
-	task, _ := taskFromResult(t, body)
-	taskID := task["id"].(string)
+		map[string]any{"sync_key": "hk_stock"})
+	_, tasks := syncTasksFromResult(t, body)
+	taskID := syncTaskID(tasks[0])
 
 	resp, body := getJSON(t, client, srv.URL+"/api/v1/tasks/"+taskID)
 	if resp.StatusCode != http.StatusOK {
@@ -232,6 +311,105 @@ func TestListMarketAssets_SearchAndSyncBlock(t *testing.T) {
 		if !scopes[want] {
 			t.Fatalf("syncs missing scope %s: %v", want, syncs)
 		}
+	}
+}
+
+// TestListMarketAssets_ScopeAggregation covers the td/090 scope status rules:
+// partial while only some units succeeded, complete (with min success time)
+// once every unit succeeded, running with an active unit task and failed when
+// nothing ever succeeded and the latest task failed.
+func TestListMarketAssets_ScopeAggregation(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+
+	seedState := func(syncKey, scope, lastTaskID string, lastSuccessAt *int64) {
+		t.Helper()
+		if _, err := db.Exec(`
+			INSERT INTO market_asset_sync_state
+				(sync_key, scope, last_task_id, last_success_task_id, last_success_at, updated_at)
+			VALUES (?,?,?,?,?,1)
+			ON CONFLICT(sync_key) DO UPDATE SET
+				last_task_id=excluded.last_task_id,
+				last_success_task_id=excluded.last_success_task_id,
+				last_success_at=excluded.last_success_at`,
+			syncKey, scope, lastTaskID, lastTaskID, lastSuccessAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedTask := func(id, status string) {
+		t.Helper()
+		if _, err := db.Exec(`
+			INSERT INTO worker_tasks (id, version_no, type, status, dedupe_key, payload_json, created_at)
+			VALUES (?,1,'asset_directory_sync',?,?, '{}', 1)`,
+			id, status, "asset_directory_sync|"+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scopeView := func(scope string) map[string]any {
+		t.Helper()
+		resp, body := getJSON(t, client, srv.URL+"/api/v1/market-assets")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("list status=%d body=%s", resp.StatusCode, body)
+		}
+		for _, s := range decodeEnvelope(t, body)["data"].(map[string]any)["syncs"].([]any) {
+			view := s.(map[string]any)
+			if view["scope"] == scope {
+				return view
+			}
+		}
+		t.Fatalf("scope %s missing from syncs", scope)
+		return nil
+	}
+
+	// Nothing seeded: never.
+	if got := scopeView("cn_all"); got["status"] != "never" {
+		t.Fatalf("empty scope status = %v, want never", got["status"])
+	}
+
+	// 2 of 3 CN units succeeded: partial, no aggregate last_success_at.
+	t100, t200 := int64(100), int64(200)
+	seedState("cn_exchange_stock", "cn_all", "", &t200)
+	seedState("cn_exchange_fund", "cn_all", "", &t100)
+	view := scopeView("cn_all")
+	if view["status"] != "partial" {
+		t.Fatalf("2/3 success status = %v, want partial", view["status"])
+	}
+	if _, ok := view["last_success_at"]; ok {
+		t.Fatalf("partial scope must not expose last_success_at, got %v", view["last_success_at"])
+	}
+	units := view["units"].([]any)
+	if len(units) != 3 {
+		t.Fatalf("cn_all units = %d, want 3", len(units))
+	}
+	first := units[0].(map[string]any)
+	if first["sync_key"] != "cn_exchange_stock" || first["label"] == "" {
+		t.Fatalf("units[0] = %v", first)
+	}
+
+	// All units succeeded: complete with the minimum success time.
+	t300 := int64(300)
+	seedState("cn_mutual_fund", "cn_all", "", &t300)
+	view = scopeView("cn_all")
+	if view["status"] != "complete" {
+		t.Fatalf("3/3 success status = %v, want complete", view["status"])
+	}
+	if view["last_success_at"].(float64) != 100 {
+		t.Fatalf("aggregate last_success_at = %v, want min(100)", view["last_success_at"])
+	}
+
+	// An active unit task flips the scope to running.
+	seedTask("wt_run", "running")
+	seedState("cn_exchange_fund", "cn_all", "wt_run", &t100)
+	view = scopeView("cn_all")
+	if view["status"] != "running" {
+		t.Fatalf("active unit status = %v, want running", view["status"])
+	}
+
+	// Failed with no successes at all: hk_all with one failed latest task.
+	seedTask("wt_fail", "failed")
+	seedState("hk_stock", "hk_all", "wt_fail", nil)
+	view = scopeView("hk_all")
+	if view["status"] != "failed" {
+		t.Fatalf("failed-only scope status = %v, want failed", view["status"])
 	}
 }
 

@@ -54,6 +54,7 @@ export interface MarketAsset {
   history_sync_error?: string;
 }
 
+/** Single-unit sync status block (FX rates). */
 export interface MarketAssetSyncView {
   scope: string;
   task?: WorkerTask | null;
@@ -61,10 +62,31 @@ export interface MarketAssetSyncView {
   last_success_task_id: string;
 }
 
+/** One directory sync unit's status inside a scope aggregation. */
+export interface DirectorySyncUnitView {
+  sync_key: string;
+  label: string;
+  task?: WorkerTask | null;
+  last_success_at?: number | null;
+  last_success_task_id: string;
+}
+
+/** Scope aggregate status computed by the backend (td/090). */
+export type DirectoryScopeStatus = "running" | "complete" | "partial" | "failed" | "never";
+
+/** Aggregated sync view of one directory scope. */
+export interface DirectoryScopeSyncView {
+  scope: string;
+  label: string;
+  status: DirectoryScopeStatus;
+  /** Oldest full-success time; absent while any unit has never succeeded. */
+  last_success_at?: number | null;
+  units: DirectorySyncUnitView[];
+}
+
 export interface MarketAssetListResult {
   assets: MarketAsset[];
-  sync?: MarketAssetSyncView | null;
-  syncs: MarketAssetSyncView[];
+  syncs: DirectoryScopeSyncView[];
   fx_sync?: MarketAssetSyncView | null;
   total: number;
 }
@@ -99,10 +121,27 @@ export interface TaskCreateResult {
 
 export type DirectorySyncScope = "cn_all" | "hk_all" | "us_all";
 
-export function syncMarketAssets(body: {
-  scope: DirectorySyncScope;
-  force?: boolean;
-}): Promise<TaskCreateResult> {
+/** One unit's created-or-existing task in the sync response. */
+export interface DirectorySyncTaskItem {
+  sync_key: string;
+  label: string;
+  task: WorkerTask;
+  existed: boolean;
+}
+
+export interface DirectorySyncResult {
+  scope: string;
+  tasks: DirectorySyncTaskItem[];
+}
+
+/**
+ * Creates directory sync tasks: `{scope}` syncs every unit of the scope,
+ * `{sync_key}` syncs a single unit. Units with an active task come back with
+ * `existed: true`.
+ */
+export function syncMarketAssets(
+  body: { scope: DirectorySyncScope; force?: boolean } | { sync_key: string; force?: boolean },
+): Promise<DirectorySyncResult> {
   return apiPost("/api/v1/market-assets/sync", body);
 }
 

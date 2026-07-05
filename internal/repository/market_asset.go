@@ -39,8 +39,10 @@ func BuildMarketAssetKey(market, instrumentType, regionCode, symbol string) stri
 	return market + "|" + instrumentType + "|" + regionCode + "|" + symbol
 }
 
-// MarketAssetSyncState mirrors market_asset_sync_state.
+// MarketAssetSyncState mirrors market_asset_sync_state. Rows are keyed by
+// sync_key (the real task granularity); scope is the UI aggregation group.
 type MarketAssetSyncState struct {
+	SyncKey           string `json:"sync_key"`
 	Scope             string `json:"scope"`
 	LastTaskID        string `json:"last_task_id"`
 	LastSuccessTaskID string `json:"last_success_task_id"`
@@ -319,12 +321,12 @@ func escapeLike(s string) string {
 
 // --- directory sync state ---
 
-func (r *MarketAssetRepo) GetSyncState(ctx context.Context, scope string) (MarketAssetSyncState, bool, error) {
+func (r *MarketAssetRepo) GetSyncState(ctx context.Context, syncKey string) (MarketAssetSyncState, bool, error) {
 	var st MarketAssetSyncState
 	err := r.db.QueryRowContext(ctx, `
-		SELECT scope, last_task_id, last_success_task_id, last_success_at, updated_at
-		FROM market_asset_sync_state WHERE scope=?`, scope).
-		Scan(&st.Scope, &st.LastTaskID, &st.LastSuccessTaskID, &st.LastSuccessAt, &st.UpdatedAt)
+		SELECT sync_key, scope, last_task_id, last_success_task_id, last_success_at, updated_at
+		FROM market_asset_sync_state WHERE sync_key=?`, syncKey).
+		Scan(&st.SyncKey, &st.Scope, &st.LastTaskID, &st.LastSuccessTaskID, &st.LastSuccessAt, &st.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MarketAssetSyncState{}, false, nil
 	}
@@ -334,33 +336,37 @@ func (r *MarketAssetRepo) GetSyncState(ctx context.Context, scope string) (Marke
 	return st, true, nil
 }
 
-// SetSyncLastTaskTx records the most recently created directory task for scope.
-func (r *MarketAssetRepo) SetSyncLastTaskTx(ctx context.Context, tx *sql.Tx, scope, taskID string) error {
+// SetSyncLastTaskTx records the most recently created task for one sync unit.
+func (r *MarketAssetRepo) SetSyncLastTaskTx(
+	ctx context.Context, tx *sql.Tx, syncKey, scope, taskID string,
+) error {
 	now := time.Now().UnixMilli()
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO market_asset_sync_state (scope, last_task_id, updated_at)
-		VALUES (?,?,?)
-		ON CONFLICT(scope) DO UPDATE SET
+		INSERT INTO market_asset_sync_state (sync_key, scope, last_task_id, updated_at)
+		VALUES (?,?,?,?)
+		ON CONFLICT(sync_key) DO UPDATE SET
+			scope=excluded.scope,
 			last_task_id=excluded.last_task_id,
 			updated_at=excluded.updated_at`,
-		scope, taskID, now)
+		syncKey, scope, taskID, now)
 	return wrapSQL("set sync state last task", err)
 }
 
-// SetSyncSuccessTx records a successful directory post-process for scope.
+// SetSyncSuccessTx records a successful directory post-process for one unit.
 func (r *MarketAssetRepo) SetSyncSuccessTx(
-	ctx context.Context, tx *sql.Tx, scope, taskID string, successAt int64,
+	ctx context.Context, tx *sql.Tx, syncKey, scope, taskID string, successAt int64,
 ) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO market_asset_sync_state
-			(scope, last_task_id, last_success_task_id, last_success_at, updated_at)
-		VALUES (?,?,?,?,?)
-		ON CONFLICT(scope) DO UPDATE SET
+			(sync_key, scope, last_task_id, last_success_task_id, last_success_at, updated_at)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(sync_key) DO UPDATE SET
+			scope=excluded.scope,
 			last_task_id=excluded.last_task_id,
 			last_success_task_id=excluded.last_success_task_id,
 			last_success_at=excluded.last_success_at,
 			updated_at=excluded.updated_at`,
-		scope, taskID, taskID, successAt, successAt)
+		syncKey, scope, taskID, taskID, successAt, successAt)
 	return wrapSQL("set sync state success", err)
 }
 

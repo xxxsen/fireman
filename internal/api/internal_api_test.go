@@ -196,9 +196,31 @@ func TestInternalResourceUpload_ChecksumAndValidation(t *testing.T) {
 	}
 }
 
+// syncUnitTask creates (or returns) the directory task for one sync unit and
+// returns its task id.
+func syncUnitTask(t *testing.T, st internalStack, syncKey string) string {
+	t.Helper()
+	created, err := st.assets.SyncDirectory(context.Background(),
+		service.DirectorySyncRequest{SyncKey: syncKey})
+	if err != nil {
+		t.Fatalf("create %s sync task: %v", syncKey, err)
+	}
+	if len(created.Tasks) != 1 || created.Tasks[0].SyncKey != syncKey {
+		t.Fatalf("sync %s tasks = %+v, want exactly one", syncKey, created.Tasks)
+	}
+	return created.Tasks[0].Task.ID
+}
+
+func directoryUnitResult(syncKey, scope string, assets []map[string]any) []byte {
+	raw, _ := json.Marshal(map[string]any{
+		"type": "asset_directory_sync", "sync_key": syncKey, "scope": scope,
+		"assets": assets,
+	})
+	return raw
+}
+
 func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	st := newInternalStack(t)
-	ctx := context.Background()
 
 	// A previously-known asset that the new listing no longer contains; it
 	// must be marked inactive after the sync commits.
@@ -214,68 +236,72 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	created, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: "hk_all"})
-	if err != nil {
-		t.Fatalf("create directory task: %v", err)
-	}
-	taskID := created.Task.ID
-
-	result := map[string]any{
-		"type":  "asset_directory_sync",
-		"scope": "hk_all",
-		"assets": []map[string]any{
-			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
-				"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
-				"source_name": "ak_hk", "source_as_of": "2026-07-04"},
-			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00005",
-				"name": "汇丰控股", "instrument_kind": "stock", "currency": "HKD",
-				"source_name": "ak_hk", "source_as_of": "2026-07-04"},
-			// hk_all requires the ETF category as well as equities.
-			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
-				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
-				"source_name": "ak_hk_fund", "source_as_of": "2026-07-04"},
-			// Out-of-scope entry must be ignored, never written.
-			{"market": "CN", "instrument_type": "cn_exchange_stock", "symbol": "600000",
-				"name": "浦发银行", "currency": "CNY", "source_name": "ak_cn", "source_as_of": ""},
-		},
-	}
-	raw, _ := json.Marshal(result)
-	env := uploadResult(t, st, raw)
-	markPreComplete(t, st.db, taskID, env)
+	taskID := syncUnitTask(t, st, "hk_stock")
+	raw := directoryUnitResult("hk_stock", "hk_all", []map[string]any{
+		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
+			"source_name": "ak_hk", "source_as_of": "2026-07-04"},
+		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00005",
+			"name": "汇丰控股", "instrument_kind": "stock", "currency": "HKD",
+			"source_name": "ak_hk", "source_as_of": "2026-07-04"},
+		// Out-of-unit entries must be ignored, never written.
+		{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+			"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
+			"source_name": "ak_hk_fund", "source_as_of": "2026-07-04"},
+		{"market": "CN", "instrument_type": "cn_exchange_stock", "symbol": "600000",
+			"name": "浦发银行", "currency": "CNY", "source_name": "ak_cn", "source_as_of": ""},
+	})
+	markPreComplete(t, st.db, taskID, uploadResult(t, st, raw))
 
 	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
 
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 3 {
-		t.Fatalf("active HK assets = %d, want 3", n)
-	}
-	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_etf' AND active=1`); n != 1 {
-		t.Fatalf("active hk_etf assets = %d, want 1", n)
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_stock' AND active=1`); n != 2 {
+		t.Fatalf("active hk_stock assets = %d, want 2", n)
 	}
 	if n := countRows(t, st.db,
 		`SELECT COUNT(*) FROM market_assets WHERE symbol='09999' AND active=0`); n != 1 {
 		t.Fatal("unseen asset was not marked inactive")
 	}
-	if n := countRows(t, st.db, `SELECT COUNT(*) FROM market_assets WHERE market='CN'`); n != 0 {
-		t.Fatal("out-of-scope CN entry was written")
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_etf'`); n != 0 {
+		t.Fatal("out-of-unit hk_etf entry was written")
 	}
-	var lastSuccessTaskID string
-	if err := st.db.QueryRow(
-		`SELECT last_success_task_id FROM market_asset_sync_state WHERE scope='hk_all'`).
-		Scan(&lastSuccessTaskID); err != nil {
+	if n := countRows(t, st.db, `SELECT COUNT(*) FROM market_assets WHERE market='CN'`); n != 0 {
+		t.Fatal("out-of-unit CN entry was written")
+	}
+
+	// Sync state and data version live at the unit granularity; no scope
+	// aggregate rows are written.
+	var lastSuccessTaskID, scope string
+	if err := st.db.QueryRow(`
+		SELECT last_success_task_id, scope FROM market_asset_sync_state
+		WHERE sync_key='hk_stock'`).
+		Scan(&lastSuccessTaskID, &scope); err != nil {
 		t.Fatal(err)
 	}
-	if lastSuccessTaskID != taskID {
-		t.Fatalf("sync success task = %s, want %s", lastSuccessTaskID, taskID)
+	if lastSuccessTaskID != taskID || scope != "hk_all" {
+		t.Fatalf("sync state = (%s,%s), want (%s,hk_all)", lastSuccessTaskID, scope, taskID)
+	}
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_asset_sync_state WHERE sync_key='hk_all'`); n != 0 {
+		t.Fatal("scope aggregate row must not be written to sync state")
+	}
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_data_versions WHERE version_key='asset_directory|hk_stock'`); n != 1 {
+		t.Fatal("unit data version was not written")
+	}
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_data_versions WHERE version_key='asset_directory|hk_all'`); n != 0 {
+		t.Fatal("scope-level data version must not be written")
 	}
 
 	// Duplicate notification while still pre_complete: reentrant success, no
 	// duplicate writes.
 	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 3 {
-		t.Fatalf("re-notify duplicated writes: active HK assets = %d", n)
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_stock' AND active=1`); n != 2 {
+		t.Fatalf("re-notify duplicated writes: active hk_stock assets = %d", n)
 	}
 
 	// Lost success response: task already complete, re-notify still succeeds.
@@ -284,61 +310,123 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 
 	// Coverage gate: a later sync returning below 90% of the previous count
 	// for a same-source category is rejected without touching the directory.
-	created2, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: "hk_all"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	shrunk := map[string]any{
-		"type": "asset_directory_sync", "scope": "hk_all",
-		"assets": []map[string]any{
-			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
-				"name": "腾讯控股", "currency": "HKD", "source_name": "ak_hk", "source_as_of": ""},
-			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
-				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
-				"source_name": "ak_hk_fund", "source_as_of": ""},
-		},
-	}
-	raw2, _ := json.Marshal(shrunk)
-	env2 := uploadResult(t, st, raw2)
-	markPreComplete(t, st.db, created2.Task.ID, env2)
-	assertOutcome(t, notifyPostProcess(t, st, created2.Task.ID),
+	shrunkTaskID := syncUnitTask(t, st, "hk_stock")
+	shrunk := directoryUnitResult("hk_stock", "hk_all", []map[string]any{
+		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+			"name": "腾讯控股", "currency": "HKD", "source_name": "ak_hk", "source_as_of": ""},
+	})
+	markPreComplete(t, st.db, shrunkTaskID, uploadResult(t, st, shrunk))
+	assertOutcome(t, notifyPostProcess(t, st, shrunkTaskID),
 		"permanent_error", "directory_data_incomplete")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 3 {
-		t.Fatalf("failed sync mutated the directory: active HK assets = %d", n)
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_stock' AND active=1`); n != 2 {
+		t.Fatalf("failed sync mutated the directory: active hk_stock assets = %d", n)
 	}
-	finishTask(t, st.db, created2.Task.ID, "failed")
+	finishTask(t, st.db, shrunkTaskID, "failed")
 
 	// Listing-source migration: the same category served by a brand-new
 	// source compares against zero previous rows (first-sync semantics), so
 	// a smaller snapshot still commits instead of tripping the 90% gate.
-	created3, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: "hk_all"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrated := map[string]any{
-		"type": "asset_directory_sync", "scope": "hk_all",
-		"assets": []map[string]any{
-			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
-				"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
-				"source_name": "em.hk_equity_list", "source_as_of": ""},
-			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
-				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
-				"source_name": "em.hk_fund_list", "source_as_of": ""},
-		},
-	}
-	raw3, _ := json.Marshal(migrated)
-	env3 := uploadResult(t, st, raw3)
-	markPreComplete(t, st.db, created3.Task.ID, env3)
-	assertOutcome(t, notifyPostProcess(t, st, created3.Task.ID), "success", "")
+	migratedTaskID := syncUnitTask(t, st, "hk_stock")
+	migrated := directoryUnitResult("hk_stock", "hk_all", []map[string]any{
+		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
+			"source_name": "em.hk_equity_list", "source_as_of": ""},
+	})
+	markPreComplete(t, st.db, migratedTaskID, uploadResult(t, st, migrated))
+	assertOutcome(t, notifyPostProcess(t, st, migratedTaskID), "success", "")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_assets WHERE market='HK' AND active=1`); n != 2 {
-		t.Fatalf("migrated sync active HK assets = %d, want 2", n)
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='hk_stock' AND active=1`); n != 1 {
+		t.Fatalf("migrated sync active hk_stock assets = %d, want 1", n)
 	}
 	if n := countRows(t, st.db,
 		`SELECT COUNT(*) FROM market_assets WHERE symbol='00005' AND active=0`); n != 1 {
 		t.Fatal("asset absent from the migrated listing was not marked inactive")
 	}
+}
+
+// TestInternalPostProcess_DirectoryUnitIsolation covers the 090 split: one
+// unit's success only touches its own version key, sync state and
+// market+instrument_type rows; sibling units of the same scope are untouched
+// and a failed sibling does not block the successful unit.
+func TestInternalPostProcess_DirectoryUnitIsolation(t *testing.T) {
+	st := newInternalStack(t)
+
+	// Existing assets in two sibling CN units.
+	seen := time.Now().Add(-24 * time.Hour).UnixMilli()
+	for _, row := range []struct{ key, itype, symbol string }{
+		{"CN|cn_exchange_stock|sh|600000", "cn_exchange_stock", "600000"},
+		{"CN|cn_mutual_fund||000001", "cn_mutual_fund", "000001"},
+	} {
+		if _, err := st.db.Exec(`
+			INSERT INTO market_assets (
+				asset_key, market, instrument_type, region_code, symbol, name, exchange,
+				instrument_kind, currency, active, listing_status, last_seen_at,
+				source_name, source_as_of, refreshed_at, created_at, updated_at
+			) VALUES (?,'CN',?,'',?,?,'','','CNY',1,'active',?,'ak_cn','',?,?,?)`,
+			row.key, row.itype, row.symbol, row.symbol, seen, seen, seen, seen); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fundTaskID := syncUnitTask(t, st, "cn_exchange_fund")
+	fund := directoryUnitResult("cn_exchange_fund", "cn_all", []map[string]any{
+		{"market": "CN", "instrument_type": "cn_exchange_fund", "region_code": "sh",
+			"symbol": "510300", "name": "沪深300ETF", "exchange": "SH",
+			"instrument_kind": "etf", "currency": "CNY",
+			"source_name": "em.cn_etf_list", "source_as_of": "2026-07-05"},
+	})
+	markPreComplete(t, st.db, fundTaskID, uploadResult(t, st, fund))
+	assertOutcome(t, notifyPostProcess(t, st, fundTaskID), "success", "")
+
+	// Sibling units' assets keep active=1: MarkUnseenInactive is unit-scoped.
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='cn_exchange_stock' AND active=1`); n != 1 {
+		t.Fatal("cn_exchange_stock rows were touched by a cn_exchange_fund sync")
+	}
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE instrument_type='cn_mutual_fund' AND active=1`); n != 1 {
+		t.Fatal("cn_mutual_fund rows were touched by a cn_exchange_fund sync")
+	}
+	// Only the unit's version key exists.
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_data_versions WHERE version_key='asset_directory|cn_exchange_fund'`); n != 1 {
+		t.Fatal("cn_exchange_fund version key missing")
+	}
+	if n := countRows(t, st.db, `
+		SELECT COUNT(*) FROM market_data_versions
+		WHERE version_key IN ('asset_directory|cn_all','asset_directory|cn_exchange_stock')`); n != 0 {
+		t.Fatal("sibling/scope version keys must not be written")
+	}
+	// Only the unit's sync state row exists.
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_asset_sync_state WHERE sync_key='cn_exchange_fund' AND scope='cn_all'`); n != 1 {
+		t.Fatal("cn_exchange_fund sync state row missing")
+	}
+	finishTask(t, st.db, fundTaskID, "complete")
+
+	// A failed sibling unit does not roll back the committed unit.
+	stockTaskID := syncUnitTask(t, st, "cn_exchange_stock")
+	empty := directoryUnitResult("cn_exchange_stock", "cn_all", []map[string]any{})
+	markPreComplete(t, st.db, stockTaskID, uploadResult(t, st, empty))
+	assertOutcome(t, notifyPostProcess(t, st, stockTaskID),
+		"permanent_error", "directory_data_incomplete")
+	finishTask(t, st.db, stockTaskID, "failed")
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_assets WHERE symbol='510300' AND active=1`); n != 1 {
+		t.Fatal("failed sibling rolled back the committed unit")
+	}
+
+	// sync_key mismatch between result and payload is a permanent error.
+	mismatchTaskID := syncUnitTask(t, st, "cn_mutual_fund")
+	mismatch := directoryUnitResult("cn_exchange_fund", "cn_all", []map[string]any{
+		{"market": "CN", "instrument_type": "cn_mutual_fund", "symbol": "000001",
+			"name": "华夏成长", "currency": "CNY",
+			"source_name": "ak.fund_name_em", "source_as_of": ""},
+	})
+	markPreComplete(t, st.db, mismatchTaskID, uploadResult(t, st, mismatch))
+	assertOutcome(t, notifyPostProcess(t, st, mismatchTaskID),
+		"permanent_error", "result_task_mismatch")
 }
 
 func historySyncResult(assetKey, source string, dates []string, values []float64) []byte {
@@ -567,32 +655,30 @@ func TestInternalPostProcess_ETFSearchableViaPublicAPI(t *testing.T) {
 	t.Cleanup(pub.Close)
 	client := pub.Client()
 
-	runDirectory := func(scope string, assets []map[string]any) {
-		created, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: scope})
-		if err != nil {
-			t.Fatalf("create %s sync: %v", scope, err)
-		}
-		raw, _ := json.Marshal(map[string]any{
-			"type": "asset_directory_sync", "scope": scope, "assets": assets,
-		})
-		env := uploadResult(t, st, raw)
-		markPreComplete(t, st.db, created.Task.ID, env)
-		assertOutcome(t, notifyPostProcess(t, st, created.Task.ID), "success", "")
-		finishTask(t, st.db, created.Task.ID, "complete")
+	runDirectory := func(syncKey, scope string, assets []map[string]any) {
+		taskID := syncUnitTask(t, st, syncKey)
+		raw := directoryUnitResult(syncKey, scope, assets)
+		markPreComplete(t, st.db, taskID, uploadResult(t, st, raw))
+		assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
+		finishTask(t, st.db, taskID, "complete")
 	}
 
-	runDirectory("hk_all", []map[string]any{
+	runDirectory("hk_stock", "hk_all", []map[string]any{
 		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
 			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
 			"source_name": "em.hk_equity_list", "source_as_of": "2026-07-05"},
+	})
+	runDirectory("hk_etf", "hk_all", []map[string]any{
 		{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
 			"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
 			"source_name": "em.hk_fund_list", "source_as_of": "2026-07-05"},
 	})
-	runDirectory("us_all", []map[string]any{
+	runDirectory("us_stock", "us_all", []map[string]any{
 		{"market": "US", "instrument_type": "us_stock", "symbol": "AAPL",
 			"name": "苹果", "instrument_kind": "stock", "currency": "USD",
 			"source_name": "em.us_equity_list", "source_as_of": "2026-07-05"},
+	})
+	runDirectory("us_etf", "us_all", []map[string]any{
 		{"market": "US", "instrument_type": "us_etf", "symbol": "SPY",
 			"name": "标普500ETF-SPDR", "instrument_kind": "etf", "currency": "USD",
 			"source_name": "em.us_etf_list", "source_as_of": "2026-07-05"},
@@ -625,25 +711,21 @@ func TestInternalPostProcess_ETFSearchableViaPublicAPI(t *testing.T) {
 
 func TestInternalPostProcess_ErrorClassification(t *testing.T) {
 	st := newInternalStack(t)
-	ctx := context.Background()
 
 	// Unknown task.
 	assertOutcome(t, notifyPostProcess(t, st, "wt_missing"), "permanent_error", "task_not_found")
 
 	// Task not yet pre_complete.
-	created, err := st.assets.SyncDirectory(ctx, service.DirectorySyncRequest{Scope: "us_all"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertOutcome(t, notifyPostProcess(t, st, created.Task.ID),
+	taskID := syncUnitTask(t, st, "us_stock")
+	assertOutcome(t, notifyPostProcess(t, st, taskID),
 		"permanent_error", "task_status_invalid")
 
 	// pre_complete without result_data.
 	if _, err := st.db.Exec(
-		`UPDATE worker_tasks SET status='pre_complete' WHERE id=?`, created.Task.ID); err != nil {
+		`UPDATE worker_tasks SET status='pre_complete' WHERE id=?`, taskID); err != nil {
 		t.Fatal(err)
 	}
-	assertOutcome(t, notifyPostProcess(t, st, created.Task.ID),
+	assertOutcome(t, notifyPostProcess(t, st, taskID),
 		"permanent_error", "invalid_result_data")
 
 	// Envelope referencing a missing (e.g. expired) resource.
@@ -654,7 +736,7 @@ func TestInternalPostProcess_ErrorClassification(t *testing.T) {
 		SHA256:        "0000000000000000000000000000000000000000000000000000000000000000",
 		SizeBytes:     1,
 	}
-	markPreComplete(t, st.db, created.Task.ID, ghost)
-	assertOutcome(t, notifyPostProcess(t, st, created.Task.ID),
+	markPreComplete(t, st.db, taskID, ghost)
+	assertOutcome(t, notifyPostProcess(t, st, taskID),
 		"permanent_error", "resource_not_found")
 }

@@ -8,19 +8,25 @@ import {
   listMarketAssets,
   syncFXRates,
   syncMarketAssets,
+  type DirectoryScopeStatus,
+  type DirectoryScopeSyncView,
   type DirectorySyncScope,
+  type DirectorySyncUnitView,
   type MarketAssetSyncView,
   type WorkerTask,
 } from "@/lib/api/market-assets";
+import { ApiError } from "@/lib/api/client";
 import { dataSourceLabel, formatDateTimeFromMs, instrumentTypeLabel } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { SplitButton } from "@/components/ui/SplitButton";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { TaskErrorInline } from "@/components/ui/TaskErrorInline";
 import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
@@ -28,10 +34,20 @@ import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
 const PAGE_SIZE = 50;
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
-const SCOPE_LABELS: Record<string, string> = {
-  cn_all: "A 股 / 场内基金",
-  hk_all: "港股 / 港股 ETF",
-  us_all: "美股 / 美股 ETF",
+const SCOPE_STATUS_LABELS: Record<DirectoryScopeStatus, string> = {
+  running: "同步中",
+  complete: "已同步",
+  partial: "部分未同步",
+  failed: "同步失败",
+  never: "从未同步",
+};
+
+const SCOPE_STATUS_VARIANTS: Record<DirectoryScopeStatus, BadgeVariant> = {
+  running: "info",
+  complete: "positive",
+  partial: "warning",
+  failed: "danger",
+  never: "neutral",
 };
 
 const MARKET_FILTERS: { value: string; label: string }[] = [
@@ -60,25 +76,22 @@ function marketAssetDetailHref(assetKey: string): string {
   return `/assets/market/${encodeURIComponent(assetKey)}`;
 }
 
-/** One sync scope row: status badge, last success time, sync button, error. */
-function DirectorySyncRow({
-  view,
+/**
+ * One directory sync unit row: polls its latest active task and reports
+ * terminal transitions so the parent can refetch the scope aggregation.
+ */
+function DirectoryUnitRow({
+  unit,
   onChanged,
 }: {
-  view: MarketAssetSyncView;
+  unit: DirectorySyncUnitView;
   onChanged: () => void;
 }) {
-  const serverTask = view.task ?? null;
-  const [manualTaskId, setManualTaskId] = useState<string | null>(null);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const serverTask = unit.task ?? null;
+  const activeTaskId = serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
 
-  // Prefer an active task from the server snapshot (authoritative after
-  // refetch), otherwise the task we just created locally.
-  const serverActiveId = serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
-  const trackedTaskId = serverActiveId ?? manualTaskId;
-
-  const { task: polledTask, pollError } = useWorkerTaskPolling(trackedTaskId, {
-    initialTask: serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
+  const { task: polledTask, pollError } = useWorkerTaskPolling(activeTaskId, {
+    initialTask: serverTask && serverTask.id === activeTaskId ? serverTask : undefined,
     onComplete: onChanged,
     onFailed: onChanged,
   });
@@ -88,13 +101,11 @@ function DirectorySyncRow({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2"
-      data-testid={`directory-sync-${view.scope}`}
+      className="flex flex-wrap items-center gap-x-4 gap-y-1 py-1.5 pl-6"
+      data-testid={`directory-sync-unit-${unit.sync_key}`}
     >
-      <span className="w-32 shrink-0 text-sm font-medium text-ink">
-        {SCOPE_LABELS[view.scope] ?? view.scope}
-      </span>
-      <span className="flex items-center gap-2 text-xs text-ink-muted">
+      <span className="w-40 shrink-0 text-xs text-ink">{unit.label}</span>
+      <span className="flex min-w-0 items-center gap-2 text-xs text-ink-muted">
         {task ? (
           <TaskStatusBadge status={task.status} labels={DIRECTORY_TASK_LABELS} />
         ) : (
@@ -106,29 +117,96 @@ function DirectorySyncRow({
         )}
         {pollError && <span className="text-danger">任务状态查询失败：{pollError}</span>}
       </span>
-      <span className="text-xs text-ink-muted">
+      <span className="ml-auto text-xs text-ink-muted">
         最近成功：
         <span className="font-mono-numeric text-ink">
-          {formatDateTimeFromMs(view.last_success_at)}
+          {formatDateTimeFromMs(unit.last_success_at)}
         </span>
       </span>
-      <span className="ml-auto flex items-center gap-2">
-        {createError && <span className="text-xs text-danger">{createError}</span>}
-        <RefreshTaskButton
-          variant="secondary"
-          className="min-h-8 px-3 py-1 text-xs"
-          data-testid={`sync-button-${view.scope}`}
-          createTask={() => {
-            setCreateError(null);
-            return syncMarketAssets({ scope: view.scope as DirectorySyncScope });
-          }}
-          onTask={(t: WorkerTask) => setManualTaskId(t.id)}
-          onError={setCreateError}
-          activeTask={task}
-        >
-          同步资产列表
-        </RefreshTaskButton>
-      </span>
+    </div>
+  );
+}
+
+/**
+ * One directory scope block: aggregated status computed by the backend, a
+ * split button (sync all units / sync one unit) and the per-unit rows.
+ */
+function DirectoryScopeRow({
+  view,
+  onChanged,
+}: {
+  view: DirectoryScopeSyncView;
+  onChanged: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const submit = async (body: Parameters<typeof syncMarketAssets>[0]) => {
+    if (submitting) return;
+    setSubmitting(true);
+    setCreateError(null);
+    try {
+      await syncMarketAssets(body);
+      // The backend recomputes the aggregation; refetch instead of guessing.
+      onChanged();
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? err.message : err instanceof Error ? err.message : "创建任务失败";
+      setCreateError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const anySuccess = view.units.some((u) => u.last_success_at);
+  const lastFullSuccess = view.last_success_at
+    ? formatDateTimeFromMs(view.last_success_at)
+    : anySuccess
+      ? "部分未同步"
+      : "—";
+
+  return (
+    <div className="py-2" data-testid={`directory-sync-${view.scope}`}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="w-32 shrink-0 text-sm font-medium text-ink">{view.label}</span>
+        <span className="flex items-center gap-2 text-xs text-ink-muted">
+          <Badge variant={SCOPE_STATUS_VARIANTS[view.status] ?? "neutral"}>
+            <span data-testid={`scope-status-${view.scope}`} data-status={view.status}>
+              {SCOPE_STATUS_LABELS[view.status] ?? view.status}
+            </span>
+          </Badge>
+          {view.status === "running" && <LoadingState label="同步进行中…" className="text-xs" />}
+        </span>
+        <span className="text-xs text-ink-muted">
+          最近全量成功：
+          <span className="font-mono-numeric text-ink">{lastFullSuccess}</span>
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          {createError && <span className="text-xs text-danger">{createError}</span>}
+          <SplitButton
+            data-testid={`sync-button-${view.scope}`}
+            pending={submitting}
+            onMain={() => void submit({ scope: view.scope as DirectorySyncScope })}
+            items={view.units.map((unit) => {
+              const active = isTaskActive(unit.task?.status);
+              return {
+                key: unit.sync_key,
+                label: `同步 ${unit.label}`,
+                disabled: active,
+                note: active ? "同步中" : undefined,
+              };
+            })}
+            onItem={(syncKey) => void submit({ sync_key: syncKey })}
+          >
+            同步全部
+          </SplitButton>
+        </span>
+      </div>
+      <div className="mt-1 divide-y divide-line/60">
+        {view.units.map((unit) => (
+          <DirectoryUnitRow key={unit.sync_key} unit={unit} onChanged={onChanged} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -253,7 +331,7 @@ export default function MarketAssetsPage() {
   const syncs = useMemo(() => data?.syncs ?? [], [data]);
   const assets = data?.assets ?? [];
   const total = data?.total ?? 0;
-  const everSynced = syncs.some((s) => s.last_success_at);
+  const everSynced = syncs.some((s) => s.units.some((u) => u.last_success_at));
   const fetchedAt = data?.fetchedAt ?? 0;
   const staleScopes = syncs.filter(
     (s) => s.last_success_at && fetchedAt - s.last_success_at > STALE_AFTER_MS,
@@ -263,17 +341,12 @@ export default function MarketAssetsPage() {
     void qc.invalidateQueries({ queryKey: ["market-assets"] });
   };
 
-  // Panel default: collapsed only when every directory scope has a success
-  // record with no failure and no active task; otherwise expanded.
+  // Panel default: collapsed only when every directory scope is complete;
+  // any never/partial/failed/running scope keeps it expanded.
   const panelAutoOpen = useMemo(() => {
     if (!data) return true;
     if (!syncs.length) return true;
-    return syncs.some(
-      (s) =>
-        !s.last_success_at ||
-        s.task?.status === "failed" ||
-        isTaskActive(s.task?.status),
-    );
+    return syncs.some((s) => s.status !== "complete");
   }, [data, syncs]);
   const panelOpen = panelOpenOverride ?? panelAutoOpen;
 
@@ -316,7 +389,7 @@ export default function MarketAssetsPage() {
       {panelOpen && (
         <div className="divide-y divide-line border-t border-line px-4 py-1">
           {syncs.map((view) => (
-            <DirectorySyncRow key={view.scope} view={view} onChanged={invalidateDirectory} />
+            <DirectoryScopeRow key={view.scope} view={view} onChanged={invalidateDirectory} />
           ))}
           <FXSyncRow view={data?.fx_sync} onChanged={invalidateDirectory} />
         </div>
@@ -439,7 +512,7 @@ export default function MarketAssetsPage() {
           data-testid="directory-stale-banner"
           className="mb-4 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning"
         >
-          {staleScopes.map((s) => SCOPE_LABELS[s.scope] ?? s.scope).join("、")}
+          {staleScopes.map((s) => s.label || s.scope).join("、")}
           目录已超过 7 天未同步，搜索结果基于旧数据，建议重新同步资产列表。
         </div>
       )}

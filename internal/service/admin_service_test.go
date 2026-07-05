@@ -114,11 +114,19 @@ func TestAdminOverview_Aggregation(t *testing.T) {
 		}
 	}
 
-	// Sync state + versions + history dimensions.
+	// Sync state + versions + history dimensions. Rows live at the unit
+	// (sync_key) granularity: every CN unit succeeded recently, one US unit
+	// succeeded 8 days ago, HK never synced.
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO market_asset_sync_state (scope, last_task_id, last_success_task_id, last_success_at, updated_at)
-		VALUES ('cn_all', 't_done', 't_done', ?, ?), ('us_all', '', 't_old', ?, ?)`,
-		now-3600_000, now, now-8*24*3600_000, now); err != nil {
+		INSERT INTO market_asset_sync_state
+			(sync_key, scope, last_task_id, last_success_task_id, last_success_at, updated_at)
+		VALUES
+			('cn_exchange_stock', 'cn_all', 't_done', 't_done', ?, ?),
+			('cn_exchange_fund', 'cn_all', 't_done', 't_done', ?, ?),
+			('cn_mutual_fund', 'cn_all', 't_done', 't_done', ?, ?),
+			('us_stock', 'us_all', '', 't_old', ?, ?)`,
+		now-3600_000, now, now-3600_000, now, now-3600_000, now,
+		now-8*24*3600_000, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
@@ -162,13 +170,27 @@ func TestAdminOverview_Aggregation(t *testing.T) {
 	for _, s := range out.SyncHealth.DirectoryScopes {
 		byScope[s.Scope] = s
 	}
-	if byScope["cn_all"].Stale || byScope["cn_all"].LastSuccessAt == nil {
+	if byScope["cn_all"].Stale || byScope["cn_all"].LastSuccessAt == nil ||
+		byScope["cn_all"].Status != DirectoryScopeStatusComplete {
 		t.Fatalf("cn_all=%+v", byScope["cn_all"])
 	}
-	if !byScope["us_all"].Stale {
-		t.Fatalf("us_all should be stale: %+v", byScope["us_all"])
+	if len(byScope["cn_all"].Units) != 3 {
+		t.Fatalf("cn_all units=%+v", byScope["cn_all"].Units)
 	}
-	if byScope["hk_all"].Stale || byScope["hk_all"].LastSuccessAt != nil {
+	// us_etf never succeeded: the scope is partial and the stale us_stock
+	// unit marks the scope stale.
+	if !byScope["us_all"].Stale || byScope["us_all"].Status != DirectoryScopeStatusPartial {
+		t.Fatalf("us_all should be stale partial: %+v", byScope["us_all"])
+	}
+	usUnits := map[string]AdminDirectoryUnitHealth{}
+	for _, u := range byScope["us_all"].Units {
+		usUnits[u.SyncKey] = u
+	}
+	if !usUnits["us_stock"].Stale || usUnits["us_etf"].Stale {
+		t.Fatalf("us_all unit staleness=%+v", usUnits)
+	}
+	if byScope["hk_all"].Stale || byScope["hk_all"].LastSuccessAt != nil ||
+		byScope["hk_all"].Status != DirectoryScopeStatusNever {
 		t.Fatalf("hk_all never synced should not be stale: %+v", byScope["hk_all"])
 	}
 
@@ -198,8 +220,8 @@ func TestAdminOverview_ActiveDirectoryTaskStatus(t *testing.T) {
 		Status: "running", CreatedAt: now, StartedAt: ptr(now), HeartbeatAt: ptr(now),
 	})
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO market_asset_sync_state (scope, last_task_id, updated_at)
-		VALUES ('cn_all', 't_dir', ?)`, now); err != nil {
+		INSERT INTO market_asset_sync_state (sync_key, scope, last_task_id, updated_at)
+		VALUES ('cn_exchange_stock', 'cn_all', 't_dir', ?)`, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,8 +230,18 @@ func TestAdminOverview_ActiveDirectoryTaskStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range out.SyncHealth.DirectoryScopes {
-		if s.Scope == "cn_all" && s.ActiveTaskStatus != "running" {
-			t.Fatalf("cn_all active status=%q", s.ActiveTaskStatus)
+		if s.Scope == "cn_all" {
+			if s.ActiveTaskStatus != "running" || s.Status != DirectoryScopeStatusRunning {
+				t.Fatalf("cn_all=%+v", s)
+			}
+			for _, u := range s.Units {
+				if u.SyncKey == "cn_exchange_stock" && u.ActiveTaskStatus != "running" {
+					t.Fatalf("cn_exchange_stock unit=%+v", u)
+				}
+				if u.SyncKey != "cn_exchange_stock" && u.ActiveTaskStatus != "" {
+					t.Fatalf("idle unit exposes active status: %+v", u)
+				}
+			}
 		}
 		if s.Scope == "hk_all" && s.ActiveTaskStatus != "" {
 			t.Fatalf("hk_all active status=%q", s.ActiveTaskStatus)

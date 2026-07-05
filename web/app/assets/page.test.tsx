@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MarketAsset, MarketAssetSyncView } from "@/lib/api/market-assets";
+import type {
+  DirectoryScopeSyncView,
+  DirectorySyncUnitView,
+  MarketAsset,
+} from "@/lib/api/market-assets";
 import { formatDateTimeFromMs } from "@/lib/format";
 import MarketAssetsPage from "./page";
 
@@ -44,14 +48,83 @@ function makeAsset(overrides: Partial<MarketAsset> = {}): MarketAsset {
   };
 }
 
-function makeSyncs(overrides: Partial<MarketAssetSyncView>[] = []): MarketAssetSyncView[] {
-  const base: MarketAssetSyncView[] = [
-    { scope: "cn_all", last_success_at: Date.now() - 60_000, last_success_task_id: "wt_cn" },
-    { scope: "hk_all", last_success_at: null, last_success_task_id: "" },
-    { scope: "us_all", last_success_at: null, last_success_task_id: "" },
+const SCOPE_UNITS: Record<string, [string, string][]> = {
+  cn_all: [
+    ["cn_exchange_stock", "A 股股票"],
+    ["cn_exchange_fund", "场内基金（ETF/LOF）"],
+    ["cn_mutual_fund", "场外基金"],
+  ],
+  hk_all: [
+    ["hk_stock", "港股股票"],
+    ["hk_etf", "港股 ETF"],
+  ],
+  us_all: [
+    ["us_stock", "美股股票"],
+    ["us_etf", "美股 ETF"],
+  ],
+};
+
+const SCOPE_TITLES: Record<string, string> = {
+  cn_all: "中国市场目录",
+  hk_all: "港股市场目录",
+  us_all: "美股市场目录",
+};
+
+function makeScope(
+  scope: string,
+  overrides: Partial<DirectoryScopeSyncView> = {},
+  unitOverrides: Record<string, Partial<DirectorySyncUnitView>> = {},
+): DirectoryScopeSyncView {
+  const units: DirectorySyncUnitView[] = SCOPE_UNITS[scope].map(([syncKey, label]) => ({
+    sync_key: syncKey,
+    label,
+    last_success_at: null,
+    last_success_task_id: "",
+    ...unitOverrides[syncKey],
+  }));
+  return {
+    scope,
+    label: SCOPE_TITLES[scope],
+    status: "never",
+    last_success_at: null,
+    units,
+    ...overrides,
+  };
+}
+
+/** cn_all fully synced a minute ago; hk_all/us_all never synced. */
+function makeSyncs(): DirectoryScopeSyncView[] {
+  const successAt = Date.now() - 60_000;
+  return [
+    makeScope(
+      "cn_all",
+      { status: "complete", last_success_at: successAt },
+      {
+        cn_exchange_stock: { last_success_at: successAt, last_success_task_id: "wt_cn" },
+        cn_exchange_fund: { last_success_at: successAt, last_success_task_id: "wt_cn" },
+        cn_mutual_fund: { last_success_at: successAt, last_success_task_id: "wt_cn" },
+      },
+    ),
+    makeScope("hk_all"),
+    makeScope("us_all"),
   ];
-  overrides.forEach((patch, i) => Object.assign(base[i], patch));
-  return base;
+}
+
+/** Every scope complete. */
+function makeCompleteSyncs(): DirectoryScopeSyncView[] {
+  const successAt = Date.now() - 60_000;
+  return ["cn_all", "hk_all", "us_all"].map((scope) =>
+    makeScope(
+      scope,
+      { status: "complete", last_success_at: successAt },
+      Object.fromEntries(
+        SCOPE_UNITS[scope].map(([syncKey]) => [
+          syncKey,
+          { last_success_at: successAt, last_success_task_id: `wt_${syncKey}` },
+        ]),
+      ),
+    ),
+  );
 }
 
 function renderPage() {
@@ -84,9 +157,13 @@ describe("MarketAssetsPage", () => {
     expect(screen.getByRole("heading", { name: "资产目录" })).toBeInTheDocument();
 
     const panel = screen.getByTestId("directory-sync-panel");
-    expect(within(panel).getByText("A 股 / 场内基金")).toBeInTheDocument();
-    expect(within(panel).getByText("港股 / 港股 ETF")).toBeInTheDocument();
-    expect(within(panel).getByText("美股 / 美股 ETF")).toBeInTheDocument();
+    expect(within(panel).getByText("中国市场目录")).toBeInTheDocument();
+    expect(within(panel).getByText("港股市场目录")).toBeInTheDocument();
+    expect(within(panel).getByText("美股市场目录")).toBeInTheDocument();
+    // Unit rows render under each scope.
+    expect(within(panel).getByTestId("directory-sync-unit-cn_exchange_stock")).toBeInTheDocument();
+    expect(within(panel).getByTestId("directory-sync-unit-cn_mutual_fund")).toBeInTheDocument();
+    expect(within(panel).getByTestId("directory-sync-unit-hk_etf")).toBeInTheDocument();
 
     const row = screen.getByTestId("market-asset-row");
     expect(within(row).getByRole("link", { name: "510300" })).toHaveAttribute(
@@ -105,14 +182,10 @@ describe("MarketAssetsPage", () => {
     expect(screen.queryByRole("link", { name: "录入资产" })).not.toBeInTheDocument();
   });
 
-  it("collapses the sync panel by default when every scope has synced", async () => {
+  it("collapses the sync panel by default when every scope is complete", async () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset()],
-      syncs: [
-        { scope: "cn_all", last_success_at: Date.now(), last_success_task_id: "wt_cn" },
-        { scope: "hk_all", last_success_at: Date.now(), last_success_task_id: "wt_hk" },
-        { scope: "us_all", last_success_at: Date.now(), last_success_task_id: "wt_us" },
-      ],
+      syncs: makeCompleteSyncs(),
       fx_sync: { scope: "fx_rates", last_success_at: null, last_success_task_id: "" },
       total: 1,
     });
@@ -126,16 +199,42 @@ describe("MarketAssetsPage", () => {
     expect(screen.getByTestId("directory-sync-cn_all")).toBeInTheDocument();
   });
 
-  it("expands the sync panel by default when a scope has never synced", async () => {
+  it("expands the sync panel by default when a scope is not complete", async () => {
     renderPage();
     await screen.findByTestId("market-assets-table");
     expect(screen.getByTestId("directory-sync-hk_all")).toBeInTheDocument();
   });
 
+  it("expands the sync panel when a scope is partial even with a success record", async () => {
+    const successAt = Date.now() - 60_000;
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: [
+        makeScope(
+          "cn_all",
+          { status: "partial" },
+          { cn_exchange_stock: { last_success_at: successAt } },
+        ),
+        ...makeCompleteSyncs().slice(1),
+      ],
+      fx_sync: { scope: "fx_rates", last_success_at: null, last_success_task_id: "" },
+      total: 1,
+    });
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+    const row = screen.getByTestId("directory-sync-cn_all");
+    expect(within(row).getByTestId("scope-status-cn_all")).toHaveAttribute(
+      "data-status",
+      "partial",
+    );
+    // Aggregate success time absent: the row explains partial sync.
+    expect(within(row).getByText("部分未同步", { selector: ".font-mono-numeric" })).toBeInTheDocument();
+  });
+
   it("shows the never-synced empty state before the first directory sync", async () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [],
-      syncs: makeSyncs([{ last_success_at: null, last_success_task_id: "" }]),
+      syncs: [makeScope("cn_all"), makeScope("hk_all"), makeScope("us_all")],
       total: 0,
     });
     renderPage();
@@ -224,84 +323,186 @@ describe("MarketAssetsPage", () => {
   });
 
   it("shows a stale banner when a scope has not synced for over 7 days", async () => {
+    const staleAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset()],
-      syncs: makeSyncs([
-        { last_success_at: Date.now() - 8 * 24 * 60 * 60 * 1000, last_success_task_id: "wt_cn" },
-      ]),
+      syncs: [
+        makeScope(
+          "cn_all",
+          { status: "complete", last_success_at: staleAt },
+          {
+            cn_exchange_stock: { last_success_at: staleAt },
+            cn_exchange_fund: { last_success_at: staleAt },
+            cn_mutual_fund: { last_success_at: staleAt },
+          },
+        ),
+        makeScope("hk_all"),
+        makeScope("us_all"),
+      ],
       total: 1,
     });
     renderPage();
     const banner = await screen.findByTestId("directory-stale-banner");
-    expect(banner).toHaveTextContent("A 股 / 场内基金");
+    expect(banner).toHaveTextContent("中国市场目录");
     expect(banner).toHaveTextContent("超过 7 天未同步");
   });
 
-  it("creates a directory sync task from the scope row", async () => {
+  it("creates unit tasks for the whole scope from the split button main action", async () => {
     syncMarketAssetsMock.mockResolvedValue({
-      task: { id: "wt_new", type: "asset_directory_sync", status: "pending", created_at: 0 },
-      existed: false,
+      scope: "hk_all",
+      tasks: [
+        {
+          sync_key: "hk_stock",
+          scope: "hk_all",
+          task: { id: "wt_hk1", type: "asset_directory_sync", status: "pending", created_at: 0 },
+          existed: false,
+        },
+        {
+          sync_key: "hk_etf",
+          scope: "hk_all",
+          task: { id: "wt_hk2", type: "asset_directory_sync", status: "pending", created_at: 0 },
+          existed: false,
+        },
+      ],
     });
     renderPage();
     await screen.findByTestId("market-assets-table");
 
-    fireEvent.click(screen.getByTestId("sync-button-hk_all"));
+    fireEvent.click(screen.getByTestId("sync-button-hk_all-main"));
     await waitFor(() =>
       expect(syncMarketAssetsMock).toHaveBeenCalledWith({ scope: "hk_all" }),
     );
+    // Scope aggregation comes from the backend: the list query is refetched.
+    await waitFor(() => expect(listMarketAssetsMock.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it("disables the sync button and shows progress while a task is active", async () => {
+  it("creates a single unit task from the split button dropdown", async () => {
+    syncMarketAssetsMock.mockResolvedValue({
+      scope: "hk_all",
+      tasks: [
+        {
+          sync_key: "hk_etf",
+          scope: "hk_all",
+          task: { id: "wt_hk2", type: "asset_directory_sync", status: "pending", created_at: 0 },
+          existed: false,
+        },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+
+    fireEvent.click(screen.getByTestId("sync-button-hk_all-toggle"));
+    fireEvent.click(screen.getByTestId("sync-button-hk_all-item-hk_etf"));
+    await waitFor(() =>
+      expect(syncMarketAssetsMock).toHaveBeenCalledWith({ sync_key: "hk_etf" }),
+    );
+    // Menu closes after selecting.
+    expect(screen.queryByTestId("sync-button-hk_all-menu")).not.toBeInTheDocument();
+  });
+
+  it("disables only the running unit in the dropdown and keeps the main button clickable", async () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset()],
-      syncs: makeSyncs([
-        {
-          task: {
-            id: "wt_running",
-            type: "asset_directory_sync",
-            status: "running",
-            created_at: 0,
+      syncs: [
+        makeScope(
+          "cn_all",
+          { status: "running" },
+          {
+            cn_exchange_stock: {
+              task: {
+                id: "wt_running",
+                type: "asset_directory_sync",
+                status: "running",
+                created_at: 0,
+              },
+            },
           },
-        },
-      ]),
+        ),
+        makeScope("hk_all"),
+        makeScope("us_all"),
+      ],
       total: 1,
     });
     renderPage();
     const row = await screen.findByTestId("directory-sync-cn_all");
-    expect(within(row).getByTestId("sync-button-cn_all")).toBeDisabled();
-    expect(within(row).getByText("同步进行中…")).toBeInTheDocument();
-    expect(within(row).getByTestId("task-status-badge")).toHaveAttribute(
+    expect(within(row).getByTestId("scope-status-cn_all")).toHaveAttribute(
       "data-status",
       "running",
     );
+    // Backend dedupe makes "sync all" safe while one unit is running.
+    expect(within(row).getByTestId("sync-button-cn_all-main")).toBeEnabled();
+
+    fireEvent.click(within(row).getByTestId("sync-button-cn_all-toggle"));
+    expect(within(row).getByTestId("sync-button-cn_all-item-cn_exchange_stock")).toBeDisabled();
+    expect(within(row).getByTestId("sync-button-cn_all-item-cn_mutual_fund")).toBeEnabled();
+
+    const unitRow = within(row).getByTestId("directory-sync-unit-cn_exchange_stock");
+    expect(within(unitRow).getByTestId("task-status-badge")).toHaveAttribute(
+      "data-status",
+      "running",
+    );
+    expect(within(unitRow).getByText("同步进行中…")).toBeInTheDocument();
   });
 
-  it("surfaces the error code when the latest sync task failed", async () => {
+  it("surfaces the error code when a unit's latest sync task failed", async () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset()],
-      syncs: makeSyncs([
-        {
-          task: {
-            id: "wt_failed",
-            type: "asset_directory_sync",
-            status: "failed",
-            error_code: "directory_data_incomplete",
-            error_message: "category CN/cn_mutual_fund returned no assets",
-            created_at: 0,
+      syncs: [
+        makeScope(
+          "cn_all",
+          { status: "failed" },
+          {
+            cn_mutual_fund: {
+              task: {
+                id: "wt_failed",
+                type: "asset_directory_sync",
+                status: "failed",
+                error_code: "directory_data_incomplete",
+                error_message: "category CN/cn_mutual_fund returned no assets",
+                created_at: 0,
+              },
+            },
           },
-        },
-      ]),
+        ),
+        makeScope("hk_all"),
+        makeScope("us_all"),
+      ],
       total: 1,
     });
     renderPage();
     const row = await screen.findByTestId("directory-sync-cn_all");
-    expect(within(row).getByTestId("task-status-badge")).toHaveAttribute(
+    expect(within(row).getByTestId("scope-status-cn_all")).toHaveAttribute(
       "data-status",
       "failed",
     );
-    expect(within(row).getByTestId("task-error-inline")).toHaveTextContent(
+    const unitRow = within(row).getByTestId("directory-sync-unit-cn_mutual_fund");
+    expect(within(unitRow).getByTestId("task-status-badge")).toHaveAttribute(
+      "data-status",
+      "failed",
+    );
+    expect(within(unitRow).getByTestId("task-error-inline")).toHaveTextContent(
       "category CN/cn_mutual_fund returned no assets",
     );
+  });
+
+  it("keeps every sync row visible while the asset list is filtered by market", async () => {
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+
+    fireEvent.change(screen.getByTestId("market-assets-market-filter"), {
+      target: { value: "CN" },
+    });
+    await waitFor(() =>
+      expect(listMarketAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ market: "CN" }),
+      ),
+    );
+
+    const panel = screen.getByTestId("directory-sync-panel");
+    expect(within(panel).getByTestId("directory-sync-cn_all")).toBeInTheDocument();
+    expect(within(panel).getByTestId("directory-sync-hk_all")).toBeInTheDocument();
+    expect(within(panel).getByTestId("directory-sync-us_all")).toBeInTheDocument();
+    expect(within(panel).getByTestId("fx-sync-row")).toBeInTheDocument();
   });
 
   it("displays HK/US ETF directory entries with type labels", async () => {
@@ -422,7 +623,7 @@ describe("MarketAssetsPage", () => {
     expect(within(row).getByTestId("task-status-badge")).toBeInTheDocument();
   });
 
-  it("surfaces polling errors without hiding the sync row", async () => {
+  it("surfaces polling errors without hiding the unit row", async () => {
     useWorkerTaskPollingMock.mockReturnValue({
       task: {
         id: "wt_running",
@@ -435,21 +636,30 @@ describe("MarketAssetsPage", () => {
     });
     listMarketAssetsMock.mockResolvedValue({
       assets: [makeAsset()],
-      syncs: makeSyncs([
-        {
-          task: {
-            id: "wt_running",
-            type: "asset_directory_sync",
-            status: "running",
-            created_at: 0,
+      syncs: [
+        makeScope(
+          "cn_all",
+          { status: "running" },
+          {
+            cn_exchange_stock: {
+              task: {
+                id: "wt_running",
+                type: "asset_directory_sync",
+                status: "running",
+                created_at: 0,
+              },
+            },
           },
-        },
-      ]),
+        ),
+        makeScope("hk_all"),
+        makeScope("us_all"),
+      ],
       total: 1,
     });
     renderPage();
     const row = await screen.findByTestId("directory-sync-cn_all");
-    expect(within(row).getByText(/任务状态查询失败/)).toBeInTheDocument();
-    expect(within(row).getByTestId("task-status-badge")).toBeInTheDocument();
+    const unitRow = within(row).getByTestId("directory-sync-unit-cn_exchange_stock");
+    expect(within(unitRow).getByText(/任务状态查询失败/)).toBeInTheDocument();
+    expect(within(unitRow).getByTestId("task-status-badge")).toBeInTheDocument();
   });
 });

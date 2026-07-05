@@ -99,10 +99,28 @@ type AdminSyncHealth struct {
 	HistoryDimensions repository.HistoryStateAggregate `json:"history_dimensions"`
 }
 
+// AdminDirectoryScopeHealth is one scope's aggregated directory sync health
+// plus the per-unit facts, so the admin never hides which unit failed.
 type AdminDirectoryScopeHealth struct {
-	Scope            string `json:"scope"`
+	Scope string `json:"scope"`
+	Label string `json:"label"`
+	// Status: running | complete | partial | failed | never (scope aggregate).
+	Status string `json:"status"`
+	// LastSuccessAt is the scope's oldest full-success time; null while any
+	// unit has never succeeded.
+	LastSuccessAt    *int64                     `json:"last_success_at"`
+	ActiveTaskStatus string                     `json:"active_task_status"`
+	Stale            bool                       `json:"stale"`
+	Units            []AdminDirectoryUnitHealth `json:"units"`
+}
+
+// AdminDirectoryUnitHealth is one directory sync unit's health facts.
+type AdminDirectoryUnitHealth struct {
+	SyncKey          string `json:"sync_key"`
+	Label            string `json:"label"`
 	LastSuccessAt    *int64 `json:"last_success_at"`
 	ActiveTaskStatus string `json:"active_task_status"`
+	LatestTaskFailed bool   `json:"latest_task_failed"`
 	Stale            bool   `json:"stale"`
 }
 
@@ -182,20 +200,37 @@ func (s *AdminService) syncHealth(ctx context.Context, now time.Time) (AdminSync
 	var health AdminSyncHealth
 	staleBefore := now.Add(-adminStaleSync).UnixMilli()
 
-	for _, scope := range []string{ScopeCNAll, ScopeHKAll, ScopeUSAll} {
-		view, err := s.marketAssets.BuildSyncView(ctx, scope)
+	for _, scope := range DirectoryScopes {
+		view, err := s.marketAssets.BuildScopeSyncView(ctx, scope)
 		if err != nil {
 			return AdminSyncHealth{}, err
 		}
 		item := AdminDirectoryScopeHealth{
 			Scope:         scope,
+			Label:         view.Label,
+			Status:        view.Status,
 			LastSuccessAt: view.LastSuccessAt,
 		}
-		if view.Task != nil && repository.IsActiveWorkerTaskStatus(view.Task.Status) {
-			item.ActiveTaskStatus = view.Task.Status
-		}
-		if view.LastSuccessAt != nil && *view.LastSuccessAt < staleBefore {
-			item.Stale = true
+		for _, u := range view.Units {
+			unit := AdminDirectoryUnitHealth{
+				SyncKey:       u.SyncKey,
+				Label:         u.Label,
+				LastSuccessAt: u.LastSuccessAt,
+			}
+			if u.Task != nil {
+				if repository.IsActiveWorkerTaskStatus(u.Task.Status) {
+					unit.ActiveTaskStatus = u.Task.Status
+					if item.ActiveTaskStatus == "" {
+						item.ActiveTaskStatus = u.Task.Status
+					}
+				}
+				unit.LatestTaskFailed = u.Task.Status == repository.WorkerTaskStatusFailed
+			}
+			if u.LastSuccessAt != nil && *u.LastSuccessAt < staleBefore {
+				unit.Stale = true
+				item.Stale = true
+			}
+			item.Units = append(item.Units, unit)
 		}
 		health.DirectoryScopes = append(health.DirectoryScopes, item)
 	}

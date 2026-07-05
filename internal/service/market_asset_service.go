@@ -16,8 +16,8 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// Directory sync scopes. Each scope normalizes to a fixed markets +
-// instrument_types combination so synonymous requests share one dedupe key.
+// Directory sync scopes. A scope is a pure UI aggregation of directory sync
+// units; the real task/state/version granularity is the unit's sync_key.
 const (
 	ScopeCNAll   = "cn_all"
 	ScopeHKAll   = "hk_all"
@@ -25,45 +25,78 @@ const (
 	ScopeFXRates = "fx_rates"
 )
 
-// scopeDefinition pins the normalized markets and required instrument types
-// for one directory scope. Every listed instrument type is a required
-// category: if the upstream listing for any of them fails, the whole task
-// fails (no partial success).
-type scopeDefinition struct {
+// DirectorySyncUnit is one directory sync unit: the real dedupe, state and
+// version granularity. All directory tasks are generated from this static
+// registry — arbitrary markets/instrument_types are never accepted.
+type DirectorySyncUnit struct {
+	SyncKey         string
+	Scope           string
+	Label           string
 	Markets         []string
 	InstrumentTypes []string
 }
 
-var scopeDefinitions = map[string]scopeDefinition{
-	ScopeCNAll: {
-		Markets:         []string{"CN"},
-		InstrumentTypes: []string{"cn_exchange_stock", "cn_exchange_fund", "cn_mutual_fund"},
-	},
-	ScopeHKAll: {
-		Markets:         []string{"HK"},
-		InstrumentTypes: []string{"hk_stock", "hk_etf"},
-	},
-	ScopeUSAll: {
-		Markets:         []string{"US"},
-		InstrumentTypes: []string{"us_stock", "us_etf"},
-	},
+// directorySyncUnits is the full unit registry in display order.
+var directorySyncUnits = []DirectorySyncUnit{
+	{SyncKey: "cn_exchange_stock", Scope: ScopeCNAll, Label: "A 股股票",
+		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_exchange_stock"}},
+	{SyncKey: "cn_exchange_fund", Scope: ScopeCNAll, Label: "场内基金（ETF/LOF）",
+		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_exchange_fund"}},
+	{SyncKey: "cn_mutual_fund", Scope: ScopeCNAll, Label: "场外基金",
+		Markets: []string{"CN"}, InstrumentTypes: []string{"cn_mutual_fund"}},
+	{SyncKey: "hk_stock", Scope: ScopeHKAll, Label: "港股股票",
+		Markets: []string{"HK"}, InstrumentTypes: []string{"hk_stock"}},
+	{SyncKey: "hk_etf", Scope: ScopeHKAll, Label: "港股 ETF",
+		Markets: []string{"HK"}, InstrumentTypes: []string{"hk_etf"}},
+	{SyncKey: "us_stock", Scope: ScopeUSAll, Label: "美股股票",
+		Markets: []string{"US"}, InstrumentTypes: []string{"us_stock"}},
+	{SyncKey: "us_etf", Scope: ScopeUSAll, Label: "美股 ETF",
+		Markets: []string{"US"}, InstrumentTypes: []string{"us_etf"}},
 }
 
-// ScopeForMarket maps a market code to its directory scope.
-func ScopeForMarket(market string) string {
-	switch strings.ToUpper(strings.TrimSpace(market)) {
-	case "CN":
-		return ScopeCNAll
-	case "HK":
-		return ScopeHKAll
-	case "US":
-		return ScopeUSAll
+// DirectoryScopes lists the directory scopes in display order.
+var DirectoryScopes = []string{ScopeCNAll, ScopeHKAll, ScopeUSAll}
+
+var directoryScopeLabels = map[string]string{
+	ScopeCNAll: "中国市场目录",
+	ScopeHKAll: "港股市场目录",
+	ScopeUSAll: "美股市场目录",
+}
+
+// DirectoryScopeLabel returns the display label for a directory scope.
+func DirectoryScopeLabel(scope string) string {
+	if label, ok := directoryScopeLabels[scope]; ok {
+		return label
 	}
-	return ""
+	return scope
+}
+
+// DirectoryUnitBySyncKey looks up one unit in the registry.
+func DirectoryUnitBySyncKey(syncKey string) (DirectorySyncUnit, bool) {
+	for _, u := range directorySyncUnits {
+		if u.SyncKey == syncKey {
+			return u, true
+		}
+	}
+	return DirectorySyncUnit{}, false
+}
+
+// DirectoryUnitsByScope returns a scope's units in registry order.
+func DirectoryUnitsByScope(scope string) []DirectorySyncUnit {
+	var out []DirectorySyncUnit
+	for _, u := range directorySyncUnits {
+		if u.Scope == scope {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // AssetDirectorySyncPayload is the worker payload for asset_directory_sync.
+// sync_key identifies the directory sync unit; markets/instrument_types are
+// always copied from the unit registry, never from user input.
 type AssetDirectorySyncPayload struct {
+	SyncKey         string   `json:"sync_key"`
 	Scope           string   `json:"scope"`
 	Markets         []string `json:"markets"`
 	InstrumentTypes []string `json:"instrument_types"`
@@ -162,12 +195,94 @@ func (s *MarketAssetService) GetTask(ctx context.Context, taskID string) (Worker
 
 // --- directory listing ---
 
-// MarketAssetSyncView is the directory sync status block returned to the UI.
+// MarketAssetSyncView is a single-unit sync status block (FX rates). The
+// directory scopes use the aggregated DirectoryScopeSyncView instead.
 type MarketAssetSyncView struct {
 	Scope             string          `json:"scope"`
 	Task              *WorkerTaskView `json:"task,omitempty"`
 	LastSuccessAt     *int64          `json:"last_success_at,omitempty"`
 	LastSuccessTaskID string          `json:"last_success_task_id"`
+}
+
+// DirectorySyncUnitView is one unit's status inside a scope aggregation.
+type DirectorySyncUnitView struct {
+	SyncKey           string          `json:"sync_key"`
+	Label             string          `json:"label"`
+	Task              *WorkerTaskView `json:"task,omitempty"`
+	LastSuccessAt     *int64          `json:"last_success_at,omitempty"`
+	LastSuccessTaskID string          `json:"last_success_task_id"`
+}
+
+// Directory scope aggregate statuses; computed by Go only so every page
+// renders the same interpretation.
+const (
+	DirectoryScopeStatusRunning  = "running"
+	DirectoryScopeStatusComplete = "complete"
+	DirectoryScopeStatusPartial  = "partial"
+	DirectoryScopeStatusFailed   = "failed"
+	DirectoryScopeStatusNever    = "never"
+)
+
+// DirectoryScopeSyncView is the aggregated sync view of one directory scope:
+// scope-level status plus the per-unit facts it was derived from.
+type DirectoryScopeSyncView struct {
+	Scope string `json:"scope"`
+	Label string `json:"label"`
+	// Status: running | complete | partial | failed | never.
+	Status string `json:"status"`
+	// LastSuccessAt is only set when every unit has succeeded at least once;
+	// it is the minimum of the unit success times ("oldest full success").
+	LastSuccessAt *int64                  `json:"last_success_at,omitempty"`
+	Units         []DirectorySyncUnitView `json:"units"`
+}
+
+// aggregateDirectoryScope derives the scope status and full-success time from
+// unit views, following the td/090 rules.
+func aggregateDirectoryScope(units []DirectorySyncUnitView) (string, *int64) {
+	if len(units) == 0 {
+		return DirectoryScopeStatusNever, nil
+	}
+	var (
+		anyActive, anyFailed, anySuccess, anyTask bool
+		allSuccess                                = true
+		minSuccess                                int64
+	)
+	for _, u := range units {
+		if u.Task != nil {
+			anyTask = true
+			if repository.IsActiveWorkerTaskStatus(u.Task.Status) {
+				anyActive = true
+			}
+			if u.Task.Status == repository.WorkerTaskStatusFailed {
+				anyFailed = true
+			}
+		}
+		if u.LastSuccessAt == nil {
+			allSuccess = false
+			continue
+		}
+		anySuccess = true
+		if minSuccess == 0 || *u.LastSuccessAt < minSuccess {
+			minSuccess = *u.LastSuccessAt
+		}
+	}
+	var lastSuccessAt *int64
+	if allSuccess {
+		v := minSuccess
+		lastSuccessAt = &v
+	}
+	switch {
+	case anyActive:
+		return DirectoryScopeStatusRunning, lastSuccessAt
+	case allSuccess && !anyFailed:
+		return DirectoryScopeStatusComplete, lastSuccessAt
+	case !anySuccess && !anyTask:
+		return DirectoryScopeStatusNever, lastSuccessAt
+	case !anySuccess && anyFailed:
+		return DirectoryScopeStatusFailed, lastSuccessAt
+	default:
+		return DirectoryScopeStatusPartial, lastSuccessAt
+	}
 }
 
 // MarketAssetListItem is one directory row plus its local history readiness
@@ -188,11 +303,10 @@ type MarketAssetListItem struct {
 // MarketAssetListResult is the GET /market-assets response. Total is the
 // filtered row count before pagination.
 type MarketAssetListResult struct {
-	Assets []MarketAssetListItem `json:"assets"`
-	Sync   *MarketAssetSyncView  `json:"sync,omitempty"`
-	Syncs  []MarketAssetSyncView `json:"syncs"`
-	FXSync *MarketAssetSyncView  `json:"fx_sync,omitempty"`
-	Total  int                   `json:"total"`
+	Assets []MarketAssetListItem    `json:"assets"`
+	Syncs  []DirectoryScopeSyncView `json:"syncs"`
+	FXSync *MarketAssetSyncView     `json:"fx_sync,omitempty"`
+	Total  int                      `json:"total"`
 }
 
 // MarketAssetListParams filters the directory listing. SymbolQuery matches
@@ -207,13 +321,12 @@ type MarketAssetListParams struct {
 	Offset          int
 }
 
-// BuildSyncView assembles the sync status block for one directory/FX scope:
-// last success facts from market_asset_sync_state plus the latest task read
-// live from worker_tasks. Shared by the asset listing API and the admin
-// overview so the two never drift apart.
-func (s *MarketAssetService) BuildSyncView(ctx context.Context, scope string) (MarketAssetSyncView, error) {
-	view := MarketAssetSyncView{Scope: scope}
-	st, ok, err := s.assets.GetSyncState(ctx, scope)
+// BuildSyncView assembles the single-unit sync status block for one sync-state
+// row (FX rates): last success facts from market_asset_sync_state plus the
+// latest task read live from worker_tasks.
+func (s *MarketAssetService) BuildSyncView(ctx context.Context, syncKey string) (MarketAssetSyncView, error) {
+	view := MarketAssetSyncView{Scope: syncKey}
+	st, ok, err := s.assets.GetSyncState(ctx, syncKey)
 	if err != nil {
 		return view, wrapRepo("load sync state", err)
 	}
@@ -231,6 +344,38 @@ func (s *MarketAssetService) BuildSyncView(ctx context.Context, scope string) (M
 			return view, wrapRepo("load sync task", err)
 		}
 	}
+	return view, nil
+}
+
+// BuildScopeSyncView assembles one directory scope's aggregated sync view
+// from its units' sync-state rows and latest tasks. Shared by the asset
+// listing API and the admin sync health so the two never drift apart.
+func (s *MarketAssetService) BuildScopeSyncView(
+	ctx context.Context, scope string,
+) (DirectoryScopeSyncView, error) {
+	view := DirectoryScopeSyncView{Scope: scope, Label: DirectoryScopeLabel(scope)}
+	for _, unit := range DirectoryUnitsByScope(scope) {
+		unitView := DirectorySyncUnitView{SyncKey: unit.SyncKey, Label: unit.Label}
+		st, ok, err := s.assets.GetSyncState(ctx, unit.SyncKey)
+		if err != nil {
+			return view, wrapRepo("load sync state", err)
+		}
+		if ok {
+			unitView.LastSuccessAt = st.LastSuccessAt
+			unitView.LastSuccessTaskID = st.LastSuccessTaskID
+			if st.LastTaskID != "" {
+				task, err := s.tasks.GetByID(ctx, st.LastTaskID)
+				if err == nil {
+					v := taskToView(task)
+					unitView.Task = &v
+				} else if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
+					return view, wrapRepo("load sync task", err)
+				}
+			}
+		}
+		view.Units = append(view.Units, unitView)
+	}
+	view.Status, view.LastSuccessAt = aggregateDirectoryScope(view.Units)
 	return view, nil
 }
 
@@ -261,16 +406,12 @@ func (s *MarketAssetService) ListAssets(
 
 	// Sync views always cover every directory scope: the UI sync panel is
 	// fixed and must not react to list filters.
-	scopes := []string{ScopeCNAll, ScopeHKAll, ScopeUSAll}
-	for _, scope := range scopes {
-		view, err := s.BuildSyncView(ctx, scope)
+	for _, scope := range DirectoryScopes {
+		view, err := s.BuildScopeSyncView(ctx, scope)
 		if err != nil {
 			return MarketAssetListResult{}, err
 		}
 		out.Syncs = append(out.Syncs, view)
-	}
-	if len(out.Syncs) > 0 {
-		out.Sync = &out.Syncs[0]
 	}
 	fxView, err := s.BuildSyncView(ctx, ScopeFXRates)
 	if err != nil {
@@ -344,12 +485,13 @@ func (s *MarketAssetService) attachHistoryStates(
 
 // --- directory sync task creation ---
 
-// DirectorySyncRequest is the POST /market-assets/sync body.
+// DirectorySyncRequest is the POST /market-assets/sync body: either a whole
+// scope (creates every unit task) or a single sync_key. Arbitrary
+// markets/instrument_types are never accepted — units come from the registry.
 type DirectorySyncRequest struct {
-	Scope           string   `json:"scope"`
-	Markets         []string `json:"markets"`
-	InstrumentTypes []string `json:"instrument_types"`
-	Force           bool     `json:"force"`
+	Scope   string `json:"scope"`
+	SyncKey string `json:"sync_key"`
+	Force   bool   `json:"force"`
 }
 
 // TaskCreateResult reports the task the caller should poll plus whether it
@@ -359,42 +501,135 @@ type TaskCreateResult struct {
 	Existed bool           `json:"existed"`
 }
 
-func directoryDedupeKey(p AssetDirectorySyncPayload) string {
-	return strings.Join([]string{
-		repository.WorkerTaskTypeAssetDirectorySync,
-		p.Scope,
-		strings.Join(p.Markets, ","),
-		strings.Join(p.InstrumentTypes, ","),
-	}, "|")
+// DirectorySyncTaskItem reports one unit's created-or-existing task.
+type DirectorySyncTaskItem struct {
+	SyncKey string         `json:"sync_key"`
+	Label   string         `json:"label"`
+	Task    WorkerTaskView `json:"task"`
+	Existed bool           `json:"existed"`
 }
 
-// SyncDirectory creates (or returns the existing active) asset_directory_sync
-// task for the requested scope.
+// DirectorySyncResult is the sync response: one entry per requested unit.
+type DirectorySyncResult struct {
+	Scope string                  `json:"scope"`
+	Tasks []DirectorySyncTaskItem `json:"tasks"`
+}
+
+// directoryDedupeKey is asset_directory_sync|{sync_key}. force never changes
+// the dedupe key: an active unit task is always returned as-is.
+func directoryDedupeKey(syncKey string) string {
+	return repository.WorkerTaskTypeAssetDirectorySync + "|" + syncKey
+}
+
+// SyncDirectory creates asset_directory_sync tasks for the requested scope
+// (all units) or single sync_key. All units are processed in one transaction
+// so worker_tasks and market_asset_sync_state.last_task_id stay consistent;
+// units with an existing active task are returned with existed=true without
+// blocking the other units.
 func (s *MarketAssetService) SyncDirectory(
 	ctx context.Context, req DirectorySyncRequest,
-) (TaskCreateResult, error) {
+) (DirectorySyncResult, error) {
 	scope := strings.ToLower(strings.TrimSpace(req.Scope))
-	def, ok := scopeDefinitions[scope]
-	if !ok {
-		return TaskCreateResult{}, newErr("invalid_request",
-			"scope must be one of cn_all, hk_all, us_all", nil)
-	}
-	payload := AssetDirectorySyncPayload{
-		Scope:           scope,
-		Markets:         def.Markets,
-		InstrumentTypes: def.InstrumentTypes,
-		Force:           req.Force,
-	}
-	dedupeKey := directoryDedupeKey(payload)
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return TaskCreateResult{}, fmt.Errorf("marshal directory payload: %w", err)
+	syncKey := strings.ToLower(strings.TrimSpace(req.SyncKey))
+
+	var units []DirectorySyncUnit
+	switch {
+	case syncKey != "":
+		unit, ok := DirectoryUnitBySyncKey(syncKey)
+		if !ok {
+			return DirectorySyncResult{}, newErr("invalid_request",
+				"unknown sync_key "+syncKey, nil)
+		}
+		if scope != "" && scope != unit.Scope {
+			return DirectorySyncResult{}, newErr("invalid_request",
+				fmt.Sprintf("sync_key %s does not belong to scope %s", syncKey, scope), nil)
+		}
+		scope = unit.Scope
+		units = []DirectorySyncUnit{unit}
+	case scope != "":
+		units = DirectoryUnitsByScope(scope)
+		if len(units) == 0 {
+			return DirectorySyncResult{}, newErr("invalid_request",
+				"scope must be one of cn_all, hk_all, us_all", nil)
+		}
+	default:
+		return DirectorySyncResult{}, newErr("invalid_request",
+			"scope or sync_key is required", nil)
 	}
 
-	return s.createTask(ctx, repository.WorkerTaskTypeAssetDirectorySync, dedupeKey, string(payloadJSON),
-		func(ctx context.Context, tx *sql.Tx, taskID string) error {
-			return s.assets.SetSyncLastTaskTx(ctx, tx, scope, taskID)
-		})
+	out := DirectorySyncResult{Scope: scope, Tasks: make([]DirectorySyncTaskItem, 0, len(units))}
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		for _, unit := range units {
+			item, err := s.createDirectoryUnitTaskTx(ctx, tx, unit, req.Force)
+			if err != nil {
+				return err
+			}
+			out.Tasks = append(out.Tasks, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return DirectorySyncResult{}, wrapRepo("create directory sync tasks", err)
+	}
+	return out, nil
+}
+
+// createDirectoryUnitTaskTx creates (or returns the existing active) task for
+// one directory sync unit inside the caller's transaction.
+func (s *MarketAssetService) createDirectoryUnitTaskTx(
+	ctx context.Context, tx *sql.Tx, unit DirectorySyncUnit, force bool,
+) (DirectorySyncTaskItem, error) {
+	item := DirectorySyncTaskItem{SyncKey: unit.SyncKey, Label: unit.Label}
+	taskType := repository.WorkerTaskTypeAssetDirectorySync
+	dedupeKey := directoryDedupeKey(unit.SyncKey)
+
+	existing, err := s.tasks.FindActiveByDedupeTx(ctx, tx, taskType, dedupeKey)
+	if err == nil {
+		item.Task = taskToView(existing)
+		item.Existed = true
+		return item, nil
+	}
+	if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return item, fmt.Errorf("find active directory task: %w", err)
+	}
+
+	payload := AssetDirectorySyncPayload{
+		SyncKey:         unit.SyncKey,
+		Scope:           unit.Scope,
+		Markets:         unit.Markets,
+		InstrumentTypes: unit.InstrumentTypes,
+		Force:           force,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return item, fmt.Errorf("marshal directory payload: %w", err)
+	}
+	task := repository.WorkerTask{
+		ID:          "wt_" + uuid.New().String(),
+		Type:        taskType,
+		Status:      repository.WorkerTaskStatusPending,
+		DedupeKey:   dedupeKey,
+		PayloadJSON: string(payloadJSON),
+		CreatedAt:   time.Now().UnixMilli(),
+	}
+	if err := s.tasks.CreateTx(ctx, tx, &task); err != nil {
+		if repository.IsWorkerTaskUniqueConstraint(err) {
+			// Lost the race: another request created the active task first.
+			dup, findErr := s.tasks.FindActiveByDedupeTx(ctx, tx, taskType, dedupeKey)
+			if findErr != nil {
+				return item, fmt.Errorf("find duplicate directory task: %w", findErr)
+			}
+			item.Task = taskToView(dup)
+			item.Existed = true
+			return item, nil
+		}
+		return item, fmt.Errorf("create directory task: %w", err)
+	}
+	if err := s.assets.SetSyncLastTaskTx(ctx, tx, unit.SyncKey, unit.Scope, task.ID); err != nil {
+		return item, fmt.Errorf("set directory sync last task: %w", err)
+	}
+	item.Task = taskToView(task)
+	return item, nil
 }
 
 // createTask creates a worker task with dedupe semantics: when an active task
@@ -861,6 +1096,6 @@ func (s *MarketAssetService) SyncFXRates(ctx context.Context) (TaskCreateResult,
 	return s.createTask(ctx, repository.WorkerTaskTypeFXRateSync,
 		fxDedupeKey(payload), string(payloadJSON),
 		func(ctx context.Context, tx *sql.Tx, taskID string) error {
-			return s.assets.SetSyncLastTaskTx(ctx, tx, ScopeFXRates, taskID)
+			return s.assets.SetSyncLastTaskTx(ctx, tx, ScopeFXRates, ScopeFXRates, taskID)
 		})
 }
