@@ -1,8 +1,13 @@
 "use client";
 
 import ReactECharts from "echarts-for-react";
-import type { ReturnSeriesPoint } from "@/lib/api/instruments";
 import { formatPercent, pointTypeLabel } from "@/lib/format";
+
+export interface ReturnSeriesPoint {
+  date: string;
+  value: number;
+  cumulative_return: number;
+}
 
 type AxisTooltipParam = { dataIndex?: number };
 

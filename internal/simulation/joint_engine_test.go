@@ -45,7 +45,7 @@ func TestJointEngineTwoAssetsBuildAndRun(t *testing.T) {
 	in := testInputSnapshot()
 	in.RandomFactorModel = FactorModelMultivariate
 	in.Assets = append(in.Assets, SnapshotAsset{
-		HoldingID: "h2", InstrumentID: "i2", SnapshotID: "s2",
+		HoldingID: "h2", AssetKey: "i2", SnapshotID: "s2",
 		Currency: "CNY", AssetClass: "equity", IsCash: false,
 		InitialMinor: 0, TargetWeight: 0, ModeledAnnualReturn: 0.07, AnnualVolatility: 0.15,
 		SourceHash: "def",

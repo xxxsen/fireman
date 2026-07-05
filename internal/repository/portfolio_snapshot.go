@@ -46,8 +46,8 @@ func (r *PortfolioSnapshotRepo) createTx(ctx context.Context, tx *sql.Tx, snap P
 	}
 	for _, item := range snap.Items {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO portfolio_snapshot_items (snapshot_id, instrument_id, amount_minor) VALUES (?,?,?)`,
-			snap.ID, item.InstrumentID, item.AmountMinor); err != nil {
+			INSERT INTO portfolio_snapshot_items (snapshot_id, asset_key, amount_minor) VALUES (?,?,?)`,
+			snap.ID, item.AssetKey, item.AmountMinor); err != nil {
 			return wrapSQL("insert portfolio snapshot item", err)
 		}
 	}

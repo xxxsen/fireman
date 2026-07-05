@@ -44,7 +44,7 @@ type SnapshotYear struct {
 // SnapshotAsset is one simulated asset frozen at job creation.
 type SnapshotAsset struct {
 	HoldingID           string  `json:"holding_id"`
-	InstrumentID        string  `json:"instrument_id"`
+	AssetKey        string  `json:"asset_key"`
 	InstrumentName      string  `json:"instrument_name,omitempty"`
 	InstrumentCode      string  `json:"instrument_code,omitempty"`
 	SnapshotID          string  `json:"snapshot_id"`

@@ -43,8 +43,6 @@ func newInternalStack(t *testing.T) internalStack {
 		db, taskRepo, assetRepo,
 		repository.NewInstrumentRepo(db),
 		repository.NewMarketDataRepo(db),
-		repository.NewAnnualReturnsRepo(db),
-		repository.NewInstrumentLibraryMetricsRepo(db),
 		resources,
 	)
 	srv := httptest.NewServer(NewInternalRouter(InternalDeps{
@@ -231,7 +229,7 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 			{"market": "HK", "instrument_type": "hk_stock", "symbol": "00005",
 				"name": "汇丰控股", "instrument_kind": "stock", "currency": "HKD",
 				"source_name": "ak_hk", "source_as_of": "2026-07-04"},
-			// hk_all requires the ETF category as well (td/079).
+			// hk_all requires the ETF category as well as equities.
 			{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
 				"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
 				"source_name": "ak_hk_fund", "source_as_of": "2026-07-04"},
@@ -558,7 +556,7 @@ func TestInternalPostProcess_FXRates(t *testing.T) {
 		"permanent_error", "provider_data_incomplete")
 }
 
-// TestInternalPostProcess_ETFSearchableViaPublicAPI covers the td/079
+// TestInternalPostProcess_ETFSearchableViaPublicAPI covers the
 // acceptance path: after a directory sync post-process commits HK/US ETF
 // entries, the public market-assets API can find them by market and query.
 func TestInternalPostProcess_ETFSearchableViaPublicAPI(t *testing.T) {
@@ -619,9 +617,9 @@ func TestInternalPostProcess_ETFSearchableViaPublicAPI(t *testing.T) {
 
 	assertSearchable(pub.URL+"/api/v1/market-assets?market=HK", "hk_etf", "02800")
 	assertSearchable(pub.URL+"/api/v1/market-assets?market=US", "us_etf", "SPY")
-	// Local search hits the ETF entries by name/code as well.
-	assertSearchable(pub.URL+"/api/v1/market-assets?q=盈富", "hk_etf", "02800")
-	assertSearchable(pub.URL+"/api/v1/market-assets?q=SPY", "us_etf", "SPY")
+	// Local search hits the ETF entries by name/symbol as well.
+	assertSearchable(pub.URL+"/api/v1/market-assets?name_q=盈富", "hk_etf", "02800")
+	assertSearchable(pub.URL+"/api/v1/market-assets?symbol_q=SPY", "us_etf", "SPY")
 }
 
 func TestInternalPostProcess_ErrorClassification(t *testing.T) {

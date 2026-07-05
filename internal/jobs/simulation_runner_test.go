@@ -261,7 +261,7 @@ func testSnapshot() *simulation.InputSnapshot {
 			SimulationRuns: 10, StudentTDf: 7, Seed: "42",
 		},
 		Assets: []simulation.SnapshotAsset{{
-			HoldingID: "h1", InstrumentID: "i1", SnapshotID: "s1",
+			HoldingID: "h1", AssetKey: "i1", SnapshotID: "s1",
 			Currency: "CNY", AssetClass: "equity", IsCash: false,
 			InitialMinor: 1_000_000_00, TargetWeight: 1.0,
 			ModeledAnnualReturn: 0.07, AnnualVolatility: 0.15, MaxDrawdown: 0.30,

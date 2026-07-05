@@ -75,7 +75,7 @@ func TestForwardReturnRegressionReport(t *testing.T) {
 			},
 			Assets: []SnapshotAsset{
 				{
-					HoldingID: "h1", InstrumentID: "i1", SnapshotID: "s1",
+					HoldingID: "h1", AssetKey: "i1", SnapshotID: "s1",
 					Currency: "CNY", AssetClass: "equity", Region: "foreign", IsCash: false,
 					InitialMinor: int64(totalMinor * equityWt), TargetWeight: equityWt,
 					// Only the forward return varies across variants; volatility is fixed.
@@ -83,7 +83,7 @@ func TestForwardReturnRegressionReport(t *testing.T) {
 					CompleteYearCount: sampleYrs, SourceHash: "equity",
 				},
 				{
-					HoldingID: "h2", InstrumentID: "i2", SnapshotID: "s2",
+					HoldingID: "h2", AssetKey: "i2", SnapshotID: "s2",
 					Currency: "CNY", AssetClass: "cash", IsCash: true,
 					InitialMinor: int64(totalMinor * cashWt), TargetWeight: cashWt,
 					ModeledAnnualReturn: 0, AnnualVolatility: 0, SourceHash: "cash",

@@ -1,28 +1,60 @@
 "use client";
 
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { WizardHoldingRow } from "@/components/plans/WizardHoldingRow";
-import { ApiError } from "@/lib/api/client";
-import { assetClassLabel, historyDepthLabel, regionLabel } from "@/lib/format";
-import {
-  importMarketAssetCandidate,
-  looksLikeFundCode,
-  MarketAssetHistoryEmptyError,
-  searchMarketAssetCandidates,
-} from "@/lib/instrument-resolve-search";
+import { assetClassLabel, dataSourceLabel, regionLabel } from "@/lib/format";
+import { isTaskActive, listMarketAssets, type MarketAsset } from "@/lib/api/market-assets";
 import {
   addInstrumentToGroup,
   computeExpectedAmountMinor,
   removeInstrumentFromGroup,
   updateInstrumentWeightInGroup,
 } from "@/lib/wizard-allocation";
-import { searchInstruments } from "@/lib/api/instruments";
-import type { MarketAsset } from "@/lib/api/market-assets";
-import type { Instrument } from "@/types/api";
-import type { WizardHoldingSelection } from "@/lib/wizard-allocation";
+import type { WizardAsset, WizardHoldingSelection } from "@/lib/wizard-allocation";
 
 const PAGE_SIZE = 10;
+
+const PICKER_MARKET_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "全部市场" },
+  { value: "CN", label: "CN" },
+  { value: "HK", label: "HK" },
+  { value: "US", label: "US" },
+];
+
+const PICKER_TYPE_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "全部类型" },
+  { value: "cn_exchange_stock", label: "A 股" },
+  { value: "cn_exchange_fund", label: "场内 ETF / LOF" },
+  { value: "cn_mutual_fund", label: "公募基金" },
+  { value: "hk_stock", label: "港股" },
+  { value: "hk_etf", label: "香港 ETF" },
+  { value: "us_stock", label: "美国股票" },
+  { value: "us_etf", label: "美国 ETF" },
+];
+
+/** A query that is only letters/digits/dots is treated as a symbol search. */
+function looksLikeSymbolQuery(q: string): boolean {
+  return /^[A-Za-z0-9.]+$/.test(q);
+}
+
+export function marketAssetToWizardAsset(
+  asset: MarketAsset,
+  assetClass: string,
+  region: string,
+): WizardAsset {
+  return {
+    id: asset.asset_key,
+    code: asset.symbol,
+    name: asset.name,
+    asset_class: assetClass,
+    region,
+    has_history: asset.has_history === true,
+    history_data_as_of: asset.history_data_as_of,
+    history_source_name: asset.history_source_name,
+  };
+}
 
 export interface AssetClassHoldingPickerProps {
   assetClass: string;
@@ -38,10 +70,6 @@ export interface AssetClassHoldingPickerProps {
   nested?: boolean;
 }
 
-function canAddToPlan(inst: Instrument): boolean {
-  return inst.simulation_eligible === true;
-}
-
 export function AssetClassHoldingPicker({
   assetClass,
   classWeight,
@@ -53,22 +81,15 @@ export function AssetClassHoldingPicker({
   subTitle,
   nested = false,
 }: AssetClassHoldingPickerProps) {
-  const queryClient = useQueryClient();
   const rootRef = useRef<HTMLElement | null>(null);
   const listboxId = useId();
   const [filter, setFilter] = useState("");
   const [debouncedFilter, setDebouncedFilter] = useState("");
+  const [market, setMarket] = useState("");
+  const [instrumentType, setInstrumentType] = useState("");
   const [open, setOpen] = useState(false);
-  const [resolveLoading, setResolveLoading] = useState(false);
-  const [importLoading, setImportLoading] = useState(false);
-  const [resolveError, setResolveError] = useState<string | null>(null);
-  const [externalCandidates, setExternalCandidates] = useState<MarketAsset[]>([]);
 
-  const selectedCodes = useMemo(
-    () => new Set(selected.map((s) => s.inst.code.toLowerCase())),
-    [selected],
-  );
-  const excludeIds = useMemo(() => selected.map((s) => s.inst.id).sort(), [selected]);
+  const selectedKeys = useMemo(() => new Set(selected.map((s) => s.inst.id)), [selected]);
 
   const effectiveRegion = region ?? "domestic";
 
@@ -78,14 +99,8 @@ export function AssetClassHoldingPicker({
     return () => window.clearTimeout(timer);
   }, [filter]);
 
-  // Collapse the whole candidate layer (local + external + states) but keep the
-  // typed query so refocusing can re-show candidates. Used by outside-click and
-  // Escape; selecting an asset clears the query separately in addInstrument.
   const closeDropdown = useCallback(() => {
     setOpen(false);
-    setExternalCandidates([]);
-    setResolveError(null);
-    setResolveLoading(false);
   }, []);
 
   // Close the candidate dropdown when clicking outside the whole picker. We use
@@ -102,94 +117,40 @@ export function AssetClassHoldingPicker({
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [open, closeDropdown]);
 
+  const symbolQ = looksLikeSymbolQuery(debouncedFilter) ? debouncedFilter : undefined;
+  const nameQ = symbolQ ? undefined : debouncedFilter || undefined;
+
   const listQuery = useInfiniteQuery({
     queryKey: [
-      "instrument-picker",
-      assetClass,
-      effectiveRegion,
+      "market-asset-picker",
+      market,
+      instrumentType,
       debouncedFilter,
-      excludeIds.join(","),
     ],
     enabled: open,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      searchInstruments({
-        q: debouncedFilter || undefined,
-        assetClass,
-        region: effectiveRegion,
-        status: "active",
-        excludeIds,
+      listMarketAssets({
+        market: market || undefined,
+        instrumentTypes: instrumentType ? [instrumentType] : undefined,
+        symbolQ,
+        nameQ,
         limit: PAGE_SIZE,
-        cursor: pageParam as number,
+        offset: pageParam as number,
       }),
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, page) => sum + page.assets.length, 0);
+      return loaded < lastPage.total && lastPage.assets.length > 0 ? loaded : undefined;
+    },
   });
 
-  const libraryResults = useMemo(
-    () => (listQuery.data?.pages ?? []).flatMap((page) => page.instruments),
-    [listQuery.data],
-  );
-
-  const hasExactLibraryHit = useMemo(
+  const results = useMemo(
     () =>
-      libraryResults.some((inst) => inst.code.toLowerCase() === debouncedFilter.toLowerCase()),
-    [libraryResults, debouncedFilter],
+      (listQuery.data?.pages ?? [])
+        .flatMap((page) => page.assets)
+        .filter((asset) => !selectedKeys.has(asset.asset_key)),
+    [listQuery.data, selectedKeys],
   );
-
-  // The local paginated search must finish before we can conclude the library
-  // has no hit. While it is loading/refetching, libraryResults is stale/empty
-  // and hasExactLibraryHit cannot be trusted.
-  const listSettled = !listQuery.isLoading && !listQuery.isFetching;
-
-  // Search the local market asset directory only when the query looks like a
-  // fund code AND the library search has settled with no exact match for it.
-  useEffect(() => {
-    const q = debouncedFilter;
-    let cancelled = false;
-    const shouldResolve =
-      open && looksLikeFundCode(q) && listSettled && !hasExactLibraryHit;
-
-    // All state updates run inside the timer callback (asynchronously) so the
-    // effect body never calls setState synchronously.
-    const timer = window.setTimeout(() => {
-      if (cancelled) return;
-      if (!shouldResolve) {
-        setExternalCandidates([]);
-        setResolveError(null);
-        setResolveLoading(false);
-        return;
-      }
-      setResolveLoading(true);
-      setResolveError(null);
-      void (async () => {
-        try {
-          const candidates = (await searchMarketAssetCandidates(q)).filter(
-            (a) => !selectedCodes.has(a.symbol.toLowerCase()),
-          );
-          if (cancelled) return;
-          setExternalCandidates(candidates);
-          if (candidates.length === 0) {
-            setResolveError("未在本地资产目录中找到可录入的标的");
-          }
-        } catch (error) {
-          if (cancelled) return;
-          setExternalCandidates([]);
-          if (error instanceof ApiError) {
-            setResolveError(error.message);
-          } else {
-            setResolveError(error instanceof Error ? error.message : "查询失败");
-          }
-        } finally {
-          if (!cancelled) setResolveLoading(false);
-        }
-      })();
-    }, 0);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [debouncedFilter, hasExactLibraryHit, listSettled, open, selectedCodes]);
 
   // Auto-load the next page when the sentinel scrolls into view.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -207,49 +168,34 @@ export function AssetClassHoldingPicker({
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [listQuery.hasNextPage, listQuery.isFetchingNextPage, listQuery, libraryResults.length]);
+  }, [listQuery.hasNextPage, listQuery.isFetchingNextPage, listQuery, results.length]);
 
-  const addInstrument = (inst: Instrument) => {
-    onSelectedChange(addInstrumentToGroup(selected, inst));
+  const addAsset = (asset: MarketAsset) => {
+    onSelectedChange(
+      addInstrumentToGroup(
+        selected,
+        marketAssetToWizardAsset(asset, assetClass, effectiveRegion),
+      ),
+    );
     setFilter("");
-    setExternalCandidates([]);
-    setResolveError(null);
     setOpen(false);
   };
 
-  const importAndAdd = async (candidate: MarketAsset) => {
-    setImportLoading(true);
-    setResolveError(null);
-    try {
-      const inst = await importMarketAssetCandidate(candidate, assetClass, effectiveRegion);
-      await queryClient.invalidateQueries({ queryKey: ["instrument-picker"] });
-      addInstrument(inst);
-    } catch (error) {
-      if (error instanceof MarketAssetHistoryEmptyError) {
-        setResolveError(error.message);
-      } else {
-        setResolveError(error instanceof Error ? error.message : "录入失败");
-      }
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
   const updateSelection = (
-    instrumentId: string,
+    assetKey: string,
     patch: Partial<Pick<WizardHoldingSelection, "weight" | "amount">>,
   ) => {
     if (patch.weight !== undefined) {
-      onSelectedChange(updateInstrumentWeightInGroup(selected, instrumentId, patch.weight));
+      onSelectedChange(updateInstrumentWeightInGroup(selected, assetKey, patch.weight));
       return;
     }
     onSelectedChange(
-      selected.map((s) => (s.inst.id === instrumentId ? { ...s, ...patch } : s)),
+      selected.map((s) => (s.inst.id === assetKey ? { ...s, ...patch } : s)),
     );
   };
 
-  const removeSelection = (instrumentId: string) => {
-    onSelectedChange(removeInstrumentFromGroup(selected, instrumentId));
+  const removeSelection = (assetKey: string) => {
+    onSelectedChange(removeInstrumentFromGroup(selected, assetKey));
   };
 
   const searchAriaLabel = subTitle
@@ -266,12 +212,7 @@ export function AssetClassHoldingPicker({
   const sectionAriaLabel = nested ? undefined : (subTitle ?? `${assetClassLabel(assetClass)}选标`);
 
   const showEmptyHint =
-    open &&
-    !listQuery.isLoading &&
-    libraryResults.length === 0 &&
-    externalCandidates.length === 0 &&
-    !resolveLoading &&
-    !importLoading;
+    open && !listQuery.isLoading && !listQuery.isFetching && results.length === 0;
 
   return (
     <section ref={rootRef} className={sectionClass} aria-label={sectionAriaLabel}>
@@ -299,28 +240,60 @@ export function AssetClassHoldingPicker({
           })}
         </ul>
       )}
-      <input
-        className={`input-base ${subTitle || selected.length > 0 ? "mt-2" : "mt-3"}`}
-        placeholder={`搜索${assetClassLabel(assetClass)}标的（代码或名称）`}
-        value={filter}
-        role="combobox"
-        aria-expanded={open}
-        aria-controls={listboxId}
-        aria-autocomplete="list"
-        onFocus={() => setOpen(true)}
-        onChange={(e) => {
-          setOpen(true);
-          setFilter(e.target.value);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            closeDropdown();
-          }
-        }}
-        aria-label={searchAriaLabel}
-        data-testid="wizard-holding-search"
-      />
-      {open && (libraryResults.length > 0 || listQuery.isLoading) && (
+      <div
+        className={`flex flex-col gap-2 sm:flex-row sm:items-center ${
+          subTitle || selected.length > 0 ? "mt-2" : "mt-3"
+        }`}
+      >
+        <input
+          className="input-base min-w-0 flex-1"
+          placeholder={`搜索${assetClassLabel(assetClass)}标的（代码或名称）`}
+          value={filter}
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            setOpen(true);
+            setFilter(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              closeDropdown();
+            }
+          }}
+          aria-label={searchAriaLabel}
+          data-testid="wizard-holding-search"
+        />
+        <select
+          value={market}
+          onChange={(e) => setMarket(e.target.value)}
+          className="input-base w-auto shrink-0 text-xs"
+          aria-label="按市场筛选候选"
+          data-testid="wizard-picker-market-filter"
+        >
+          {PICKER_MARKET_FILTERS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={instrumentType}
+          onChange={(e) => setInstrumentType(e.target.value)}
+          className="input-base w-auto shrink-0 text-xs"
+          aria-label="按资产类型筛选候选"
+          data-testid="wizard-picker-type-filter"
+        >
+          {PICKER_TYPE_FILTERS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {open && (results.length > 0 || listQuery.isLoading) && (
         <div
           id={listboxId}
           role="listbox"
@@ -330,34 +303,51 @@ export function AssetClassHoldingPicker({
           data-testid="wizard-library-results"
         >
           <ul className="divide-y divide-line text-sm">
-            {libraryResults.map((inst) => {
-              const addable = canAddToPlan(inst);
-              return (
-                <li key={inst.id} role="option" aria-selected={false}>
-                  <button
-                    type="button"
-                    className="flex h-12 w-full items-center gap-2 overflow-hidden whitespace-nowrap px-3 text-left hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={!addable || importLoading}
-                    onClick={() => addInstrument(inst)}
-                  >
-                    <span className="truncate font-medium">{inst.name}</span>
-                    <span className="shrink-0 text-ink-muted">{inst.code}</span>
-                    {inst.complete_year_count != null && (
-                      <span className="shrink-0 text-xs text-ink-muted">{inst.complete_year_count} 完整年</span>
-                    )}
-                    {inst.monthly_return_count != null && (
-                      <span className="shrink-0 text-xs text-ink-muted">{inst.monthly_return_count} 月</span>
-                    )}
-                    {inst.history_depth === "one_year" && (
-                      <span className="shrink-0 text-xs text-warning">{historyDepthLabel(inst.history_depth)}</span>
-                    )}
-                    {!addable && (
-                      <span className="shrink-0 text-xs text-ink-muted">历史不足，暂不可用于模拟</span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
+            {results.map((asset) => (
+              <li
+                key={asset.asset_key}
+                role="option"
+                aria-selected={false}
+                className="flex h-12 items-center gap-2 overflow-hidden whitespace-nowrap pr-3 hover:bg-surface-muted"
+              >
+                <button
+                  type="button"
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-3 text-left"
+                  onClick={() => addAsset(asset)}
+                >
+                  <span className="truncate font-medium">{asset.name}</span>
+                  <span className="shrink-0 text-ink-muted">{asset.symbol}</span>
+                  <span className="shrink-0 text-xs text-ink-muted">{asset.market}</span>
+                  {asset.has_history ? (
+                    <span className="shrink-0 text-xs text-ink-muted">
+                      数据截至 {asset.history_data_as_of || "—"} ·{" "}
+                      {dataSourceLabel(asset.history_source_name)}
+                    </span>
+                  ) : asset.history_sync_status === "failed" ? (
+                    <span className="shrink-0 text-xs text-danger">
+                      历史同步失败
+                      {asset.history_sync_error ? `：${asset.history_sync_error}` : ""}
+                      ，可在详情页重新同步
+                    </span>
+                  ) : isTaskActive(asset.history_sync_status) ? (
+                    <span className="shrink-0 text-xs text-ink-muted">
+                      历史同步中…
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs text-warning">
+                      未同步历史，模拟前需要同步
+                    </span>
+                  )}
+                </button>
+                <Link
+                  href={`/assets/market/${encodeURIComponent(asset.asset_key)}`}
+                  target="_blank"
+                  className="shrink-0 text-xs text-brand underline-offset-2 hover:underline"
+                >
+                  详情
+                </Link>
+              </li>
+            ))}
           </ul>
           {(listQuery.isLoading || listQuery.isFetchingNextPage) && (
             <p className="px-3 py-2 text-xs text-ink-muted" role="status">
@@ -367,44 +357,14 @@ export function AssetClassHoldingPicker({
           <div ref={sentinelRef} aria-hidden="true" />
         </div>
       )}
-      {open && (resolveLoading || importLoading) && (
-        <p className="mt-2 text-sm text-ink-muted" role="status">
-          {importLoading ? "正在录入…" : "正在搜索本地资产目录…"}
-        </p>
-      )}
-      {open && externalCandidates.length > 0 && (
-        <ul
-          role="listbox"
-          className="mt-2 max-h-40 overflow-y-auto rounded-md border border-dashed border-line divide-y divide-line text-sm"
-          data-testid="wizard-external-results"
-        >
-          {externalCandidates.map((candidate) => (
-            <li key={candidate.asset_key} role="option" aria-selected={false}>
-              <button
-                type="button"
-                className="w-full px-3 py-2 text-left hover:bg-surface-muted disabled:opacity-50"
-                disabled={importLoading}
-                onClick={() => void importAndAdd(candidate)}
-              >
-                <span className="font-medium">{candidate.name}</span>
-                <span className="ml-2 text-ink-muted">{candidate.symbol}</span>
-                <span className="ml-2 text-xs text-ink-muted">资产库未收录 · 点击录入并添加</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && resolveError && (
+      {open && listQuery.isError && (
         <p className="mt-2 text-sm text-danger" role="alert">
-          {resolveError}
+          资产目录查询失败，请稍后重试。
         </p>
       )}
-      {showEmptyHint && !looksLikeFundCode(debouncedFilter) && (
-        <p className="mt-2 text-sm text-ink-muted">未找到匹配的{assetClassLabel(assetClass)}标的。</p>
-      )}
-      {showEmptyHint && looksLikeFundCode(debouncedFilter) && !resolveError && (
+      {showEmptyHint && (
         <p className="mt-2 text-sm text-ink-muted">
-          资产库中暂无该代码；输入完整代码后会自动搜索本地资产目录。
+          未在本地资产目录中找到匹配标的；若目录较旧，可先到资产页同步资产列表。
         </p>
       )}
     </section>

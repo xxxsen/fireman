@@ -47,16 +47,15 @@ type ParametersUpdateRequest struct {
 
 // PlanService orchestrates plan lifecycle.
 type PlanService struct {
-	sql        *sql.DB
-	plans      *repository.PlanRepo
-	params     *repository.ParametersRepo
-	alloc      *repository.AllocationRepo
-	scenario   *repository.ScenarioRepo
-	holdings   *repository.HoldingsRepo
-	instRepo   *repository.InstrumentRepo
-	hash       *ConfigHashService
-	snapSvc    *marketdata.SnapshotService
-	marketRepo *repository.MarketDataRepo
+	sql       *sql.DB
+	plans     *repository.PlanRepo
+	params    *repository.ParametersRepo
+	alloc     *repository.AllocationRepo
+	scenario  *repository.ScenarioRepo
+	holdings  *repository.HoldingsRepo
+	assetRepo *repository.MarketAssetRepo
+	hash      *ConfigHashService
+	snapSvc   *marketdata.SnapshotService
 }
 
 func NewPlanService(
@@ -66,14 +65,13 @@ func NewPlanService(
 	alloc *repository.AllocationRepo,
 	scenario *repository.ScenarioRepo,
 	holdings *repository.HoldingsRepo,
-	instRepo *repository.InstrumentRepo,
+	assetRepo *repository.MarketAssetRepo,
 	hash *ConfigHashService,
 	snapSvc *marketdata.SnapshotService,
-	marketRepo *repository.MarketDataRepo,
 ) *PlanService {
 	return &PlanService{
 		sql: sqlDB, plans: plans, params: params, alloc: alloc, scenario: scenario,
-		holdings: holdings, instRepo: instRepo, hash: hash, snapSvc: snapSvc, marketRepo: marketRepo,
+		holdings: holdings, assetRepo: assetRepo, hash: hash, snapSvc: snapSvc,
 	}
 }
 

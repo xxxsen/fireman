@@ -24,7 +24,7 @@ var (
 var pragmaStatements = []string{
 	"PRAGMA journal_mode = WAL",
 	"PRAGMA foreign_keys = ON",
-	"PRAGMA busy_timeout = 5000",
+	"PRAGMA busy_timeout = 30000",
 	"PRAGMA synchronous = NORMAL",
 	"PRAGMA temp_store = MEMORY",
 }
@@ -47,8 +47,11 @@ func Open(ctx context.Context, dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("db: open sqlite: %w", err)
 	}
 
-	pool.SetMaxOpenConns(8)
-	pool.SetMaxIdleConns(4)
+	// Single writer connection: SQLite serializes writers anyway, and one
+	// pooled connection removes SQLITE_BUSY races between Go-side writers
+	// (directory post-process vs. task creation vs. sync-state updates).
+	pool.SetMaxOpenConns(1)
+	pool.SetMaxIdleConns(1)
 
 	if err := applyPragmas(ctx, pool); err != nil {
 		_ = pool.Close()
@@ -99,7 +102,7 @@ func buildDSN(path string) string {
 	q := url.Values{}
 	q.Set("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "foreign_keys(ON)")
-	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "busy_timeout(30000)")
 	q.Add("_pragma", "synchronous(NORMAL)")
 	q.Add("_pragma", "temp_store(MEMORY)")
 

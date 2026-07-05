@@ -125,7 +125,7 @@ class WorkerRunner:
         return execute_task(task.type, payload)
 
     def _upload_and_pre_complete(self, db: TaskDB, task: ClaimedTask, result: dict[str, Any]) -> None:
-        # Order per td/078: resource first (via the Go upload API), envelope +
+        # Upload order contract: resource first (via the Go upload API), envelope +
         # pre_complete second. A failure after upload leaves an orphan resource
         # that Go's TTL cleanup removes.
         try:

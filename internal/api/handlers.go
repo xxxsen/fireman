@@ -16,26 +16,26 @@ import (
 
 // Services groups business services.
 type Services struct {
-	Plans               *service.PlanService
-	Allocation          *service.AllocationService
-	Holdings            *service.HoldingsService
-	Targets             *service.TargetService
-	Rebalance           *service.RebalanceService
-	RebalanceDrafts     *service.RebalanceDraftService
-	RebalanceExecutions *service.RebalanceExecutionService
-	AssetRefresh        *service.AssetRefreshService
-	Instruments         *service.InstrumentService
-	MarketAssets        *service.MarketAssetService
-	HoldingSnapshots    *service.HoldingSnapshotService
-	Simulations         *service.SimulationService
-	Assumptions         *service.AssumptionService
-	Stress              *service.StressService
-	Sensitivity         *service.SensitivityService
-	Jobs                *service.JobService
-	Dashboard           *service.DashboardService
-	System              *service.SystemService
-	EventHub            *jobs.EventHub
-	Maintenance         *service.MaintenanceGate
+	Plans                *service.PlanService
+	Allocation           *service.AllocationService
+	Holdings             *service.HoldingsService
+	Targets              *service.TargetService
+	Rebalance            *service.RebalanceService
+	RebalanceDrafts      *service.RebalanceDraftService
+	RebalanceExecutions  *service.RebalanceExecutionService
+	AssetRefresh         *service.AssetRefreshService
+	MarketAssets         *service.MarketAssetService
+	HoldingSnapshots     *service.HoldingSnapshotService
+	Simulations          *service.SimulationService
+	SimulationReadiness  *service.SimulationReadinessService
+	Assumptions          *service.AssumptionService
+	Stress               *service.StressService
+	Sensitivity          *service.SensitivityService
+	Jobs                 *service.JobService
+	Dashboard            *service.DashboardService
+	System               *service.SystemService
+	EventHub             *jobs.EventHub
+	Maintenance          *service.MaintenanceGate
 }
 
 func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate) Services {
@@ -46,19 +46,18 @@ func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate
 	holdings := repository.NewHoldingsRepo(db)
 	instRepo := repository.NewInstrumentRepo(db)
 	marketRepo := repository.NewMarketDataRepo(db)
-	annualRepo := repository.NewAnnualReturnsRepo(db)
 	snapRepo := repository.NewSnapshotRepo(db)
+	workerTaskRepo := repository.NewWorkerTaskRepo(db)
+	marketAssetRepo := repository.NewMarketAssetRepo(db)
 	hash := service.NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
-	snapSvc := marketdata.NewSnapshotService(snapRepo, instRepo, marketRepo)
+	snapSvc := marketdata.NewSnapshotService(snapRepo, marketAssetRepo)
 	jobRepo := repository.NewJobRepo(db)
 	simRepo := repository.NewSimulationRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
-	workerTaskRepo := repository.NewWorkerTaskRepo(db)
-	marketAssetRepo := repository.NewMarketAssetRepo(db)
 	eventHub := jobs.NewEventHub()
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
-	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, instRepo, marketRepo)
+	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, marketAssetRepo)
 	rebalanceDraftSvc := service.NewRebalanceDraftService(
 		db, plans, repository.NewRebalanceDraftRepo(db), holdings, holdingsSvc, rebalanceSvc,
 	)
@@ -66,17 +65,22 @@ func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate
 	rebalanceExecutionSvc := service.NewRebalanceExecutionService(
 		db, plans, executionRepo, holdings, holdingsSvc, rebalanceSvc,
 	)
+	marketAssetSvc := service.NewMarketAssetService(db, workerTaskRepo, marketAssetRepo)
+	readinessSvc := service.NewSimulationReadinessService(
+		db, plans, holdings, marketAssetRepo, workerTaskRepo, snapSvc, marketAssetSvc,
+	)
 	simSvc := service.NewSimulationService(
-		db, plans, params, alloc, holdings, snapRepo, instRepo, marketRepo, jobRepo, simRepo, analysisRepo, hash,
+		db, plans, params, alloc, holdings, snapRepo, marketAssetRepo, instRepo, marketRepo,
+		jobRepo, simRepo, analysisRepo, hash, readinessSvc,
 	)
 	stressSvc := service.NewStressService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	sensitivitySvc := service.NewSensitivityService(db, plans, jobRepo, analysisRepo, simSvc, hash)
 	dashboardSvc := service.NewDashboardService(
-		plans, params, alloc, scenario, holdings, instRepo, simRepo, analysisRepo, hash,
+		plans, params, alloc, scenario, holdings, simRepo, analysisRepo, hash,
 		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc, executionRepo,
 	)
 
-	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, instRepo, hash, snapSvc, marketRepo)
+	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, marketAssetRepo, hash, snapSvc)
 	return Services{
 		Plans:               planSvc,
 		Allocation:          service.NewAllocationService(db, plans, params, alloc, scenario),
@@ -88,20 +92,18 @@ func NewServices(db *sql.DB, dbPath string, maintenance *service.MaintenanceGate
 		AssetRefresh: service.NewAssetRefreshService(
 			db, plans, params, alloc, scenario, holdingsSvc, repository.NewAssetRefreshEventRepo(db), executionRepo,
 		),
-		Instruments: service.NewInstrumentService(
-			db, instRepo, marketRepo, annualRepo, marketAssetRepo,
-		),
-		MarketAssets: service.NewMarketAssetService(db, workerTaskRepo, marketAssetRepo),
-		HoldingSnapshots: service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
-		Simulations:      simSvc,
-		Assumptions:      service.NewAssumptionService(db),
-		Stress:           stressSvc,
-		Sensitivity:      sensitivitySvc,
-		Jobs:             service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),
-		Dashboard:        dashboardSvc,
-		System:           service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
-		EventHub:         eventHub,
-		Maintenance:      maintenance,
+		MarketAssets:        marketAssetSvc,
+		HoldingSnapshots:    service.NewHoldingSnapshotService(db, plans, holdings, snapRepo, snapSvc),
+		Simulations:         simSvc,
+		SimulationReadiness: readinessSvc,
+		Assumptions:         service.NewAssumptionService(db),
+		Stress:              stressSvc,
+		Sensitivity:         sensitivitySvc,
+		Jobs:                service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),
+		Dashboard:           dashboardSvc,
+		System:              service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
+		EventHub:            eventHub,
+		Maintenance:         maintenance,
 	}
 }
 
@@ -320,9 +322,11 @@ func checkHoldingReadOnlyFields(body []byte) error {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return &service.AppError{Code: "invalid_request", Message: err.Error()}
 	}
+	// asset_class/region are user-chosen and writable; asset metadata and
+	// snapshot-derived metrics stay read-only.
 	readOnly := []string{
 		"name", "code", "instrument_name", "instrument_code",
-		"market", "asset_class", "region", "currency",
+		"market", "currency",
 		"historical_cagr", "modeled_annual_return", "annual_volatility", "max_drawdown",
 		"expense_ratio", "simulation_snapshot_id",
 	}
@@ -331,7 +335,7 @@ func checkHoldingReadOnlyFields(body []byte) error {
 			if _, ok := h[f]; ok {
 				return &service.AppError{
 					Code:    "holding_fields_read_only",
-					Message: "instrument metadata, risk/return metrics and simulation_snapshot_id are read-only",
+					Message: "asset metadata, risk/return metrics and simulation_snapshot_id are read-only",
 					Details: map[string]any{"field": f},
 				}
 			}

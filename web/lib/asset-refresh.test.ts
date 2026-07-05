@@ -13,14 +13,14 @@ import type { PlanHolding } from "@/types/api";
 describe("validateAssetRefreshTotal", () => {
   it("passes when sum matches total within tolerance", () => {
     const rows = [
-      { instrument_id: "a", current_amount_minor: 50_000_00 },
-      { instrument_id: "b", current_amount_minor: 50_000_00 },
+      { asset_key: "a", current_amount_minor: 50_000_00 },
+      { asset_key: "b", current_amount_minor: 50_000_00 },
     ];
     expect(validateAssetRefreshTotal(rows, 100_000_00).ok).toBe(true);
   });
 
   it("blocks when gap exceeds 1 yuan", () => {
-    const rows = [{ instrument_id: "a", current_amount_minor: 50_000_00 }];
+    const rows = [{ asset_key: "a", current_amount_minor: 50_000_00 }];
     const result = validateAssetRefreshTotal(rows, 100_000_00);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("分项合计");
@@ -34,7 +34,7 @@ describe("buildAssetRefreshBody", () => {
       [
         {
           id: "h1",
-          instrument_id: "a",
+          asset_key: "a",
           label: "A",
           code: "A",
           asset_class: "equity",
@@ -55,7 +55,7 @@ describe("buildAssetRefreshBody", () => {
     expect(body.sync_total_assets_minor).toBe(true);
     expect(body.config_changed).toBe(true);
     expect(body.holdings[0]).toMatchObject({
-      instrument_id: "a",
+      asset_key: "a",
       weight_within_group: 1,
     });
     expect(body.holdings[0]).not.toHaveProperty("enabled");
@@ -67,7 +67,7 @@ describe("hasAssetRefreshStructureChange", () => {
     {
       id: "h1",
       plan_id: "plan_1",
-      instrument_id: "i1",
+      asset_key: "i1",
       enabled: true,
       asset_class: "equity",
       region: "domestic",
@@ -83,7 +83,7 @@ describe("hasAssetRefreshStructureChange", () => {
       hasAssetRefreshStructureChange(base, [
         {
           id: "h1",
-          instrument_id: "i1",
+          asset_key: "i1",
           label: "A",
           code: "A",
           asset_class: "equity",
@@ -95,7 +95,7 @@ describe("hasAssetRefreshStructureChange", () => {
         },
         {
           id: "h2",
-          instrument_id: "i2",
+          asset_key: "i2",
           label: "B",
           code: "B",
           asset_class: "equity",
@@ -114,7 +114,7 @@ describe("hasAssetRefreshStructureChange", () => {
       hasAssetRefreshStructureChange(base, [
         {
           id: "h1",
-          instrument_id: "i1",
+          asset_key: "i1",
           label: "A",
           code: "A",
           asset_class: "equity",
@@ -134,7 +134,7 @@ describe("countAssetRefreshChanges", () => {
     {
       id: "h1",
       plan_id: "plan_1",
-      instrument_id: "i1",
+      asset_key: "i1",
       enabled: true,
       asset_class: "equity",
       region: "domestic",
@@ -146,7 +146,7 @@ describe("countAssetRefreshChanges", () => {
     {
       id: "h2",
       plan_id: "plan_1",
-      instrument_id: "i2",
+      asset_key: "i2",
       enabled: true,
       asset_class: "equity",
       region: "domestic",
@@ -163,7 +163,7 @@ describe("countAssetRefreshChanges", () => {
         base,
         base.map((holding) => ({
           id: holding.id,
-          instrument_id: holding.instrument_id,
+          asset_key: holding.asset_key,
           label: "X",
           code: "X",
           asset_class: holding.asset_class,
@@ -182,7 +182,7 @@ describe("countAssetRefreshChanges", () => {
       countAssetRefreshChanges(base, [
         {
           id: "h1",
-          instrument_id: "i1",
+          asset_key: "i1",
           label: "A",
           code: "A",
           asset_class: "equity",
@@ -194,7 +194,7 @@ describe("countAssetRefreshChanges", () => {
         },
         {
           id: "h2",
-          instrument_id: "i2",
+          asset_key: "i2",
           label: "B",
           code: "B",
           asset_class: "equity",
@@ -213,7 +213,7 @@ describe("countAssetRefreshChanges", () => {
       countAssetRefreshChanges(base, [
         {
           id: "h1",
-          instrument_id: "i1",
+          asset_key: "i1",
           label: "A",
           code: "A",
           asset_class: "equity",
@@ -225,7 +225,7 @@ describe("countAssetRefreshChanges", () => {
         },
         {
           id: "h2",
-          instrument_id: "i2",
+          asset_key: "i2",
           label: "B",
           code: "B",
           asset_class: "equity",
@@ -244,7 +244,7 @@ describe("countAssetRefreshChanges", () => {
       countAssetRefreshChanges(base, [
         {
           id: "h1",
-          instrument_id: "i1",
+          asset_key: "i1",
           label: "A",
           code: "A",
           asset_class: "equity",
@@ -264,7 +264,7 @@ describe("hasAssetRefreshDraftChanges", () => {
     {
       id: "h1",
       plan_id: "plan_1",
-      instrument_id: "i1",
+      asset_key: "i1",
       enabled: true,
       asset_class: "equity",
       region: "domestic",
@@ -281,7 +281,7 @@ describe("hasAssetRefreshDraftChanges", () => {
         base,
         base.map((holding) => ({
           id: holding.id,
-          instrument_id: holding.instrument_id,
+          asset_key: holding.asset_key,
           label: "A",
           code: "A",
           asset_class: holding.asset_class,
@@ -302,7 +302,7 @@ describe("validateAssetRefreshGroupWeights", () => {
     const result = validateAssetRefreshGroupWeights([
       {
         id: "h1",
-        instrument_id: "i1",
+        asset_key: "i1",
         label: "A",
         code: "A",
         asset_class: "equity",
@@ -314,7 +314,7 @@ describe("validateAssetRefreshGroupWeights", () => {
       },
       {
         id: "h2",
-        instrument_id: "i2",
+        asset_key: "i2",
         label: "B",
         code: "B",
         asset_class: "equity",
@@ -332,7 +332,7 @@ describe("validateAssetRefreshGroupWeights", () => {
     const result = validateAssetRefreshGroupWeights([
       {
         id: "h1",
-        instrument_id: "i1",
+        asset_key: "i1",
         label: "A",
         code: "A",
         asset_class: "equity",
@@ -354,7 +354,7 @@ describe("defaultWeightWithinGroup", () => {
       [
         {
           id: "h1",
-          instrument_id: "i1",
+          asset_key: "i1",
           label: "A",
           code: "A",
           asset_class: "equity",

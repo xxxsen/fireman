@@ -21,11 +21,10 @@ func newPlanServiceForTest(t *testing.T) *PlanService {
 	hash := NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
 	snapSvc := marketdata.NewSnapshotService(
 		repository.NewSnapshotRepo(db),
-		repository.NewInstrumentRepo(db),
-		repository.NewMarketDataRepo(db),
+		repository.NewMarketAssetRepo(db),
 	)
 	return NewPlanService(db, plans, params, alloc, scenario, holdings,
-		repository.NewInstrumentRepo(db), hash, snapSvc, repository.NewMarketDataRepo(db))
+		repository.NewMarketAssetRepo(db), hash, snapSvc)
 }
 
 func assertAppErrorCode(t *testing.T, err error, wantCode string) {

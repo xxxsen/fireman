@@ -15,13 +15,59 @@ import (
 func (s Services) registerSimulationRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans/:plan_id/simulations", s.createSimulation)
 	rg.GET("/plans/:plan_id/simulations", s.listSimulations)
+	rg.GET("/plans/:plan_id/simulation-readiness", s.getSimulationReadiness)
+	rg.POST("/plans/:plan_id/sync-missing-asset-history", s.syncMissingAssetHistory)
 	rg.GET("/plans/:plan_id/scenario-comparison", s.compareScenarios)
 	rg.GET("/plans/:plan_id/return-overrides", s.listReturnOverrides)
-	rg.PUT("/plans/:plan_id/return-overrides/:instrument_id", s.setReturnOverride)
-	rg.DELETE("/plans/:plan_id/return-overrides/:instrument_id", s.deleteReturnOverride)
+	rg.PUT("/plans/:plan_id/return-overrides/:asset_key", s.setReturnOverride)
+	rg.DELETE("/plans/:plan_id/return-overrides/:asset_key", s.deleteReturnOverride)
 	rg.GET("/simulations/:run_id", s.getSimulation)
 	rg.GET("/simulations/:run_id/paths", s.listSimulationPaths)
 	rg.GET("/simulations/:run_id/paths/:path_no", s.getSimulationPath)
+
+	rg.GET("/plans/:plan_id/holdings/:holding_id/simulation-snapshot", s.getHoldingSimulationSnapshot)
+	rg.POST("/plans/:plan_id/holdings/:holding_id/sync-simulation-snapshot", s.syncHoldingSimulationSnapshot)
+}
+
+func (s Services) getSimulationReadiness(c *gin.Context) {
+	out, err := s.SimulationReadiness.Check(c.Request.Context(), c.Param("plan_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) syncMissingAssetHistory(c *gin.Context) {
+	out, err := s.SimulationReadiness.SyncMissingHistory(c.Request.Context(), c.Param("plan_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) getHoldingSimulationSnapshot(c *gin.Context) {
+	out, err := s.HoldingSnapshots.Get(c.Request.Context(), c.Param("plan_id"), c.Param("holding_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) syncHoldingSimulationSnapshot(c *gin.Context) {
+	var req service.SyncSnapshotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.HoldingSnapshots.Sync(c.Request.Context(), c.Param("plan_id"), c.Param("holding_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 func (s Services) registerJobRoutes(rg *gin.RouterGroup) {
@@ -80,7 +126,7 @@ func (s Services) setReturnOverride(c *gin.Context) {
 		return
 	}
 	out, err := s.Simulations.SetReturnOverride(
-		c.Request.Context(), c.Param("plan_id"), c.Param("instrument_id"), req)
+		c.Request.Context(), c.Param("plan_id"), c.Param("asset_key"), req)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -90,7 +136,7 @@ func (s Services) setReturnOverride(c *gin.Context) {
 
 func (s Services) deleteReturnOverride(c *gin.Context) {
 	err := s.Simulations.DeleteReturnOverride(
-		c.Request.Context(), c.Param("plan_id"), c.Param("instrument_id"))
+		c.Request.Context(), c.Param("plan_id"), c.Param("asset_key"))
 	if err != nil {
 		FailErr(c, err)
 		return

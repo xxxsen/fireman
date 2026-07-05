@@ -48,6 +48,7 @@ type SimulationService struct {
 	alloc       *repository.AllocationRepo
 	holdings    *repository.HoldingsRepo
 	snapRepo    *repository.SnapshotRepo
+	assetRepo   *repository.MarketAssetRepo
 	fx          *marketdata.FXResolver
 	jobs        *repository.JobRepo
 	sims        *repository.SimulationRepo
@@ -55,6 +56,7 @@ type SimulationService struct {
 	hash        *ConfigHashService
 	assumptions *repository.AssumptionProfileRepo
 	overrides   *repository.ReturnOverrideRepo
+	readiness   *SimulationReadinessService
 }
 
 func NewSimulationService(
@@ -64,20 +66,24 @@ func NewSimulationService(
 	alloc *repository.AllocationRepo,
 	holdings *repository.HoldingsRepo,
 	snapRepo *repository.SnapshotRepo,
+	assetRepo *repository.MarketAssetRepo,
 	inst *repository.InstrumentRepo,
 	market *repository.MarketDataRepo,
 	jobs *repository.JobRepo,
 	sims *repository.SimulationRepo,
 	analysis *repository.AnalysisRepo,
 	hash *ConfigHashService,
+	readiness *SimulationReadinessService,
 ) *SimulationService {
 	return &SimulationService{
 		sql: sqlDB, plans: plans, params: params, alloc: alloc, holdings: holdings,
-		snapRepo: snapRepo,
-		fx:       marketdata.NewFXResolver(inst, market),
-		jobs:     jobs, sims: sims, analysis: analysis, hash: hash,
+		snapRepo:  snapRepo,
+		assetRepo: assetRepo,
+		fx:        marketdata.NewFXResolver(inst, market),
+		jobs:      jobs, sims: sims, analysis: analysis, hash: hash,
 		assumptions: repository.NewAssumptionProfileRepo(sqlDB),
 		overrides:   repository.NewReturnOverrideRepo(sqlDB),
+		readiness:   readiness,
 	}
 }
 
@@ -190,6 +196,24 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 			return CreateSimulationResponse{}, newErr("parameters_invalid", err.Error(), nil)
 		}
 		req.seedInt = parsed
+	}
+
+	// Simulation readiness gate: lazily-saved holdings get their snapshots
+	// built now that history may have arrived; assets still missing history
+	// block the run with market_asset_history_missing.
+	if s.readiness != nil {
+		if err := s.readiness.EnsureHoldingSnapshots(ctx, req.PlanID); err != nil {
+			return CreateSimulationResponse{}, err
+		}
+		readiness, err := s.readiness.Check(ctx, req.PlanID)
+		if err != nil {
+			return CreateSimulationResponse{}, err
+		}
+		if !readiness.Ready {
+			return CreateSimulationResponse{}, newErr("market_asset_history_missing",
+				"部分计划资产尚未同步历史数据",
+				map[string]any{"missing_history": readiness.MissingHistory})
+		}
 	}
 
 	snap, inputHash, err := s.buildInputSnapshot(ctx, plan, req, "")
@@ -397,7 +421,7 @@ func (s *SimulationService) GetPathDetail(ctx context.Context, runID string, pat
 // AssetParticipationView summarizes which complete years each asset used in simulation.
 type AssetParticipationView struct {
 	HoldingID     string `json:"holding_id"`
-	InstrumentID  string `json:"instrument_id"`
+	AssetKey  string `json:"asset_key"`
 	CompleteYears []int  `json:"complete_years"`
 }
 
@@ -521,7 +545,7 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 				years = append(years, y.Year)
 			}
 			participation = append(participation, AssetParticipationView{
-				HoldingID: a.HoldingID, InstrumentID: a.InstrumentID, CompleteYears: years,
+				HoldingID: a.HoldingID, AssetKey: a.AssetKey, CompleteYears: years,
 			})
 		}
 		assumption = buildRunAssumptionView(snap)
@@ -647,7 +671,7 @@ func (s *SimulationService) activeReturnOverrides(
 		if o.ExpiresAt < plan.ValuationDate {
 			continue
 		}
-		out[o.InstrumentID] = o
+		out[o.AssetKey] = o
 	}
 	return out, nil
 }

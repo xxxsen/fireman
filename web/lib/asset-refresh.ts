@@ -13,13 +13,13 @@ function weightWithinGroupChanged(before: number, after: number): boolean {
 }
 
 export interface AssetRefreshRow {
-  instrument_id: string;
+  asset_key: string;
   current_amount_minor: number;
 }
 
 export interface AssetRefreshHolding {
   id: string;
-  instrument_id: string;
+  asset_key: string;
   label: string;
   code: string;
   asset_class: string;
@@ -33,9 +33,9 @@ export interface AssetRefreshHolding {
 export function holdingFromPlan(holding: PlanHolding, isSystem = false): AssetRefreshHolding {
   return {
     id: holding.id,
-    instrument_id: holding.instrument_id,
-    label: holding.instrument_name ?? holding.instrument_code ?? holding.instrument_id,
-    code: holding.instrument_code ?? holding.instrument_id,
+    asset_key: holding.asset_key,
+    label: holding.instrument_name ?? holding.instrument_code ?? holding.asset_key,
+    code: holding.instrument_code ?? holding.asset_key,
     asset_class: holding.asset_class,
     region: holding.region,
     current_amount_minor: holding.current_amount_minor,
@@ -50,10 +50,10 @@ export function countAssetRefreshChanges(
   after: AssetRefreshHolding[],
 ): number {
   const beforeByInstrument = new Map(
-    before.map((holding) => [holding.instrument_id, holding] as const),
+    before.map((holding) => [holding.asset_key, holding] as const),
   );
   const afterByInstrument = new Map(
-    after.map((holding) => [holding.instrument_id, holding] as const),
+    after.map((holding) => [holding.asset_key, holding] as const),
   );
   const instrumentIds = new Set([
     ...beforeByInstrument.keys(),
@@ -85,7 +85,7 @@ export function hasAssetRefreshDraftChanges(
 ): boolean {
   const beforeTotal = sumHoldingsMinor(
     before.map((holding) => ({
-      instrument_id: holding.instrument_id,
+      asset_key: holding.asset_key,
       current_amount_minor: holding.current_amount_minor,
     })),
   );
@@ -125,7 +125,7 @@ export function validateAssetRefreshGroupWeights(
   for (const [key, rows] of groups) {
     const [assetClass, region] = key.split(":");
     const check = validatePercentSum(
-      rows.map((row) => ({ label: row.instrument_id, value: row.weight_within_group })),
+      rows.map((row) => ({ label: row.asset_key, value: row.weight_within_group })),
     );
     if (!check.passed) {
       return {
@@ -135,15 +135,6 @@ export function validateAssetRefreshGroupWeights(
     }
   }
   return { ok: true };
-}
-
-export function buildHoldingsUpdateItems(holdings: AssetRefreshHolding[]) {
-  return holdings.map((holding, index) => ({
-    instrument_id: holding.instrument_id,
-    weight_within_group: holding.weight_within_group,
-    current_amount_minor: holding.current_amount_minor,
-    sort_order: holding.sort_order ?? index * 10,
-  }));
 }
 
 export function sumHoldingsMinor(rows: AssetRefreshRow[]): number {
@@ -177,7 +168,9 @@ export function buildAssetRefreshBody(
     config_version: configVersion,
     ...(scenarioId ? { scenario_id: scenarioId } : {}),
     holdings: draftHoldings.map((row, index) => ({
-      instrument_id: row.instrument_id,
+      asset_key: row.asset_key,
+      asset_class: row.asset_class,
+      region: row.region,
       current_amount_minor: row.current_amount_minor,
       weight_within_group: row.weight_within_group,
       sort_order: row.sort_order ?? index * 10,

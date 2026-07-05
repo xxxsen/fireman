@@ -113,10 +113,8 @@ describe("MarketAssetDetailPage", () => {
 
     expect(screen.getByTestId("return-series-chart")).toBeInTheDocument();
     expect(screen.getByTestId("annual-returns-table")).toBeInTheDocument();
-    expect(screen.getByTestId("import-from-detail")).toHaveAttribute(
-      "href",
-      `/assets/import?asset_key=${encodeURIComponent(ASSET_KEY)}`,
-    );
+    // The user asset library was removed: no import entry on the detail page.
+    expect(screen.queryByTestId("import-from-detail")).not.toBeInTheDocument();
   });
 
   it("shows the no-history empty state before the first sync", async () => {

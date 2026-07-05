@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,17 +27,17 @@ func seedSimulationReadyPlan(t *testing.T, db *sql.DB) string {
 	planID := plan.ID
 
 	snapRepo := repository.NewSnapshotRepo(db)
-	instID := "ins_sim_equity"
-	if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
-		ID: instID, Code: "SIM001", Name: "模拟基金", Market: "CN",
-		AssetClass: "equity", Region: "domestic", Currency: "CNY",
+	assetKey := "CN|test|sh|SIM001"
+	if err := snapRepo.EnsureMarketAsset(context.Background(), repository.MarketAsset{
+		AssetKey: assetKey, Symbol: "SIM001", Name: "模拟基金",
+		Market: "CN", Currency: "CNY",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	snapID := "snap_sim_equity"
 	now := time.Now().UnixMilli()
 	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
-		ID: snapID, InstrumentID: instID, PlanID: &planID,
+		ID: snapID, AssetKey: assetKey, PlanID: &planID,
 		InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
 		CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
 		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -59,11 +60,11 @@ func seedSimulationReadyPlan(t *testing.T, db *sql.DB) string {
 	holdID := "hold_sim_1"
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO plan_holdings (
-			id, plan_id, instrument_id, enabled, asset_class, region,
+			id, plan_id, asset_key, enabled, asset_class, region,
 			weight_within_group, current_amount_minor, simulation_snapshot_id,
 			sort_order, created_at, updated_at
 		) VALUES (?,?,?,1,'equity','domestic',1.0,?,?,1,?,?)`,
-		holdID, planID, instID, 1_000_000_00, snapID, now, now); err != nil {
+		holdID, planID, assetKey, 1_000_000_00, snapID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(context.Background(), `
@@ -98,17 +99,17 @@ func seedOneYearSimulationPlan(t *testing.T, db *sql.DB) string {
 	planID := plan.ID
 
 	snapRepo := repository.NewSnapshotRepo(db)
-	instID := "ins_one_year"
-	if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
-		ID: instID, Code: "ONE001", Name: "一年样本基金", Market: "CN",
-		AssetClass: "equity", Region: "domestic", Currency: "CNY",
+	assetKey := "CN|test|sh|ONE001"
+	if err := snapRepo.EnsureMarketAsset(context.Background(), repository.MarketAsset{
+		AssetKey: assetKey, Symbol: "ONE001", Name: "一年样本基金",
+		Market: "CN", Currency: "CNY",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	snapID := "snap_one_year"
 	now := time.Now().UnixMilli()
 	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
-		ID: snapID, InstrumentID: instID, PlanID: &planID,
+		ID: snapID, AssetKey: assetKey, PlanID: &planID,
 		InclusionDate: "2026-06-14", AsOfDate: "2026-06-14",
 		CompleteYearCount: 1, DailyObservationCount: 252, MonthlyReturnCount: 12,
 		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -128,11 +129,11 @@ func seedOneYearSimulationPlan(t *testing.T, db *sql.DB) string {
 	holdID := "hold_one_year"
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO plan_holdings (
-			id, plan_id, instrument_id, enabled, asset_class, region,
+			id, plan_id, asset_key, enabled, asset_class, region,
 			weight_within_group, current_amount_minor, simulation_snapshot_id,
 			sort_order, created_at, updated_at
 		) VALUES (?,?,?,1,'equity','domestic',1.0,?,?,1,?,?)`,
-		holdID, planID, instID, 1_000_000_00, snapID, now, now); err != nil {
+		holdID, planID, assetKey, 1_000_000_00, snapID, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(context.Background(), `
@@ -299,19 +300,22 @@ func TestReturnOverrideEndpoint(t *testing.T) {
 	defer srv.Close()
 	base := srv.URL + "/api/v1/plans/" + planID + "/return-overrides"
 
+	heldKey := url.PathEscape("CN|test|sh|SIM001")
+	unheldKey := url.PathEscape("CN|test|sh|NOTHELD")
+
 	// Missing reason is rejected.
-	if status := putJSON(t, base+"/ins_sim_equity",
+	if status := putJSON(t, base+"/"+heldKey,
 		map[string]any{"forward_return": 0.2, "expires_at": "2099-12-31"}); status == http.StatusOK {
 		t.Fatal("override without reason must be rejected")
 	}
-	// Override for an instrument not held by the plan is rejected.
-	if status := putJSON(t, base+"/ins_not_in_plan",
+	// Override for an asset not held by the plan is rejected.
+	if status := putJSON(t, base+"/"+unheldKey,
 		map[string]any{"forward_return": 0.2, "reason": "x", "expires_at": "2099-12-31"}); status == http.StatusOK {
-		t.Fatal("override for unheld instrument must be rejected")
+		t.Fatal("override for unheld asset must be rejected")
 	}
 
 	// Valid override is accepted.
-	if status := putJSON(t, base+"/ins_sim_equity", map[string]any{
+	if status := putJSON(t, base+"/"+heldKey, map[string]any{
 		"forward_return": 0.25, "reason": "锁定到期收益率", "expires_at": "2099-12-31",
 	}); status != http.StatusOK {
 		t.Fatalf("valid override status=%d", status)
@@ -367,7 +371,7 @@ func TestReturnOverrideEndpoint(t *testing.T) {
 	}
 
 	// Delete clears it.
-	delReq, _ := http.NewRequest(http.MethodDelete, base+"/ins_sim_equity", nil)
+	delReq, _ := http.NewRequest(http.MethodDelete, base+"/"+heldKey, nil)
 	resp, err = http.DefaultClient.Do(delReq)
 	if err != nil {
 		t.Fatal(err)

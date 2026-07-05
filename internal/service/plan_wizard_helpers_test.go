@@ -36,7 +36,7 @@ func TestValidateWizardRequestAcceptsPartialRegionTargets(t *testing.T) {
 		Name:               "p",
 		ValuationDate:      "2026-06-14",
 		SelectedScenarioID: "scn_a",
-		Holdings:           []WizardHoldingItem{{InstrumentID: "ins_x"}},
+		Holdings:           []WizardHoldingItem{{AssetKey: "CN|test|sh|X001"}},
 		RegionTargets: []repository.RegionTarget{
 			{AssetClass: "equity", Region: "domestic", WeightWithinClass: 1.0},
 			{AssetClass: "equity", Region: "foreign", WeightWithinClass: 0.0},

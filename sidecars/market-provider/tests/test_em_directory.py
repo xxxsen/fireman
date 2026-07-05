@@ -1,4 +1,4 @@
-"""Eastmoney clist directory fetcher tests (mocked HTTP)."""
+"""Eastmoney clist directory fetcher tests (recorded testdata, no network)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 from fireman_market_provider.adapters import em_directory
+
+from .dataload import load_json_gz
 
 
 class _FakeResponse:
@@ -20,11 +22,11 @@ class _FakeResponse:
         return self._payload
 
 
-def _rows(start: int, count: int, market: int = 116) -> list[dict[str, Any]]:
-    return [
-        {"f12": f"{i:05d}", "f13": market, "f14": f"资产{i}"}
-        for i in range(start, start + count)
-    ]
+_HK_EQUITY_PAGES = {
+    1: load_json_gz("em_hk_equity_list.page1.json.gz"),
+    2: load_json_gz("em_hk_equity_list.page2.json.gz"),
+    3: load_json_gz("em_hk_equity_list.page3.json.gz"),
+}
 
 
 @pytest.fixture(autouse=True)
@@ -33,16 +35,11 @@ def _fast_pagination(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_fetch_board_paginates_until_total(monkeypatch: pytest.MonkeyPatch) -> None:
-    pages = {
-        1: {"total": 250, "diff": _rows(0, 100)},
-        2: {"total": 250, "diff": _rows(100, 100)},
-        3: {"total": 250, "diff": _rows(200, 50)},
-    }
     calls: list[tuple[str, int]] = []
 
     def fake_get(url, params=None, headers=None, timeout=None):
         calls.append((url, params["pn"]))
-        return _FakeResponse({"data": pages[params["pn"]]})
+        return _FakeResponse(_HK_EQUITY_PAGES[params["pn"]])
 
     monkeypatch.setattr(em_directory.requests, "get", fake_get)
     rows = em_directory._fetch_board("m:116 t:1")
@@ -53,10 +50,12 @@ def test_fetch_board_paginates_until_total(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_fetch_board_falls_back_to_next_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = load_json_gz("em_hk_fund_list.page1.json.gz")
+
     def fake_get(url, params=None, headers=None, timeout=None):
         if url == em_directory._CLIST_HOSTS[0]:
             raise ConnectionError("host unreachable")
-        return _FakeResponse({"data": {"total": 2, "diff": _rows(0, 2)}})
+        return _FakeResponse(payload)
 
     monkeypatch.setattr(em_directory.requests, "get", fake_get)
     rows = em_directory._fetch_board("m:116 t:1")
@@ -64,10 +63,16 @@ def test_fetch_board_falls_back_to_next_host(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_fetch_board_truncated_response_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    page1 = load_json_gz("em_hk_equity_list.page1.json.gz")
+    truncated = load_json_gz("em_hk_equity_list.truncated_page2.json.gz")
+
     def fake_get(url, params=None, headers=None, timeout=None):
         if params["pn"] == 1:
-            return _FakeResponse({"data": {"total": 300, "diff": _rows(0, 100)}})
-        return _FakeResponse({"data": {"total": 300, "diff": []}})
+            # total=300 forces a second page which then comes back empty.
+            return _FakeResponse(
+                {"data": {"total": 300, "diff": page1["data"]["diff"]}}
+            )
+        return _FakeResponse(truncated)
 
     monkeypatch.setattr(em_directory.requests, "get", fake_get)
     with pytest.raises(RuntimeError, match="all eastmoney clist hosts failed"):
@@ -75,13 +80,14 @@ def test_fetch_board_truncated_response_raises(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_hk_and_us_frames_have_akshare_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    hk_fund = load_json_gz("em_hk_fund_list.page1.json.gz")
+    us_etf = load_json_gz("em_us_etf_list.page1.json.gz")
+
     def fake_get(url, params=None, headers=None, timeout=None):
         fs = params["fs"]
         if "m:116" in fs:
-            diff = [{"f12": "02800", "f13": 116, "f14": "盈富基金"}]
-        else:
-            diff = [{"f12": "SPY", "f13": 107, "f14": "标普500ETF"}]
-        return _FakeResponse({"data": {"total": 1, "diff": diff}})
+            return _FakeResponse(hk_fund)
+        return _FakeResponse(us_etf)
 
     monkeypatch.setattr(em_directory.requests, "get", fake_get)
 
@@ -94,11 +100,26 @@ def test_hk_and_us_frames_have_akshare_columns(monkeypatch: pytest.MonkeyPatch) 
     assert us.iloc[0]["代码"] == "107.SPY"
 
 
+def test_us_equity_frame_uses_market_prefixed_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    us_equity = load_json_gz("em_us_equity_list.page1.json.gz")
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return _FakeResponse(us_equity)
+
+    monkeypatch.setattr(em_directory.requests, "get", fake_get)
+    us = em_directory.em_us_equity_list()
+    assert list(us["代码"]) == ["105.AAPL", "106.BRK.B"]
+
+
 def test_dispatcher_routes_em_operations(monkeypatch: pytest.MonkeyPatch) -> None:
     from fireman_market_provider.timeout_util import UpstreamCall, dispatch_upstream_call
 
+    payload = load_json_gz("em_hk_fund_list.page1.json.gz")
+
     def fake_get(url, params=None, headers=None, timeout=None):
-        return _FakeResponse({"data": {"total": 1, "diff": _rows(0, 1)}})
+        return _FakeResponse(payload)
 
     monkeypatch.setattr(em_directory.requests, "get", fake_get)
     df = dispatch_upstream_call(UpstreamCall("em_hk_equity_list"))
@@ -106,3 +127,11 @@ def test_dispatcher_routes_em_operations(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(ValueError, match="unsupported upstream operation"):
         dispatch_upstream_call(UpstreamCall("em_nonexistent_list"))
+
+
+def test_network_guard_blocks_unmocked_requests() -> None:
+    """Unmocked requests.get in a non-live test must fail with guidance."""
+    import requests
+
+    with pytest.raises(RuntimeError, match="tests/testdata"):
+        requests.get("https://push2.eastmoney.com/api/qt/clist/get")

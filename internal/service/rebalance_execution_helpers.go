@@ -45,10 +45,10 @@ func buildRebalanceExecutionRecords(
 	planID string,
 	plan repository.Plan,
 	result domain.RebalanceResult,
-	filterInstrumentIDs []string,
+	filterAssetKeys []string,
 ) (repository.RebalanceExecution, []repository.RebalanceExecutionLine) {
 	filter := map[string]bool{}
-	for _, id := range filterInstrumentIDs {
+	for _, id := range filterAssetKeys {
 		filter[id] = true
 	}
 	useFilter := len(filter) > 0
@@ -78,13 +78,13 @@ func buildRebalanceExecutionRecords(
 		if line.Action == domain.RebalanceActionHold {
 			continue
 		}
-		if useFilter && !filter[line.InstrumentID] {
+		if useFilter && !filter[line.AssetKey] {
 			continue
 		}
 		targetDelta := line.StructuralGapAmountMinor
 		lines = append(lines, repository.RebalanceExecutionLine{
 			ID: "rbxl_" + uuid.New().String(), ExecutionID: execution.ID,
-			HoldingID: line.HoldingID, InstrumentID: line.InstrumentID,
+			HoldingID: line.HoldingID, AssetKey: line.AssetKey,
 			BaselineCurrentMinor: line.CurrentAmountMinor,
 			TargetDeltaMinor:     targetDelta,
 			ExecutedDeltaMinor:   0,

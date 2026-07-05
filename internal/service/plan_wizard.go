@@ -10,13 +10,18 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// WizardHoldingItem is one holding in the plan wizard request.
+// WizardHoldingItem is one holding in the plan wizard request. Assets come
+// from the global market asset directory; asset_class/region are chosen by
+// the user.
 type WizardHoldingItem struct {
-	InstrumentID       string  `json:"instrument_id"`
+	AssetKey           string  `json:"asset_key"`
+	AssetClass         string  `json:"asset_class"`
+	Region             string  `json:"region"`
 	Enabled            bool    `json:"enabled"`
 	WeightWithinGroup  float64 `json:"weight_within_group"`
 	CurrentAmountMinor int64   `json:"current_amount_minor"`
 	SortOrder          int     `json:"sort_order"`
+	AllowInactive      bool    `json:"allow_inactive,omitempty"`
 }
 
 // PlanWizardRequest atomically creates a plan with parameters, allocation and holdings.
@@ -80,11 +85,10 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 	}
 
 	planID := "plan_" + uuid.New().String()
-	instruments, err := s.loadWizardInstruments(ctx, req.Holdings, req.ValuationDate)
-	if err != nil {
+	if err := s.validateWizardAssets(ctx, req.Holdings); err != nil {
 		return PlanDetail{}, err
 	}
-	pending, err := s.buildWizardPendingSnaps(ctx, planID, req.ValuationDate, req.Holdings)
+	snapIDs, pending, err := s.buildWizardPendingSnaps(ctx, planID, req.ValuationDate, req.Holdings)
 	if err != nil {
 		return PlanDetail{}, err
 	}
@@ -93,7 +97,7 @@ func (s *PlanService) CreateWizard(ctx context.Context, req PlanWizardRequest) (
 		AssetClassTargets: scn.Weights,
 		RegionTargets:     req.RegionTargets,
 	}
-	built := buildWizardHoldings(planID, req, instruments, pending, gap)
+	built := buildWizardHoldings(planID, req, snapIDs, gap)
 	if err := validateWizardWeights(alloc, built); err != nil {
 		return PlanDetail{}, err
 	}
@@ -139,7 +143,7 @@ func CountPlans(ctx context.Context, db *sql.DB) (int, error) {
 func CountSnapshots(ctx context.Context, db *sql.DB) (int, error) {
 	var n int
 	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM instrument_simulation_snapshots WHERE plan_id IS NOT NULL`).Scan(&n)
+		`SELECT COUNT(*) FROM market_asset_simulation_snapshots WHERE plan_id IS NOT NULL`).Scan(&n)
 	return n, wrapRepo("count snapshots", err)
 }
 

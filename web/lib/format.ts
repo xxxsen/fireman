@@ -197,6 +197,7 @@ export function instrumentTypeLabel(t: string | undefined | null): string {
     hk_stock: "港股",
     us_etf: "美国 ETF",
     us_stock: "美国股票",
+    cash: "现金",
   };
   return map[t] ?? t;
 }
@@ -228,21 +229,6 @@ export function rebalanceActionLabel(action: string): string {
   return map[action] ?? action;
 }
 
-export function qualityStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    available: "可用",
-    insufficient_history: "历史不足",
-    provider_data_anomaly: "数据异常",
-    pending_sync: "待同步",
-    classification_failed: "分类失败",
-    data_anomaly: "数据异常",
-    pending_fetch: "抓取中",
-    fetch_failed: "抓取失败",
-    active: "正常",
-  };
-  return map[status] ?? status;
-}
-
 export function historyDepthLabel(depth: string | undefined): string {
   const map: Record<string, string> = {
     insufficient: "历史不足",
@@ -254,81 +240,9 @@ export function historyDepthLabel(depth: string | undefined): string {
   return depth ? (map[depth] ?? depth) : "—";
 }
 
-export function metricStatusLabel(status: string | undefined | null): string {
-  if (!status) return "—";
-  const map: Record<string, string> = {
-    available: "可用",
-    insufficient_complete_years: "完整年度不足",
-    insufficient_monthly_coverage: "月份覆盖不足",
-    invalid_metric_value: "指标无效",
-    unavailable: "不可用",
-  };
-  return map[status] ?? status;
-}
-
-export function instrumentSimulationStatusLabel(inst: {
-  status: string;
-  simulation_eligible?: boolean;
-  history_depth?: string;
-  quality_status?: string;
-}): string | null {
-  if (inst.status === "pending_fetch" || inst.status === "fetch_failed") {
-    return null;
-  }
-  if (inst.simulation_eligible && inst.history_depth === "one_year") {
-    return "可用于模拟·历史样本有限";
-  }
-  if (inst.simulation_eligible) {
-    return "可用于模拟";
-  }
-  return null;
-}
-
-export function excludedYearReasonLabel(reason: string): string {
-  const map: Record<string, string> = {
-    missing_opening_anchor: "成立首年，缺少年初锚点",
-    current_year: "当前年度尚未结束",
-    incomplete_year: "不完整年度",
-    insufficient_monthly_coverage: "月份覆盖不足",
-  };
-  return map[reason] ?? reason;
-}
-
 export function formatNullablePercent(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";
   return formatPercent(value);
-}
-
-/**
- * Compact, fixed-order trailing-return summary `1年 8.12% · 3年 6.41% · 5年 —`
- * shared by the asset library desktop table cell and mobile cards so both render
- * the same labels, order and empty-value text. Each window keeps its `N年` label
- * (never bare percentages) and falls back to `—` when history is insufficient.
- */
-export function formatTrailingReturnsSummary(
-  tr:
-    | {
-        one_year_annualized_return?: number | null;
-        three_year_annualized_return?: number | null;
-        five_year_annualized_return?: number | null;
-      }
-    | null
-    | undefined,
-): string {
-  return [
-    `1年 ${formatNullablePercent(tr?.one_year_annualized_return)}`,
-    `3年 ${formatNullablePercent(tr?.three_year_annualized_return)}`,
-    `5年 ${formatNullablePercent(tr?.five_year_annualized_return)}`,
-  ].join(" · ");
-}
-
-export function instrumentStatusLabel(status: string): string {
-  const map: Record<string, string> = {
-    pending_fetch: "抓取中",
-    fetch_failed: "抓取失败",
-    active: "正常",
-  };
-  return map[status] ?? status;
 }
 
 const DATA_SOURCE_MAP: Record<string, string> = {

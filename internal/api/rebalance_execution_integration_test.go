@@ -225,7 +225,7 @@ func TestRebalanceExecutionFlow(t *testing.T) {
 	refreshHoldings := make([]map[string]any, 0, len(instIDs))
 	for _, instID := range instIDs {
 		refreshHoldings = append(refreshHoldings, map[string]any{
-			"instrument_id": instID, "current_amount_minor": 100_000_00,
+			"asset_key": instID, "current_amount_minor": 100_000_00,
 		})
 	}
 	allowBody, _ := json.Marshal(map[string]any{

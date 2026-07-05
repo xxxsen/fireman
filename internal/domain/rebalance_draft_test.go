@@ -7,7 +7,7 @@ func TestBuildFrozenDraftLines_OnlyEnabled(t *testing.T) {
 		Lines: []RebalanceLine{
 			{
 				HoldingTargetLine: HoldingTargetLine{
-					HoldingID: "h1", InstrumentID: "i1", Enabled: true,
+					HoldingID: "h1", AssetKey: "i1", Enabled: true,
 					CurrentAmountMinor: 120_000_00, StructuralTargetAmountMinor: 100_000_00,
 					StructuralGapAmountMinor: -20_000_00, StructuralGapWeight: -0.067,
 				},
@@ -15,7 +15,7 @@ func TestBuildFrozenDraftLines_OnlyEnabled(t *testing.T) {
 			},
 			{
 				HoldingTargetLine: HoldingTargetLine{
-					HoldingID: "h2", InstrumentID: "i2", Enabled: false,
+					HoldingID: "h2", AssetKey: "i2", Enabled: false,
 					CurrentAmountMinor: 50_000_00,
 				},
 			},

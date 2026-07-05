@@ -1,7 +1,8 @@
 """Regression tests for historical fetch fixes (td/034).
 
 The resolve-path regressions were removed together with the resolve endpoint
-(td/078); identity/type mismatch handling now happens at directory level.
+(task-worker refactor); identity/type mismatch handling now happens at
+directory level.
 """
 
 from unittest.mock import patch

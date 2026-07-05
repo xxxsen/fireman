@@ -1,6 +1,22 @@
 import { assetClassLabel, formatMoney, formatPercent, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
-import type { AssetClassTarget, Instrument, RegionTarget } from "@/types/api";
+import type { AssetClassTarget, RegionTarget } from "@/types/api";
+
+/**
+ * A market-directory asset picked into the wizard. `id` is the market asset
+ * key; `asset_class`/`region` are the user's classification (from the picker
+ * group), not intrinsic properties of the asset.
+ */
+export interface WizardAsset {
+  id: string;
+  code: string;
+  name: string;
+  asset_class: string;
+  region: string;
+  has_history: boolean;
+  history_data_as_of?: string;
+  history_source_name?: string;
+}
 
 /** Default region split used when creating a plan from the wizard. */
 export const WIZARD_DEFAULT_REGION_WEIGHT = {
@@ -99,7 +115,7 @@ export function pruneSelectedByRegionTargets(
 }
 
 export interface WizardHoldingSelection {
-  inst: Instrument;
+  inst: WizardAsset;
   weight: number;
   amount: number;
   /** User manually edited weight; excluded from auto redistribution. */
@@ -126,7 +142,7 @@ export function redistributeGroupWeights(items: WizardHoldingSelection[]): Wizar
 
 export function addInstrumentToGroup(
   items: WizardHoldingSelection[],
-  inst: Instrument,
+  inst: WizardAsset,
 ): WizardHoldingSelection[] {
   return redistributeGroupWeights([
     ...items,

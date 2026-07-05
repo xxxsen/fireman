@@ -6,52 +6,59 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/fireman/fireman/internal/repository"
 )
 
-var errSystemInstrumentHoldings = errors.New("system instrument cannot be added to plan holdings")
+// ErrAssetHistoryMissing reports that a market asset has no local history
+// points, so a simulation snapshot cannot be built until a history sync runs.
+var ErrAssetHistoryMissing = errors.New("market asset has no local history data")
 
-// SnapshotService creates plan-specific simulation snapshots.
+// SnapshotService creates plan-specific simulation snapshots from the global
+// market asset directory (market_assets + market_asset_points).
 type SnapshotService struct {
-	snapRepo   *repository.SnapshotRepo
-	instRepo   *repository.InstrumentRepo
-	marketRepo *repository.MarketDataRepo
+	snapRepo  *repository.SnapshotRepo
+	assetRepo *repository.MarketAssetRepo
 }
 
 func NewSnapshotService(
 	snapRepo *repository.SnapshotRepo,
-	instRepo *repository.InstrumentRepo,
-	marketRepo *repository.MarketDataRepo,
+	assetRepo *repository.MarketAssetRepo,
 ) *SnapshotService {
-	return &SnapshotService{snapRepo: snapRepo, instRepo: instRepo, marketRepo: marketRepo}
+	return &SnapshotService{snapRepo: snapRepo, assetRepo: assetRepo}
 }
 
-// BuildSnapshotForHolding computes a plan-specific simulation snapshot without persisting.
+// BuildSnapshotForHolding computes a plan-specific simulation snapshot without
+// persisting. System cash assets resolve to their immutable seeded snapshots.
 func (s *SnapshotService) BuildSnapshotForHolding(
 	ctx context.Context,
-	planID, instrumentID, valuationDate string,
+	planID, assetKey, valuationDate string,
 ) (repository.SimulationSnapshot, error) {
-	inst, err := s.instRepo.GetByID(ctx, instrumentID)
+	if cashSnapID, ok := repository.SystemCashSnapshotIDForAsset(assetKey); ok {
+		return repository.SimulationSnapshot{ID: cashSnapID}, nil
+	}
+	asset, err := s.assetRepo.GetByKey(ctx, assetKey)
 	if err != nil {
-		return repository.SimulationSnapshot{}, fmt.Errorf("load instrument: %w", err)
-	}
-	if inst.ID == "system_cash_cny" {
-		return repository.SimulationSnapshot{ID: s.snapRepo.GetSystemCashSnapshotID()}, nil
-	}
-	if inst.IsSystem {
-		return repository.SimulationSnapshot{}, errSystemInstrumentHoldings
+		return repository.SimulationSnapshot{}, fmt.Errorf("load market asset: %w", err)
 	}
 
-	points, err := s.loadPoints(ctx, instrumentID)
+	points, err := s.LoadAssetPoints(ctx, asset)
 	if err != nil {
 		return repository.SimulationSnapshot{}, err
 	}
+	if len(points) == 0 {
+		return repository.SimulationSnapshot{}, &SnapshotError{
+			Code:    "asset_history_missing",
+			Message: "该标的尚未同步历史数据，请先同步历史数据",
+			Details: map[string]any{"asset_key": assetKey},
+		}
+	}
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, valuationDate, pointType, sourceName)
-	snap := metricsToRepositorySnapshot("", instrumentID, &planID, valuationDate, inst, metrics)
+	snap := metricsToRepositorySnapshot("", assetKey, &planID, valuationDate, metrics)
 	if err := ValidateSimulationSnapshot(snap); err != nil {
 		if !metrics.SimulationEligible {
 			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
@@ -74,18 +81,17 @@ func (s *SnapshotService) BuildSnapshotForHolding(
 
 	snapID := "sim_snap_" + uuid.New().String()
 	planRef := planID
-	return metricsToRepositorySnapshot(snapID, instrumentID, &planRef, valuationDate, inst, metrics), nil
+	return metricsToRepositorySnapshot(snapID, assetKey, &planRef, valuationDate, metrics), nil
 }
 
 func metricsToRepositorySnapshot(
-	id, instrumentID string,
+	id, assetKey string,
 	planID *string,
 	valuationDate string,
-	inst repository.InstrumentRecord,
 	metrics SnapshotMetrics,
 ) repository.SimulationSnapshot {
 	return repository.SimulationSnapshot{
-		ID: id, InstrumentID: instrumentID, PlanID: planID,
+		ID: id, AssetKey: assetKey, PlanID: planID,
 		InclusionDate: valuationDate, AsOfDate: valuationDate,
 		WindowStart: metrics.WindowStart, WindowEnd: metrics.WindowEnd,
 		CompleteYearStart: metrics.CompleteYearStart, CompleteYearEnd: metrics.CompleteYearEnd,
@@ -99,13 +105,16 @@ func metricsToRepositorySnapshot(
 		ModeledAnnualReturn:   MetricFloat(metrics.ModeledAnnualReturn),
 		AnnualVolatility:      MetricFloat(metrics.AnnualVolatility),
 		MaxDrawdown:           MetricFloat(metrics.MaxDrawdown),
-		ExpenseRatio:          inst.ExpenseRatio, ExpenseRatioStatus: inst.ExpenseRatioStatus,
-		FeeTreatment: inst.FeeTreatment, SourceMode: "akshare_historical",
-		QualityStatus: metrics.QualityStatus,
-		WarningsJSON:  repository.WarningsToJSON(metrics.Warnings),
-		SourceHash:    metrics.SourceHash,
-		Years:         toRepoYears(metrics.Years),
-		Months:        toRepoMonths(metrics.MonthlyReturns),
+		// Market asset prices/NAV already embed fund fees; the directory does
+		// not track expense ratios separately.
+		ExpenseRatioStatus: "unavailable",
+		FeeTreatment:       "embedded",
+		SourceMode:         "market_asset_history",
+		QualityStatus:      metrics.QualityStatus,
+		WarningsJSON:       repository.WarningsToJSON(metrics.Warnings),
+		SourceHash:         metrics.SourceHash,
+		Years:              toRepoYears(metrics.Years),
+		Months:             toRepoMonths(metrics.MonthlyReturns),
 	}
 }
 
@@ -156,13 +165,13 @@ func (s *SnapshotService) CreatePlanSnapshotTx(
 // CreateForHolding returns a simulation snapshot ID for a new plan holding.
 func (s *SnapshotService) CreateForHolding(
 	ctx context.Context,
-	planID, instrumentID, valuationDate string,
+	planID, assetKey, valuationDate string,
 ) (string, error) {
-	snap, err := s.BuildSnapshotForHolding(ctx, planID, instrumentID, valuationDate)
+	snap, err := s.BuildSnapshotForHolding(ctx, planID, assetKey, valuationDate)
 	if err != nil {
 		return "", err
 	}
-	if snap.ID == s.snapRepo.GetSystemCashSnapshotID() {
+	if _, isCash := repository.SystemCashSnapshotIDForAsset(assetKey); isCash {
 		return snap.ID, nil
 	}
 	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {
@@ -171,60 +180,27 @@ func (s *SnapshotService) CreateForHolding(
 	return snap.ID, nil
 }
 
-// SyncForHolding rebuilds snapshot for an existing holding.
-func (s *SnapshotService) SyncForHolding(
-	ctx context.Context,
-	planID, instrumentID, holdingID, syncDate string,
-) (repository.SimulationSnapshot, error) {
-	inst, err := s.instRepo.GetByID(ctx, instrumentID)
+// LoadAssetPoints loads the asset's local history series for the dimension the
+// simulation should use: the history state with the most points wins, falling
+// back to (none, default point type by asset type).
+func (s *SnapshotService) LoadAssetPoints(
+	ctx context.Context, asset repository.MarketAsset,
+) ([]DataPoint, error) {
+	adjustPolicy, pointType := "none", defaultPointTypeForAsset(asset)
+	states, err := s.assetRepo.ListHistoryStatesByAsset(ctx, asset.AssetKey)
 	if err != nil {
-		return repository.SimulationSnapshot{}, fmt.Errorf("load instrument: %w", err)
+		return nil, fmt.Errorf("list history states: %w", err)
 	}
-	points, err := s.loadPoints(ctx, instrumentID)
-	if err != nil {
-		return repository.SimulationSnapshot{}, err
-	}
-	pointType, sourceName := pointMeta(points)
-	metrics := BuildSnapshotMetrics(points, syncDate, pointType, sourceName)
-	planRef := planID
-	snap := metricsToRepositorySnapshot("", instrumentID, &planRef, syncDate, inst, metrics)
-	if err := ValidateSimulationSnapshot(snap); err != nil {
-		if !metrics.SimulationEligible {
-			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
-		}
-		return repository.SimulationSnapshot{}, &SnapshotError{
-			Code:    "instrument_insufficient_history",
-			Message: err.Error(),
-			Details: map[string]any{
-				"complete_year_count":  metrics.CompleteYearCount,
-				"monthly_return_count": metrics.MonthlyReturnCount,
-				"quality_status":       metrics.QualityStatus,
-				"metrics_version":      metrics.MetricsVersion,
-				"volatility_method":    metrics.VolatilityMethod,
-			},
+	bestCount := 0
+	for _, st := range states {
+		if st.PointCount > bestCount {
+			bestCount = st.PointCount
+			adjustPolicy, pointType = st.AdjustPolicy, st.PointType
 		}
 	}
-	if !metrics.SimulationEligible {
-		return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
-	}
-
-	snapID := "sim_snap_" + uuid.New().String()
-	snap = metricsToRepositorySnapshot(snapID, instrumentID, &planRef, syncDate, inst, metrics)
-	_ = holdingID
-	if err := s.snapRepo.CreatePlanSnapshot(ctx, nil, snap); err != nil {
-		return repository.SimulationSnapshot{}, fmt.Errorf("persist synced snapshot: %w", err)
-	}
-	out, err := s.snapRepo.GetByID(ctx, snapID)
+	rows, err := s.assetRepo.ListPoints(ctx, asset.AssetKey, adjustPolicy, pointType)
 	if err != nil {
-		return repository.SimulationSnapshot{}, fmt.Errorf("load synced snapshot: %w", err)
-	}
-	return out, nil
-}
-
-func (s *SnapshotService) loadPoints(ctx context.Context, instrumentID string) ([]DataPoint, error) {
-	rows, err := s.marketRepo.ListByInstrument(ctx, instrumentID)
-	if err != nil {
-		return nil, fmt.Errorf("list market data points: %w", err)
+		return nil, fmt.Errorf("list market asset points: %w", err)
 	}
 	out := make([]DataPoint, len(rows))
 	for i, r := range rows {
@@ -234,6 +210,19 @@ func (s *SnapshotService) loadPoints(ctx context.Context, instrumentID string) (
 		}
 	}
 	return out, nil
+}
+
+// defaultPointTypeForAsset mirrors the history-sync default: mutual money
+// funds use NAV, other mutual funds the cumulative NAV index, exchange-traded
+// assets adjusted close.
+func defaultPointTypeForAsset(asset repository.MarketAsset) string {
+	if asset.InstrumentType == "cn_mutual_fund" {
+		if strings.Contains(asset.InstrumentKind, "货币") {
+			return "nav"
+		}
+		return "total_return_index"
+	}
+	return "adjusted_close"
 }
 
 func pointMeta(points []DataPoint) (string, string) {

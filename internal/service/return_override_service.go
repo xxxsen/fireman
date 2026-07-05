@@ -21,7 +21,7 @@ const (
 
 // ReturnOverrideView is the API view of one asset-level override.
 type ReturnOverrideView struct {
-	InstrumentID     string   `json:"instrument_id"`
+	AssetKey     string   `json:"asset_key"`
 	ForwardReturn    *float64 `json:"forward_return"`
 	AnnualVolatility *float64 `json:"annual_volatility"`
 	Reason           string   `json:"reason"`
@@ -85,7 +85,7 @@ func (s *SimulationService) SetReturnOverride(
 
 	o := repository.PlanReturnOverride{
 		PlanID:           planID,
-		InstrumentID:     instrumentID,
+		AssetKey:     instrumentID,
 		ForwardReturn:    req.ForwardReturn,
 		AnnualVolatility: req.AnnualVolatility,
 		Reason:           strings.TrimSpace(req.Reason),
@@ -99,7 +99,7 @@ func (s *SimulationService) SetReturnOverride(
 		return ReturnOverrideView{}, wrapRepo("reload return overrides", err)
 	}
 	for _, r := range rows {
-		if r.InstrumentID == instrumentID {
+		if r.AssetKey == instrumentID {
 			return toReturnOverrideView(r, plan.ValuationDate), nil
 		}
 	}
@@ -129,13 +129,13 @@ func (s *SimulationService) ensureInstrumentInPlan(ctx context.Context, planID, 
 		return wrapRepo("list holdings for override", err)
 	}
 	for _, h := range holds {
-		if h.InstrumentID == instrumentID {
+		if h.AssetKey == instrumentID {
 			return nil
 		}
 	}
 	return newErr("instrument_not_in_plan",
 		"instrument is not held by this plan; only held instruments can be overridden",
-		map[string]any{"instrument_id": instrumentID})
+		map[string]any{"asset_key": instrumentID})
 }
 
 func validateOverrideRequest(req SetReturnOverrideRequest) error {
@@ -168,7 +168,7 @@ func validateOverrideRequest(req SetReturnOverrideRequest) error {
 
 func toReturnOverrideView(o repository.PlanReturnOverride, valuationDate string) ReturnOverrideView {
 	return ReturnOverrideView{
-		InstrumentID:     o.InstrumentID,
+		AssetKey:     o.AssetKey,
 		ForwardReturn:    o.ForwardReturn,
 		AnnualVolatility: o.AnnualVolatility,
 		Reason:           o.Reason,

@@ -1,7 +1,6 @@
-import type { Instrument } from "@/types/api";
 import { apiGet, apiPost } from "./client";
 
-/** Worker task status enum (td/078). */
+/** Worker task status enum for market data sync tasks. */
 export type WorkerTaskStatus =
   | "pending"
   | "running"
@@ -45,6 +44,14 @@ export interface MarketAsset {
   refreshed_at: number;
   created_at: number;
   updated_at: number;
+  /** Local history readiness attached by the listing API. */
+  has_history?: boolean;
+  history_data_as_of?: string;
+  history_point_count?: number;
+  history_source_name?: string;
+  /** Latest history sync task status when the asset has no local history. */
+  history_sync_status?: WorkerTaskStatus;
+  history_sync_error?: string;
 }
 
 export interface MarketAssetSyncView {
@@ -65,7 +72,8 @@ export interface MarketAssetListResult {
 export interface MarketAssetListParams {
   market?: string;
   instrumentTypes?: string[];
-  q?: string;
+  symbolQ?: string;
+  nameQ?: string;
   includeInactive?: boolean;
   limit?: number;
   offset?: number;
@@ -75,7 +83,8 @@ export function listMarketAssets(params?: MarketAssetListParams): Promise<Market
   const qs = new URLSearchParams();
   if (params?.market) qs.set("market", params.market);
   if (params?.instrumentTypes?.length) qs.set("instrument_types", params.instrumentTypes.join(","));
-  if (params?.q) qs.set("q", params.q);
+  if (params?.symbolQ) qs.set("symbol_q", params.symbolQ);
+  if (params?.nameQ) qs.set("name_q", params.nameQ);
   if (params?.includeInactive) qs.set("include_inactive", "true");
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
@@ -178,13 +187,4 @@ export function syncMarketAssetHistory(body: {
 
 export function syncFXRates(): Promise<TaskCreateResult> {
   return apiPost("/api/v1/market-assets/fx-sync", {});
-}
-
-/** Import a user instrument from a market asset directory entry (td/078 P4). */
-export function importFromMarketAsset(body: {
-  asset_key: string;
-  asset_class: string;
-  region: string;
-}): Promise<Instrument> {
-  return apiPost("/api/v1/instruments/import", body);
 }

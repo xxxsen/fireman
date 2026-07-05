@@ -132,7 +132,7 @@ export interface RebalanceWorkspaceRow {
   region?: string;
   label: string;
   instrument_code?: string;
-  instrument_id?: string;
+  asset_key?: string;
   holding_id?: string;
   target_weight: number;
   target_weight_within_parent?: number;
@@ -176,9 +176,9 @@ function holdingToWorkspaceRow(line: RebalanceLine): RebalanceWorkspaceRow {
     level: "holding",
     asset_class: line.asset_class,
     region: line.region,
-    label: line.instrument_name ?? line.instrument_code ?? line.instrument_id,
+    label: line.instrument_name ?? line.instrument_code ?? line.asset_key,
     instrument_code: line.instrument_code,
-    instrument_id: line.instrument_id,
+    asset_key: line.asset_key,
     holding_id: line.holding_id,
     target_weight: line.portfolio_target_weight,
     current_weight: line.structural_current_weight,

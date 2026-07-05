@@ -89,7 +89,7 @@ export interface AllocationScenario {
 export interface PlanHolding {
   id: string;
   plan_id: string;
-  instrument_id: string;
+  asset_key: string;
   enabled: boolean;
   asset_class: string;
   region: string;
@@ -123,7 +123,7 @@ export interface WeightValidationResult {
 
 export interface HoldingTargetLine {
   holding_id: string;
-  instrument_id: string;
+  asset_key: string;
   instrument_name?: string;
   instrument_code?: string;
   asset_class: string;
@@ -201,7 +201,7 @@ export interface RebalanceDraftLine {
   id: string;
   draft_id: string;
   holding_id: string;
-  instrument_id: string;
+  asset_key: string;
   instrument_code?: string;
   instrument_name?: string;
   baseline_current_minor: number;
@@ -254,7 +254,7 @@ export interface RebalanceExecutionLine {
   id: string;
   execution_id: string;
   holding_id: string;
-  instrument_id: string;
+  asset_key: string;
   instrument_code?: string;
   instrument_name?: string;
   baseline_current_minor: number;
@@ -271,7 +271,7 @@ export interface RebalanceExecutionEvent {
   execution_id: string;
   seq: number;
   event_type: string;
-  instrument_id?: string;
+  asset_key?: string;
   amount_minor: number;
   cash_pool_after_minor: number;
   payload_json: string;
@@ -305,53 +305,6 @@ export interface ActiveRebalanceExecution {
   cash_pool_minor: number;
   done_line_count: number;
   line_count: number;
-}
-
-export interface Instrument {
-  id: string;
-  code: string;
-  name: string;
-  market: string;
-  instrument_type: string;
-  asset_class: string;
-  region: string;
-  currency: string;
-  provider: string;
-  asset_key?: string;
-  is_system: boolean;
-  expense_ratio?: number | null;
-  expense_ratio_status: string;
-  fee_treatment: string;
-  status: string;
-  quality_status?: string;
-  data_as_of?: string;
-  data_source_name?: string;
-  point_type?: string;
-  data_stale: boolean;
-  stale_warning?: string;
-  referencing_plan_count?: number;
-  simulation_eligible?: boolean;
-  history_depth?: string;
-  complete_year_count?: number;
-  monthly_return_count?: number;
-  metrics_version?: string;
-  warnings?: string[];
-  trailing_returns?: InstrumentTrailingReturns;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface InstrumentTrailingReturns {
-  as_of_date: string;
-  one_year_annualized_return: number | null;
-  three_year_annualized_return: number | null;
-  five_year_annualized_return: number | null;
-}
-
-export interface InstrumentImportRequest {
-  asset_key: string;
-  asset_class: string;
-  region: string;
 }
 
 export interface Job {
@@ -401,7 +354,7 @@ export interface SimulationRun {
   created_at: number;
   asset_participation?: {
     holding_id: string;
-    instrument_id: string;
+    asset_key: string;
     complete_years: number[];
   }[];
   assumption?: RunAssumption | null;
@@ -489,7 +442,7 @@ export interface AssumptionPreferences {
 // Asset-level plan-specific override of the forward return / volatility.
 // A null dimension means it is not overridden.
 export interface ReturnOverride {
-  instrument_id: string;
+  asset_key: string;
   forward_return: number | null;
   annual_volatility: number | null;
   reason: string;

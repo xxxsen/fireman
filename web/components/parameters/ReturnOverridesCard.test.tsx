@@ -29,7 +29,7 @@ function renderCard() {
 const holding = {
   id: "h1",
   plan_id: "plan_1",
-  instrument_id: "ins_bond",
+  asset_key: "ins_bond",
   enabled: true,
   asset_class: "bond",
   region: "domestic",
@@ -54,7 +54,7 @@ describe("ReturnOverridesCard", () => {
     mockGetOverrides.mockResolvedValue({
       overrides: [
         {
-          instrument_id: "ins_bond",
+          asset_key: "ins_bond",
           forward_return: 0.032,
           annual_volatility: null,
           reason: "持有至到期",

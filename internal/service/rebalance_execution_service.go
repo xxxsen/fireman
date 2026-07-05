@@ -73,7 +73,7 @@ type ExecutionStats struct {
 }
 
 type CreateRebalanceExecutionRequest struct {
-	InstrumentIDs []string `json:"instrument_ids"`
+	AssetKeys []string `json:"asset_keys"`
 	ForceNew      bool     `json:"force_new"`
 }
 
@@ -158,7 +158,7 @@ func (s *RebalanceExecutionService) Create(
 		return RebalanceExecutionDetail{}, err
 	}
 
-	execution, lines := buildRebalanceExecutionRecords(planID, plan, result, req.InstrumentIDs)
+	execution, lines := buildRebalanceExecutionRecords(planID, plan, result, req.AssetKeys)
 	err = persistExecutionCreate(ctx, s, active, req, execution, lines)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
@@ -228,7 +228,7 @@ func (s *RebalanceExecutionService) Skip(
 		if label == "" {
 			label = line.InstrumentCode
 		}
-		return s.insertExecutionEventTx(ctx, tx, execution, ExecutionEventAdjustTarget, line.InstrumentID, 0,
+		return s.insertExecutionEventTx(ctx, tx, execution, ExecutionEventAdjustTarget, line.AssetKey, 0,
 			execution.CashPoolMinor, map[string]any{
 				"line_id": req.LineID,
 				"summary": fmt.Sprintf("跳过 %s", label),
@@ -478,7 +478,7 @@ func (s *RebalanceExecutionService) insertExecutionEventTx(
 	payloadJSON, _ := json.Marshal(payload)
 	return wrapRepo("insert execution event", s.executions.InsertEventTx(ctx, tx, repository.RebalanceExecutionEvent{
 		ID: "rbex_" + uuid.New().String(), ExecutionID: execution.ID,
-		Seq: seq, EventType: eventType, InstrumentID: instrumentID,
+		Seq: seq, EventType: eventType, AssetKey: instrumentID,
 		AmountMinor: amountMinor, CashPoolAfterMinor: cashPoolAfter,
 		PayloadJSON: string(payloadJSON),
 	}))

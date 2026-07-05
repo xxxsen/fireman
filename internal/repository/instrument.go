@@ -5,191 +5,43 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
-// InstrumentRecord is the full instruments table row.
+// InstrumentRecord is a row of the internal instruments table. Since the
+// FIRE plan chain moved to the global market asset directory, this table only
+// holds system rows (FX rates, legacy system cash) and is never exposed as a
+// user-facing asset library.
 type InstrumentRecord struct {
-	ID                   string                     `json:"id"`
-	Code                 string                     `json:"code"`
-	Name                 string                     `json:"name"`
-	Market               string                     `json:"market"`
-	InstrumentType       string                     `json:"instrument_type"`
-	AssetClass           string                     `json:"asset_class"`
-	Region               string                     `json:"region"`
-	Currency             string                     `json:"currency"`
-	Provider             string                     `json:"provider"`
-	ProviderSymbol       string                     `json:"provider_symbol"`
-	AssetKey             string                     `json:"asset_key,omitempty"`
-	AdjustPolicy         string                     `json:"adjust_policy"`
-	InstrumentKind       string                     `json:"instrument_kind,omitempty"`
-	IsSystem             bool                       `json:"is_system"`
-	ExpenseRatio         *float64                   `json:"expense_ratio,omitempty"`
-	ExpenseRatioStatus   string                     `json:"expense_ratio_status"`
-	FeeTreatment         string                     `json:"fee_treatment"`
-	Status               string                     `json:"status"`
-	QualityStatus        string                     `json:"quality_status,omitempty"`
-	DataAsOf             string                     `json:"data_as_of,omitempty"`
-	DataSourceName       string                     `json:"data_source_name,omitempty"`
-	PointType            string                     `json:"point_type,omitempty"`
-	DataStale            bool                       `json:"data_stale"`
-	StaleWarning         string                     `json:"stale_warning,omitempty"`
-	ReferencingPlanCount int                        `json:"referencing_plan_count,omitempty"`
-	SimulationEligible   bool                       `json:"simulation_eligible,omitempty"`
-	HistoryDepth         string                     `json:"history_depth,omitempty"`
-	CompleteYearCount    int                        `json:"complete_year_count,omitempty"`
-	MonthlyReturnCount   int                        `json:"monthly_return_count,omitempty"`
-	MetricsVersion       string                     `json:"metrics_version,omitempty"`
-	Warnings             []string                   `json:"warnings,omitempty"`
-	TrailingReturns      *InstrumentTrailingReturns `json:"trailing_returns,omitempty"`
-	CreatedAt            int64                      `json:"created_at"`
-	UpdatedAt            int64                      `json:"updated_at"`
+	ID                 string   `json:"id"`
+	Code               string   `json:"code"`
+	Name               string   `json:"name"`
+	Market             string   `json:"market"`
+	InstrumentType     string   `json:"instrument_type"`
+	AssetClass         string   `json:"asset_class"`
+	Region             string   `json:"region"`
+	Currency           string   `json:"currency"`
+	Provider           string   `json:"provider"`
+	ProviderSymbol     string   `json:"provider_symbol"`
+	AssetKey           string   `json:"asset_key,omitempty"`
+	AdjustPolicy       string   `json:"adjust_policy"`
+	InstrumentKind     string   `json:"instrument_kind,omitempty"`
+	IsSystem           bool     `json:"is_system"`
+	ExpenseRatio       *float64 `json:"expense_ratio,omitempty"`
+	ExpenseRatioStatus string   `json:"expense_ratio_status"`
+	FeeTreatment       string   `json:"fee_treatment"`
+	Status             string   `json:"status"`
+	CreatedAt          int64    `json:"created_at"`
+	UpdatedAt          int64    `json:"updated_at"`
 }
 
-// InstrumentTrailingReturns is the asset-library list view of annualized trailing
-// returns. Each period is nil when not computable (insufficient history, fetching
-// or failed); the frontend renders nil as "—".
-type InstrumentTrailingReturns struct {
-	AsOfDate                  string   `json:"as_of_date"`
-	OneYearAnnualizedReturn   *float64 `json:"one_year_annualized_return"`
-	ThreeYearAnnualizedReturn *float64 `json:"three_year_annualized_return"`
-	FiveYearAnnualizedReturn  *float64 `json:"five_year_annualized_return"`
-}
-
-// InstrumentRepo manages the asset library.
+// InstrumentRepo manages the internal system instruments table.
 type InstrumentRepo struct {
 	db *sql.DB
 }
 
 func NewInstrumentRepo(db *sql.DB) *InstrumentRepo {
 	return &InstrumentRepo{db: db}
-}
-
-func (r *InstrumentRepo) List(ctx context.Context) ([]InstrumentRecord, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+instrumentBaseColumns+`
-		FROM instruments
-		WHERE provider='akshare' OR is_system=1
-		ORDER BY is_system DESC, name`)
-	if err != nil {
-		return nil, fmt.Errorf("query instruments: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	return scanInstrumentRecords(rows)
-}
-
-// ListWithMetrics returns the asset library joined with the precomputed
-// instrument_library_metrics projection (market metadata, simulation eligibility
-// and trailing returns). It performs a single LEFT JOIN so the library list
-// reads list metadata in a constant number of queries, never recomputing full
-// price history per row. Instruments without a projection row keep
-// empty/nil list fields, which the frontend renders as "—".
-func (r *InstrumentRepo) ListWithMetrics(ctx context.Context) ([]InstrumentRecord, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+instrumentBaseColumnsAliased+`, `+instrumentProjectionColumns+`
-		FROM instruments i
-		LEFT JOIN instrument_library_metrics m ON m.instrument_id = i.id
-		WHERE i.provider='akshare' OR i.is_system=1
-		ORDER BY i.is_system DESC, i.name`)
-	if err != nil {
-		return nil, fmt.Errorf("query instruments with metrics: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	return scanInstrumentListRecords(rows)
-}
-
-// InstrumentSearchOptions filters and paginates the asset library.
-type InstrumentSearchOptions struct {
-	Query         string
-	AssetClass    string
-	Region        string
-	Status        string
-	ExcludeIDs    []string
-	ExcludeSystem bool
-	Limit         int
-	Offset        int
-}
-
-// InstrumentSearchResult is one page of search results plus the total count.
-type InstrumentSearchResult struct {
-	Instruments []InstrumentRecord
-	Total       int
-}
-
-// Search returns a filtered, paginated page of instruments ordered by
-// created_at DESC, id DESC (most recent first).
-func (r *InstrumentRepo) Search(ctx context.Context, opts InstrumentSearchOptions) (InstrumentSearchResult, error) {
-	where := []string{}
-	args := []any{}
-
-	if opts.ExcludeSystem {
-		where = append(where, "is_system=0 AND provider='akshare'")
-	} else {
-		where = append(where, "(provider='akshare' OR is_system=1)")
-	}
-	if opts.Status != "" {
-		where = append(where, "status=?")
-		args = append(args, opts.Status)
-	}
-	if opts.AssetClass != "" {
-		where = append(where, "asset_class=?")
-		args = append(args, opts.AssetClass)
-	}
-	if opts.Region != "" {
-		where = append(where, "region=?")
-		args = append(args, opts.Region)
-	}
-	if q := strings.TrimSpace(opts.Query); q != "" {
-		where = append(where, "(LOWER(code) LIKE ? OR LOWER(name) LIKE ?)")
-		like := "%" + strings.ToLower(q) + "%"
-		args = append(args, like, like)
-	}
-	if len(opts.ExcludeIDs) > 0 {
-		placeholders := make([]string, len(opts.ExcludeIDs))
-		for i, id := range opts.ExcludeIDs {
-			placeholders[i] = "?"
-			args = append(args, id)
-		}
-		where = append(where, "id NOT IN ("+strings.Join(placeholders, ",")+")")
-	}
-
-	whereSQL := ""
-	if len(where) > 0 {
-		whereSQL = "WHERE " + strings.Join(where, " AND ")
-	}
-
-	var total int
-	if err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM instruments "+whereSQL, args...).Scan(&total); err != nil {
-		return InstrumentSearchResult{}, fmt.Errorf("count instruments: %w", err)
-	}
-
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-	offset := opts.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	pagedArgs := append(append([]any{}, args...), limit, offset)
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+instrumentBaseColumnsAliased+`, `+instrumentProjectionColumns+`
-		FROM instruments i
-		LEFT JOIN instrument_library_metrics m ON m.instrument_id = i.id
-		`+whereSQL+`
-		ORDER BY i.created_at DESC, i.id DESC
-		LIMIT ? OFFSET ?`, pagedArgs...)
-	if err != nil {
-		return InstrumentSearchResult{}, fmt.Errorf("query instruments search: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	recs, err := scanInstrumentListRecords(rows)
-	if err != nil {
-		return InstrumentSearchResult{}, err
-	}
-	return InstrumentSearchResult{Instruments: recs, Total: total}, nil
 }
 
 func (r *InstrumentRepo) GetByID(ctx context.Context, id string) (InstrumentRecord, error) {
@@ -210,22 +62,7 @@ func (r *InstrumentRepo) FindByKey(ctx context.Context, market, instrumentType, 
 	return scanInstrumentRecord(row)
 }
 
-// ListByAssetKeyTx returns user instruments linked to a global market asset
-// (P4 projection targets). System instruments never carry an asset_key.
-func (r *InstrumentRepo) ListByAssetKeyTx(
-	ctx context.Context, tx *sql.Tx, assetKey string,
-) ([]InstrumentRecord, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT `+instrumentBaseColumns+`
-		FROM instruments WHERE asset_key=?
-		ORDER BY created_at, id`, assetKey)
-	if err != nil {
-		return nil, fmt.Errorf("query instruments by asset key: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	return scanInstrumentRecords(rows)
-}
-
+// Create inserts a system instrument row (test fixtures / migrations only).
 func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst InstrumentRecord) error {
 	now := time.Now().UnixMilli()
 	if inst.CreatedAt == 0 {
@@ -251,130 +88,12 @@ func (r *InstrumentRepo) Create(ctx context.Context, tx *sql.Tx, inst Instrument
 	return nil
 }
 
-func (r *InstrumentRepo) UpdateStatusTx(ctx context.Context, tx *sql.Tx, id, status string) error {
-	now := time.Now().UnixMilli()
-	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET status=?, updated_at=? WHERE id=?`, status, now, id)
-	if err != nil {
-		return fmt.Errorf("update instrument status: %w", err)
-	}
-	return nil
-}
-
-func (r *InstrumentRepo) UpdateAfterFetchTx(ctx context.Context, tx *sql.Tx, inst InstrumentRecord) error {
-	now := time.Now().UnixMilli()
-	_, err := r.exec(tx).ExecContext(ctx, `
-		UPDATE instruments SET
-			name=?, asset_class=?, region=?, currency=?,
-			provider_symbol=?, expense_ratio=?, expense_ratio_status=?,
-			fee_treatment=?, status=?, updated_at=?
-		WHERE id=?`,
-		inst.Name, inst.AssetClass, inst.Region, inst.Currency,
-		inst.ProviderSymbol, inst.ExpenseRatio, inst.ExpenseRatioStatus,
-		inst.FeeTreatment, inst.Status, now, inst.ID)
-	if err != nil {
-		return fmt.Errorf("update instrument after fetch: %w", err)
-	}
-	return nil
-}
-
 func (r *InstrumentRepo) TouchUpdated(ctx context.Context, tx *sql.Tx, id string) error {
 	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
 	if err != nil {
 		return fmt.Errorf("touch instrument updated_at: %w", err)
 	}
 	return nil
-}
-
-// UpdateClassification updates only asset_class/region with optimistic locking on
-// updated_at. It returns ErrInstrumentVersionConflict when expectedUpdatedAt no
-// longer matches (a concurrent edit landed first) and ErrInstrumentNotFound when
-// the row is gone, so callers can give precise feedback.
-func (r *InstrumentRepo) UpdateClassification(
-	ctx context.Context, id, assetClass, region string, expectedUpdatedAt int64,
-) (InstrumentRecord, error) {
-	// Force updated_at to strictly increase so the optimistic version always
-	// advances, even when two updates land in the same millisecond.
-	newUpdatedAt := time.Now().UnixMilli()
-	if newUpdatedAt <= expectedUpdatedAt {
-		newUpdatedAt = expectedUpdatedAt + 1
-	}
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE instruments SET asset_class=?, region=?, updated_at=?
-		WHERE id=? AND updated_at=?`,
-		assetClass, region, newUpdatedAt, id, expectedUpdatedAt)
-	if err != nil {
-		return InstrumentRecord{}, fmt.Errorf("update instrument classification: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		if _, getErr := r.GetByID(ctx, id); errors.Is(getErr, ErrInstrumentNotFound) {
-			return InstrumentRecord{}, ErrInstrumentNotFound
-		}
-		return InstrumentRecord{}, ErrInstrumentVersionConflict
-	}
-	return r.GetByID(ctx, id)
-}
-
-func (r *InstrumentRepo) UpdateInstrumentKindTx(ctx context.Context, tx *sql.Tx, id, kind string) error {
-	now := time.Now().UnixMilli()
-	_, err := r.exec(tx).ExecContext(ctx,
-		`UPDATE instruments SET instrument_kind=?, updated_at=? WHERE id=?`, kind, now, id)
-	if err != nil {
-		return fmt.Errorf("update instrument kind: %w", err)
-	}
-	return nil
-}
-
-func (r *InstrumentRepo) UpdateNameTx(ctx context.Context, tx *sql.Tx, id, name string) error {
-	now := time.Now().UnixMilli()
-	_, err := r.exec(tx).ExecContext(ctx, `UPDATE instruments SET name=?, updated_at=? WHERE id=?`, name, now, id)
-	if err != nil {
-		return fmt.Errorf("update instrument name: %w", err)
-	}
-	return nil
-}
-
-func (r *InstrumentRepo) Delete(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM instruments WHERE id=?`, id)
-	if err != nil {
-		return fmt.Errorf("delete instrument: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrInstrumentNotFound
-	}
-	return nil
-}
-
-func (r *InstrumentRepo) IsReferencedByPlan(ctx context.Context, instrumentID string) (bool, error) {
-	var n int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plan_holdings WHERE instrument_id=?`, instrumentID).Scan(&n)
-	if err != nil {
-		return false, fmt.Errorf("count plan references: %w", err)
-	}
-	return n > 0, nil
-}
-
-func (r *InstrumentRepo) ReferenceCounts(ctx context.Context) (map[string]int, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT instrument_id, COUNT(*) FROM plan_holdings GROUP BY instrument_id`)
-	if err != nil {
-		return nil, fmt.Errorf("query plan reference counts: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	out := make(map[string]int)
-	for rows.Next() {
-		var instrumentID string
-		var count int
-		if err := rows.Scan(&instrumentID, &count); err != nil {
-			return nil, fmt.Errorf("scan plan reference count: %w", err)
-		}
-		out[instrumentID] = count
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate plan reference counts: %w", err)
-	}
-	return out, nil
 }
 
 func (r *InstrumentRepo) exec(tx *sql.Tx) dbExec {
@@ -385,7 +104,7 @@ func (r *InstrumentRepo) exec(tx *sql.Tx) dbExec {
 }
 
 // instrumentBaseColumns is the unaliased instruments column list in the exact
-// order scanInstrumentRecord / scanInstrumentRecords expect.
+// order scanInstrumentRecord expects.
 const instrumentBaseColumns = `id, code, name, market, instrument_type, asset_class, region, currency,
 		provider, provider_symbol, asset_key, adjust_policy, instrument_kind, is_system,
 		expense_ratio, expense_ratio_status, fee_treatment, status,
@@ -414,32 +133,4 @@ func scanInstrumentRecord(row *sql.Row) (InstrumentRecord, error) {
 		inst.ExpenseRatio = &v
 	}
 	return inst, nil
-}
-
-func scanInstrumentRecords(rows *sql.Rows) ([]InstrumentRecord, error) {
-	var out []InstrumentRecord
-	for rows.Next() {
-		var inst InstrumentRecord
-		var isSystem int
-		var expenseRatio sql.NullFloat64
-		if err := rows.Scan(
-			&inst.ID, &inst.Code, &inst.Name, &inst.Market, &inst.InstrumentType,
-			&inst.AssetClass, &inst.Region, &inst.Currency,
-			&inst.Provider, &inst.ProviderSymbol, &inst.AssetKey, &inst.AdjustPolicy, &inst.InstrumentKind, &isSystem,
-			&expenseRatio, &inst.ExpenseRatioStatus, &inst.FeeTreatment, &inst.Status,
-			&inst.CreatedAt, &inst.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan instrument row: %w", err)
-		}
-		inst.IsSystem = isSystem == 1
-		if expenseRatio.Valid {
-			v := expenseRatio.Float64
-			inst.ExpenseRatio = &v
-		}
-		out = append(out, inst)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate instruments: %w", err)
-	}
-	return out, nil
 }

@@ -7,74 +7,101 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fireman/fireman/internal/domain"
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// frozenClassification carries the asset_class/region already recorded on a
-// plan's holding so structural updates keep the plan-level frozen copy instead of
-// silently adopting the library's current classification.
-type frozenClassification struct {
-	assetClass string
-	region     string
-}
-
+// buildOnePreparedHolding validates one holding write item against the global
+// market asset directory and prepares its simulation snapshot. Assets without
+// local history are saved with an empty snapshot id; the simulation readiness
+// check gates simulation until their history is synced.
 func (s *HoldingsService) buildOnePreparedHolding(
 	ctx context.Context,
 	plan repository.Plan,
 	item HoldingWriteItem,
 	existingSnap map[string]string,
-	existingClass map[string]frozenClassification,
 ) (repository.PlanHolding, *pendingHoldingSnap, error) {
-	if item.AssetClass != nil || item.Region != nil || item.SimulationSnapshotID != nil {
+	if item.SimulationSnapshotID != nil {
 		return repository.PlanHolding{}, nil, newErr(
 			"holding_fields_read_only",
-			"asset_class, region and simulation_snapshot_id are read-only",
+			"simulation_snapshot_id is read-only",
 			nil,
 		)
 	}
-	instRec, err := s.instRepo.GetByID(ctx, item.InstrumentID)
+	if !isValidHoldingAssetClass(item.AssetClass) || !isValidHoldingRegion(item.Region) {
+		return repository.PlanHolding{}, nil, newErr(
+			"holding_classification_invalid",
+			"asset_class must be equity/bond/cash and region must be domestic/foreign",
+			map[string]any{"asset_key": item.AssetKey},
+		)
+	}
+	asset, err := s.assetRepo.GetByKey(ctx, item.AssetKey)
 	if err != nil {
-		if errors.Is(err, repository.ErrInstrumentNotFound) {
-			return repository.PlanHolding{}, nil, newErr("instrument_not_found", "instrument not found",
-				map[string]any{"instrument_id": item.InstrumentID})
+		if errors.Is(err, repository.ErrMarketAssetNotFound) {
+			return repository.PlanHolding{}, nil, newErr("market_asset_not_found",
+				"market asset not found; sync the asset directory first",
+				map[string]any{"asset_key": item.AssetKey})
 		}
-		return repository.PlanHolding{}, nil, wrapRepo("load instrument", err)
+		return repository.PlanHolding{}, nil, wrapRepo("load market asset", err)
 	}
-	if _, err := EvaluateInstrumentForPlan(ctx, instRec, s.marketRepo, plan.ValuationDate); err != nil {
-		return repository.PlanHolding{}, nil, err
+	if !asset.Active && !item.AllowInactive {
+		return repository.PlanHolding{}, nil, newErr("market_asset_inactive",
+			"market asset is inactive; set allow_inactive to keep it",
+			map[string]any{"asset_key": item.AssetKey})
 	}
-	inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
-	if err != nil {
-		return repository.PlanHolding{}, nil, wrapRepo("load holding instrument", err)
-	}
-	snapID, ok := existingSnap[item.InstrumentID]
+
+	snapID, ok := existingSnap[item.AssetKey]
 	var pending *pendingHoldingSnap
 	if !ok {
-		snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, plan.ID, item.InstrumentID, plan.ValuationDate)
+		snapID, pending, err = s.tryBuildHoldingSnapshot(ctx, plan, item.AssetKey)
 		if err != nil {
-			return repository.PlanHolding{}, nil, MapSnapshotError(err)
+			return repository.PlanHolding{}, nil, err
 		}
-		snapID = snap.ID
-		pending = &pendingHoldingSnap{
-			snap: snap,
-			skip: snap.ID == repository.SystemCashSnapshotID,
-		}
-	}
-	// Freeze rule: an asset already in this plan keeps its plan-level
-	// classification; only assets joining the plan for the first time copy the
-	// library's current asset_class/region.
-	assetClass, region := inst.AssetClass, inst.Region
-	if prev, ok := existingClass[item.InstrumentID]; ok {
-		assetClass, region = prev.assetClass, prev.region
 	}
 	holding := repository.PlanHolding{
 		ID: "hold_" + uuid.New().String(), PlanID: plan.ID,
-		InstrumentID: item.InstrumentID, Enabled: item.Enabled,
-		AssetClass: assetClass, Region: region,
+		AssetKey: item.AssetKey, Enabled: item.Enabled,
+		AssetClass: item.AssetClass, Region: item.Region,
 		WeightWithinGroup: item.WeightWithinGroup, CurrentAmountMinor: item.CurrentAmountMinor,
 		SimulationSnapshotID: snapID, SortOrder: item.SortOrder,
 	}
 	return holding, pending, nil
+}
+
+// tryBuildHoldingSnapshot builds a plan snapshot for an asset joining the
+// plan. Missing or insufficient history is not an error at save time: the
+// holding is stored with an empty snapshot id (lazy) and readiness reports it.
+func (s *HoldingsService) tryBuildHoldingSnapshot(
+	ctx context.Context, plan repository.Plan, assetKey string,
+) (string, *pendingHoldingSnap, error) {
+	snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, plan.ID, assetKey, plan.ValuationDate)
+	if err != nil {
+		var snapErr *marketdata.SnapshotError
+		if errors.As(err, &snapErr) {
+			return "", nil, nil
+		}
+		return "", nil, MapSnapshotError(err)
+	}
+	_, isCash := repository.SystemCashSnapshotIDForAsset(assetKey)
+	return snap.ID, &pendingHoldingSnap{snap: snap, skip: isCash}, nil
+}
+
+func isValidHoldingAssetClass(v string) bool {
+	for _, ac := range domain.AssetClasses {
+		if ac == v {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidHoldingRegion(v string) bool {
+	for _, r := range domain.Regions {
+		if r == v {
+			return true
+		}
+	}
+	return false
 }
 
 func initialPlanAllocation(ctx context.Context, s *PlanService, scenarioID *string) (repository.PlanAllocation, error) {

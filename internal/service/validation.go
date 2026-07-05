@@ -341,16 +341,16 @@ func enrichInstrumentNames(lines []domain.HoldingTargetLine, holds []repository.
 }
 
 func holdingMeta(holds []repository.PlanHolding) []struct {
-	ID, InstrumentID, SimulationSnapshotID string
+	ID, AssetKey, SimulationSnapshotID string
 	SortOrder                              int
 } {
 	out := make([]struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}, len(holds))
 	for i, h := range holds {
 		out[i].ID = h.ID
-		out[i].InstrumentID = h.InstrumentID
+		out[i].AssetKey = h.AssetKey
 		out[i].SimulationSnapshotID = h.SimulationSnapshotID
 		out[i].SortOrder = h.SortOrder
 	}

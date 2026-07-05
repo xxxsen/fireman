@@ -2,7 +2,7 @@
 
 AKShare has no dedicated HK-ETF / US-ETF list endpoints, and its full-board
 spot functions (``stock_hk_spot_em`` / ``stock_us_spot_em``) mix security
-categories that td/078's directory taxonomy must keep apart (equities vs ETF
+categories that the local directory taxonomy must keep apart (equities vs ETF
 vs bonds/warrants). These fetchers hit the same Eastmoney ``qt/clist`` API
 akshare wraps, but pinned to explicit category filters so every directory
 instrument_type maps to exactly one upstream board:

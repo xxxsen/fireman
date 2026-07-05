@@ -5,8 +5,7 @@ import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
 
 const routerPush = vi.fn();
-const listInstruments = vi.hoisted(() => vi.fn());
-const searchInstruments = vi.hoisted(() => vi.fn());
+const listMarketAssets = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPush }),
@@ -58,84 +57,65 @@ vi.mock("@/lib/api/allocation", () => ({
     }),
 }));
 
-vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: (...args: unknown[]) => listInstruments(...args),
-  searchInstruments: (...args: unknown[]) => searchInstruments(...args),
+vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
+  listMarketAssets: (...args: unknown[]) => listMarketAssets(...args),
 }));
 
-interface SearchParams {
-  q?: string;
-  assetClass?: string;
-  region?: string;
-  excludeIds?: string[];
-  cursor?: number;
+interface ListParams {
+  symbolQ?: string;
+  nameQ?: string;
+  market?: string;
+  instrumentTypes?: string[];
   limit?: number;
+  offset?: number;
 }
 
-let searchPool: (typeof defaultInstruments)[number][] = [];
+let searchPool: (typeof defaultAssets)[number][] = [];
 
-function filterSearchPool(params: SearchParams) {
-  const q = (params.q ?? "").toLowerCase();
-  const exclude = new Set(params.excludeIds ?? []);
+function filterSearchPool(params: ListParams) {
+  const symbolQ = (params.symbolQ ?? "").toLowerCase();
+  const nameQ = (params.nameQ ?? "").toLowerCase();
   const items = searchPool.filter(
-    (i) =>
-      (!params.assetClass || i.asset_class === params.assetClass) &&
-      (!params.region || i.region === params.region) &&
-      i.status === "active" &&
-      !i.is_system &&
-      !exclude.has(i.id) &&
-      (!q || i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q)),
+    (a) =>
+      (!symbolQ || a.symbol.toLowerCase().includes(symbolQ)) &&
+      (!nameQ || a.name.toLowerCase().includes(nameQ)),
   );
-  const cursor = params.cursor ?? 0;
+  const offset = params.offset ?? 0;
   const limit = params.limit ?? 10;
-  const page = items.slice(cursor, cursor + limit);
-  const next = cursor + page.length < items.length ? cursor + page.length : null;
-  return Promise.resolve({ instruments: page, next_cursor: next, total: items.length });
+  const page = items.slice(offset, offset + limit);
+  return Promise.resolve({ assets: page, syncs: [], total: items.length });
 }
 
-const defaultInstruments = [
-  {
-    id: "ins_equity_domestic",
-    code: "T1",
-    name: "测试权益基金",
+function makeDirectoryAsset(symbol: string, name: string, hasHistory = true) {
+  return {
+    asset_key: `CN|cn_exchange_fund|sh|${symbol}`,
     market: "CN",
-    instrument_type: "fund",
-    asset_class: "equity",
-    region: "domestic",
+    instrument_type: "cn_exchange_fund",
+    region_code: "sh",
+    symbol,
+    name,
+    exchange: "SH",
+    instrument_kind: "etf",
     currency: "CNY",
-    quality_status: "available",
-    simulation_eligible: true,
-    status: "active",
-    is_system: false,
-  },
-  {
-    id: "ins_equity_foreign",
-    code: "F1",
-    name: "测试国外权益基金",
-    market: "CN",
-    instrument_type: "fund",
-    asset_class: "equity",
-    region: "foreign",
-    currency: "CNY",
-    quality_status: "available",
-    simulation_eligible: true,
-    status: "active",
-    is_system: false,
-  },
-  {
-    id: "ins_bond",
-    code: "B1",
-    name: "测试债券基金",
-    market: "CN",
-    instrument_type: "fund",
-    asset_class: "bond",
-    region: "domestic",
-    currency: "CNY",
-    quality_status: "available",
-    simulation_eligible: true,
-    status: "active",
-    is_system: false,
-  },
+    active: true,
+    listing_status: "active",
+    last_seen_at: 0,
+    source_name: "ak.fund_etf_spot_em",
+    source_as_of: "",
+    refreshed_at: 0,
+    created_at: 0,
+    updated_at: 0,
+    has_history: hasHistory,
+    history_data_as_of: hasHistory ? "2026-07-01" : undefined,
+    history_source_name: hasHistory ? "ak.fund_etf_hist_em" : undefined,
+  };
+}
+
+const defaultAssets = [
+  makeDirectoryAsset("T1", "测试权益基金"),
+  makeDirectoryAsset("F1", "测试国外权益基金"),
+  makeDirectoryAsset("B1", "测试债券基金"),
 ];
 
 function renderWizard() {
@@ -192,44 +172,26 @@ describe("NewPlanWizardPage", () => {
     createPlanWizard.mockReset();
     createSimulation.mockReset();
     routerPush.mockReset();
-    listInstruments.mockReset();
-    listInstruments.mockResolvedValue({ instruments: defaultInstruments });
-    searchInstruments.mockReset();
-    searchPool = defaultInstruments;
-    searchInstruments.mockImplementation((params: SearchParams) => filterSearchPool(params));
+    listMarketAssets.mockReset();
+    searchPool = defaultAssets;
+    listMarketAssets.mockImplementation((params: ListParams) => filterSearchPool(params));
     createPlanWizard.mockResolvedValue({ id: "plan_new", config_version: 1 });
     createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
   });
 
-  it("shows short-history warning on confirm step for one-year instruments", async () => {
-    searchPool = [
-      {
-        id: "ins_short",
-        code: "SHORT01",
-        name: "短历史基金",
-        market: "CN",
-        instrument_type: "fund",
-        asset_class: "equity",
-        region: "domestic",
-        currency: "CNY",
-        quality_status: "available",
-        simulation_eligible: true,
-        history_depth: "one_year",
-        status: "active",
-        is_system: false,
-      },
-    ] as unknown as typeof defaultInstruments;
+  it("shows missing-history hint on confirm step for unsynced assets", async () => {
+    searchPool = [makeDirectoryAsset("SHORT01", "未同步历史基金", false)];
 
     renderWizard();
     await goToInstrumentStep("scn_a");
     const search = await screen.findByLabelText("权益国内搜索");
     fireEvent.change(search, { target: { value: "SHORT" } });
-    fireEvent.click(await screen.findByRole("button", { name: /短历史基金/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /未同步历史基金/ }));
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
-    const warning = await screen.findByTestId("wizard-short-history");
-    expect(warning).toHaveTextContent("短历史基金（SHORT01）历史样本有限");
-    expect(warning).toHaveTextContent("模拟长期估计不确定性较高");
+    const warning = await screen.findByTestId("wizard-missing-history");
+    expect(warning).toHaveTextContent("未同步历史基金（SHORT01）尚未同步历史数据");
+    expect(warning).toHaveTextContent("一键同步缺失历史");
   });
 
   it("shows confirm checklist on final step", async () => {
@@ -279,10 +241,12 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByRole("tab", { name: /债券/ })).toBeInTheDocument();
     expect(screen.queryByLabelText("现金/其他选标")).not.toBeInTheDocument();
 
+    // Classification is user-driven now: a symbol miss shows the directory hint.
     const equitySearch = screen.getByLabelText("权益国内搜索");
-    fireEvent.change(equitySearch, { target: { value: "B1" } });
-    expect(screen.queryByRole("button", { name: /测试债券基金/ })).not.toBeInTheDocument();
-    expect(await screen.findByText("未找到匹配的权益标的。")).toBeInTheDocument();
+    fireEvent.change(equitySearch, { target: { value: "X9" } });
+    expect(
+      await screen.findByText(/未在本地资产目录中找到匹配标的/),
+    ).toBeInTheDocument();
   });
 
   it("auto-complements region allocation when editing domestic", async () => {
@@ -309,13 +273,11 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByLabelText("国内（占权益 70%）搜索")).toBeInTheDocument();
     expect(screen.getByLabelText("国外（占权益 30%）搜索")).toBeInTheDocument();
 
-    const domesticSearch = screen.getByLabelText("国内（占权益 70%）搜索");
-    fireEvent.change(domesticSearch, { target: { value: "F1" } });
-    expect(screen.queryByRole("button", { name: /测试国外权益基金/ })).not.toBeInTheDocument();
-
+    // Picking in the foreign sub-container classifies the asset as foreign.
     const foreignSearch = screen.getByLabelText("国外（占权益 30%）搜索");
-    fireEvent.change(foreignSearch, { target: { value: "T1" } });
-    expect(screen.queryByRole("button", { name: /测试权益基金/ })).not.toBeInTheDocument();
+    fireEvent.change(foreignSearch, { target: { value: "F1" } });
+    fireEvent.click(await screen.findByRole("button", { name: /测试国外权益基金/ }));
+    expect(await screen.findByLabelText("测试国外权益基金 F1")).toBeInTheDocument();
   });
 
   it("defaults weight to 100% when selecting first instrument", async () => {
@@ -491,11 +453,15 @@ describe("NewPlanWizardPage", () => {
 
     await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
     const body = createPlanWizard.mock.calls[0]![0] as {
-      holdings: { instrument_id: string }[];
+      holdings: { asset_key: string; asset_class: string; region: string }[];
     };
-    const ids = body.holdings.map((h) => h.instrument_id);
-    expect(ids).toContain("ins_equity_foreign");
-    expect(ids).not.toContain("ins_equity_domestic");
+    const ids = body.holdings.map((h) => h.asset_key);
+    expect(ids).toContain("CN|cn_exchange_fund|sh|F1");
+    expect(ids).not.toContain("CN|cn_exchange_fund|sh|T1");
+    const foreignHolding = body.holdings.find(
+      (h) => h.asset_key === "CN|cn_exchange_fund|sh|F1",
+    );
+    expect(foreignHolding).toMatchObject({ asset_class: "equity", region: "foreign" });
   });
 
   it("blocks advancing when advanced params are out of range", async () => {

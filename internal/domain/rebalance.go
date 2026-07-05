@@ -39,7 +39,7 @@ func ComputeFullRebalance(
 	alloc AllocationWeights,
 	holdings []HoldingWeightInput,
 	meta []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	},
 	totalAssetsMinor int64,
@@ -109,7 +109,7 @@ func ComputeNewCashRebalance(
 	alloc AllocationWeights,
 	holdings []HoldingWeightInput,
 	meta []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	},
 	totalAssetsMinor int64,

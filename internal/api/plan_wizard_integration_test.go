@@ -62,12 +62,8 @@ func postWizard(t *testing.T, client *http.Client, baseURL string, body map[stri
 func TestPlanWizardSuccessIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
-		t.Fatal(err)
-	}
+	assetEquity := seedAssetCode(t, db, "510300")
+	assetBond := seedAssetCode(t, db, "510500")
 
 	const total = int64(10_000_000_00)
 	body := map[string]any{
@@ -77,18 +73,20 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 		"region_targets":       wizardRegionTargets(),
 		"holdings": []map[string]any{
 			{
-				"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 7_000_000_00,
+				"asset_key": assetEquity, "asset_class": "equity", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 7_000_000_00,
 				"sort_order": 1,
 			},
 			{
-				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
+				"asset_key": assetBond, "asset_class": "bond", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
 				"sort_order": 2,
 			},
 		},
 	}
 
 	plansBefore := countTable(t, db, "plans")
-	snapsBefore := countTable(t, db, "instrument_simulation_snapshots")
+	snapsBefore := countTable(t, db, "market_asset_simulation_snapshots")
 
 	resp, raw := postWizard(t, client, srv.URL, body)
 	if resp.StatusCode != http.StatusOK {
@@ -104,7 +102,7 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 	if countTable(t, db, "plans") != plansBefore+1 {
 		t.Fatal("expected exactly one new plan")
 	}
-	if countTable(t, db, "instrument_simulation_snapshots") <= snapsBefore {
+	if countTable(t, db, "market_asset_simulation_snapshots") <= snapsBefore {
 		t.Fatal("expected new plan snapshots")
 	}
 
@@ -148,12 +146,12 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 	for _, h := range holdings {
 		row := h.(map[string]any)
 		sid := row["simulation_snapshot_id"].(string)
-		if sid == "snap_system_cash" {
+		if sid == "sim_snapshot_system_cash_cny" {
 			continue
 		}
 		var planRef sql.NullString
 		if err := db.QueryRowContext(context.Background(),
-			`SELECT plan_id FROM instrument_simulation_snapshots WHERE id=?`, sid).Scan(&planRef); err != nil {
+			`SELECT plan_id FROM market_asset_simulation_snapshots WHERE id=?`, sid).Scan(&planRef); err != nil {
 			t.Fatal(err)
 		}
 		if !planRef.Valid || planRef.String != planID {
@@ -165,12 +163,8 @@ func TestPlanWizardSuccessIntegration(t *testing.T) {
 func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
-		t.Fatal(err)
-	}
+	assetEquity := seedAssetCode(t, db, "510300")
+	assetBond := seedAssetCode(t, db, "510500")
 
 	const total = int64(10_000_000_00)
 	params := wizardParams(total)
@@ -192,11 +186,13 @@ func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
 		"region_targets":       wizardRegionTargets(),
 		"holdings": []map[string]any{
 			{
-				"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0,
+				"asset_key": assetEquity, "asset_class": "equity", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0,
 				"current_amount_minor": 7_000_000_00, "sort_order": 1,
 			},
 			{
-				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0,
+				"asset_key": assetBond, "asset_class": "bond", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0,
 				"current_amount_minor": 3_000_000_00, "sort_order": 2,
 			},
 		},
@@ -238,21 +234,19 @@ func TestPlanWizardAdvancedParametersIntegration(t *testing.T) {
 func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
-		t.Fatal(err)
-	}
+	assetEquity := seedAssetCode(t, db, "510300")
+	assetBond := seedAssetCode(t, db, "510500")
 
 	const total = int64(10_000_000_00)
 	holdings := []map[string]any{
 		{
-			"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0,
+			"asset_key": assetEquity, "asset_class": "equity", "region": "domestic",
+			"enabled": true, "weight_within_group": 1.0,
 			"current_amount_minor": 7_000_000_00, "sort_order": 1,
 		},
 		{
-			"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0,
+			"asset_key": assetBond, "asset_class": "bond", "region": "domestic",
+			"enabled": true, "weight_within_group": 1.0,
 			"current_amount_minor": 3_000_000_00, "sort_order": 2,
 		},
 	}
@@ -278,7 +272,7 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			plansBefore := countTable(t, db, "plans")
-			snapsBefore := countTable(t, db, "instrument_simulation_snapshots")
+			snapsBefore := countTable(t, db, "market_asset_simulation_snapshots")
 			params := wizardParams(total)
 			tc.apply(params)
 			body := map[string]any{
@@ -296,7 +290,7 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 			if got := countTable(t, db, "plans"); got != plansBefore {
 				t.Fatalf("plans changed: before=%d after=%d", plansBefore, got)
 			}
-			if got := countTable(t, db, "instrument_simulation_snapshots"); got != snapsBefore {
+			if got := countTable(t, db, "market_asset_simulation_snapshots"); got != snapsBefore {
 				t.Fatalf("snapshots changed: before=%d after=%d", snapsBefore, got)
 			}
 		})
@@ -322,17 +316,9 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquityDomestic := importInstrumentCode(t, db, client, srv.URL, "510300")
-	instEquityForeign := importInstrumentCode(t, db, client, srv.URL, "510500")
-	instBond := importInstrumentCode(t, db, client, srv.URL, "159915")
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE instruments SET region='foreign' WHERE id=?`, instEquityForeign); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
-		t.Fatal(err)
-	}
+	assetEquityDomestic := seedAssetCode(t, db, "510300")
+	assetEquityForeign := seedAssetCode(t, db, "510500")
+	assetBond := seedAssetCode(t, db, "159915")
 
 	const total = int64(10_000_000_00)
 	customTargets := []map[string]any{
@@ -350,15 +336,18 @@ func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 		"region_targets":       customTargets,
 		"holdings": []map[string]any{
 			{
-				"instrument_id": instEquityDomestic, "enabled": true, "weight_within_group": 1.0,
+				"asset_key": assetEquityDomestic, "asset_class": "equity", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0,
 				"current_amount_minor": 4_900_000_00, "sort_order": 1,
 			},
 			{
-				"instrument_id": instEquityForeign, "enabled": true, "weight_within_group": 1.0,
+				"asset_key": assetEquityForeign, "asset_class": "equity", "region": "foreign",
+				"enabled": true, "weight_within_group": 1.0,
 				"current_amount_minor": 2_100_000_00, "sort_order": 2,
 			},
 			{
-				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
+				"asset_key": assetBond, "asset_class": "bond", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
 				"sort_order": 3,
 			},
 		},
@@ -393,12 +382,8 @@ func TestPlanWizardRegionTargetsIntegration(t *testing.T) {
 func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
 
-	instEquity := importInstrumentCode(t, db, client, srv.URL, "510300")
-	instBond := importInstrumentCode(t, db, client, srv.URL, "510500")
-	if _, err := db.ExecContext(context.Background(),
-		`UPDATE instruments SET asset_class='bond' WHERE id=?`, instBond); err != nil {
-		t.Fatal(err)
-	}
+	assetEquity := seedAssetCode(t, db, "510300")
+	assetBond := seedAssetCode(t, db, "510500")
 
 	const total = int64(10_000_000_00)
 	const equityAmt = int64(7_000_000_00)
@@ -411,11 +396,13 @@ func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 		"apply_unallocated_to_cash": true,
 		"holdings": []map[string]any{
 			{
-				"instrument_id": instEquity, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": equityAmt,
+				"asset_key": assetEquity, "asset_class": "equity", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": equityAmt,
 				"sort_order": 1,
 			},
 			{
-				"instrument_id": instBond, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": bondAmt,
+				"asset_key": assetBond, "asset_class": "bond", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": bondAmt,
 				"sort_order": 2,
 			},
 		},
@@ -444,7 +431,7 @@ func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 		}
 		amt := int64(row["current_amount_minor"].(float64))
 		sum += amt
-		if row["instrument_id"].(string) == "system_cash_cny" {
+		if row["asset_key"].(string) == "SYS|cash||CNY" {
 			cashMinor = amt
 		}
 	}
@@ -459,7 +446,7 @@ func TestPlanWizardApplyUnallocatedToCashIntegration(t *testing.T) {
 
 func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 	srv, db, client := setupInstrumentIntegration(t)
-	inst := importInstrumentCode(t, db, client, srv.URL, "510300")
+	asset := seedAssetCode(t, db, "510300")
 
 	cases := []struct {
 		name string
@@ -477,7 +464,8 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"apply_unallocated_to_cash": true,
 				"holdings": []map[string]any{
 					{
-						"instrument_id": inst, "enabled": true, "weight_within_group": 0.4, "current_amount_minor": 700_000_00,
+						"asset_key": asset, "asset_class": "equity", "region": "domestic",
+						"enabled": true, "weight_within_group": 0.4, "current_amount_minor": 700_000_00,
 						"sort_order": 1,
 					},
 				},
@@ -493,24 +481,26 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				"region_targets":       wizardRegionTargets(),
 				"holdings": []map[string]any{
 					{
-						"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_000_000_00,
+						"asset_key": asset, "asset_class": "equity", "region": "domestic",
+						"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 2_000_000_00,
 						"sort_order": 1,
 					},
 				},
 			},
 		},
 		{
-			name: "insufficient history",
-			code: "instrument_insufficient_history",
+			name: "unknown asset",
+			code: "market_asset_not_found",
 			body: map[string]any{
-				"name": "失败-历史不足", "valuation_date": "2026-06-09",
+				"name": "失败-未知标的", "valuation_date": "2026-06-09",
 				"selected_scenario_id":      "scn_builtin_near_fire",
 				"parameters":                wizardParams(1_000_000_00),
 				"region_targets":            wizardRegionTargets(),
 				"apply_unallocated_to_cash": true,
 				"holdings": []map[string]any{
 					{
-						"instrument_id": inst, "enabled": true, "weight_within_group": 1.0, "current_amount_minor": 700_000_00,
+						"asset_key": "cn:cn_exchange_fund:sh:999999", "asset_class": "equity", "region": "domestic",
+						"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 700_000_00,
 						"sort_order": 1,
 					},
 				},
@@ -520,13 +510,6 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.code == "instrument_insufficient_history" {
-				if _, err := db.ExecContext(context.Background(), `DELETE FROM market_data_points WHERE instrument_id=?`,
-					inst); err != nil {
-					t.Fatal(err)
-				}
-			}
-
 			plansBefore := countTable(t, db, "plans")
 			holdBefore := countTable(t, db, "plan_holdings")
 			snapsBefore, err := service.CountSnapshots(context.Background(), db)
@@ -554,5 +537,54 @@ func TestPlanWizardFailureNoResidualIntegration(t *testing.T) {
 				t.Fatal("plan snapshots should have no residual row")
 			}
 		})
+	}
+}
+
+// TestPlanWizardLazyHoldingIntegration: a wizard holding whose asset has no
+// local history is saved lazily (empty snapshot id) instead of failing.
+func TestPlanWizardLazyHoldingIntegration(t *testing.T) {
+	srv, db, client := setupInstrumentIntegration(t)
+
+	seed := cnETFAssetSeed()
+	seed.AssetKey = "cn:cn_exchange_fund:sh:513999"
+	seed.Symbol = "513999"
+	seed.Points = nil // directory row only, no history yet
+	seedMarketAssetWithHistory(t, db, seed)
+	assetBond := seedAssetCode(t, db, "510510")
+
+	const total = int64(10_000_000_00)
+	body := map[string]any{
+		"name": "向导-懒快照", "valuation_date": "2026-06-09",
+		"selected_scenario_id":      "scn_builtin_near_fire",
+		"parameters":                wizardParams(total),
+		"region_targets":            wizardRegionTargets(),
+		"apply_unallocated_to_cash": true,
+		"holdings": []map[string]any{
+			{
+				"asset_key": seed.AssetKey, "asset_class": "equity", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 7_000_000_00,
+				"sort_order": 1,
+			},
+			{
+				"asset_key": assetBond, "asset_class": "bond", "region": "domestic",
+				"enabled": true, "weight_within_group": 1.0, "current_amount_minor": 3_000_000_00,
+				"sort_order": 2,
+			},
+		},
+	}
+	resp, raw := postWizard(t, client, srv.URL, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wizard with missing history must lazily save, status=%d body=%s", resp.StatusCode, string(raw))
+	}
+	planID := decodeEnvelope(t, raw)["data"].(map[string]any)["id"].(string)
+
+	var snapID string
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT simulation_snapshot_id FROM plan_holdings
+		WHERE plan_id=? AND asset_key=?`, planID, seed.AssetKey).Scan(&snapID); err != nil {
+		t.Fatal(err)
+	}
+	if snapID != "" {
+		t.Fatalf("expected lazy holding with empty snapshot id, got %q", snapID)
 	}
 }

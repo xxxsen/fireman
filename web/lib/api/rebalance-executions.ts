@@ -3,7 +3,7 @@ import { apiGet, apiPost } from "./client";
 
 export function createRebalanceExecution(
   planId: string,
-  body: { instrument_ids?: string[]; force_new?: boolean } = {},
+  body: { asset_keys?: string[]; force_new?: boolean } = {},
 ): Promise<RebalanceExecutionDetail> {
   return apiPost<RebalanceExecutionDetail>(`/api/v1/plans/${planId}/rebalance-executions`, body);
 }

@@ -21,7 +21,6 @@ import {
   pointTypeLabel,
 } from "@/lib/format";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
@@ -195,15 +194,6 @@ export default function MarketAssetDetailPage() {
             </dd>
           </div>
         </dl>
-        <div className="mt-4">
-          <Button
-            variant="secondary"
-            href={`/assets/import?asset_key=${encodeURIComponent(asset.asset_key)}`}
-            data-testid="import-from-detail"
-          >
-            录入到我的资产库
-          </Button>
-        </div>
       </section>
 
       <section
@@ -368,8 +358,7 @@ export default function MarketAssetDetailPage() {
       )}
 
       <p className="mt-8 text-xs text-ink-muted">
-        全量市场资产与历史数据由系统统一同步维护，不支持在此删除；如需移除自己的引用，请前往
-        「我的资产库」删除对应标的。
+        全量市场资产与历史数据由系统统一同步维护；计划持仓直接引用该资产，无需单独录入。
       </p>
     </div>
   );

@@ -60,7 +60,7 @@ func (s *SimulationService) buildSnapshotAssets(
 	plan repository.Plan,
 	lines []domain.HoldingTargetLine,
 	resolved resolvedAssumption,
-	customByInstrument map[string]float64,
+	customByAsset map[string]float64,
 	overrides map[string]repository.PlanReturnOverride,
 ) ([]simulation.SnapshotAsset, error) {
 	fxCache := make(map[string]marketdata.SnapshotMetrics)
@@ -69,7 +69,7 @@ func (s *SimulationService) buildSnapshotAssets(
 		if !line.Enabled {
 			continue
 		}
-		sa, err := s.buildOneSnapshotAsset(ctx, plan, line, fxCache, resolved, customByInstrument, overrides)
+		sa, err := s.buildOneSnapshotAsset(ctx, plan, line, fxCache, resolved, customByAsset, overrides)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +84,7 @@ func (s *SimulationService) buildOneSnapshotAsset(
 	line domain.HoldingTargetLine,
 	fxCache map[string]marketdata.SnapshotMetrics,
 	resolved resolvedAssumption,
-	customByInstrument map[string]float64,
+	customByAsset map[string]float64,
 	overrides map[string]repository.PlanReturnOverride,
 ) (simulation.SnapshotAsset, error) {
 	snap, err := s.snapRepo.GetByID(ctx, line.SimulationSnapshotID)
@@ -108,33 +108,35 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		}
 	}
 	years := toSimSnapshotYears(snap.Years)
-	inst, err := s.holdings.GetInstrument(ctx, line.InstrumentID)
+	asset, err := s.assetRepo.GetByKey(ctx, line.AssetKey)
 	currency := plan.BaseCurrency
 	instrumentName := ""
 	instrumentCode := ""
 	if err == nil {
-		currency = inst.Currency
-		instrumentName = inst.Name
-		instrumentCode = inst.Code
+		if asset.Currency != "" {
+			currency = asset.Currency
+		}
+		instrumentName = asset.Name
+		instrumentCode = asset.Symbol
 	}
 	isCash := snap.SourceMode == "system_cash" || line.AssetClass == domain.AssetClassCash
 	region := line.Region
 	if isCash {
 		region = domain.RegionDomestic
 	}
-	cal, err := calibrateAsset(resolved, line.InstrumentID, line.AssetClass, region, currency,
-		snap.ModeledAnnualReturn, snap.AnnualVolatility, snap.CompleteYearCount, customByInstrument)
+	cal, err := calibrateAsset(resolved, line.AssetKey, line.AssetClass, region, currency,
+		snap.ModeledAnnualReturn, snap.AnnualVolatility, snap.CompleteYearCount, customByAsset)
 	if err != nil {
 		return simulation.SnapshotAsset{}, newErr("assumption_unavailable",
 			"no forward-return assumption covers this holding; configure it in 模拟假设",
 			map[string]any{
-				"holding_id": line.HoldingID, "instrument_id": line.InstrumentID,
+				"holding_id": line.HoldingID, "asset_key": line.AssetKey,
 				"asset_class": line.AssetClass, "region": region, "currency": currency,
 				"mode": resolved.Mode, "error": err.Error(),
 			})
 	}
 	sa := simulation.SnapshotAsset{
-		HoldingID: line.HoldingID, InstrumentID: line.InstrumentID,
+		HoldingID: line.HoldingID, AssetKey: line.AssetKey,
 		InstrumentName: instrumentName, InstrumentCode: instrumentCode,
 		SnapshotID: line.SimulationSnapshotID,
 		Currency:   currency, AssetClass: line.AssetClass, Region: region, IsCash: isCash,
@@ -147,7 +149,7 @@ func (s *SimulationService) buildOneSnapshotAsset(
 	}
 	applyReturnCalibration(&sa, cal, resolved.Scenario)
 	if !isCash {
-		if ov, ok := overrides[line.InstrumentID]; ok {
+		if ov, ok := overrides[line.AssetKey]; ok {
 			applyReturnOverride(&sa, ov)
 		}
 		if months, err := s.snapRepo.ListSnapshotMonths(ctx, line.SimulationSnapshotID); err == nil {

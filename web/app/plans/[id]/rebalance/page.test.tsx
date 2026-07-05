@@ -24,7 +24,7 @@ vi.mock("next/navigation", () => ({
 
 const targetLineBase = {
   holding_id: "holding_1",
-  instrument_id: "instrument_1",
+  asset_key: "CN|cn_exchange_fund|sh|510300",
   instrument_name: "测试基金",
   instrument_code: "T1",
   asset_class: "equity",
@@ -230,7 +230,7 @@ describe("RebalancePage (调仓工作台)", () => {
       execution: { id: "rbx_active", cash_pool_minor: 50_000_00, status: "in_progress" },
       lines: [
         {
-          instrument_id: "instrument_1",
+          asset_key: "CN|cn_exchange_fund|sh|510300",
           execution_status: "partial",
           remaining_delta_minor: 10_000_00,
         },

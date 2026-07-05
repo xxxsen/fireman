@@ -1,6 +1,7 @@
 """Test helper: drive the fetch chain with the legacy response contract.
 
-The synchronous /v1/instruments/fetch endpoint was removed by td/078 (the
+The synchronous /v1/instruments/fetch endpoint was removed by the
+task-worker refactor (the
 sidecar is a pure task worker now), but the underlying fetch chain
 (adapters.registry.fetch_instrument) still powers asset_history_sync's
 unpinned path. This helper preserves the old envelope shape so the fetch

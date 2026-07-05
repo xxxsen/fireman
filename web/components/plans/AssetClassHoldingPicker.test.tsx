@@ -3,93 +3,64 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import type { MarketAsset } from "@/lib/api/market-assets";
-import { AssetClassHoldingPicker } from "./AssetClassHoldingPicker";
+import { AssetClassHoldingPicker, marketAssetToWizardAsset } from "./AssetClassHoldingPicker";
 
-const searchInstruments = vi.fn();
-const getInstrument = vi.fn();
 const listMarketAssets = vi.fn();
-const importFromMarketAsset = vi.fn();
-
-vi.mock("@/lib/api/instruments", () => ({
-  searchInstruments: (...args: unknown[]) => searchInstruments(...args),
-  getInstrument: (...args: unknown[]) => getInstrument(...args),
-}));
 
 vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
   listMarketAssets: (...args: unknown[]) => listMarketAssets(...args),
-  importFromMarketAsset: (...args: unknown[]) => importFromMarketAsset(...args),
 }));
 
-interface SearchParams {
-  q?: string;
-  assetClass?: string;
-  region?: string;
-  excludeIds?: string[];
-  cursor?: number;
+interface ListParams {
+  symbolQ?: string;
+  nameQ?: string;
+  market?: string;
+  instrumentTypes?: string[];
   limit?: number;
+  offset?: number;
 }
 
-function makeInstrument(i: number) {
+function makeMarketAsset(i: number, overrides: Partial<MarketAsset> = {}): MarketAsset {
   return {
-    id: `ins_${i}`,
-    code: `EQ${i}`,
-    name: `资料库基金${i}`,
+    asset_key: `CN|cn_exchange_fund|sh|51030${i}`,
     market: "CN",
-    instrument_type: "cn_mutual_fund",
-    asset_class: "equity",
-    region: "domestic",
-    currency: "CNY",
-    provider: "akshare",
-    is_system: false,
-    status: "active",
-    simulation_eligible: true,
-    expense_ratio_status: "unknown",
-    fee_treatment: "net",
-    data_stale: false,
-    created_at: 0,
-    updated_at: 0,
-  };
-}
-
-function makeMarketAsset(overrides: Partial<MarketAsset> = {}): MarketAsset {
-  return {
-    asset_key: "cn:cn_mutual_fund:270042",
-    market: "CN",
-    instrument_type: "cn_mutual_fund",
-    region_code: "",
-    symbol: "270042",
-    name: "广发纳指100ETF联接（QDII）人民币A",
-    exchange: "",
-    instrument_kind: "指数型-海外股票",
+    instrument_type: "cn_exchange_fund",
+    region_code: "sh",
+    symbol: `51030${i}`,
+    name: `目录基金${i}`,
+    exchange: "SH",
+    instrument_kind: "etf",
     currency: "CNY",
     active: true,
     listing_status: "active",
     last_seen_at: 0,
-    source_name: "ak.fund_name_em",
+    source_name: "ak.fund_etf_spot_em",
     source_as_of: "",
     refreshed_at: 0,
     created_at: 0,
     updated_at: 0,
+    has_history: true,
+    history_data_as_of: "2026-07-01",
+    history_source_name: "ak.fund_etf_hist_em",
     ...overrides,
   };
 }
 
-let pool = [makeInstrument(1)];
+let pool: MarketAsset[] = [makeMarketAsset(1)];
 
-function filterPool(params: SearchParams) {
-  const q = (params.q ?? "").toLowerCase();
-  const exclude = new Set(params.excludeIds ?? []);
+function filterPool(params: ListParams) {
+  const symbolQ = (params.symbolQ ?? "").toLowerCase();
+  const nameQ = (params.nameQ ?? "").toLowerCase();
   const items = pool.filter(
-    (i) =>
-      !exclude.has(i.id) &&
-      (!q || i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q)),
+    (a) =>
+      (!symbolQ || a.symbol.toLowerCase().includes(symbolQ)) &&
+      (!nameQ || a.name.toLowerCase().includes(nameQ)),
   );
-  const cursor = params.cursor ?? 0;
+  const offset = params.offset ?? 0;
   const limit = params.limit ?? 10;
-  const page = items.slice(cursor, cursor + limit);
-  const next = cursor + page.length < items.length ? cursor + page.length : null;
-  return Promise.resolve({ instruments: page, next_cursor: next, total: items.length });
+  const page = items.slice(offset, offset + limit);
+  return Promise.resolve({ assets: page, syncs: [], total: items.length });
 }
 
 function renderPicker(selected: unknown[] = []) {
@@ -113,180 +84,170 @@ function renderPicker(selected: unknown[] = []) {
 
 describe("AssetClassHoldingPicker", () => {
   beforeEach(() => {
-    searchInstruments.mockReset();
-    getInstrument.mockReset();
     listMarketAssets.mockReset();
-    importFromMarketAsset.mockReset();
-    pool = [makeInstrument(1)];
-    searchInstruments.mockImplementation((params: SearchParams) => filterPool(params));
-    listMarketAssets.mockResolvedValue({ assets: [], syncs: [], total: 0 });
+    pool = [makeMarketAsset(1)];
+    listMarketAssets.mockImplementation((params: ListParams) => filterPool(params));
   });
 
-  it("loads the first page of recent instruments on focus without typing", async () => {
-    pool = Array.from({ length: 5 }, (_, i) => makeInstrument(i + 1));
+  it("loads the first page of directory assets on focus without typing", async () => {
+    pool = Array.from({ length: 5 }, (_, i) => makeMarketAsset(i + 1));
     renderPicker();
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));
-    expect(await screen.findByRole("button", { name: /资料库基金1/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /目录基金1/ })).toBeInTheDocument();
     await waitFor(() =>
-      expect(searchInstruments).toHaveBeenCalledWith(
-        expect.objectContaining({ assetClass: "equity", region: "domestic", cursor: 0 }),
+      expect(listMarketAssets).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 0, limit: 10 }),
       ),
     );
   });
 
   it("appends the next page when the sentinel scrolls into view", async () => {
-    pool = Array.from({ length: 12 }, (_, i) => makeInstrument(i + 1));
+    pool = Array.from({ length: 12 }, (_, i) => makeMarketAsset(i + 1));
     renderPicker();
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));
-    // Page 2 contains the 11th and 12th instruments.
-    expect(await screen.findByRole("button", { name: /资料库基金11/ })).toBeInTheDocument();
+    // Page 2 contains the 11th and 12th assets.
+    expect(await screen.findByRole("button", { name: /目录基金11/ })).toBeInTheDocument();
     await waitFor(() =>
-      expect(searchInstruments).toHaveBeenCalledWith(expect.objectContaining({ cursor: 10 })),
+      expect(listMarketAssets).toHaveBeenCalledWith(expect.objectContaining({ offset: 10 })),
     );
   });
 
-  it("excludes already-selected instruments from the query", async () => {
-    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
-    renderPicker([{ inst: makeInstrument(1), weight: 1, amount: 0 }]);
+  it("hides already-selected assets from the candidate list", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeMarketAsset(i + 1));
+    renderPicker([
+      {
+        inst: marketAssetToWizardAsset(makeMarketAsset(1), "equity", "domestic"),
+        weight: 1,
+        amount: 0,
+      },
+    ]);
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));
-    await waitFor(() =>
-      expect(searchInstruments).toHaveBeenCalledWith(
-        expect.objectContaining({ excludeIds: ["ins_1"] }),
-      ),
-    );
+    expect(await screen.findByRole("button", { name: /目录基金2/ })).toBeInTheDocument();
+    const list = screen.getByTestId("wizard-library-results");
+    expect(list).not.toHaveTextContent("目录基金1");
   });
 
-  it("searches the local market asset directory when the library has no exact code match", async () => {
-    pool = [];
-    listMarketAssets.mockResolvedValue({
-      assets: [makeMarketAsset()],
-      syncs: [],
-      total: 1,
-    });
+  it("searches by symbol_q for code-like queries after the debounce", async () => {
     renderPicker();
-
     fireEvent.change(screen.getByTestId("wizard-holding-search"), {
-      target: { value: "270042" },
+      target: { value: "510301" },
     });
-
     await waitFor(() =>
       expect(listMarketAssets).toHaveBeenCalledWith(
-        expect.objectContaining({ q: "270042" }),
+        expect.objectContaining({ symbolQ: "510301" }),
       ),
     );
-    expect(await screen.findByTestId("wizard-external-results")).toBeInTheDocument();
-    expect(screen.getByText(/资产库未收录/)).toBeInTheDocument();
   });
 
-  it("never searches the directory when the library search (still pending) ends up holding the code", async () => {
-    const libInst = {
-      ...makeInstrument(1),
-      id: "ins_270042",
-      code: "270042",
-      name: "资料库已收录基金",
-    };
-    let settleCodeSearch: () => void = () => {};
-    searchInstruments.mockImplementation((params: SearchParams) => {
-      if (params.q === "270042") {
-        return new Promise((res) => {
-          settleCodeSearch = () =>
-            res({ instruments: [libInst], next_cursor: null, total: 1 });
-        });
-      }
-      return Promise.resolve({ instruments: [], next_cursor: null, total: 0 });
-    });
-
+  it("searches by name_q for non-code queries after the debounce", async () => {
     renderPicker();
     fireEvent.change(screen.getByTestId("wizard-holding-search"), {
-      target: { value: "270042" },
+      target: { value: "目录基金" },
     });
-
-    // Wait until the local code search is actually in flight.
     await waitFor(() =>
-      expect(searchInstruments).toHaveBeenCalledWith(expect.objectContaining({ q: "270042" })),
+      expect(listMarketAssets).toHaveBeenCalledWith(
+        expect.objectContaining({ nameQ: "目录基金" }),
+      ),
     );
-    // While the local paginated search is pending, the directory must not be queried.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(listMarketAssets).not.toHaveBeenCalled();
-
-    // Settle the local search with an exact library hit.
-    settleCodeSearch();
-    expect(await screen.findByRole("button", { name: /资料库已收录基金/ })).toBeInTheDocument();
-    // The library holds the code → directory search must never run.
-    expect(listMarketAssets).not.toHaveBeenCalled();
   });
 
-  it("imports a directory candidate and adds the instrument to the selection", async () => {
-    pool = [];
-    listMarketAssets.mockResolvedValue({
-      assets: [makeMarketAsset()],
-      syncs: [],
-      total: 1,
-    });
-    importFromMarketAsset.mockResolvedValue({
-      ...makeInstrument(99),
-      id: "ins_new",
-      code: "270042",
-      name: "广发纳指100ETF联接（QDII）人民币A",
-    });
-
-    const { onSelectedChange } = renderPicker();
-
-    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
-      target: { value: "270042" },
-    });
-    fireEvent.click(await screen.findByRole("button", { name: /点击录入并添加/ }));
-
-    await waitFor(() => {
-      expect(importFromMarketAsset).toHaveBeenCalledWith({
-        asset_key: "cn:cn_mutual_fund:270042",
-        asset_class: "equity",
-        region: "domestic",
-      });
-    });
-    await waitFor(() => {
-      expect(onSelectedChange).toHaveBeenCalled();
-    });
-  });
-
-  it("shows the history-empty guidance when the candidate has no synced history", async () => {
-    pool = [];
-    listMarketAssets.mockResolvedValue({
-      assets: [makeMarketAsset()],
-      syncs: [],
-      total: 1,
-    });
-    const { ApiError } = await import("@/lib/api/client");
-    importFromMarketAsset.mockRejectedValue(
-      new ApiError("market_asset_history_empty", "history empty"),
-    );
-
-    const { onSelectedChange } = renderPicker();
-    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
-      target: { value: "270042" },
-    });
-    fireEvent.click(await screen.findByRole("button", { name: /点击录入并添加/ }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("该资产还没有本地历史数据");
-    expect(onSelectedChange).not.toHaveBeenCalled();
-  });
-
-  it("filters out inactive directory entries from external candidates", async () => {
-    pool = [];
-    listMarketAssets.mockResolvedValue({
-      assets: [makeMarketAsset({ active: false })],
-      syncs: [],
-      total: 1,
-    });
+  it("passes market and instrument type filters to the directory query", async () => {
     renderPicker();
-    fireEvent.change(screen.getByTestId("wizard-holding-search"), {
-      target: { value: "270042" },
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    fireEvent.change(screen.getByTestId("wizard-picker-market-filter"), {
+      target: { value: "HK" },
     });
+    fireEvent.change(screen.getByTestId("wizard-picker-type-filter"), {
+      target: { value: "hk_etf" },
+    });
+    await waitFor(() =>
+      expect(listMarketAssets).toHaveBeenCalledWith(
+        expect.objectContaining({ market: "HK", instrumentTypes: ["hk_etf"] }),
+      ),
+    );
+  });
 
-    expect(
-      await screen.findByText("未在本地资产目录中找到可录入的标的"),
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("wizard-external-results")).not.toBeInTheDocument();
+  it("adds a selected asset with the group's classification", async () => {
+    const { onSelectedChange } = renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    fireEvent.click(await screen.findByRole("button", { name: /目录基金1/ }));
+
+    await waitFor(() => expect(onSelectedChange).toHaveBeenCalled());
+    const next = onSelectedChange.mock.calls[0][0];
+    expect(next).toHaveLength(1);
+    expect(next[0].inst).toMatchObject({
+      id: "CN|cn_exchange_fund|sh|510301",
+      code: "510301",
+      asset_class: "equity",
+      region: "domestic",
+      has_history: true,
+    });
+  });
+
+  it("allows selecting an asset without history and shows the sync hint", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        has_history: false,
+        history_data_as_of: undefined,
+        history_source_name: undefined,
+      }),
+    ];
+    const { onSelectedChange } = renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    const option = await screen.findByRole("button", { name: /目录基金1/ });
+    expect(option).toHaveTextContent("未同步历史，模拟前需要同步");
+
+    fireEvent.click(option);
+    await waitFor(() => expect(onSelectedChange).toHaveBeenCalled());
+    expect(onSelectedChange.mock.calls[0][0][0].inst.has_history).toBe(false);
+  });
+
+  it("shows history status for synced candidates", async () => {
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    const option = await screen.findByRole("button", { name: /目录基金1/ });
+    expect(option).toHaveTextContent("数据截至 2026-07-01");
+  });
+
+  it("shows the syncing state while a history sync task is active", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        has_history: false,
+        history_data_as_of: undefined,
+        history_source_name: undefined,
+        history_sync_status: "running",
+      }),
+    ];
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    const option = await screen.findByRole("button", { name: /目录基金1/ });
+    expect(option).toHaveTextContent("历史同步中…");
+  });
+
+  it("shows the failure summary when the history sync task failed", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        has_history: false,
+        history_data_as_of: undefined,
+        history_source_name: undefined,
+        history_sync_status: "failed",
+        history_sync_error: "上游超时",
+      }),
+    ];
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    const option = await screen.findByRole("button", { name: /目录基金1/ });
+    expect(option).toHaveTextContent("历史同步失败：上游超时，可在详情页重新同步");
+  });
+
+  it("links each candidate to the asset detail page", async () => {
+    renderPicker();
+    fireEvent.focus(screen.getByTestId("wizard-holding-search"));
+    await screen.findByRole("button", { name: /目录基金1/ });
+    expect(screen.getByRole("link", { name: "详情" })).toHaveAttribute(
+      "href",
+      `/assets/market/${encodeURIComponent("CN|cn_exchange_fund|sh|510301")}`,
+    );
   });
 
   it("exposes combobox semantics on the search input", async () => {
@@ -299,7 +260,7 @@ describe("AssetClassHoldingPicker", () => {
   });
 
   it("closes the candidate dropdown when clicking outside", async () => {
-    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+    pool = Array.from({ length: 3 }, (_, i) => makeMarketAsset(i + 1));
     renderPicker();
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));
     expect(await screen.findByTestId("wizard-library-results")).toBeInTheDocument();
@@ -311,7 +272,7 @@ describe("AssetClassHoldingPicker", () => {
   });
 
   it("closes the candidate dropdown on Escape", async () => {
-    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+    pool = Array.from({ length: 3 }, (_, i) => makeMarketAsset(i + 1));
     renderPicker();
     const search = screen.getByTestId("wizard-holding-search");
     fireEvent.focus(search);
@@ -324,7 +285,13 @@ describe("AssetClassHoldingPicker", () => {
   });
 
   it("renders selected holdings above the search input", () => {
-    renderPicker([{ inst: makeInstrument(1), weight: 1, amount: 0 }]);
+    renderPicker([
+      {
+        inst: marketAssetToWizardAsset(makeMarketAsset(1), "equity", "domestic"),
+        weight: 1,
+        amount: 0,
+      },
+    ]);
     const selectedRows = screen.getByTestId("wizard-selected-rows");
     const search = screen.getByTestId("wizard-holding-search");
     expect(
@@ -332,53 +299,18 @@ describe("AssetClassHoldingPicker", () => {
     ).toBeTruthy();
   });
 
-  it("closes external directory candidates on outside click", async () => {
-    pool = [];
-    listMarketAssets.mockResolvedValue({
-      assets: [makeMarketAsset()],
-      syncs: [],
-      total: 1,
-    });
-    renderPicker();
-    fireEvent.change(screen.getByTestId("wizard-holding-search"), { target: { value: "270042" } });
-    expect(await screen.findByTestId("wizard-external-results")).toBeInTheDocument();
-
-    fireEvent.pointerDown(document.body);
-    await waitFor(() =>
-      expect(screen.queryByTestId("wizard-external-results")).not.toBeInTheDocument(),
-    );
-  });
-
-  it("closes external directory candidates on Escape", async () => {
-    pool = [];
-    listMarketAssets.mockResolvedValue({
-      assets: [makeMarketAsset()],
-      syncs: [],
-      total: 1,
-    });
-    renderPicker();
-    const search = screen.getByTestId("wizard-holding-search");
-    fireEvent.change(search, { target: { value: "270042" } });
-    expect(await screen.findByTestId("wizard-external-results")).toBeInTheDocument();
-
-    fireEvent.keyDown(search, { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByTestId("wizard-external-results")).not.toBeInTheDocument(),
-    );
-  });
-
-  it("renders the local dropdown at a fixed 10-row height with single-line rows", async () => {
-    pool = Array.from({ length: 3 }, (_, i) => makeInstrument(i + 1));
+  it("renders the dropdown at a fixed 10-row height with single-line rows", async () => {
+    pool = Array.from({ length: 3 }, (_, i) => makeMarketAsset(i + 1));
     renderPicker();
     fireEvent.focus(screen.getByTestId("wizard-holding-search"));
-    const option = await screen.findByRole("button", { name: /资料库基金1/ });
+    const option = await screen.findByRole("button", { name: /目录基金1/ });
 
     const list = screen.getByTestId("wizard-library-results");
     expect(list).toHaveClass("h-[30rem]");
-    expect(list).not.toHaveClass("max-h-80");
 
-    expect(option).toHaveClass("h-12");
-    expect(option).toHaveClass("whitespace-nowrap");
-    expect(screen.getByText("资料库基金1")).toHaveClass("truncate");
+    expect(option).toHaveClass("h-full");
+    expect(option.parentElement).toHaveClass("h-12");
+    expect(option.parentElement).toHaveClass("whitespace-nowrap");
+    expect(screen.getByText("目录基金1")).toHaveClass("truncate");
   });
 });

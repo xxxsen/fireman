@@ -10,7 +10,9 @@ export function updateHoldings(
   body: {
     config_version: number;
     holdings: {
-      instrument_id: string;
+      asset_key: string;
+      asset_class: string;
+      region: string;
       enabled: boolean;
       weight_within_group: number;
       current_amount_minor: number;
@@ -23,7 +25,7 @@ export function updateHoldings(
 
 export interface HoldingSimulationSnapshot {
   id: string;
-  instrument_id: string;
+  asset_key: string;
   inclusion_date: string;
   as_of_date: string;
   complete_year_count: number;

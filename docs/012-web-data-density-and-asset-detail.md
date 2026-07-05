@@ -1,6 +1,8 @@
 # 012 · Web 数据密度与资产详情重排
 
 > 本文自洽描述页面宽度与数据密度、资产选择分页、资产资料库分类与刷新、金额单位与配置 tooltip、资产详情重排、场景卡片权限等统一约定。除资料库分类的受控编辑与新增 `GET /api/v1/instruments/:id/return-series`、扩展 `GET /api/v1/instruments` 的分页/搜索、Dashboard allocation bar 明细外，不改变任何金额 / 权重 / 调仓 / 模拟计算口径。
+>
+> **注**：本文中「用户资产资料库 / `instruments` API / `instrument_library_metrics` 投影」相关章节已被市场资产目录模型取代——计划持仓直接引用 `market_assets.asset_key`，相关表与 API 已移除；最终架构见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。页面宽度、金额单位、tooltip、场景卡片等 UI 约定仍然有效。
 
 ## 1. 新建计划向导与页面容器宽度
 

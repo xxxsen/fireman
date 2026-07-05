@@ -289,7 +289,7 @@ func (s *RebalanceDraftService) buildDetail(ctx context.Context, draft repositor
 	frozen := make([]domain.FrozenDraftLine, 0, len(lines))
 	for _, line := range lines {
 		frozen = append(frozen, domain.FrozenDraftLine{
-			HoldingID: line.HoldingID, InstrumentID: line.InstrumentID,
+			HoldingID: line.HoldingID, AssetKey: line.AssetKey,
 			BaselineCurrentMinor: line.BaselineCurrentMinor, PlannedCurrentMinor: line.PlannedCurrentMinor,
 			FrozenTargetMinor: line.FrozenTargetMinor, FrozenGapMinor: line.FrozenGapMinor,
 			FrozenGapWeight: line.FrozenGapWeight, FrozenAction: line.FrozenAction,
@@ -363,7 +363,7 @@ func findCashSweepHolding(holdings []repository.PlanHolding) *repository.PlanHol
 		if !h.Enabled {
 			continue
 		}
-		if h.InstrumentID == repository.SystemCashInstrumentID {
+		if h.AssetKey == repository.SystemCashAssetKey {
 			return h
 		}
 		if h.AssetClass == domain.AssetClassCash {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,8 @@ func (s Services) registerMarketAssetRoutes(rg *gin.RouterGroup) {
 func (s Services) listMarketAssets(c *gin.Context) {
 	params := service.MarketAssetListParams{
 		Market:          c.Query("market"),
-		Query:           c.Query("q"),
+		SymbolQuery:     c.Query("symbol_q"),
+		NameQuery:       c.Query("name_q"),
 		IncludeInactive: c.Query("include_inactive") == "true",
 		Limit:           atoiDefault(c.Query("limit"), 50),
 		Offset:          atoiDefault(c.Query("offset"), 0),
@@ -99,4 +101,15 @@ func (s Services) getWorkerTask(c *gin.Context) {
 		return
 	}
 	OK(c, out)
+}
+
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }

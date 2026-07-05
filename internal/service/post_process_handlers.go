@@ -11,12 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fireman/fireman/internal/libmetrics"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// Coverage thresholds from td/078.
+// Coverage thresholds for worker task post-processing.
 const (
 	// directoryCoverageRatio: each required category must return at least 90%
 	// of the previous successful count.
@@ -468,8 +467,8 @@ func (s *PostProcessService) applyFullHistory(
 	return s.assets.UpsertPointsTx(ctx, tx, repoPoints)
 }
 
-// finishHistoryCommit recomputes projections, updates the history state and
-// version table, and mirrors the series into linked user instruments (P4).
+// finishHistoryCommit recomputes projections and updates the history state
+// and version table.
 func (s *PostProcessService) finishHistoryCommit(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -548,10 +547,6 @@ func (s *PostProcessService) finishHistoryCommit(
 		return err
 	}
 
-	if err := s.projectToInstrumentsTx(ctx, tx, payload.AssetKey, payload.AdjustPolicy, dp, annual); err != nil {
-		return err
-	}
-
 	// Single-source invariant check after commit: merge is source-pinned and
 	// full replaces everything, so more than one distinct source signals a
 	// mixed series that the next refresh must repair with a full replacement.
@@ -569,62 +564,22 @@ func (s *PostProcessService) finishHistoryCommit(
 	return s.assets.SetDataVersionTx(ctx, tx, versionKey, task.VersionNo, task.ID)
 }
 
-// projectToInstrumentsTx mirrors the market asset series into the legacy
-// instrument tables (market_data_points, instrument_annual_returns,
-// instrument_library_metrics) so simulations, library metrics and plan
-// validation keep working without reading market_asset_points directly.
-func (s *PostProcessService) projectToInstrumentsTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	assetKey, adjustPolicy string,
-	dp []marketdata.DataPoint,
-	annual []marketdata.AnnualReturnRow,
-) error {
-	instruments, err := s.instRepo.ListByAssetKeyTx(ctx, tx, assetKey)
-	if err != nil {
-		return err
-	}
-	for _, inst := range instruments {
-		if inst.AdjustPolicy != adjustPolicy {
-			continue
-		}
-		if err := s.marketRepo.DeleteAllTx(ctx, tx, inst.ID); err != nil {
-			return err
-		}
-		repoPoints := make([]repository.MarketDataPoint, len(dp))
-		for i, p := range dp {
-			repoPoints[i] = repository.MarketDataPoint{
-				InstrumentID: inst.ID, TradeDate: p.TradeDate, Value: p.Value,
-				PointType: p.PointType, SourceName: p.SourceName, FetchedAt: p.FetchedAt,
-			}
-		}
-		if err := s.marketRepo.UpsertBatch(ctx, tx, inst.ID, repoPoints); err != nil {
-			return err
-		}
-		annualRecords := make([]repository.AnnualReturnRecord, len(annual))
-		for i, a := range annual {
-			annualRecords[i] = repository.AnnualReturnRecord{
-				InstrumentID: inst.ID, Year: a.Year, AnnualReturn: a.AnnualReturn,
-				StartDate: a.StartDate, EndDate: a.EndDate,
-				StartValue: a.StartValue, EndValue: a.EndValue,
-				Observations: a.Observations, IsPartial: a.IsPartial,
-			}
-		}
-		if err := s.annualRepo.ReplaceAll(ctx, tx, inst.ID, annualRecords); err != nil {
-			return err
-		}
-		if err := libmetrics.SyncTx(ctx, s.libMetrics, tx, inst.ID, dp); err != nil {
-			return err
-		}
-		if inst.Status == "pending_fetch" || inst.Status == "fetch_failed" {
-			if err := s.instRepo.UpdateStatusTx(ctx, tx, inst.ID, "active"); err != nil {
-				return err
-			}
-		} else if err := s.instRepo.TouchUpdated(ctx, tx, inst.ID); err != nil {
-			return err
+// trailingReturnsToMap serializes trailing returns into the detail projection
+// JSON shape consumed by the asset detail API.
+func trailingReturnsToMap(t marketdata.TrailingReturns) map[string]any {
+	periods := map[string]any{}
+	for key, p := range t.Periods {
+		periods[key] = map[string]any{
+			"status": p.Status, "target_start_date": p.TargetStartDate,
+			"start_date": p.StartDate, "end_date": p.EndDate,
+			"actual_days": p.ActualDays, "cumulative_return": p.CumulativeReturn,
+			"annualized_return": p.AnnualizedReturn,
 		}
 	}
-	return nil
+	return map[string]any{
+		"as_of_date": t.AsOfDate, "point_type": t.PointType, "source_name": t.SourceName,
+		"periods": periods,
+	}
 }
 
 // --- fx_rate_sync ---

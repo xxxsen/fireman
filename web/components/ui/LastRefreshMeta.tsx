@@ -1,4 +1,4 @@
-import { formatDateTimeFromMs } from "@/lib/format";
+import { dataSourceLabel, formatDateTimeFromMs } from "@/lib/format";
 
 export interface LastRefreshMetaProps {
   /** Millisecond epoch of the last successful refresh. */
@@ -36,7 +36,7 @@ export function LastRefreshMeta({
       <div className="flex items-center gap-1">
         <dt>数据源</dt>
         <dd data-testid="last-refresh-source" className="text-ink">
-          {sourceName?.trim() ? sourceName : "—"}
+          {dataSourceLabel(sourceName)}
         </dd>
       </div>
     </dl>

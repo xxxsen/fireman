@@ -575,7 +575,7 @@ export function ParametersContent({
               {(holdingsQ.data?.holdings ?? []).map((h) => (
                   <tr key={h.id} className="border-t">
                     <td className="py-1 pr-4">
-                      {h.instrument_name ?? h.instrument_id}（{h.instrument_code ?? "—"}）
+                      {h.instrument_name ?? h.asset_key}（{h.instrument_code ?? "—"}）
                     </td>
                     <td className="py-1 pr-4">{historyDepthLabel(h.snapshot_history_depth)}</td>
                     <td className="py-1 pr-4">{h.snapshot_complete_year_count ?? "—"}</td>

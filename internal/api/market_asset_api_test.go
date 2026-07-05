@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func postJSON(t *testing.T, client *http.Client, url string, body any) (*http.Response, []byte) {
@@ -187,15 +188,16 @@ func TestListMarketAssets_SearchAndSyncBlock(t *testing.T) {
 		t.Fatalf("list status=%d body=%s", resp.StatusCode, body)
 	}
 	data := decodeEnvelope(t, body)["data"].(map[string]any)
-	if got := len(data["assets"].([]any)); got != 2 {
-		t.Fatalf("assets = %d, want 2", got)
+	// 2 seeded assets plus 3 built-in system cash assets (SYS market).
+	if got := len(data["assets"].([]any)); got != 5 {
+		t.Fatalf("assets = %d, want 5", got)
 	}
 	if got := len(data["syncs"].([]any)); got != 3 {
 		t.Fatalf("syncs should cover 3 scopes, got %d", got)
 	}
 
-	// Local search by name substring.
-	resp, body = getJSON(t, client, srv.URL+"/api/v1/market-assets?q=510300")
+	// Local search by symbol substring.
+	resp, body = getJSON(t, client, srv.URL+"/api/v1/market-assets?symbol_q=510300")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("search status=%d body=%s", resp.StatusCode, body)
 	}
@@ -208,7 +210,8 @@ func TestListMarketAssets_SearchAndSyncBlock(t *testing.T) {
 		t.Fatalf("unexpected search hit: %v", assets[0])
 	}
 
-	// Market filter narrows both assets and the syncs block.
+	// Market filter narrows the asset list, but the syncs block stays fixed:
+	// the UI sync panel always shows every directory scope.
 	resp, body = getJSON(t, client, srv.URL+"/api/v1/market-assets?market=HK")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("filter status=%d body=%s", resp.StatusCode, body)
@@ -218,8 +221,85 @@ func TestListMarketAssets_SearchAndSyncBlock(t *testing.T) {
 		t.Fatalf("HK assets = %d, want 1", got)
 	}
 	syncs := data["syncs"].([]any)
-	if len(syncs) != 1 || syncs[0].(map[string]any)["scope"] != "hk_all" {
-		t.Fatalf("HK syncs = %v", syncs)
+	if len(syncs) != 3 {
+		t.Fatalf("syncs must stay fixed across filters, got %v", syncs)
+	}
+	scopes := map[string]bool{}
+	for _, s := range syncs {
+		scopes[s.(map[string]any)["scope"].(string)] = true
+	}
+	for _, want := range []string{"cn_all", "hk_all", "us_all"} {
+		if !scopes[want] {
+			t.Fatalf("syncs missing scope %s: %v", want, syncs)
+		}
+	}
+}
+
+// TestListMarketAssets_HistorySyncStatusForPendingAndFailed covers the picker
+// states: an asset without local history whose latest history sync task failed
+// (or is still running) must expose that through the listing API.
+func TestListMarketAssets_HistorySyncStatusForPendingAndFailed(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UnixMilli()
+
+	seed := cnETFAssetSeed()
+	seed.AssetKey = "cn:cn_exchange_fund:sh:561000"
+	seed.Symbol = "561000"
+	seed.Points = nil
+	seedMarketAssetWithHistory(t, db, seed)
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO worker_tasks (id, version_no, type, status, payload_json,
+			error_code, error_message, created_at)
+		VALUES ('task_failed_1', 1, 'asset_history_sync', 'failed', '{}',
+			'provider_unreachable', 'upstream timed out', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO market_asset_history_state (asset_key, adjust_policy, point_type,
+			last_task_id, last_success_task_id, data_as_of, point_count, source_name, updated_at)
+		VALUES (?, 'none', 'adjusted_close', 'task_failed_1', '', '', 0, '', ?)`,
+		seed.AssetKey, now); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := getJSON(t, client, srv.URL+"/api/v1/market-assets?symbol_q=561000")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", resp.StatusCode, body)
+	}
+	data := decodeEnvelope(t, body)["data"].(map[string]any)
+	assets := data["assets"].([]any)
+	if len(assets) != 1 {
+		t.Fatalf("assets = %d, want 1", len(assets))
+	}
+	row := assets[0].(map[string]any)
+	if row["has_history"] != false {
+		t.Fatalf("has_history = %v, want false", row["has_history"])
+	}
+	if row["history_sync_status"] != "failed" {
+		t.Fatalf("history_sync_status = %v, want failed", row["history_sync_status"])
+	}
+	if row["history_sync_error"] != "upstream timed out" {
+		t.Fatalf("history_sync_error = %v", row["history_sync_error"])
+	}
+
+	// Flip the task to running: status is exposed, error cleared.
+	if _, err := db.ExecContext(ctx,
+		`UPDATE worker_tasks SET status='running', error_code='', error_message='' WHERE id='task_failed_1'`); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = getJSON(t, client, srv.URL+"/api/v1/market-assets?symbol_q=561000")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", resp.StatusCode, body)
+	}
+	data = decodeEnvelope(t, body)["data"].(map[string]any)
+	row = data["assets"].([]any)[0].(map[string]any)
+	if row["history_sync_status"] != "running" {
+		t.Fatalf("history_sync_status = %v, want running", row["history_sync_status"])
+	}
+	if _, hasErr := row["history_sync_error"]; hasErr {
+		t.Fatalf("history_sync_error should be omitted, got %v", row["history_sync_error"])
 	}
 }
 

@@ -14,8 +14,12 @@ import (
 )
 
 // AssetRefreshHoldingItem is one holding in an asset refresh submission.
+// AssetClass/Region are only needed for assets that are new to the plan;
+// existing holdings keep their stored classification.
 type AssetRefreshHoldingItem struct {
-	InstrumentID       string   `json:"instrument_id"`
+	AssetKey           string   `json:"asset_key"`
+	AssetClass         string   `json:"asset_class,omitempty"`
+	Region             string   `json:"region,omitempty"`
 	CurrentAmountMinor int64    `json:"current_amount_minor"`
 	WeightWithinGroup  *float64 `json:"weight_within_group,omitempty"`
 	SortOrder          *int     `json:"sort_order,omitempty"`

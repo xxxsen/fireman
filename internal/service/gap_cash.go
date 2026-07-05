@@ -22,7 +22,7 @@ func applyUnallocatedGapToCashTx(
 	updated := append([]repository.PlanHolding(nil), existing...)
 	cashIdx := -1
 	for i, h := range updated {
-		if h.InstrumentID == repository.SystemCashInstrumentID {
+		if h.AssetKey == repository.SystemCashAssetKey {
 			cashIdx = i
 			break
 		}
@@ -36,7 +36,7 @@ func applyUnallocatedGapToCashTx(
 		updated = append(updated, repository.PlanHolding{
 			ID:                   "hold_" + uuid.New().String(),
 			PlanID:               planID,
-			InstrumentID:         repository.SystemCashInstrumentID,
+			AssetKey:             repository.SystemCashAssetKey,
 			Enabled:              true,
 			AssetClass:           domain.AssetClassCash,
 			Region:               domain.RegionDomestic,

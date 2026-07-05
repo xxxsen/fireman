@@ -1,6 +1,6 @@
 """FastAPI application for the Fireman market data worker sidecar.
 
-Since td/078 the sidecar is a pure task worker: it claims worker_tasks from
+The sidecar is a pure task worker: it claims worker_tasks from
 the shared SQLite DB, executes market data fetches, uploads results through
 the Go internal API and drives task terminal states. The old synchronous
 resolve/fetch/metadata HTTP endpoints are gone; HTTP only serves /healthz
@@ -9,6 +9,7 @@ for container health checks.
 
 from __future__ import annotations
 
+import os
 import threading
 from contextlib import asynccontextmanager
 
@@ -42,6 +43,18 @@ def _start_mutual_fund_cache_warm() -> None:
     threading.Thread(target=_warm, daemon=True, name="mutual-fund-cache-warm").start()
 
 
+def _startup_warm_enabled() -> bool:
+    """Whether the startup name-cache warm thread may hit the real upstream.
+
+    Tests must be able to start the app without triggering any network
+    traffic, so both a dedicated kill switch and an explicit toggle exist.
+    """
+    if os.getenv("FIREMAN_DISABLE_STARTUP_WARM") == "1":
+        return False
+    raw = os.getenv("MARKET_PROVIDER_STARTUP_WARM_ENABLED", "true")
+    return raw.strip().lower() not in {"0", "false", "no"}
+
+
 def create_app() -> FastAPI:
     configure_logging()
 
@@ -49,7 +62,8 @@ def create_app() -> FastAPI:
     async def lifespan(_app: FastAPI):
         # Preheat the mutual fund name cache off the request path; never block
         # startup (and therefore /healthz) on upstream availability.
-        _start_mutual_fund_cache_warm()
+        if _startup_warm_enabled():
+            _start_mutual_fund_cache_warm()
         start_worker_from_env()
         yield
         stop_worker()

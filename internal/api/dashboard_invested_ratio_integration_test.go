@@ -30,15 +30,15 @@ func seedInvestedRatioDashboardPlan(t *testing.T, db *sql.DB) string {
 		{id: "hold_cash", instID: "ins_cash", assetClass: "cash", amount: 80_000_00},
 	}
 	for i, spec := range specs {
-		if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
-			ID: spec.instID, Code: "IR" + string(rune('A'+i)), Name: "测试" + string(rune('A'+i)),
-			Market: "CN", AssetClass: spec.assetClass, Region: "domestic", Currency: "CNY",
+		if err := snapRepo.EnsureMarketAsset(context.Background(), repository.MarketAsset{
+			AssetKey: spec.instID, Symbol: "IR" + string(rune('A'+i)), Name: "测试" + string(rune('A'+i)),
+			Market: "CN", Currency: "CNY",
 		}); err != nil {
 			t.Fatal(err)
 		}
 		snapID := "snap_" + spec.instID
 		if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
-			ID: snapID, InstrumentID: spec.instID, PlanID: &planID,
+			ID: snapID, AssetKey: spec.instID, PlanID: &planID,
 			InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
 			CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
 			VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -52,7 +52,7 @@ func seedInvestedRatioDashboardPlan(t *testing.T, db *sql.DB) string {
 		}
 		if _, err := db.ExecContext(context.Background(), `
 			INSERT INTO plan_holdings (
-				id, plan_id, instrument_id, enabled, asset_class, region,
+				id, plan_id, asset_key, enabled, asset_class, region,
 				weight_within_group, current_amount_minor, simulation_snapshot_id,
 				sort_order, created_at, updated_at
 			) VALUES (?,?,?,1,?,?,1,?,?,?,?,?)`,

@@ -200,19 +200,26 @@ func (r *MarketAssetRepo) GetByKeyTx(ctx context.Context, tx *sql.Tx, assetKey s
 }
 
 // MarketAssetSearchOptions filters directory search. Search never touches the
-// network; it reads local rows only.
+// network; it reads local rows only. SymbolQuery matches only
+// symbol/region_code+symbol; NameQuery matches only name.
 type MarketAssetSearchOptions struct {
 	Market          string
 	InstrumentTypes []string
-	Query           string
+	SymbolQuery     string
+	NameQuery       string
 	IncludeInactive bool
 	Limit           int
 	Offset          int
 }
 
-// Search lists directory rows matching the options ordered by market,
-// instrument_type, symbol.
-func (r *MarketAssetRepo) Search(ctx context.Context, opts MarketAssetSearchOptions) ([]MarketAsset, error) {
+// MarketAssetSearchResult is one page of directory rows plus the filtered
+// total count (for pagination).
+type MarketAssetSearchResult struct {
+	Assets []MarketAsset
+	Total  int
+}
+
+func buildMarketAssetSearchWhere(opts MarketAssetSearchOptions) (string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -232,27 +239,50 @@ func (r *MarketAssetRepo) Search(ctx context.Context, opts MarketAssetSearchOpti
 	if !opts.IncludeInactive {
 		conds = append(conds, "active = 1")
 	}
-	if q := strings.TrimSpace(opts.Query); q != "" {
+	if q := strings.TrimSpace(opts.SymbolQuery); q != "" {
 		like := "%" + escapeLike(q) + "%"
-		conds = append(conds, `(symbol LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\' OR (region_code || symbol) LIKE ? ESCAPE '\')`)
-		args = append(args, like, like, like)
+		conds = append(conds, `(symbol LIKE ? ESCAPE '\' OR (region_code || symbol) LIKE ? ESCAPE '\')`)
+		args = append(args, like, like)
+	}
+	if q := strings.TrimSpace(opts.NameQuery); q != "" {
+		like := "%" + escapeLike(q) + "%"
+		conds = append(conds, `name LIKE ? ESCAPE '\'`)
+		args = append(args, like)
 	}
 	where := ""
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
+	return where, args
+}
+
+// Search lists directory rows matching the options ordered by market,
+// instrument_type, symbol, plus the filtered total count.
+func (r *MarketAssetRepo) Search(ctx context.Context, opts MarketAssetSearchOptions) (MarketAssetSearchResult, error) {
+	where, args := buildMarketAssetSearchWhere(opts)
+
+	var total int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM market_assets `+where, args...).Scan(&total); err != nil {
+		return MarketAssetSearchResult{}, wrapSQL("count market assets", err)
+	}
+
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 50
 	}
-	args = append(args, limit, opts.Offset)
-	return queryCollect(ctx, r.db,
+	pagedArgs := append(append([]any{}, args...), limit, opts.Offset)
+	assets, err := queryCollect(ctx, r.db,
 		`SELECT `+marketAssetColumns+` FROM market_assets `+where+`
 		 ORDER BY market, instrument_type, symbol LIMIT ? OFFSET ?`,
-		args,
+		pagedArgs,
 		func(rows *sql.Rows) (MarketAsset, error) { return scanMarketAsset(rows) },
 		"query market assets", "scan market asset", "iterate market assets",
 	)
+	if err != nil {
+		return MarketAssetSearchResult{}, err
+	}
+	return MarketAssetSearchResult{Assets: assets, Total: total}, nil
 }
 
 func escapeLike(s string) string {
@@ -499,6 +529,38 @@ func (r *MarketAssetRepo) ListHistoryStatesByAsset(
 		WHERE asset_key=?
 		ORDER BY adjust_policy, point_type`,
 		[]any{assetKey},
+		func(rows *sql.Rows) (MarketAssetHistoryState, error) {
+			st, err := scanHistoryState(rows)
+			if err != nil {
+				return MarketAssetHistoryState{}, wrapSQL("scan market asset history state", err)
+			}
+			return st, nil
+		},
+		"query market asset history states", "scan market asset history state",
+		"iterate market asset history states",
+	)
+}
+
+// ListHistoryStatesByAssetKeys returns all history dimension states for the
+// given asset keys, used to batch-annotate list/readiness views.
+func (r *MarketAssetRepo) ListHistoryStatesByAssetKeys(
+	ctx context.Context, assetKeys []string,
+) ([]MarketAssetHistoryState, error) {
+	if len(assetKeys) == 0 {
+		return nil, nil
+	}
+	ph := make([]string, len(assetKeys))
+	args := make([]any, len(assetKeys))
+	for i, k := range assetKeys {
+		ph[i] = "?"
+		args[i] = k
+	}
+	return queryCollect(ctx, r.db, `
+		SELECT `+historyStateColumns+`
+		FROM market_asset_history_state
+		WHERE asset_key IN (`+strings.Join(ph, ",")+`)
+		ORDER BY asset_key, adjust_policy, point_type`,
+		args,
 		func(rows *sql.Rows) (MarketAssetHistoryState, error) {
 			st, err := scanHistoryState(rows)
 			if err != nil {

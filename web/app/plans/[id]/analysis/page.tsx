@@ -18,6 +18,10 @@ import {
   TornadoChart,
 } from "@/components/charts/SensitivityCharts";
 import { useJobStatus } from "@/hooks/useJobStatus";
+import {
+  SimulationReadinessPanel,
+  useSimulationReadiness,
+} from "@/components/plans/SimulationReadinessPanel";
 import { getParameters } from "@/lib/api/plans";
 import {
   createSensitivityTest,
@@ -407,6 +411,9 @@ export function AnalysisContent() {
     queryFn: () => listSimulations(planId),
   });
 
+  const readinessQ = useSimulationReadiness(planId);
+  const readinessBlocked = readinessQ.data ? !readinessQ.data.ready : false;
+
   const simulations = simsQ.data?.simulations ?? [];
   const selectedRun =
     simulations.find((run) => run.id === selectedRunId) ?? simulations[0];
@@ -607,7 +614,7 @@ export function AnalysisContent() {
       if (!h.enabled) {
         continue;
       }
-      const name = h.instrument_name ?? h.instrument_id;
+      const name = h.instrument_name ?? h.asset_key;
       const code = h.instrument_code ?? "—";
       for (const w of h.snapshot_warnings ?? []) {
         labels.push(`${name}（${code}）· ${w}`);
@@ -653,6 +660,7 @@ export function AnalysisContent() {
             以下持仓历史样本有限，模拟结果长期不确定性较高：{snapshotWarningLabels.join("；")}
           </Alert>
         )}
+        <SimulationReadinessPanel planId={planId} />
         {simulations.length > 0 && (
           <label className="mt-3 block text-sm text-ink">
             历史模拟
@@ -694,7 +702,8 @@ export function AnalysisContent() {
             />
           </div>
           <Button
-            disabled={startMut.isPending || simBusy}
+            disabled={startMut.isPending || simBusy || readinessBlocked}
+            title={readinessBlocked ? "存在缺失历史数据的持仓，请先同步" : undefined}
             onClick={() => startMut.mutate()}
           >
             运行模拟

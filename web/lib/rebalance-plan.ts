@@ -1,7 +1,8 @@
 /** Rebalance plan draft fund pool and validation helpers. */
 
 export const REBALANCE_FUND_TOLERANCE_MINOR = 100;
-export const SYSTEM_CASH_INSTRUMENT_ID = "system_cash_cny";
+/** Built-in CNY cash market asset key. */
+export const SYSTEM_CASH_ASSET_KEY = "SYS|cash||CNY";
 
 export interface FundPoolLine {
   baseline_current_minor: number;
@@ -76,7 +77,7 @@ export function hasReferencePackage(lines: PackageDeltaLine[]): boolean {
 
 export interface CashSweepCandidate {
   holding_id: string;
-  instrument_id: string;
+  asset_key: string;
   instrument_name?: string;
   current_amount_minor: number;
 }
@@ -84,7 +85,7 @@ export interface CashSweepCandidate {
 export function findCashSweepHolding(
   holdings: {
     id: string;
-    instrument_id: string;
+    asset_key: string;
     instrument_name?: string;
     enabled: boolean;
     asset_class: string;
@@ -95,10 +96,10 @@ export function findCashSweepHolding(
   let fallback: (CashSweepCandidate & { sort_order: number }) | null = null;
   for (const h of holdings) {
     if (!h.enabled) continue;
-    if (h.instrument_id === SYSTEM_CASH_INSTRUMENT_ID) {
+    if (h.asset_key === SYSTEM_CASH_ASSET_KEY) {
       return {
         holding_id: h.id,
-        instrument_id: h.instrument_id,
+        asset_key: h.asset_key,
         instrument_name: h.instrument_name,
         current_amount_minor: h.current_amount_minor,
       };
@@ -106,7 +107,7 @@ export function findCashSweepHolding(
     if (h.asset_class === "cash" && (!fallback || h.sort_order < fallback.sort_order)) {
       fallback = {
         holding_id: h.id,
-        instrument_id: h.instrument_id,
+        asset_key: h.asset_key,
         instrument_name: h.instrument_name,
         current_amount_minor: h.current_amount_minor,
         sort_order: h.sort_order,
@@ -116,7 +117,7 @@ export function findCashSweepHolding(
   if (!fallback) return null;
   return {
     holding_id: fallback.holding_id,
-    instrument_id: fallback.instrument_id,
+    asset_key: fallback.asset_key,
     instrument_name: fallback.instrument_name,
     current_amount_minor: fallback.current_amount_minor,
   };

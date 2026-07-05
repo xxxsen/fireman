@@ -93,17 +93,43 @@ describe("MarketAssetsPage", () => {
       "href",
       `/assets/market/${encodeURIComponent("cn:cn_exchange_fund:sh:510300")}`,
     );
-    expect(within(row).getByRole("link", { name: "录入" })).toHaveAttribute(
-      "href",
-      `/assets/import?asset_key=${encodeURIComponent("cn:cn_exchange_fund:sh:510300")}`,
-    );
+    // The user asset library was removed: no import entry anywhere.
+    expect(within(row).queryByRole("link", { name: "录入" })).not.toBeInTheDocument();
   });
 
-  it("links to the user library and import flow from the header", async () => {
+  it("has no import or library entry points", async () => {
     renderPage();
     await screen.findByTestId("market-assets-table");
-    expect(screen.getByTestId("my-library-link")).toHaveAttribute("href", "/assets/library");
-    expect(screen.getByTestId("page-header-primary")).toHaveAttribute("href", "/assets/import");
+    expect(screen.queryByTestId("my-library-link")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-header-primary")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "录入资产" })).not.toBeInTheDocument();
+  });
+
+  it("collapses the sync panel by default when every scope has synced", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: [makeAsset()],
+      syncs: [
+        { scope: "cn_all", last_success_at: Date.now(), last_success_task_id: "wt_cn" },
+        { scope: "hk_all", last_success_at: Date.now(), last_success_task_id: "wt_hk" },
+        { scope: "us_all", last_success_at: Date.now(), last_success_task_id: "wt_us" },
+      ],
+      fx_sync: { scope: "fx_rates", last_success_at: null, last_success_task_id: "" },
+      total: 1,
+    });
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+    expect(screen.queryByTestId("directory-sync-cn_all")).not.toBeInTheDocument();
+    expect(screen.getByTestId("directory-sync-summary")).toHaveTextContent("目录已同步");
+
+    // Manual expand is respected.
+    fireEvent.click(screen.getByTestId("directory-sync-toggle"));
+    expect(screen.getByTestId("directory-sync-cn_all")).toBeInTheDocument();
+  });
+
+  it("expands the sync panel by default when a scope has never synced", async () => {
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+    expect(screen.getByTestId("directory-sync-hk_all")).toBeInTheDocument();
   });
 
   it("shows the never-synced empty state before the first directory sync", async () => {
@@ -116,19 +142,70 @@ describe("MarketAssetsPage", () => {
     expect(await screen.findByText("当前没有资产基础信息")).toBeInTheDocument();
   });
 
-  it("searches the local directory after the debounce", async () => {
+  it("searches by symbol and name with dedicated params after the debounce", async () => {
     renderPage();
     await screen.findByTestId("market-assets-table");
 
-    fireEvent.change(screen.getByTestId("market-assets-search"), {
+    fireEvent.change(screen.getByTestId("market-assets-symbol-search"), {
+      target: { value: "510300" },
+    });
+    await waitFor(
+      () =>
+        expect(listMarketAssetsMock).toHaveBeenCalledWith(
+          expect.objectContaining({ symbolQ: "510300", offset: 0 }),
+        ),
+      { timeout: 2000 },
+    );
+
+    fireEvent.change(screen.getByTestId("market-assets-name-search"), {
       target: { value: "沪深300" },
     });
     await waitFor(
       () =>
         expect(listMarketAssetsMock).toHaveBeenCalledWith(
-          expect.objectContaining({ q: "沪深300", offset: 0 }),
+          expect.objectContaining({ nameQ: "沪深300", offset: 0 }),
         ),
       { timeout: 2000 },
+    );
+  });
+
+  it("filters by instrument type immediately", async () => {
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+
+    fireEvent.change(screen.getByTestId("market-assets-type-filter"), {
+      target: { value: "hk_etf" },
+    });
+    await waitFor(() =>
+      expect(listMarketAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ instrumentTypes: ["hk_etf"], offset: 0 }),
+      ),
+    );
+  });
+
+  it("shows the range, total and page jump in the pagination bar", async () => {
+    listMarketAssetsMock.mockResolvedValue({
+      assets: Array.from({ length: 50 }, (_, i) =>
+        makeAsset({ asset_key: `cn:cn_exchange_fund:sh:a${i}`, symbol: `a${i}` }),
+      ),
+      syncs: makeSyncs(),
+      fx_sync: { scope: "fx_rates", last_success_at: null, last_success_task_id: "" },
+      total: 120,
+    });
+    renderPage();
+    await screen.findByTestId("market-assets-table");
+    expect(screen.getByTestId("market-assets-range")).toHaveTextContent(
+      "当前第 1-50 条，共 120 条 · 第 1 / 3 页",
+    );
+
+    fireEvent.change(screen.getByTestId("market-assets-page-input"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByTestId("market-assets-page-jump"));
+    await waitFor(() =>
+      expect(listMarketAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 100 }),
+      ),
     );
   });
 
@@ -227,7 +304,7 @@ describe("MarketAssetsPage", () => {
     );
   });
 
-  it("displays HK/US ETF directory entries with type labels and import links", async () => {
+  it("displays HK/US ETF directory entries with type labels", async () => {
     listMarketAssetsMock.mockResolvedValue({
       assets: [
         makeAsset({
@@ -268,17 +345,11 @@ describe("MarketAssetsPage", () => {
       "href",
       `/assets/market/${encodeURIComponent("hk:hk_etf:hk:02800")}`,
     );
-    expect(within(hkRow).getByRole("link", { name: "录入" })).toHaveAttribute(
-      "href",
-      `/assets/import?asset_key=${encodeURIComponent("hk:hk_etf:hk:02800")}`,
-    );
+    expect(within(hkRow).queryByRole("link", { name: "录入" })).not.toBeInTheDocument();
 
     const usRow = rows[1];
     expect(within(usRow).getByText("美国 ETF")).toBeInTheDocument();
-    expect(within(usRow).getByRole("link", { name: "录入" })).toHaveAttribute(
-      "href",
-      `/assets/import?asset_key=${encodeURIComponent("us:us_etf:us:SPY")}`,
-    );
+    expect(within(usRow).queryByRole("link", { name: "录入" })).not.toBeInTheDocument();
   });
 
   it("marks inactive assets as delisted in the table", async () => {

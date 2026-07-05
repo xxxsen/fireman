@@ -31,7 +31,8 @@ func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
 	if err != nil {
 		return nil, wrapSQL("list allocation scenarios", err)
 	}
-	defer func() { _ = rows.Close() }()
+	// Collect headers before the per-scenario child queries: nested queries
+	// while rows are open would exhaust the single-connection pool.
 	var out []AllocationScenario
 	for rows.Next() {
 		var s AllocationScenario
@@ -40,22 +41,30 @@ func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
 			&s.ID, &s.Name, &s.Description, &builtin,
 			&s.CreatedAt, &s.UpdatedAt, &s.PlanCount,
 		); err != nil {
+			_ = rows.Close()
 			return nil, wrapSQL("scan allocation scenario", err)
 		}
 		s.IsBuiltin = builtin == 1
-		weights, err := r.getWeights(ctx, s.ID)
-		if err != nil {
-			return nil, err
-		}
-		s.Weights = weights
-		regions, err := r.getRegionTargets(ctx, s.ID)
-		if err != nil {
-			return nil, err
-		}
-		s.RegionTargets = regions
 		out = append(out, s)
 	}
-	return out, wrapSQL("iterate allocation scenarios", rows.Err())
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, wrapSQL("iterate allocation scenarios", err)
+	}
+	_ = rows.Close()
+	for i := range out {
+		weights, err := r.getWeights(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Weights = weights
+		regions, err := r.getRegionTargets(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].RegionTargets = regions
+	}
+	return out, nil
 }
 
 func (r *ScenarioRepo) GetByID(ctx context.Context, id string) (AllocationScenario, error) {

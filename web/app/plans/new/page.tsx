@@ -205,7 +205,9 @@ export default function NewPlanWizardPage() {
   const finishMut = useMutation({
     mutationFn: async () => {
       const holdings = selectedInstruments.map((s, i) => ({
-        instrument_id: s.inst.id,
+        asset_key: s.inst.id,
+        asset_class: s.inst.asset_class,
+        region: s.inst.region,
         enabled: true,
         weight_within_group: s.weight,
         current_amount_minor: s.amount,
@@ -376,15 +378,6 @@ export default function NewPlanWizardPage() {
     }
     if (!groupWeightChecks.every((g) => g.passed)) {
       setError("各「大类 × 地区」组内权重须合计 100%。");
-      return false;
-    }
-    const unavailable = selectedInstruments.filter(
-      (s) => s.inst.quality_status === "insufficient_history",
-    );
-    if (unavailable.length > 0) {
-      setError(
-        `以下标的历史不足，不能用于模拟：${unavailable.map((s) => s.inst.code).join("、")}`,
-      );
       return false;
     }
     const sum = selectedInstruments.reduce((a, s) => a + s.amount, 0);
@@ -606,8 +599,8 @@ export default function NewPlanWizardPage() {
                   按大类分标签页搜索并添加标的；组内占比将自动均分，手动调整后其余标的自动补齐。未配置资金默认计入
                   现金/其他。预期资金 = 基准规模 × 大类权重 × 地区权重 × 组内占比。
                 </p>
-                <Link href="/assets/import" className="inline-block text-sm underline">
-                  需要新标的？从 AKShare 录入
+                <Link href="/assets" className="inline-block text-sm underline">
+                  找不到标的？前往资产目录同步资产列表
                 </Link>
                 {groupWeightChecks.map((g) => (
                   <p
@@ -898,16 +891,15 @@ export default function NewPlanWizardPage() {
               </p>
             )}
             {selectedInstruments
-              .filter(
-                (s) => s.inst.simulation_eligible && s.inst.history_depth === "one_year",
-              )
+              .filter((s) => !s.inst.has_history)
               .map((s) => (
                 <p
                   key={s.inst.id}
                   className="mt-2 text-sm text-warning"
-                  data-testid="wizard-short-history"
+                  data-testid="wizard-missing-history"
                 >
-                  {s.inst.name}（{s.inst.code}）历史样本有限，模拟长期估计不确定性较高。
+                  {s.inst.name}（{s.inst.code}）尚未同步历史数据；可先保存计划，创建模拟前需在
+                  计划的模拟入口一键同步缺失历史。
                 </p>
               ))}
             {assetGap < -100 && (

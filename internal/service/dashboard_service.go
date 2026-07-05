@@ -142,7 +142,6 @@ type DashboardService struct {
 	alloc       *repository.AllocationRepo
 	scenario    *repository.ScenarioRepo
 	holdings    *repository.HoldingsRepo
-	instRepo    *repository.InstrumentRepo
 	sims        *repository.SimulationRepo
 	analysis    *repository.AnalysisRepo
 	hash        *ConfigHashService
@@ -160,7 +159,6 @@ func NewDashboardService(
 	alloc *repository.AllocationRepo,
 	scenario *repository.ScenarioRepo,
 	holdings *repository.HoldingsRepo,
-	instRepo *repository.InstrumentRepo,
 	sims *repository.SimulationRepo,
 	analysis *repository.AnalysisRepo,
 	hash *ConfigHashService,
@@ -173,7 +171,7 @@ func NewDashboardService(
 ) *DashboardService {
 	return &DashboardService{
 		plans: plans, params: params, alloc: alloc, scenario: scenario,
-		holdings: holdings, instRepo: instRepo, sims: sims, analysis: analysis, hash: hash,
+		holdings: holdings, sims: sims, analysis: analysis, hash: hash,
 		targets: targets, rebalance: rebalance, simulations: simulations,
 		stress: stress, sensitivity: sensitivity, executions: executions,
 	}
@@ -226,7 +224,7 @@ func (s *DashboardService) Get(ctx context.Context, planID string) (DashboardVie
 	regionBars := buildRegionBars(targets)
 	regionGroups := buildAssetClassRegionGroups(targets)
 	topDev := topDeviations(targets.Holdings, holds, 5)
-	warnings := collectDataWarnings(ctx, s.instRepo, holds)
+	warnings := collectDataWarnings(holds)
 
 	latest := s.loadLatestSimulationRun(ctx, planID)
 
@@ -553,31 +551,20 @@ func topDeviations(lines []domain.HoldingTargetLine, holds []repository.PlanHold
 	return out
 }
 
-func collectDataWarnings(ctx context.Context, instRepo *repository.InstrumentRepo,
-	holds []repository.PlanHolding,
-) []string {
+// collectDataWarnings surfaces holdings whose market asset history has not
+// been synced yet (empty simulation snapshot): simulation is blocked until a
+// history sync makes their snapshot buildable.
+func collectDataWarnings(holds []repository.PlanHolding) []string {
 	var warnings []string
-	seen := map[string]bool{}
 	for _, h := range holds {
-		if !h.Enabled {
+		if !h.Enabled || h.SimulationSnapshotID != "" {
 			continue
 		}
-		inst, err := instRepo.GetByID(ctx, h.InstrumentID)
-		if err != nil {
-			continue
+		name := h.InstrumentName
+		if name == "" {
+			name = h.AssetKey
 		}
-		key := inst.QualityStatus + inst.Status
-		if seen[key] {
-			continue
-		}
-		switch inst.QualityStatus {
-		case "insufficient_history", "classification_failed", "data_anomaly", "pending_sync":
-			warnings = append(warnings, inst.Name+"（"+inst.Code+"）：数据状态 "+inst.QualityStatus)
-			seen[key] = true
-		}
-		if inst.DataStale && inst.StaleWarning != "" {
-			warnings = append(warnings, inst.StaleWarning)
-		}
+		warnings = append(warnings, name+"（"+h.InstrumentCode+"）：历史数据未同步，模拟前需要同步")
 	}
 	return warnings
 }

@@ -19,11 +19,10 @@ func TestUpdateParameters_ApplyUnallocatedGapToCash(t *testing.T) {
 	hash := NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
 	snapSvc := marketdata.NewSnapshotService(
 		repository.NewSnapshotRepo(db),
-		repository.NewInstrumentRepo(db),
-		repository.NewMarketDataRepo(db),
+		repository.NewMarketAssetRepo(db),
 	)
-	svc := NewPlanService(db, plans, params, alloc, scenario, holdings, repository.NewInstrumentRepo(db), hash, snapSvc,
-		repository.NewMarketDataRepo(db))
+	svc := NewPlanService(db, plans, params, alloc, scenario, holdings,
+		repository.NewMarketAssetRepo(db), hash, snapSvc)
 
 	scn := "scn_builtin_near_fire"
 	plan, err := svc.Create(context.Background(), CreatePlanRequest{
@@ -55,7 +54,7 @@ func TestUpdateParameters_ApplyUnallocatedGapToCash(t *testing.T) {
 	}
 	var cashMinor int64
 	for _, h := range holds {
-		if h.InstrumentID == repository.SystemCashInstrumentID && h.Enabled {
+		if h.AssetKey == repository.SystemCashAssetKey && h.Enabled {
 			cashMinor = h.CurrentAmountMinor
 		}
 	}

@@ -25,59 +25,22 @@ func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) 
 	return srv, db, srv.Client()
 }
 
-func importHKInstrument(t *testing.T, db *sql.DB, client *http.Client, baseURL string) string {
+func seedHKAsset(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	seedMarketAssetWithHistory(t, db, hkStockAssetSeed())
-	inst := importMarketAsset(t, client, baseURL, "hk:hk_stock:00700")
-	return inst["id"].(string)
-}
-
-func TestHKInstrumentImportIntegration(t *testing.T) {
-	srv, db, client := setupHKIntegration(t)
-
-	instID := importHKInstrument(t, db, client, srv.URL)
-	resp, err := client.Get(srv.URL + "/api/v1/instruments/" + instID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inst := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
-	if inst["currency"] != "HKD" {
-		t.Fatalf("imported currency=%v want HKD", inst["currency"])
-	}
-	if inst["region"] != "foreign" {
-		t.Fatalf("imported region=%v want foreign", inst["region"])
-	}
-	if inst["code"] != "00700" {
-		t.Fatalf("imported code=%v want 00700", inst["code"])
-	}
-
-	var pointCount int
-	if err := db.QueryRowContext(context.Background(),
-		`SELECT COUNT(*) FROM market_data_points WHERE instrument_id=?`, instID).Scan(&pointCount); err != nil {
-		t.Fatal(err)
-	}
-	if pointCount == 0 {
-		t.Fatal("expected full history projected for HK import")
-	}
-
-	resp, err = client.Get(srv.URL + "/api/v1/instruments/" + instID + "/annual-returns")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("annual returns status=%d body=%s", resp.StatusCode, readBody(t, resp))
-	}
+	seed := hkStockAssetSeed()
+	seedMarketAssetWithHistory(t, db, seed)
+	return seed.AssetKey
 }
 
 func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 	srv, db, client := setupHKIntegration(t)
 	seedHKDCNYMarketData(t, db)
 
-	instID := importHKInstrument(t, db, client, srv.URL)
+	assetKey := seedHKAsset(t, db)
 
 	plan := createPlanWithValuationDate(t, db, "2026-06-09")
 	version := setForeignEquityAllocation(t, client, srv.URL, plan.ID, plan.ConfigVersion)
-	holdingID, _ := addForeignEquityHolding(t, db, client, srv.URL, plan.ID, instID, version)
+	holdingID, _ := addForeignEquityHolding(t, db, client, srv.URL, plan.ID, assetKey, version)
 
 	if _, err := db.ExecContext(context.Background(), `
 		UPDATE plan_parameters SET total_assets_minor=? WHERE plan_id=?`, 10_000_000_00, plan.ID); err != nil {
@@ -193,7 +156,7 @@ func setForeignEquityAllocation(t *testing.T, client *http.Client, baseURL, plan
 	return version + 1
 }
 
-func addForeignEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, instrumentID string,
+func addForeignEquityHolding(t *testing.T, db *sql.DB, client *http.Client, baseURL, planID, assetKey string,
 	version int,
 ) (holdingID string, newVersion int) {
 	t.Helper()
@@ -201,7 +164,8 @@ func addForeignEquityHolding(t *testing.T, db *sql.DB, client *http.Client, base
 		"config_version": version,
 		"holdings": []map[string]any{
 			{
-				"instrument_id": instrumentID, "enabled": true,
+				"asset_key": assetKey, "enabled": true,
+				"asset_class": "equity", "region": "foreign",
 				"weight_within_group": 1.0, "current_amount_minor": 10_000_000_00, "sort_order": 1,
 			},
 		},

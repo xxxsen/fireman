@@ -14,7 +14,7 @@ def test_healthz_returns_ok(monkeypatch) -> None:
 
 
 def test_legacy_fetch_endpoints_removed(monkeypatch) -> None:
-    """td/078: the sidecar is a pure worker; the sync HTTP surface is gone."""
+    """The sidecar is a pure worker; the sync HTTP surface is gone."""
     monkeypatch.setenv("FIREMAN_WORKER_ENABLED", "false")
     with TestClient(create_app()) as client:
         for path in (

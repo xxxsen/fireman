@@ -14,7 +14,7 @@ import { queryErrorMessage } from "@/lib/query-error";
 import type { ReturnOverride } from "@/types/api";
 
 interface Draft {
-  instrumentId: string;
+  assetKey: string;
   overrideReturn: boolean;
   forwardReturnPct: string;
   overrideVol: boolean;
@@ -24,7 +24,7 @@ interface Draft {
 }
 
 const emptyDraft: Draft = {
-  instrumentId: "",
+  assetKey: "",
   overrideReturn: true,
   forwardReturnPct: "",
   overrideVol: false,
@@ -64,9 +64,9 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
     [holdingsQ.data],
   );
   const overrides = overridesQ.data?.overrides ?? [];
-  const nameOf = (instrumentId: string) => {
-    const h = riskHoldings.find((x) => x.instrument_id === instrumentId);
-    return h?.instrument_name || h?.instrument_code || instrumentId;
+  const nameOf = (assetKey: string) => {
+    const h = riskHoldings.find((x) => x.asset_key === assetKey);
+    return h?.instrument_name || h?.instrument_code || assetKey;
   };
 
   const invalidate = () => {
@@ -85,7 +85,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
         reason: draft.reason.trim(),
         expires_at: draft.expiresAt,
       };
-      return setReturnOverride(planId, draft.instrumentId, body);
+      return setReturnOverride(planId, draft.assetKey, body);
     },
     onSuccess: () => {
       setDraft(emptyDraft);
@@ -96,13 +96,13 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
   });
 
   const deleteMut = useMutation({
-    mutationFn: (instrumentId: string) => deleteReturnOverride(planId, instrumentId),
+    mutationFn: (assetKey: string) => deleteReturnOverride(planId, assetKey),
     onSuccess: invalidate,
   });
 
   const submit = () => {
     setFormError(null);
-    if (!draft.instrumentId) {
+    if (!draft.assetKey) {
       setFormError("请选择要覆盖的标的。");
       return;
     }
@@ -131,7 +131,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
 
   const editExisting = (o: ReturnOverride) => {
     setDraft({
-      instrumentId: o.instrument_id,
+      assetKey: o.asset_key,
       overrideReturn: o.forward_return !== null,
       forwardReturnPct:
         o.forward_return !== null ? decimalToPercentString(o.forward_return) : "",
@@ -178,8 +178,8 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
               </thead>
               <tbody>
                 {overrides.map((o) => (
-                  <tr key={o.instrument_id} className="border-t border-line">
-                    <td className="py-1">{nameOf(o.instrument_id)}</td>
+                  <tr key={o.asset_key} className="border-t border-line">
+                    <td className="py-1">{nameOf(o.asset_key)}</td>
                     <td className="py-1 font-mono-numeric">
                       {o.forward_return !== null ? formatPercent(o.forward_return) : "—"}
                     </td>
@@ -202,7 +202,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
                       <button
                         type="button"
                         className="ml-3 text-danger hover:underline"
-                        onClick={() => deleteMut.mutate(o.instrument_id)}
+                        onClick={() => deleteMut.mutate(o.asset_key)}
                       >
                         清除
                       </button>
@@ -219,13 +219,13 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
                 标的
                 <select
                   className="input-base mt-1"
-                  value={draft.instrumentId}
-                  onChange={(e) => setDraft({ ...draft, instrumentId: e.target.value })}
+                  value={draft.assetKey}
+                  onChange={(e) => setDraft({ ...draft, assetKey: e.target.value })}
                 >
                   <option value="">选择标的…</option>
                   {riskHoldings.map((h) => (
-                    <option key={h.instrument_id} value={h.instrument_id}>
-                      {h.instrument_name || h.instrument_code || h.instrument_id}
+                    <option key={h.asset_key} value={h.asset_key}>
+                      {h.instrument_name || h.instrument_code || h.asset_key}
                     </option>
                   ))}
                 </select>
@@ -291,7 +291,7 @@ export function ReturnOverridesCard({ planId }: { planId: string }) {
               <Button pending={saveMut.isPending} onClick={submit}>
                 保存覆盖
               </Button>
-              {(draft.instrumentId || draft.reason) && (
+              {(draft.assetKey || draft.reason) && (
                 <Button
                   variant="ghost"
                   onClick={() => {

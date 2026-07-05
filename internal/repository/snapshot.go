@@ -9,12 +9,18 @@ import (
 	"time"
 )
 
+// Built-in system cash market assets. Cash holdings reference these directory
+// rows and their immutable 0%-return simulation snapshots.
 const (
-	SystemCashInstrumentID = "system_cash_cny"
-	SystemCashSnapshotID   = "sim_snapshot_system_cash_cny"
+	SystemCashAssetKey   = "SYS|cash||CNY"
+	SystemCashSnapshotID = "sim_snapshot_system_cash_cny"
+
+	// SystemCashAssetKeyPrefix identifies every built-in cash asset
+	// (SYS|cash||CNY, SYS|cash||USD, ...).
+	SystemCashAssetKeyPrefix = "SYS|cash||"
 )
 
-// SnapshotRepo creates instrument simulation snapshots.
+// SnapshotRepo creates market asset simulation snapshots.
 type SnapshotRepo struct {
 	db *sql.DB
 }
@@ -39,8 +45,8 @@ func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap 
 		snap.CreatedAt = now
 	}
 	if err := run(`
-		INSERT INTO instrument_simulation_snapshots (
-			id, instrument_id, plan_id, inclusion_date, as_of_date,
+		INSERT INTO market_asset_simulation_snapshots (
+			id, asset_key, plan_id, inclusion_date, as_of_date,
 			window_start, window_end, complete_year_start, complete_year_end,
 			complete_year_count, daily_observation_count, monthly_return_count,
 			volatility_method, metrics_version, history_depth,
@@ -48,7 +54,7 @@ func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap 
 			expense_ratio, expense_ratio_status, fee_treatment,
 			source_mode, quality_status, warnings_json, source_hash, created_at
 		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		snap.ID, snap.InstrumentID, snap.PlanID, snap.InclusionDate, snap.AsOfDate,
+		snap.ID, snap.AssetKey, snap.PlanID, snap.InclusionDate, snap.AsOfDate,
 		snap.WindowStart, snap.WindowEnd, snap.CompleteYearStart, snap.CompleteYearEnd,
 		snap.CompleteYearCount, snap.DailyObservationCount, snap.MonthlyReturnCount,
 		snap.VolatilityMethod, snap.MetricsVersion, snap.HistoryDepth,
@@ -75,12 +81,12 @@ func (r *SnapshotRepo) replaceSnapshotMonths(ctx context.Context, tx *sql.Tx, sn
 		}
 		return wrapSQL("exec snapshot sql", e)
 	}
-	if err := run(`DELETE FROM instrument_simulation_snapshot_months WHERE snapshot_id=?`, snapshotID); err != nil {
+	if err := run(`DELETE FROM market_asset_simulation_snapshot_months WHERE snapshot_id=?`, snapshotID); err != nil {
 		return wrapSQL("delete snapshot months", err)
 	}
 	for _, m := range months {
 		if err := run(`
-			INSERT INTO instrument_simulation_snapshot_months (
+			INSERT INTO market_asset_simulation_snapshot_months (
 				snapshot_id, year, month, log_return
 			) VALUES (?,?,?,?)`,
 			snapshotID, m.Year, m.Month, m.LogReturn); err != nil {
@@ -98,7 +104,7 @@ func (r *SnapshotRepo) replaceSnapshotMonths(ctx context.Context, tx *sql.Tx, sn
 func (r *SnapshotRepo) ListSnapshotMonths(ctx context.Context, snapshotID string) ([]SnapshotMonth, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT year, month, log_return
-		FROM instrument_simulation_snapshot_months
+		FROM market_asset_simulation_snapshot_months
 		WHERE snapshot_id=? ORDER BY year, month`, snapshotID)
 	if err != nil {
 		return nil, wrapSQL("list snapshot months", err)
@@ -127,12 +133,12 @@ func (r *SnapshotRepo) replaceSnapshotYears(ctx context.Context, tx *sql.Tx, sna
 		}
 		return wrapSQL("exec snapshot sql", e)
 	}
-	if err := run(`DELETE FROM instrument_simulation_snapshot_years WHERE snapshot_id=?`, snapshotID); err != nil {
+	if err := run(`DELETE FROM market_asset_simulation_snapshot_years WHERE snapshot_id=?`, snapshotID); err != nil {
 		return wrapSQL("delete snapshot years", err)
 	}
 	for _, y := range years {
 		if err := run(`
-			INSERT INTO instrument_simulation_snapshot_years (
+			INSERT INTO market_asset_simulation_snapshot_years (
 				snapshot_id, year, annual_return, start_date, end_date, observations
 			) VALUES (?,?,?,?,?,?)`,
 			snapshotID, y.Year, y.AnnualReturn, y.StartDate, y.EndDate, y.Observations); err != nil {
@@ -142,10 +148,10 @@ func (r *SnapshotRepo) replaceSnapshotYears(ctx context.Context, tx *sql.Tx, sna
 	return nil
 }
 
-// SimulationSnapshot is a row in instrument_simulation_snapshots.
+// SimulationSnapshot is a row in market_asset_simulation_snapshots.
 type SimulationSnapshot struct {
 	ID                    string         `json:"id"`
-	InstrumentID          string         `json:"instrument_id"`
+	AssetKey              string         `json:"asset_key"`
 	PlanID                *string        `json:"plan_id,omitempty"`
 	InclusionDate         string         `json:"inclusion_date"`
 	AsOfDate              string         `json:"as_of_date"`
@@ -177,7 +183,7 @@ type SimulationSnapshot struct {
 	Months []SnapshotMonth `json:"months,omitempty"`
 }
 
-// SnapshotYear is one row in instrument_simulation_snapshot_years.
+// SnapshotYear is one row in market_asset_simulation_snapshot_years.
 type SnapshotYear struct {
 	Year         int     `json:"year"`
 	AnnualReturn float64 `json:"annual_return"`
@@ -186,7 +192,7 @@ type SnapshotYear struct {
 	Observations int     `json:"observations"`
 }
 
-// SnapshotMonth is one row in instrument_simulation_snapshot_months.
+// SnapshotMonth is one row in market_asset_simulation_snapshot_months.
 type SnapshotMonth struct {
 	Year      int     `json:"year"`
 	Month     int     `json:"month"`
@@ -195,14 +201,14 @@ type SnapshotMonth struct {
 
 func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapshot, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, instrument_id, plan_id, inclusion_date, as_of_date,
+		SELECT id, asset_key, plan_id, inclusion_date, as_of_date,
 			window_start, window_end, complete_year_start, complete_year_end,
 			complete_year_count, daily_observation_count, monthly_return_count,
 			volatility_method, metrics_version, history_depth,
 			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
 			expense_ratio, expense_ratio_status, fee_treatment,
 			source_mode, quality_status, warnings_json, source_hash, created_at
-		FROM instrument_simulation_snapshots WHERE id=?`, id)
+		FROM market_asset_simulation_snapshots WHERE id=?`, id)
 	snap, err := scanSnapshot(row)
 	if err != nil {
 		return SimulationSnapshot{}, err
@@ -218,7 +224,7 @@ func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapsh
 func (r *SnapshotRepo) listYears(ctx context.Context, snapshotID string) ([]SnapshotYear, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT year, annual_return, start_date, end_date, observations
-		FROM instrument_simulation_snapshot_years
+		FROM market_asset_simulation_snapshot_years
 		WHERE snapshot_id=? ORDER BY year`, snapshotID)
 	if err != nil {
 		return nil, wrapSQL("list snapshot years", err)
@@ -242,7 +248,7 @@ func scanSnapshot(row *sql.Row) (SimulationSnapshot, error) {
 	var yearStart, yearEnd sql.NullInt64
 	var expenseRatio sql.NullFloat64
 	err := row.Scan(
-		&snap.ID, &snap.InstrumentID, &planID, &snap.InclusionDate, &snap.AsOfDate,
+		&snap.ID, &snap.AssetKey, &planID, &snap.InclusionDate, &snap.AsOfDate,
 		&windowStart, &windowEnd, &yearStart, &yearEnd,
 		&snap.CompleteYearCount, &snap.DailyObservationCount, &snap.MonthlyReturnCount,
 		&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
@@ -289,68 +295,25 @@ func (r *SnapshotRepo) GetSystemCashSnapshotID() string {
 	return SystemCashSnapshotID
 }
 
-// ListByInstrument returns plan-specific snapshots for an instrument, newest first.
-func (r *SnapshotRepo) ListByInstrument(ctx context.Context, instrumentID string) ([]SimulationSnapshot, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, instrument_id, plan_id, inclusion_date, as_of_date,
-			window_start, window_end, complete_year_start, complete_year_end,
-			complete_year_count, daily_observation_count, monthly_return_count,
-			volatility_method, metrics_version, history_depth,
-			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
-			expense_ratio, expense_ratio_status, fee_treatment,
-			source_mode, quality_status, warnings_json, source_hash, created_at
-		FROM instrument_simulation_snapshots
-		WHERE instrument_id=? AND plan_id IS NOT NULL
-		ORDER BY created_at DESC LIMIT 50`, instrumentID)
-	if err != nil {
-		return nil, wrapSQL("list snapshots by instrument", err)
+// SystemCashSnapshotIDForAsset maps a built-in cash asset key to its immutable
+// snapshot row seeded by migrations. The bool reports whether assetKey is a
+// system cash asset.
+func SystemCashSnapshotIDForAsset(assetKey string) (string, bool) {
+	switch assetKey {
+	case "SYS|cash||CNY":
+		return "sim_snapshot_system_cash_cny", true
+	case "SYS|cash||USD":
+		return "sim_snapshot_system_cash_usd", true
+	case "SYS|cash||HKD":
+		return "sim_snapshot_system_cash_hkd", true
 	}
-	defer func() { _ = rows.Close() }()
-	var out []SimulationSnapshot
-	for rows.Next() {
-		var snap SimulationSnapshot
-		var planID sql.NullString
-		var windowStart, windowEnd sql.NullString
-		var yearStart, yearEnd sql.NullInt64
-		var expenseRatio sql.NullFloat64
-		if err := rows.Scan(
-			&snap.ID, &snap.InstrumentID, &planID, &snap.InclusionDate, &snap.AsOfDate,
-			&windowStart, &windowEnd, &yearStart, &yearEnd,
-			&snap.CompleteYearCount, &snap.DailyObservationCount, &snap.MonthlyReturnCount,
-			&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
-			&snap.HistoricalCAGR, &snap.ModeledAnnualReturn, &snap.AnnualVolatility, &snap.MaxDrawdown,
-			&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
-			&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,
-		); err != nil {
-			return nil, wrapSQL("scan snapshot list row", err)
-		}
-		if planID.Valid {
-			v := planID.String
-			snap.PlanID = &v
-		}
-		if windowStart.Valid {
-			v := windowStart.String
-			snap.WindowStart = &v
-		}
-		if windowEnd.Valid {
-			v := windowEnd.String
-			snap.WindowEnd = &v
-		}
-		if yearStart.Valid {
-			v := int(yearStart.Int64)
-			snap.CompleteYearStart = &v
-		}
-		if yearEnd.Valid {
-			v := int(yearEnd.Int64)
-			snap.CompleteYearEnd = &v
-		}
-		if expenseRatio.Valid {
-			v := expenseRatio.Float64
-			snap.ExpenseRatio = &v
-		}
-		out = append(out, snap)
-	}
-	return out, wrapSQL("iterate snapshots by instrument", rows.Err())
+	return "", false
+}
+
+// IsSystemCashAssetKey reports whether the asset key is a built-in cash asset.
+func IsSystemCashAssetKey(assetKey string) bool {
+	_, ok := SystemCashSnapshotIDForAsset(assetKey)
+	return ok
 }
 
 // WarningsToJSON serializes warning strings.
@@ -362,21 +325,34 @@ func WarningsToJSON(warnings []string) string {
 	return string(b)
 }
 
-// EnsureInstrumentExists is a test helper to insert a minimal instrument.
-func (r *SnapshotRepo) EnsureInstrument(ctx context.Context, inst Instrument) error {
+// EnsureMarketAsset is a test helper that inserts a minimal market asset
+// directory row so holdings/snapshots can reference it.
+func (r *SnapshotRepo) EnsureMarketAsset(ctx context.Context, a MarketAsset) error {
 	now := time.Now().UnixMilli()
+	if a.Market == "" {
+		a.Market = "CN"
+	}
+	if a.InstrumentType == "" {
+		a.InstrumentType = "test_fixture"
+	}
+	if a.Currency == "" {
+		a.Currency = "CNY"
+	}
+	if a.SourceName == "" {
+		a.SourceName = "fixture"
+	}
 	_, err := r.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO instruments (
-			id, code, name, market, instrument_type, asset_class, region, currency,
-			provider, provider_symbol, adjust_policy, is_system,
-			expense_ratio_status, fee_treatment, status, created_at, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		inst.ID, inst.Code, inst.Name, inst.Market, "test_fixture",
-		inst.AssetClass, inst.Region, inst.Currency,
-		"fixture", inst.Code, "none", boolToInt(inst.IsSystem),
-		"unavailable", "embedded", "active", now, now)
+		INSERT OR IGNORE INTO market_assets (
+			asset_key, market, instrument_type, region_code, symbol, name,
+			exchange, instrument_kind, currency,
+			active, listing_status, last_seen_at,
+			source_name, source_as_of, refreshed_at, created_at, updated_at
+		) VALUES (?,?,?,?,?,?,?,?,?,1,'active',?,?,'',?,?,?)`,
+		a.AssetKey, a.Market, a.InstrumentType, a.RegionCode, a.Symbol, a.Name,
+		a.Exchange, a.InstrumentKind, a.Currency,
+		now, a.SourceName, now, now, now)
 	if err != nil {
-		return fmt.Errorf("ensure instrument: %w", err)
+		return fmt.Errorf("ensure market asset: %w", err)
 	}
 	return nil
 }

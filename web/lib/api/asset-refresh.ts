@@ -6,7 +6,9 @@ export function submitAssetRefresh(
     config_version: number;
     scenario_id?: string;
     holdings: {
-      instrument_id: string;
+      asset_key: string;
+      asset_class?: string;
+      region?: string;
       current_amount_minor: number;
       weight_within_group?: number;
       sort_order?: number;

@@ -1,6 +1,7 @@
 """Regression integration tests for historically problematic fund fetch paths.
 
-Resolve-path regressions were removed with the resolve endpoint (td/078):
+Resolve-path regressions were removed with the resolve endpoint
+(task-worker refactor):
 asset identity now comes from the market_assets directory, so cross-listing
 ambiguity is handled at directory level, not per-fetch.
 """

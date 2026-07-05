@@ -85,7 +85,7 @@ func (s *HoldingSnapshotService) Sync(ctx context.Context, planID, holdingID str
 	}
 
 	syncDate := time.Now().Format("2006-01-02")
-	snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, holding.InstrumentID, syncDate)
+	snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, holding.AssetKey, syncDate)
 	if err != nil {
 		return repository.SimulationSnapshot{}, MapSnapshotError(err)
 	}

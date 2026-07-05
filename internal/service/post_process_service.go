@@ -58,8 +58,6 @@ type PostProcessService struct {
 	assets     *repository.MarketAssetRepo
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
-	annualRepo *repository.AnnualReturnsRepo
-	libMetrics *repository.InstrumentLibraryMetricsRepo
 	resources  *resourcedb.DB
 }
 
@@ -69,14 +67,12 @@ func NewPostProcessService(
 	assets *repository.MarketAssetRepo,
 	instRepo *repository.InstrumentRepo,
 	marketRepo *repository.MarketDataRepo,
-	annualRepo *repository.AnnualReturnsRepo,
-	libMetrics *repository.InstrumentLibraryMetricsRepo,
 	resources *resourcedb.DB,
 ) *PostProcessService {
 	return &PostProcessService{
 		sql: sqlDB, tasks: tasks, assets: assets,
-		instRepo: instRepo, marketRepo: marketRepo, annualRepo: annualRepo,
-		libMetrics: libMetrics, resources: resources,
+		instRepo: instRepo, marketRepo: marketRepo,
+		resources: resources,
 	}
 }
 

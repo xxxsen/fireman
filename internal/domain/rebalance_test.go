@@ -3,7 +3,7 @@ package domain
 import "testing"
 
 func testHoldings() ([]HoldingWeightInput, []struct {
-	ID, InstrumentID, SimulationSnapshotID string
+	ID, AssetKey, SimulationSnapshotID string
 	SortOrder                              int
 },
 ) {
@@ -26,7 +26,7 @@ func testHoldings() ([]HoldingWeightInput, []struct {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{
 		{"h1", "ins1", "snap1", 1},
@@ -85,7 +85,7 @@ func TestComputeNewCashRebalanceRoundingRemainderToLargestGap(t *testing.T) {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{
 		{"h1", "ins1", "snap1", 1},
@@ -187,7 +187,7 @@ func TestComputeFullRebalance_A1_ScaleOverProportional(t *testing.T) {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{{"h1", "ins1", "snap1", 1}}
 
@@ -216,7 +216,7 @@ func TestComputeFullRebalance_B1_ScaleUnderProportional(t *testing.T) {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{{"h1", "ins1", "snap1", 1}}
 
@@ -249,7 +249,7 @@ func TestComputeFullRebalance_A2_StructuralRotationScaleOver(t *testing.T) {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{
 		{"h1", "ins1", "snap1", 1},
@@ -289,7 +289,7 @@ func TestComputeFullRebalance_B2_StructuralRotationScaleUnder(t *testing.T) {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{
 		{"h1", "ins1", "snap1", 1},
@@ -329,7 +329,7 @@ func TestComputeFullRebalance_C1_ScaleAligned(t *testing.T) {
 		},
 	}
 	meta := []struct {
-		ID, InstrumentID, SimulationSnapshotID string
+		ID, AssetKey, SimulationSnapshotID string
 		SortOrder                              int
 	}{
 		{"h1", "ins1", "snap1", 1},

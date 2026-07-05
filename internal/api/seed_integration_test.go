@@ -109,7 +109,19 @@ func TestMaxSeedRoundTripIntegration(t *testing.T) {
 	if len(paths) == 0 {
 		t.Fatal("expected path index rows")
 	}
-	indexSeed := paths[0].(map[string]any)["path_seed"].(string)
+	// The list is ordered by representative percentile, so locate path 0
+	// explicitly before comparing its stored seed to the regenerated detail.
+	indexSeed := ""
+	for _, p := range paths {
+		row := p.(map[string]any)
+		if int(row["path_no"].(float64)) == 0 {
+			indexSeed = row["path_seed"].(string)
+			break
+		}
+	}
+	if indexSeed == "" {
+		t.Fatal("path 0 not found in path index")
+	}
 	if indexSeed != pathSeed {
 		t.Fatalf("path seed mismatch index=%q detail=%q", indexSeed, pathSeed)
 	}

@@ -23,7 +23,7 @@ func cashOnlySnapshot(horizonMonths int, deterministic bool) *InputSnapshot {
 			SimulationRuns: 1, StudentTDf: 7, Seed: "42",
 		},
 		Assets: []SnapshotAsset{{
-			HoldingID: "cash", InstrumentID: "cny_cash", SnapshotID: "s_cash",
+			HoldingID: "cash", AssetKey: "cny_cash", SnapshotID: "s_cash",
 			Currency: "CNY", AssetClass: "cash", Region: "domestic", IsCash: true,
 			InitialMinor: 1_000_000_00, TargetWeight: 1.0,
 			ModeledAnnualReturn: 0.018, AnnualVolatility: 0,

@@ -166,20 +166,38 @@ type MarketAssetSyncView struct {
 	LastSuccessTaskID string          `json:"last_success_task_id"`
 }
 
-// MarketAssetListResult is the GET /market-assets response.
-type MarketAssetListResult struct {
-	Assets []repository.MarketAsset `json:"assets"`
-	Sync   *MarketAssetSyncView     `json:"sync,omitempty"`
-	Syncs  []MarketAssetSyncView    `json:"syncs"`
-	FXSync *MarketAssetSyncView     `json:"fx_sync,omitempty"`
-	Total  int                      `json:"total"`
+// MarketAssetListItem is one directory row plus its local history readiness
+// (from market_asset_history_state) so pickers can tell whether the asset
+// still needs a history sync before simulation. For assets without local
+// history, HistorySyncStatus/HistorySyncError surface the latest history sync
+// task so pickers can render "syncing" and "failed" states.
+type MarketAssetListItem struct {
+	repository.MarketAsset
+	HasHistory        bool   `json:"has_history"`
+	HistoryDataAsOf   string `json:"history_data_as_of,omitempty"`
+	HistoryPointCount int    `json:"history_point_count,omitempty"`
+	HistorySourceName string `json:"history_source_name,omitempty"`
+	HistorySyncStatus string `json:"history_sync_status,omitempty"`
+	HistorySyncError  string `json:"history_sync_error,omitempty"`
 }
 
-// MarketAssetListParams filters the directory listing.
+// MarketAssetListResult is the GET /market-assets response. Total is the
+// filtered row count before pagination.
+type MarketAssetListResult struct {
+	Assets []MarketAssetListItem `json:"assets"`
+	Sync   *MarketAssetSyncView  `json:"sync,omitempty"`
+	Syncs  []MarketAssetSyncView `json:"syncs"`
+	FXSync *MarketAssetSyncView  `json:"fx_sync,omitempty"`
+	Total  int                   `json:"total"`
+}
+
+// MarketAssetListParams filters the directory listing. SymbolQuery matches
+// symbol only; NameQuery matches name only.
 type MarketAssetListParams struct {
 	Market          string
 	InstrumentTypes []string
-	Query           string
+	SymbolQuery     string
+	NameQuery       string
 	IncludeInactive bool
 	Limit           int
 	Offset          int
@@ -215,10 +233,11 @@ func (s *MarketAssetService) ListAssets(
 	ctx context.Context, params MarketAssetListParams,
 ) (MarketAssetListResult, error) {
 	market := strings.ToUpper(strings.TrimSpace(params.Market))
-	assets, err := s.assets.Search(ctx, repository.MarketAssetSearchOptions{
+	res, err := s.assets.Search(ctx, repository.MarketAssetSearchOptions{
 		Market:          market,
 		InstrumentTypes: params.InstrumentTypes,
-		Query:           params.Query,
+		SymbolQuery:     params.SymbolQuery,
+		NameQuery:       params.NameQuery,
 		IncludeInactive: params.IncludeInactive,
 		Limit:           params.Limit,
 		Offset:          params.Offset,
@@ -226,15 +245,15 @@ func (s *MarketAssetService) ListAssets(
 	if err != nil {
 		return MarketAssetListResult{}, wrapRepo("search market assets", err)
 	}
-	out := MarketAssetListResult{Assets: assets, Total: len(assets)}
-	if assets == nil {
-		out.Assets = []repository.MarketAsset{}
+	items, err := s.attachHistoryStates(ctx, res.Assets)
+	if err != nil {
+		return MarketAssetListResult{}, err
 	}
+	out := MarketAssetListResult{Assets: items, Total: res.Total}
 
+	// Sync views always cover every directory scope: the UI sync panel is
+	// fixed and must not react to list filters.
 	scopes := []string{ScopeCNAll, ScopeHKAll, ScopeUSAll}
-	if scope := ScopeForMarket(market); scope != "" {
-		scopes = []string{scope}
-	}
 	for _, scope := range scopes {
 		view, err := s.buildSyncView(ctx, scope)
 		if err != nil {
@@ -251,6 +270,68 @@ func (s *MarketAssetService) ListAssets(
 	}
 	out.FXSync = &fxView
 	return out, nil
+}
+
+// attachHistoryStates annotates directory rows with their local history
+// readiness. When an asset has several history dimensions, the one with the
+// most points wins (it is the series simulations would use).
+func (s *MarketAssetService) attachHistoryStates(
+	ctx context.Context, assets []repository.MarketAsset,
+) ([]MarketAssetListItem, error) {
+	items := make([]MarketAssetListItem, 0, len(assets))
+	keys := make([]string, 0, len(assets))
+	for _, a := range assets {
+		items = append(items, MarketAssetListItem{MarketAsset: a})
+		keys = append(keys, a.AssetKey)
+	}
+	if len(keys) == 0 {
+		return items, nil
+	}
+	states, err := s.assets.ListHistoryStatesByAssetKeys(ctx, keys)
+	if err != nil {
+		return nil, wrapRepo("list history states", err)
+	}
+	best := make(map[string]repository.MarketAssetHistoryState, len(states))
+	// Latest history sync task per asset without points yet: exposes the
+	// syncing/failed states for pickers.
+	pendingTask := make(map[string]string, len(states))
+	for _, st := range states {
+		if st.PointCount <= 0 {
+			if st.LastTaskID != "" {
+				pendingTask[st.AssetKey] = st.LastTaskID
+			}
+			continue
+		}
+		if cur, ok := best[st.AssetKey]; !ok || st.PointCount > cur.PointCount {
+			best[st.AssetKey] = st
+		}
+	}
+	for i := range items {
+		if st, ok := best[items[i].AssetKey]; ok {
+			items[i].HasHistory = true
+			items[i].HistoryDataAsOf = st.DataAsOf
+			items[i].HistoryPointCount = st.PointCount
+			items[i].HistorySourceName = st.SourceName
+			continue
+		}
+		taskID, ok := pendingTask[items[i].AssetKey]
+		if !ok {
+			continue
+		}
+		task, err := s.tasks.GetByID(ctx, taskID)
+		if err != nil {
+			continue
+		}
+		items[i].HistorySyncStatus = task.Status
+		if task.Status == repository.WorkerTaskStatusFailed {
+			msg := task.ErrorMessage
+			if msg == "" {
+				msg = task.ErrorCode
+			}
+			items[i].HistorySyncError = msg
+		}
+	}
+	return items, nil
 }
 
 // --- directory sync task creation ---

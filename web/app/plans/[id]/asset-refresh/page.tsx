@@ -13,7 +13,7 @@ import { PlanPageHeader } from "@/components/layout/PlanPageHeader";
 import { getHoldings, getTargets } from "@/lib/api/holdings";
 import { getActiveRebalanceExecution } from "@/lib/api/rebalance-executions";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
-import { listInstruments } from "@/lib/api/instruments";
+import { listMarketAssets, type MarketAsset } from "@/lib/api/market-assets";
 import { getPlan, getParameters } from "@/lib/api/plans";
 import { listScenarios } from "@/lib/api/allocation";
 import {
@@ -39,13 +39,18 @@ import { ApiError } from "@/lib/api/client";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { queryErrorMessage } from "@/lib/query-error";
-import type { Instrument } from "@/types/api";
 
 const STEPS = ["确认范围", "录入当前资产", "确认提交"] as const;
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
-function isSelectableInstrument(inst: Instrument): boolean {
-  return !inst.is_system && inst.status === "active" && inst.simulation_eligible === true;
+/** System cash holdings reference built-in `SYS|…` market assets. */
+function isSystemAssetKey(assetKey: string): boolean {
+  return assetKey.startsWith("SYS|");
+}
+
+/** A query that is only letters/digits/dots is treated as a symbol search. */
+function looksLikeSymbolQuery(q: string): boolean {
+  return /^[A-Za-z0-9.]+$/.test(q);
 }
 
 export default function AssetRefreshPage() {
@@ -57,6 +62,8 @@ export default function AssetRefreshPage() {
   const [totalOverride, setTotalOverride] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [addAssetClass, setAddAssetClass] = useState("equity");
+  const [addRegion, setAddRegion] = useState("domestic");
   const [error, setError] = useState<string | null>(null);
 
   const plan = useQuery({ queryKey: ["plan", planId], queryFn: () => getPlan(planId) });
@@ -76,35 +83,29 @@ export default function AssetRefreshPage() {
     queryKey: ["scenarios"],
     queryFn: listScenarios,
   });
-  const instruments = useQuery({
-    queryKey: ["instruments", plan.data?.valuation_date],
-    queryFn: () =>
-      listInstruments(
-        plan.data?.valuation_date ? { valuationDate: plan.data.valuation_date } : undefined,
-      ),
-    enabled: !!plan.data,
-  });
   const activeExecution = useQuery({
     queryKey: ["rebalance-execution-active", planId],
     queryFn: () => getActiveRebalanceExecution(planId),
   });
 
-  const systemInstrumentIds = useMemo(
-    () =>
-      new Set(
-        (instruments.data?.instruments ?? [])
-          .filter((inst) => inst.is_system)
-          .map((inst) => inst.id),
-      ),
-    [instruments.data],
-  );
+  const trimmedFilter = filter.trim();
+  const assetSearch = useQuery({
+    queryKey: ["asset-refresh-market-assets", trimmedFilter],
+    queryFn: () =>
+      listMarketAssets({
+        symbolQ: looksLikeSymbolQuery(trimmedFilter) ? trimmedFilter : undefined,
+        nameQ: looksLikeSymbolQuery(trimmedFilter) ? undefined : trimmedFilter,
+        limit: 20,
+      }),
+    enabled: dialogOpen && trimmedFilter.length > 0,
+  });
 
   const defaultHoldings = useMemo(
     () =>
       (holdings.data?.holdings ?? []).map((holding) =>
-        holdingFromPlan(holding, systemInstrumentIds.has(holding.instrument_id)),
+        holdingFromPlan(holding, isSystemAssetKey(holding.asset_key)),
       ),
-    [holdings.data, systemInstrumentIds],
+    [holdings.data],
   );
 
   const draftHoldings = holdingsDraft ?? defaultHoldings;
@@ -115,7 +116,7 @@ export default function AssetRefreshPage() {
   const totalAssets = totalOverride ?? defaultTotal;
   const sumMinor = useMemo(
     () => sumHoldingsMinor(draftHoldings.map((row) => ({
-      instrument_id: row.instrument_id,
+      asset_key: row.asset_key,
       current_amount_minor: row.current_amount_minor,
     }))),
     [draftHoldings],
@@ -123,7 +124,7 @@ export default function AssetRefreshPage() {
   const validation = useMemo(
     () => validateAssetRefreshTotal(
       draftHoldings.map((row) => ({
-        instrument_id: row.instrument_id,
+        asset_key: row.asset_key,
         current_amount_minor: row.current_amount_minor,
       })),
       totalAssets,
@@ -193,60 +194,48 @@ export default function AssetRefreshPage() {
       }));
   }, [draftHoldings]);
 
-  const selectedInstrumentIds = useMemo(
-    () => new Set(draftHoldings.map((holding) => holding.instrument_id)),
+  const selectedAssetKeys = useMemo(
+    () => new Set(draftHoldings.map((holding) => holding.asset_key)),
     [draftHoldings],
   );
 
-  const filteredInstruments = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-    if (!query) return [];
-    return (instruments.data?.instruments ?? [])
-      .filter(isSelectableInstrument)
-      .filter((inst) => !selectedInstrumentIds.has(inst.id))
-      .filter(
-        (inst) =>
-          inst.code.toLowerCase().includes(query) ||
-          inst.name.toLowerCase().includes(query) ||
-          assetClassLabel(inst.asset_class).includes(query) ||
-          regionLabel(inst.region).includes(query),
-      )
-      .slice(0, 20);
-  }, [filter, instruments.data, selectedInstrumentIds]);
+  const candidateAssets = useMemo(
+    () =>
+      (assetSearch.data?.assets ?? []).filter(
+        (asset) => !selectedAssetKeys.has(asset.asset_key),
+      ),
+    [assetSearch.data, selectedAssetKeys],
+  );
 
   const updateDraft = (next: AssetRefreshHolding[]) => {
     setHoldingsDraft(next);
   };
 
-  const updateHolding = (instrumentId: string, patch: Partial<AssetRefreshHolding>) => {
+  const updateHolding = (assetKey: string, patch: Partial<AssetRefreshHolding>) => {
     updateDraft(
       draftHoldings.map((holding) =>
-        holding.instrument_id === instrumentId ? { ...holding, ...patch } : holding,
+        holding.asset_key === assetKey ? { ...holding, ...patch } : holding,
       ),
     );
   };
 
   const removeHolding = (holding: AssetRefreshHolding) => {
     if (holding.is_system) return;
-    updateDraft(draftHoldings.filter((item) => item.instrument_id !== holding.instrument_id));
+    updateDraft(draftHoldings.filter((item) => item.asset_key !== holding.asset_key));
   };
 
-  const addInstrument = (instrument: Instrument) => {
-    if (selectedInstrumentIds.has(instrument.id)) return;
-    const defaultWeight = defaultWeightWithinGroup(
-      draftHoldings,
-      instrument.asset_class,
-      instrument.region,
-    );
+  const addAsset = (asset: MarketAsset) => {
+    if (selectedAssetKeys.has(asset.asset_key)) return;
+    const defaultWeight = defaultWeightWithinGroup(draftHoldings, addAssetClass, addRegion);
     updateDraft([
       ...draftHoldings,
       {
-        id: `draft_${instrument.id}`,
-        instrument_id: instrument.id,
-        label: instrument.name,
-        code: instrument.code,
-        asset_class: instrument.asset_class,
-        region: instrument.region,
+        id: `draft_${asset.asset_key}`,
+        asset_key: asset.asset_key,
+        label: asset.name,
+        code: asset.symbol,
+        asset_class: addAssetClass,
+        region: addRegion,
         current_amount_minor: 0,
         weight_within_group: defaultWeight,
         sort_order: draftHoldings.length * 10,
@@ -291,12 +280,10 @@ export default function AssetRefreshPage() {
     (plan.isError ||
       holdings.isError ||
       targets.isError ||
-      instruments.isError ||
       activeExecution.isError) &&
     (!plan.data ||
       !holdings.data ||
       !targets.data ||
-      !instruments.data ||
       !activeExecution.data)
   ) {
     return (
@@ -306,7 +293,6 @@ export default function AssetRefreshPage() {
           if (plan.isError) void plan.refetch();
           if (holdings.isError) void holdings.refetch();
           if (targets.isError) void targets.refetch();
-          if (instruments.isError) void instruments.refetch();
           if (activeExecution.isError) void activeExecution.refetch();
         }}
         backHref={`/plans/${planId}/overview`}
@@ -315,7 +301,6 @@ export default function AssetRefreshPage() {
           plan.error ??
             holdings.error ??
             targets.error ??
-            instruments.error ??
             activeExecution.error,
         )}
       />
@@ -327,11 +312,9 @@ export default function AssetRefreshPage() {
     holdings.isLoading ||
     activeExecution.isLoading ||
     targets.isLoading ||
-    instruments.isLoading ||
     !plan.data ||
     !holdings.data ||
-    !targets.data ||
-    !instruments.data
+    !targets.data
   ) {
     return <LoadingState label="加载持仓校正…" />;
   }
@@ -362,7 +345,7 @@ export default function AssetRefreshPage() {
 
   const beforeTotal = sumHoldingsMinor(
     holdings.data.holdings.map((holding) => ({
-      instrument_id: holding.instrument_id,
+      asset_key: holding.asset_key,
       current_amount_minor: holding.current_amount_minor,
     })),
   );
@@ -494,7 +477,7 @@ export default function AssetRefreshPage() {
                       </thead>
                       <tbody>
                         {regionRows.map((row) => (
-                          <tr key={row.instrument_id} className="border-t border-line">
+                          <tr key={row.asset_key} className="border-t border-line">
                             <td className="px-3 py-2">
                               <span className="font-medium">{row.label}</span>
                               <span className="block text-xs text-ink-muted">{row.code}</span>
@@ -505,7 +488,7 @@ export default function AssetRefreshPage() {
                               <PercentInput
                                 value={row.weight_within_group}
                                 onChange={(value) =>
-                                  updateHolding(row.instrument_id, { weight_within_group: value })
+                                  updateHolding(row.asset_key, { weight_within_group: value })
                                 }
                               />
                             </td>
@@ -514,7 +497,7 @@ export default function AssetRefreshPage() {
                                 plain
                                 valueMinor={row.current_amount_minor}
                                 onChange={(value) =>
-                                  updateHolding(row.instrument_id, { current_amount_minor: value })
+                                  updateHolding(row.asset_key, { current_amount_minor: value })
                                 }
                               />
                             </td>
@@ -620,19 +603,9 @@ export default function AssetRefreshPage() {
               本次提交包含持仓配置变更（新增、移除或组内配比调整）。
             </p>
           )}
-          {(instruments.data?.instruments ?? [])
-            .filter((inst) =>
-              holdingsDraft?.some((h) => h.instrument_id === inst.id) &&
-              inst.simulation_eligible &&
-              inst.history_depth === "one_year",
-            )
-            .map((inst) => (
-              <p key={inst.id} className="text-sm text-warning" data-testid="asset-refresh-short-history">
-                {inst.name}（{inst.code}）历史样本有限，模拟长期估计不确定性较高。
-              </p>
-            ))}
           <p className="text-sm text-ink-muted">
-            提交后，当前计划基准规模将同步更新为最新持仓合计。
+            提交后，当前计划基准规模将同步更新为最新持仓合计。若新增标的尚未同步历史数据，
+            创建模拟前可在计划的模拟入口一键同步缺失历史。
           </p>
           <div className="flex flex-wrap gap-3">
             <Button variant="secondary" size="lg" onClick={() => setStep(1)}>
@@ -658,26 +631,62 @@ export default function AssetRefreshPage() {
       >
         <input
           className="input-base text-sm"
-          placeholder="按代码、名称过滤"
+          placeholder="按代码或名称搜索市场资产目录"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           data-testid="asset-refresh-instrument-filter"
         />
-        <Link href="/assets/import" className="mt-2 block text-sm underline">
-          资料库中不存在？从 AKShare 录入
+        <div className="mt-2 flex gap-2">
+          <label className="flex flex-1 flex-col gap-1 text-xs text-ink-muted">
+            资产大类
+            <select
+              className="input-base text-sm"
+              value={addAssetClass}
+              onChange={(event) => setAddAssetClass(event.target.value)}
+              data-testid="asset-refresh-add-asset-class"
+            >
+              {ASSET_CLASSES.map((assetClass) => (
+                <option key={assetClass} value={assetClass}>
+                  {assetClassLabel(assetClass)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-1 flex-col gap-1 text-xs text-ink-muted">
+            国内 / 国外
+            <select
+              className="input-base text-sm"
+              value={addRegion}
+              onChange={(event) => setAddRegion(event.target.value)}
+              data-testid="asset-refresh-add-region"
+            >
+              <option value="domestic">{regionLabel("domestic")}</option>
+              <option value="foreign">{regionLabel("foreign")}</option>
+            </select>
+          </label>
+        </div>
+        <Link href="/assets" className="mt-2 block text-sm underline">
+          目录中不存在？前往资产页同步资产列表
         </Link>
+        {assetSearch.isFetching && (
+          <p className="mt-2 text-xs text-ink-muted" role="status">
+            搜索中…
+          </p>
+        )}
         <ul className="mt-4 divide-y divide-line" data-testid="asset-refresh-instrument-results">
-          {filteredInstruments.map((instrument) => (
-            <li key={instrument.id}>
+          {candidateAssets.map((asset) => (
+            <li key={asset.asset_key}>
               <button
                 type="button"
                 className="w-full px-1 py-3 text-left hover:bg-surface-muted"
-                onClick={() => addInstrument(instrument)}
+                onClick={() => addAsset(asset)}
               >
-                <div className="font-medium">{instrument.name}</div>
+                <div className="font-medium">{asset.name}</div>
                 <div className="text-xs text-ink-muted">
-                  {instrument.code} · {assetClassLabel(instrument.asset_class)} ·{" "}
-                  {regionLabel(instrument.region)}
+                  {asset.symbol} · {asset.market}
+                  {asset.has_history
+                    ? ` · 数据截至 ${asset.history_data_as_of || "—"}`
+                    : " · 未同步历史，模拟前需要同步"}
                 </div>
               </button>
             </li>

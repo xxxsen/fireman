@@ -56,7 +56,7 @@ func buildRebalanceDraftRecords(
 	for _, f := range frozen {
 		lines = append(lines, repository.RebalanceDraftLine{
 			ID: "rbdl_" + uuid.New().String(), DraftID: draft.ID,
-			HoldingID: f.HoldingID, InstrumentID: f.InstrumentID,
+			HoldingID: f.HoldingID, AssetKey: f.AssetKey,
 			BaselineCurrentMinor: f.BaselineCurrentMinor, PlannedCurrentMinor: f.PlannedCurrentMinor,
 			FrozenTargetMinor: f.FrozenTargetMinor, FrozenGapMinor: f.FrozenGapMinor,
 			FrozenGapWeight: f.FrozenGapWeight, FrozenAction: f.FrozenAction,
@@ -80,7 +80,7 @@ func (s *RebalanceDraftService) patchDraftLineItem(
 	if item.PlannedCurrentMinor < 0 {
 		return newErr("validation_failed", "planned amount cannot be negative", nil)
 	}
-	line, err := s.drafts.GetLineByID(ctx, draftID, item.LineID)
+	line, err := s.drafts.GetLineByID(ctx, tx, draftID, item.LineID)
 	if err != nil {
 		return wrapRepo("get draft line", err)
 	}

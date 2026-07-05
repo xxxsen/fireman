@@ -71,7 +71,7 @@ const defaultHoldingsResp = {
     {
       id: "h1",
       plan_id: "plan_1",
-      instrument_id: "i1",
+      asset_key: "CN|cn_exchange_fund|sh|FA",
       instrument_name: "基金A",
       instrument_code: "FA",
       asset_class: "equity",
@@ -85,7 +85,7 @@ const defaultHoldingsResp = {
     {
       id: "h2",
       plan_id: "plan_1",
-      instrument_id: "i3",
+      asset_key: "CN|cn_exchange_fund|sh|FC",
       instrument_name: "基金C",
       instrument_code: "FC",
       asset_class: "equity",
@@ -106,34 +106,45 @@ const defaultTargets = {
   ],
   holdings: [],
 };
-const defaultInstruments = {
-  instruments: [
+const defaultAssetsResp = {
+  assets: [
     {
-      id: "i2",
-      code: "FB",
-      name: "基金B",
-      asset_class: "equity",
-      region: "domestic",
-      status: "active",
-      quality_status: "available",
-      simulation_eligible: true,
-      is_system: false,
+      asset_key: "CN|cn_exchange_fund|sh|FB",
       market: "CN",
-      instrument_type: "fund",
+      instrument_type: "cn_exchange_fund",
+      region_code: "sh",
+      symbol: "FB",
+      name: "基金B",
+      exchange: "SH",
+      instrument_kind: "etf",
+      currency: "CNY",
+      active: true,
+      listing_status: "active",
+      last_seen_at: 0,
+      source_name: "ak.fund_etf_spot_em",
+      source_as_of: "",
+      refreshed_at: 0,
+      created_at: 0,
+      updated_at: 0,
+      has_history: true,
+      history_data_as_of: "2026-07-01",
     },
   ],
+  syncs: [],
+  total: 1,
 };
 const getHoldingsMock = vi.hoisted(() => vi.fn());
 const getTargetsMock = vi.hoisted(() => vi.fn());
-const listInstrumentsMock = vi.hoisted(() => vi.fn());
+const listMarketAssetsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/holdings", () => ({
   getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
   getTargets: (...args: unknown[]) => getTargetsMock(...args),
 }));
 
-vi.mock("@/lib/api/instruments", () => ({
-  listInstruments: (...args: unknown[]) => listInstrumentsMock(...args),
+vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
+  listMarketAssets: (...args: unknown[]) => listMarketAssetsMock(...args),
 }));
 
 vi.mock("@/lib/api/asset-refresh", () => ({
@@ -178,8 +189,8 @@ describe("AssetRefreshPage", () => {
     getHoldingsMock.mockResolvedValue(defaultHoldingsResp);
     getTargetsMock.mockReset();
     getTargetsMock.mockResolvedValue(defaultTargets);
-    listInstrumentsMock.mockReset();
-    listInstrumentsMock.mockResolvedValue(defaultInstruments);
+    listMarketAssetsMock.mockReset();
+    listMarketAssetsMock.mockResolvedValue(defaultAssetsResp);
     getActiveRebalanceExecutionMock.mockReset();
     getActiveRebalanceExecutionMock.mockResolvedValue(null);
   });
@@ -215,14 +226,6 @@ describe("AssetRefreshPage", () => {
 
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
     expect(screen.queryByText("1. 确认范围")).not.toBeInTheDocument();
-  });
-
-  it("shows error state when instruments load fails", async () => {
-    listInstrumentsMock.mockReset();
-    listInstrumentsMock.mockRejectedValue(new Error("boom"));
-    renderPage();
-
-    expect(await screen.findByTestId("error-state")).toBeInTheDocument();
   });
 
   it("shows the 3-step wizard with scope confirmation copy", async () => {
@@ -291,8 +294,12 @@ describe("AssetRefreshPage", () => {
       config_changed: true,
       sync_total_assets_minor: true,
       holdings: expect.arrayContaining([
-        expect.objectContaining({ instrument_id: "i1" }),
-        expect.objectContaining({ instrument_id: "i2" }),
+        expect.objectContaining({ asset_key: "CN|cn_exchange_fund|sh|FA" }),
+        expect.objectContaining({
+          asset_key: "CN|cn_exchange_fund|sh|FB",
+          asset_class: "equity",
+          region: "domestic",
+        }),
       ]),
     });
     // The wizard no longer switches config templates, so no scenario_id is sent.

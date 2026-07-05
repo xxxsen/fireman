@@ -21,15 +21,15 @@ func seedBondPlanWithHoldingAmount(t *testing.T, db *sql.DB, configuredMinor, ho
 	snapRepo := repository.NewSnapshotRepo(db)
 	instID := "ins_rebalance_bond"
 	now := time.Now().UnixMilli()
-	if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
-		ID: instID, Code: "BOND001", Name: "测试债券基金", Market: "CN",
-		AssetClass: "bond", Region: "domestic", Currency: "CNY",
+	if err := snapRepo.EnsureMarketAsset(context.Background(), repository.MarketAsset{
+		AssetKey: instID, Symbol: "BOND001", Name: "测试债券基金",
+		Market: "CN", Currency: "CNY",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	snapID := "snap_rebalance_bond"
 	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
-		ID: snapID, InstrumentID: instID, PlanID: &planID,
+		ID: snapID, AssetKey: instID, PlanID: &planID,
 		InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
 		CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
 		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -45,7 +45,7 @@ func seedBondPlanWithHoldingAmount(t *testing.T, db *sql.DB, configuredMinor, ho
 	holdID := "hold_rebalance_bond"
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO plan_holdings (
-			id, plan_id, instrument_id, enabled, asset_class, region,
+			id, plan_id, asset_key, enabled, asset_class, region,
 			weight_within_group, current_amount_minor, simulation_snapshot_id,
 			sort_order, created_at, updated_at
 		) VALUES (?,?,?,1,'bond','domestic',1.0,?,?,1,?,?)`,

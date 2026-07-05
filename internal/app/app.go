@@ -99,8 +99,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 		repository.NewMarketAssetRepo(pool),
 		repository.NewInstrumentRepo(pool),
 		repository.NewMarketDataRepo(pool),
-		repository.NewAnnualReturnsRepo(pool),
-		repository.NewInstrumentLibraryMetricsRepo(pool),
 		resources,
 	)
 	internalRouter := api.NewInternalRouter(api.InternalDeps{

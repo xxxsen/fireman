@@ -100,9 +100,10 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"plans", "plan_parameters",
 		"allocation_scenarios", "allocation_scenario_weights",
 		"plan_asset_class_targets", "plan_region_targets",
-		"instruments", "market_data_points", "instrument_annual_returns",
-		"instrument_simulation_snapshots", "instrument_simulation_snapshot_years",
-		"instrument_simulation_snapshot_months",
+		"instruments", "market_data_points",
+		"market_assets", "market_asset_points", "market_asset_history_state",
+		"market_asset_simulation_snapshots", "market_asset_simulation_snapshot_years",
+		"market_asset_simulation_snapshot_months",
 		"plan_holdings", "portfolio_snapshots", "portfolio_snapshot_items",
 		"jobs", "simulation_runs", "simulation_path_index",
 		"simulation_quantile_series", "simulation_real_quantile_series",
@@ -135,16 +136,16 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 
 	var systemCash string
 	if err := pool.QueryRowContext(ctx,
-		"SELECT id FROM instruments WHERE id='system_cash_cny' AND is_system=1").Scan(&systemCash); err != nil {
-		t.Fatalf("expected system_cash_cny instrument: %v", err)
+		"SELECT asset_key FROM market_assets WHERE asset_key='SYS|cash||CNY'").Scan(&systemCash); err != nil {
+		t.Fatalf("expected SYS|cash||CNY market asset: %v", err)
 	}
 
 	var snapID string
 	var completeYearCount int
 	var sourceMode string
 	if err := pool.QueryRowContext(ctx,
-		`SELECT id, complete_year_count, source_mode FROM instrument_simulation_snapshots
-		 WHERE instrument_id='system_cash_cny'`).Scan(&snapID, &completeYearCount, &sourceMode); err != nil {
+		`SELECT id, complete_year_count, source_mode FROM market_asset_simulation_snapshots
+		 WHERE asset_key='SYS|cash||CNY'`).Scan(&snapID, &completeYearCount, &sourceMode); err != nil {
 		t.Fatalf("expected system cash snapshot: %v", err)
 	}
 	if completeYearCount != 0 {
@@ -174,8 +175,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 20 {
-		t.Errorf("expected 20 migration records after idempotent re-run, got %d", migrationCount)
+	if migrationCount != 21 {
+		t.Errorf("expected 21 migration records after idempotent re-run, got %d", migrationCount)
 	}
 }
 

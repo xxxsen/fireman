@@ -32,7 +32,7 @@ type RebalanceDraftLine struct {
 	ID                           string  `json:"id"`
 	DraftID                      string  `json:"draft_id"`
 	HoldingID                    string  `json:"holding_id"`
-	InstrumentID                 string  `json:"instrument_id"`
+	AssetKey                     string  `json:"asset_key"`
 	InstrumentCode               string  `json:"instrument_code,omitempty"`
 	InstrumentName               string  `json:"instrument_name,omitempty"`
 	BaselineCurrentMinor         int64   `json:"baseline_current_minor"`
@@ -134,13 +134,13 @@ func (r *RebalanceDraftRepo) CreateTx(
 	for _, line := range lines {
 		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO rebalance_draft_lines (
-				id, draft_id, holding_id, instrument_id,
+				id, draft_id, holding_id, asset_key,
 				baseline_current_minor, planned_current_minor,
 				frozen_target_minor, frozen_gap_minor, frozen_gap_weight,
 				frozen_action, frozen_suggested_trade_minor,
 				recommended_package_delta_minor, last_saved_at
 			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			line.ID, draft.ID, line.HoldingID, line.InstrumentID,
+			line.ID, draft.ID, line.HoldingID, line.AssetKey,
 			line.BaselineCurrentMinor, line.PlannedCurrentMinor,
 			line.FrozenTargetMinor, line.FrozenGapMinor, line.FrozenGapWeight,
 			line.FrozenAction, line.FrozenSuggestedTradeMinor,
@@ -153,14 +153,14 @@ func (r *RebalanceDraftRepo) CreateTx(
 
 func (r *RebalanceDraftRepo) ListLines(ctx context.Context, draftID string) ([]RebalanceDraftLine, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT l.id, l.draft_id, l.holding_id, l.instrument_id,
+		SELECT l.id, l.draft_id, l.holding_id, l.asset_key,
 			l.baseline_current_minor, l.planned_current_minor,
 			l.frozen_target_minor, l.frozen_gap_minor, l.frozen_gap_weight,
 			l.frozen_action, l.frozen_suggested_trade_minor,
 			l.recommended_package_delta_minor, l.last_saved_at,
-			i.code, i.name
+			COALESCE(a.symbol, ''), COALESCE(a.name, '')
 		FROM rebalance_draft_lines l
-		JOIN instruments i ON i.id = l.instrument_id
+		LEFT JOIN market_assets a ON a.asset_key = l.asset_key
 		WHERE l.draft_id=?
 		ORDER BY l.holding_id`, draftID)
 	if err != nil {
@@ -172,7 +172,7 @@ func (r *RebalanceDraftRepo) ListLines(ctx context.Context, draftID string) ([]R
 		var line RebalanceDraftLine
 		var lastSaved sql.NullInt64
 		if err := rows.Scan(
-			&line.ID, &line.DraftID, &line.HoldingID, &line.InstrumentID,
+			&line.ID, &line.DraftID, &line.HoldingID, &line.AssetKey,
 			&line.BaselineCurrentMinor, &line.PlannedCurrentMinor,
 			&line.FrozenTargetMinor, &line.FrozenGapMinor, &line.FrozenGapWeight,
 			&line.FrozenAction, &line.FrozenSuggestedTradeMinor,
@@ -311,20 +311,24 @@ func (r *RebalanceDraftRepo) query(ctx context.Context, tx *sql.Tx, query string
 	return rows, wrapSQL("query rebalance draft", err)
 }
 
-func (r *RebalanceDraftRepo) GetLineByID(ctx context.Context, draftID, lineID string) (RebalanceDraftLine, error) {
+// GetLineByID loads one draft line; pass the enclosing tx when called inside a
+// transaction (the single-connection pool deadlocks on pool queries mid-tx).
+func (r *RebalanceDraftRepo) GetLineByID(
+	ctx context.Context, tx *sql.Tx, draftID, lineID string,
+) (RebalanceDraftLine, error) {
 	var line RebalanceDraftLine
 	var lastSaved sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `
-		SELECT l.id, l.draft_id, l.holding_id, l.instrument_id,
+	err := r.queryRow(ctx, tx, `
+		SELECT l.id, l.draft_id, l.holding_id, l.asset_key,
 			l.baseline_current_minor, l.planned_current_minor,
 			l.frozen_target_minor, l.frozen_gap_minor, l.frozen_gap_weight,
 			l.frozen_action, l.frozen_suggested_trade_minor,
 			l.recommended_package_delta_minor, l.last_saved_at,
-			i.code, i.name
+			COALESCE(a.symbol, ''), COALESCE(a.name, '')
 		FROM rebalance_draft_lines l
-		JOIN instruments i ON i.id = l.instrument_id
+		LEFT JOIN market_assets a ON a.asset_key = l.asset_key
 		WHERE l.draft_id=? AND l.id=?`, draftID, lineID).Scan(
-		&line.ID, &line.DraftID, &line.HoldingID, &line.InstrumentID,
+		&line.ID, &line.DraftID, &line.HoldingID, &line.AssetKey,
 		&line.BaselineCurrentMinor, &line.PlannedCurrentMinor,
 		&line.FrozenTargetMinor, &line.FrozenGapMinor, &line.FrozenGapWeight,
 		&line.FrozenAction, &line.FrozenSuggestedTradeMinor,

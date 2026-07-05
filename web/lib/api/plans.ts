@@ -16,7 +16,9 @@ export function createPlanWizard(body: {
   selected_scenario_id: string;
   parameters: PlanParameters;
   holdings: {
-    instrument_id: string;
+    asset_key: string;
+    asset_class: string;
+    region: string;
     enabled: boolean;
     weight_within_group: number;
     current_amount_minor: number;

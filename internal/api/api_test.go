@@ -166,16 +166,18 @@ func TestPlansCRUDAndVersionConflict(t *testing.T) {
 func TestHoldingsReadOnlyFields(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	plan := createTestPlan(t, db)
-	seedEquityInstrument(t, db, "ins_test_equity")
+	seedEquityAsset(t, db, "CN|test|sh|EQ1")
 
 	r := NewRouter(context.Background(), Deps{DB: db})
+	// name is asset metadata owned by the market directory and must stay
+	// read-only; asset_class/region are user-chosen and writable.
 	body, _ := json.Marshal(map[string]any{
 		"config_version": plan.ConfigVersion,
 		"holdings": []map[string]any{
 			{
-				"instrument_id": "ins_test_equity", "enabled": true,
+				"asset_key": "CN|test|sh|EQ1", "enabled": true,
 				"weight_within_group": 1.0, "current_amount_minor": 10000000,
-				"sort_order": 1, "asset_class": "equity",
+				"sort_order": 1, "name": "hack",
 			},
 		},
 	})
@@ -192,7 +194,7 @@ func TestHoldingsReadOnlyFields(t *testing.T) {
 func TestPlanVersionConflictOnStalePUT(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	plan := createTestPlan(t, db)
-	seedEquityInstrument(t, db, "ins_vc_equity")
+	seedEquityAsset(t, db, "CN|test|sh|EQ2")
 	r := NewRouter(context.Background(), Deps{DB: db})
 
 	// Bump config_version from 1 to 2 via a successful allocation update.
@@ -247,7 +249,7 @@ func TestPlanVersionConflictOnStalePUT(t *testing.T) {
 		"config_version": staleVersion,
 		"holdings": []map[string]any{
 			{
-				"instrument_id": "ins_vc_equity", "enabled": true,
+				"asset_key": "CN|test|sh|EQ2", "enabled": true,
 				"weight_within_group": 1.0, "current_amount_minor": 10000000, "sort_order": 1,
 			},
 		},

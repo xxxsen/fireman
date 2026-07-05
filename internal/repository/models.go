@@ -84,7 +84,7 @@ type AllocationScenario struct {
 	UpdatedAt     int64              `json:"updated_at"`
 }
 
-// Instrument is a minimal instrument record for holdings.
+// Instrument is a minimal internal system instrument record (FX rates).
 type Instrument struct {
 	ID         string `json:"id"`
 	Code       string `json:"code"`
@@ -97,11 +97,11 @@ type Instrument struct {
 	IsSystem   bool   `json:"is_system"`
 }
 
-// PlanHolding is a plan position.
+// PlanHolding is a plan position referencing a global market asset.
 type PlanHolding struct {
 	ID                          string  `json:"id"`
 	PlanID                      string  `json:"plan_id"`
-	InstrumentID                string  `json:"instrument_id"`
+	AssetKey                    string  `json:"asset_key"`
 	Enabled                     bool    `json:"enabled"`
 	AssetClass                  string  `json:"asset_class"`
 	Region                      string  `json:"region"`
@@ -112,7 +112,9 @@ type PlanHolding struct {
 	SortOrder                   int     `json:"sort_order"`
 	CreatedAt                   int64   `json:"created_at"`
 	UpdatedAt                   int64   `json:"updated_at"`
-	// Enriched fields for API responses.
+	// Enriched display fields for API responses, sourced from market_assets
+	// (symbol/name); the JSON keys keep the historical instrument_* naming
+	// consumed by the web UI.
 	InstrumentCode             string   `json:"instrument_code,omitempty"`
 	InstrumentName             string   `json:"instrument_name,omitempty"`
 	SnapshotCompleteYearCount  int      `json:"snapshot_complete_year_count,omitempty"`
@@ -135,6 +137,6 @@ type PortfolioSnapshot struct {
 
 // PortfolioSnapshotItem is one line in a portfolio snapshot.
 type PortfolioSnapshotItem struct {
-	InstrumentID string `json:"instrument_id"`
-	AmountMinor  int64  `json:"amount_minor"`
+	AssetKey    string `json:"asset_key"`
+	AmountMinor int64  `json:"amount_minor"`
 }

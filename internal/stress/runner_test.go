@@ -78,7 +78,7 @@ func TestStressShockOnlyInWindow(t *testing.T) {
 func TestHistoricalMaxDrawdownUsesPerFundShock(t *testing.T) {
 	in := testStressInput()
 	in.Assets = append(in.Assets, simulation.SnapshotAsset{
-		HoldingID: "h2", InstrumentID: "i2", SnapshotID: "s2",
+		HoldingID: "h2", AssetKey: "i2", SnapshotID: "s2",
 		Currency: "CNY", AssetClass: domain.AssetClassBond, IsCash: false,
 		InitialMinor: 0, TargetWeight: 0,
 		ModeledAnnualReturn: 0.04, AnnualVolatility: 0.05, MaxDrawdown: 0.10,
@@ -107,7 +107,7 @@ func testStressInput() *simulation.InputSnapshot {
 			SimulationRuns: 100, StudentTDf: 7, Seed: "42",
 		},
 		Assets: []simulation.SnapshotAsset{{
-			HoldingID: "h1", InstrumentID: "i1", SnapshotID: "s1",
+			HoldingID: "h1", AssetKey: "i1", SnapshotID: "s1",
 			Currency: "CNY", AssetClass: domain.AssetClassEquity, IsCash: false,
 			InitialMinor: 5_000_000_00, TargetWeight: 1.0,
 			ModeledAnnualReturn: 0.07, AnnualVolatility: 0.15, MaxDrawdown: 0.30,

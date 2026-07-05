@@ -3,7 +3,7 @@ package domain
 // FrozenDraftLine captures immutable baseline fields for one holding in a rebalance plan draft.
 type FrozenDraftLine struct {
 	HoldingID                    string  `json:"holding_id"`
-	InstrumentID                 string  `json:"instrument_id"`
+	AssetKey                 string  `json:"asset_key"`
 	BaselineCurrentMinor         int64   `json:"baseline_current_minor"`
 	PlannedCurrentMinor          int64   `json:"planned_current_minor"`
 	FrozenTargetMinor            int64   `json:"frozen_target_minor"`
@@ -35,7 +35,7 @@ func BuildFrozenDraftLines(result RebalanceResult) []FrozenDraftLine {
 		}
 		lines = append(lines, FrozenDraftLine{
 			HoldingID:                    line.HoldingID,
-			InstrumentID:                 line.InstrumentID,
+			AssetKey:                 line.AssetKey,
 			BaselineCurrentMinor:         line.CurrentAmountMinor,
 			PlannedCurrentMinor:          line.CurrentAmountMinor,
 			FrozenTargetMinor:            line.StructuralTargetAmountMinor,

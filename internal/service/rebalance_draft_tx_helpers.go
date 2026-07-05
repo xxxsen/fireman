@@ -29,7 +29,7 @@ func (s *RebalanceDraftService) undoDraftStageTx(
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		return wrapRepo("unmarshal undo payload", err)
 	}
-	line, err := s.drafts.GetLineByID(ctx, draftID, payload.LineID)
+	line, err := s.drafts.GetLineByID(ctx, tx, draftID, payload.LineID)
 	if err != nil {
 		return wrapRepo("get line for undo", err)
 	}
@@ -99,7 +99,8 @@ func buildCommitHoldingsRequest(
 			amount = planned
 		}
 		holdingsReq.Holdings = append(holdingsReq.Holdings, HoldingWriteItem{
-			InstrumentID: h.InstrumentID, Enabled: h.Enabled,
+			AssetKey: h.AssetKey, Enabled: h.Enabled,
+			AssetClass: h.AssetClass, Region: h.Region,
 			WeightWithinGroup: h.WeightWithinGroup, CurrentAmountMinor: amount,
 			SortOrder: h.SortOrder,
 		})

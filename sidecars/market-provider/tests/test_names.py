@@ -117,6 +117,19 @@ def test_mutual_fund_name_map_uses_ttl_not_permanent_cache(tmp_path, monkeypatch
     assert calls["count"] == 2
 
 
+def test_mutual_fund_name_lookup_uses_recorded_fixture(tmp_path, monkeypatch) -> None:
+    """Recorded ak.fund_name_em payload drives lookups without network."""
+    from .dataload import load_dataframe_gz
+
+    cache_path = tmp_path / "mutual_fund_names.json"
+    monkeypatch.setenv("MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH", str(cache_path))
+    sample = load_dataframe_gz("ak_fund_name_em.sample.json.gz")
+
+    register_test_dispatch("fund_name_em", lambda: sample)
+    assert lookup_cn_mutual_fund_name("000001") == "华夏成长混合"
+    assert lookup_cn_mutual_fund_name("110011") == "易方达中小盘混合"
+
+
 def test_mutual_fund_name_map_loads_from_disk_without_upstream(tmp_path, monkeypatch) -> None:
     cache_path = tmp_path / "mutual_fund_names.json"
     monkeypatch.setenv("MARKET_PROVIDER_MUTUAL_FUND_CACHE_PATH", str(cache_path))

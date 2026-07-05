@@ -57,7 +57,8 @@ func buildExecutionCompleteHoldingsRequest(
 			amount = planned
 		}
 		holdingsReq.Holdings = append(holdingsReq.Holdings, HoldingWriteItem{
-			InstrumentID: h.InstrumentID, Enabled: h.Enabled,
+			AssetKey: h.AssetKey, Enabled: h.Enabled,
+			AssetClass: h.AssetClass, Region: h.Region,
 			WeightWithinGroup: h.WeightWithinGroup, CurrentAmountMinor: amount,
 			SortOrder: h.SortOrder,
 		})
@@ -125,6 +126,6 @@ func (s *RebalanceExecutionService) applyExecutionTradeInTx(
 	}
 	execution.CashPoolMinor = newCashPool
 	return s.insertExecutionEventTx(
-		ctx, tx, execution, eventType, line.InstrumentID, req.AmountMinor, newCashPool, payload,
+		ctx, tx, execution, eventType, line.AssetKey, req.AmountMinor, newCashPool, payload,
 	)
 }

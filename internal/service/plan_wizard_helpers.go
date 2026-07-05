@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fireman/fireman/internal/domain"
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
@@ -75,31 +76,43 @@ func wizardHoldingsGap(params repository.PlanParameters, req PlanWizardRequest) 
 	return gap, nil
 }
 
-func (s *PlanService) loadWizardInstruments(
+// validateWizardAssets checks every wizard holding against the market asset
+// directory: existence, active status and user-chosen classification, plus
+// the plan-level asset_key + asset_class + region uniqueness rule.
+func (s *PlanService) validateWizardAssets(
 	ctx context.Context,
 	holdings []WizardHoldingItem,
-	valuationDate string,
-) (map[string]repository.Instrument, error) {
-	instruments := make(map[string]repository.Instrument, len(holdings))
+) error {
+	seen := make(map[string]struct{}, len(holdings))
 	for _, item := range holdings {
-		instRec, err := s.instRepo.GetByID(ctx, item.InstrumentID)
+		if !isValidHoldingAssetClass(item.AssetClass) || !isValidHoldingRegion(item.Region) {
+			return newErr("holding_classification_invalid",
+				"asset_class must be equity/bond/cash and region must be domestic/foreign",
+				map[string]any{"asset_key": item.AssetKey})
+		}
+		dupKey := item.AssetKey + "|" + item.AssetClass + "|" + item.Region
+		if _, ok := seen[dupKey]; ok {
+			return newErr("holding_duplicate",
+				"duplicate asset_key + asset_class + region within the plan",
+				map[string]any{"asset_key": item.AssetKey})
+		}
+		seen[dupKey] = struct{}{}
+		asset, err := s.assetRepo.GetByKey(ctx, item.AssetKey)
 		if err != nil {
-			if errors.Is(err, repository.ErrInstrumentNotFound) {
-				return nil, newErr("instrument_not_found", "instrument not found",
-					map[string]any{"instrument_id": item.InstrumentID})
+			if errors.Is(err, repository.ErrMarketAssetNotFound) {
+				return newErr("market_asset_not_found",
+					"market asset not found; sync the asset directory first",
+					map[string]any{"asset_key": item.AssetKey})
 			}
-			return nil, wrapRepo("get instrument for wizard", err)
+			return wrapRepo("get market asset for wizard", err)
 		}
-		if _, err := EvaluateInstrumentForPlan(ctx, instRec, s.marketRepo, valuationDate); err != nil {
-			return nil, err
+		if !asset.Active && !item.AllowInactive {
+			return newErr("market_asset_inactive",
+				"market asset is inactive; set allow_inactive to keep it",
+				map[string]any{"asset_key": item.AssetKey})
 		}
-		inst, err := s.holdings.GetInstrument(ctx, item.InstrumentID)
-		if err != nil {
-			return nil, wrapRepo("get instrument metadata for wizard", err)
-		}
-		instruments[item.InstrumentID] = inst
 	}
-	return instruments, nil
+	return nil
 }
 
 type wizardPendingSnap struct {
@@ -107,52 +120,75 @@ type wizardPendingSnap struct {
 	skip bool
 }
 
+// buildWizardPendingSnaps builds simulation snapshots for the wizard
+// holdings. Assets without local history get an empty snapshot id (lazy);
+// simulation readiness gates simulation until their history is synced.
 func (s *PlanService) buildWizardPendingSnaps(
 	ctx context.Context,
 	planID, valuationDate string,
 	holdings []WizardHoldingItem,
-) ([]wizardPendingSnap, error) {
+) (map[string]string, []wizardPendingSnap, error) {
+	snapIDs := make(map[string]string, len(holdings))
 	pending := make([]wizardPendingSnap, 0, len(holdings))
 	for _, item := range holdings {
-		snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, item.InstrumentID, valuationDate)
-		if err != nil {
-			return nil, MapSnapshotError(err)
+		if _, ok := snapIDs[item.AssetKey]; ok {
+			continue
 		}
-		pending = append(pending, wizardPendingSnap{
-			snap: snap,
-			skip: snap.ID == repository.SystemCashSnapshotID,
-		})
+		snap, err := s.snapSvc.BuildSnapshotForHolding(ctx, planID, item.AssetKey, valuationDate)
+		if err != nil {
+			var snapErr *marketdata.SnapshotError
+			if errors.As(err, &snapErr) {
+				snapIDs[item.AssetKey] = ""
+				continue
+			}
+			return nil, nil, MapSnapshotError(err)
+		}
+		snapIDs[item.AssetKey] = snap.ID
+		_, isCash := repository.SystemCashSnapshotIDForAsset(item.AssetKey)
+		pending = append(pending, wizardPendingSnap{snap: snap, skip: isCash})
 	}
-	return pending, nil
+	return snapIDs, pending, nil
 }
 
 func buildWizardHoldings(
 	planID string,
 	req PlanWizardRequest,
-	instruments map[string]repository.Instrument,
-	pending []wizardPendingSnap,
+	snapIDs map[string]string,
 	gap int64,
 ) []repository.PlanHolding {
 	built := make([]repository.PlanHolding, 0, len(req.Holdings)+1)
-	for i, item := range req.Holdings {
-		inst := instruments[item.InstrumentID]
-		snap := pending[i].snap
+	for _, item := range req.Holdings {
 		built = append(built, repository.PlanHolding{
 			ID: "hold_" + uuid.New().String(), PlanID: planID,
-			InstrumentID: item.InstrumentID, Enabled: item.Enabled,
-			AssetClass: inst.AssetClass, Region: inst.Region,
+			AssetKey: item.AssetKey, Enabled: item.Enabled,
+			AssetClass: item.AssetClass, Region: item.Region,
 			WeightWithinGroup: item.WeightWithinGroup, CurrentAmountMinor: item.CurrentAmountMinor,
-			SimulationSnapshotID: snap.ID, SortOrder: item.SortOrder,
+			SimulationSnapshotID: snapIDs[item.AssetKey], SortOrder: item.SortOrder,
 		})
 	}
 	if req.ApplyUnallocatedToCash && gap > 100 {
-		built = append(built, repository.PlanHolding{
-			ID: "hold_" + uuid.New().String(), PlanID: planID,
-			InstrumentID: repository.SystemCashInstrumentID, Enabled: true,
-			AssetClass: domain.AssetClassCash, Region: domain.RegionDomestic,
-			WeightWithinGroup: 1.0, CurrentAmountMinor: gap,
-			SimulationSnapshotID: repository.SystemCashSnapshotID, SortOrder: 9999,
-		})
+		// Merge into an existing base-currency cash row so the plan-level
+		// asset_key+asset_class+region uniqueness holds.
+		merged := false
+		for i := range built {
+			if built[i].AssetKey == repository.SystemCashAssetKey &&
+				built[i].AssetClass == domain.AssetClassCash &&
+				built[i].Region == domain.RegionDomestic {
+				built[i].CurrentAmountMinor += gap
+				built[i].Enabled = true
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			built = append(built, repository.PlanHolding{
+				ID: "hold_" + uuid.New().String(), PlanID: planID,
+				AssetKey: repository.SystemCashAssetKey, Enabled: true,
+				AssetClass: domain.AssetClassCash, Region: domain.RegionDomestic,
+				WeightWithinGroup: 1.0, CurrentAmountMinor: gap,
+				SimulationSnapshotID: repository.SystemCashSnapshotID, SortOrder: 9999,
+			})
+		}
 	}
 	return built
 }

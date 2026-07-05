@@ -35,7 +35,7 @@ type RebalanceExecutionLine struct {
 	ID                   string `json:"id"`
 	ExecutionID          string `json:"execution_id"`
 	HoldingID            string `json:"holding_id"`
-	InstrumentID         string `json:"instrument_id"`
+	AssetKey             string `json:"asset_key"`
 	InstrumentCode       string `json:"instrument_code,omitempty"`
 	InstrumentName       string `json:"instrument_name,omitempty"`
 	BaselineCurrentMinor int64  `json:"baseline_current_minor"`
@@ -53,7 +53,7 @@ type RebalanceExecutionEvent struct {
 	ExecutionID        string `json:"execution_id"`
 	Seq                int    `json:"seq"`
 	EventType          string `json:"event_type"`
-	InstrumentID       string `json:"instrument_id,omitempty"`
+	AssetKey           string `json:"asset_key,omitempty"`
 	AmountMinor        int64  `json:"amount_minor"`
 	CashPoolAfterMinor int64  `json:"cash_pool_after_minor"`
 	PayloadJSON        string `json:"payload_json"`
@@ -249,11 +249,11 @@ func (r *RebalanceExecutionRepo) CreateTx(
 		if _, err := exec.ExecContext(
 			ctx, `
 			INSERT INTO rebalance_execution_lines (
-				id, execution_id, holding_id, instrument_id,
+				id, execution_id, holding_id, asset_key,
 				baseline_current_minor, target_delta_minor, executed_delta_minor,
 				remaining_delta_minor, action_direction, execution_status, sort_order
 			) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			line.ID, execution.ID, line.HoldingID, line.InstrumentID,
+			line.ID, execution.ID, line.HoldingID, line.AssetKey,
 			line.BaselineCurrentMinor, line.TargetDeltaMinor, line.ExecutedDeltaMinor,
 			line.RemainingDeltaMinor, line.ActionDirection, line.ExecutionStatus, line.SortOrder,
 		); err != nil {
@@ -267,7 +267,7 @@ func (r *RebalanceExecutionRepo) ListLines(ctx context.Context, executionID stri
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+executionLineSelectCols+`
 		FROM rebalance_execution_lines l
-		JOIN instruments i ON i.id = l.instrument_id
+		LEFT JOIN market_assets a ON a.asset_key = l.asset_key
 		WHERE l.execution_id=?
 		ORDER BY l.sort_order, l.holding_id`, executionID)
 	if err != nil {
@@ -278,7 +278,7 @@ func (r *RebalanceExecutionRepo) ListLines(ctx context.Context, executionID stri
 	for rows.Next() {
 		var line RebalanceExecutionLine
 		if err := rows.Scan(
-			&line.ID, &line.ExecutionID, &line.HoldingID, &line.InstrumentID,
+			&line.ID, &line.ExecutionID, &line.HoldingID, &line.AssetKey,
 			&line.BaselineCurrentMinor, &line.TargetDeltaMinor, &line.ExecutedDeltaMinor,
 			&line.RemainingDeltaMinor, &line.ActionDirection, &line.ExecutionStatus, &line.SortOrder,
 			&line.InstrumentCode, &line.InstrumentName,
@@ -291,10 +291,10 @@ func (r *RebalanceExecutionRepo) ListLines(ctx context.Context, executionID stri
 }
 
 const executionLineSelectCols = `
-		l.id, l.execution_id, l.holding_id, l.instrument_id,
+		l.id, l.execution_id, l.holding_id, l.asset_key,
 		l.baseline_current_minor, l.target_delta_minor, l.executed_delta_minor,
 		l.remaining_delta_minor, l.action_direction, l.execution_status, l.sort_order,
-		i.code, i.name`
+		COALESCE(a.symbol, ''), COALESCE(a.name, '')`
 
 func (r *RebalanceExecutionRepo) GetLineByIDTx(
 	ctx context.Context, tx *sql.Tx, executionID, lineID string,
@@ -303,9 +303,9 @@ func (r *RebalanceExecutionRepo) GetLineByIDTx(
 	err := r.queryRow(ctx, tx, `
 		SELECT `+executionLineSelectCols+`
 		FROM rebalance_execution_lines l
-		JOIN instruments i ON i.id = l.instrument_id
+		LEFT JOIN market_assets a ON a.asset_key = l.asset_key
 		WHERE l.execution_id=? AND l.id=?`, executionID, lineID).Scan(
-		&line.ID, &line.ExecutionID, &line.HoldingID, &line.InstrumentID,
+		&line.ID, &line.ExecutionID, &line.HoldingID, &line.AssetKey,
 		&line.BaselineCurrentMinor, &line.TargetDeltaMinor, &line.ExecutedDeltaMinor,
 		&line.RemainingDeltaMinor, &line.ActionDirection, &line.ExecutionStatus, &line.SortOrder,
 		&line.InstrumentCode, &line.InstrumentName,
@@ -326,9 +326,9 @@ func (r *RebalanceExecutionRepo) GetLineByID(
 	err := r.db.QueryRowContext(ctx, `
 		SELECT `+executionLineSelectCols+`
 		FROM rebalance_execution_lines l
-		JOIN instruments i ON i.id = l.instrument_id
+		LEFT JOIN market_assets a ON a.asset_key = l.asset_key
 		WHERE l.execution_id=? AND l.id=?`, executionID, lineID).Scan(
-		&line.ID, &line.ExecutionID, &line.HoldingID, &line.InstrumentID,
+		&line.ID, &line.ExecutionID, &line.HoldingID, &line.AssetKey,
 		&line.BaselineCurrentMinor, &line.TargetDeltaMinor, &line.ExecutedDeltaMinor,
 		&line.RemainingDeltaMinor, &line.ActionDirection, &line.ExecutionStatus, &line.SortOrder,
 		&line.InstrumentCode, &line.InstrumentName,
@@ -393,20 +393,20 @@ func (r *RebalanceExecutionRepo) ListEvents(
 ) ([]RebalanceExecutionEvent, error) {
 	return queryCollect(
 		ctx, r.db, `
-		SELECT id, execution_id, seq, event_type, instrument_id, amount_minor,
+		SELECT id, execution_id, seq, event_type, asset_key, amount_minor,
 			cash_pool_after_minor, payload_json, created_at
 		FROM rebalance_execution_events WHERE execution_id=? ORDER BY seq ASC`, []any{executionID},
 		func(rows *sql.Rows) (RebalanceExecutionEvent, error) {
 			var e RebalanceExecutionEvent
-			var instID sql.NullString
+			var assetKey sql.NullString
 			if err := rows.Scan(
-				&e.ID, &e.ExecutionID, &e.Seq, &e.EventType, &instID,
+				&e.ID, &e.ExecutionID, &e.Seq, &e.EventType, &assetKey,
 				&e.AmountMinor, &e.CashPoolAfterMinor, &e.PayloadJSON, &e.CreatedAt,
 			); err != nil {
 				return RebalanceExecutionEvent{}, wrapSQL("scan rebalance execution event", err)
 			}
-			if instID.Valid {
-				e.InstrumentID = instID.String
+			if assetKey.Valid {
+				e.AssetKey = assetKey.String
 			}
 			return e, nil
 		},
@@ -431,17 +431,17 @@ func (r *RebalanceExecutionRepo) InsertEventTx(ctx context.Context, tx *sql.Tx, 
 	if event.CreatedAt == 0 {
 		event.CreatedAt = time.Now().UnixMilli()
 	}
-	var instID any
-	if event.InstrumentID != "" {
-		instID = event.InstrumentID
+	var assetKey any
+	if event.AssetKey != "" {
+		assetKey = event.AssetKey
 	}
 	_, err := r.exec(tx).ExecContext(
 		ctx, `
 		INSERT INTO rebalance_execution_events (
-			id, execution_id, seq, event_type, instrument_id, amount_minor,
+			id, execution_id, seq, event_type, asset_key, amount_minor,
 			cash_pool_after_minor, payload_json, created_at
 		) VALUES (?,?,?,?,?,?,?,?,?)`,
-		event.ID, event.ExecutionID, event.Seq, event.EventType, instID, event.AmountMinor,
+		event.ID, event.ExecutionID, event.Seq, event.EventType, assetKey, event.AmountMinor,
 		event.CashPoolAfterMinor, event.PayloadJSON, event.CreatedAt,
 	)
 	return wrapSQL("insert rebalance execution event", err)

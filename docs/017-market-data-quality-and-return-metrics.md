@@ -1,8 +1,10 @@
 # 市场数据质量、收益指标与模拟准入
 
+> **注**：本文中「资产资料库 / `instruments` API / `instrument_library_metrics` 投影」相关内容已被市场资产目录模型取代——计划持仓直接引用 `market_assets.asset_key`，收益投影迁移至 `market_asset_detail_projections`；最终架构见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。完整自然年、质量指标与模拟准入口径仍然有效。
+
 ## 目的
 
-Fireman 的资产资料库、计划持仓和 FIRE 模拟共用同一套行情质量与收益指标口径。本文整理已实现的规则，避免资料库展示、模拟快照和资产准入各自解释历史数据。
+Fireman 的资产目录、计划持仓和 FIRE 模拟共用同一套行情质量与收益指标口径。本文整理已实现的规则，避免目录展示、模拟快照和资产准入各自解释历史数据。
 
 ## 完整自然年
 

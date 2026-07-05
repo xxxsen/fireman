@@ -3,7 +3,18 @@ package service
 import (
 	"errors"
 	"strings"
+
+	"github.com/fireman/fireman/internal/marketdata"
 )
+
+// MapSnapshotError converts snapshot errors to AppError.
+func MapSnapshotError(err error) error {
+	var se *marketdata.SnapshotError
+	if errors.As(err, &se) {
+		return newErr(se.Code, se.Message, se.Details)
+	}
+	return err
+}
 
 var (
 	ErrNotFound          = errors.New("not found")

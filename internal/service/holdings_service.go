@@ -13,15 +13,19 @@ import (
 )
 
 // HoldingWriteItem contains the client-writable fields of a plan holding.
+// asset_class/region are chosen by the user (never inferred from the asset
+// type). AllowInactive lets the client keep an asset that has left the
+// upstream directory listing.
 type HoldingWriteItem struct {
-	InstrumentID       string  `json:"instrument_id"`
+	AssetKey           string  `json:"asset_key"`
+	AssetClass         string  `json:"asset_class"`
+	Region             string  `json:"region"`
 	Enabled            bool    `json:"enabled"`
 	WeightWithinGroup  float64 `json:"weight_within_group"`
 	CurrentAmountMinor int64   `json:"current_amount_minor"`
 	SortOrder          int     `json:"sort_order"`
-	// Read-only fields rejected if present in raw JSON — checked at API layer.
-	AssetClass           *string `json:"asset_class,omitempty"`
-	Region               *string `json:"region,omitempty"`
+	AllowInactive      bool    `json:"allow_inactive,omitempty"`
+	// Read-only field rejected if present in raw JSON — checked at API layer.
 	SimulationSnapshotID *string `json:"simulation_snapshot_id,omitempty"`
 }
 
@@ -33,12 +37,11 @@ type HoldingsUpdateRequest struct {
 
 // HoldingsService manages plan holdings.
 type HoldingsService struct {
-	sql        *sql.DB
-	plans      *repository.PlanRepo
-	holdings   *repository.HoldingsRepo
-	snapSvc    *marketdata.SnapshotService
-	instRepo   *repository.InstrumentRepo
-	marketRepo *repository.MarketDataRepo
+	sql       *sql.DB
+	plans     *repository.PlanRepo
+	holdings  *repository.HoldingsRepo
+	snapSvc   *marketdata.SnapshotService
+	assetRepo *repository.MarketAssetRepo
 }
 
 func NewHoldingsService(
@@ -46,12 +49,11 @@ func NewHoldingsService(
 	plans *repository.PlanRepo,
 	holdings *repository.HoldingsRepo,
 	snapSvc *marketdata.SnapshotService,
-	instRepo *repository.InstrumentRepo,
-	marketRepo *repository.MarketDataRepo,
+	assetRepo *repository.MarketAssetRepo,
 ) *HoldingsService {
 	return &HoldingsService{
 		sql: sqlDB, plans: plans, holdings: holdings, snapSvc: snapSvc,
-		instRepo: instRepo, marketRepo: marketRepo,
+		assetRepo: assetRepo,
 	}
 }
 
@@ -137,22 +139,38 @@ func (s *HoldingsService) prepareHoldingsUpdateWithPendingBumps(ctx context.Cont
 	if err != nil {
 		return nil, fmt.Errorf("list existing holdings: %w", err)
 	}
+	// Only reuse non-empty snapshots: a holding saved lazily (no history at
+	// the time) retries the build on every save so it heals once history
+	// arrives.
 	existingSnap := make(map[string]string)
-	existingClass := make(map[string]frozenClassification)
 	for _, h := range existing {
-		existingSnap[h.InstrumentID] = h.SimulationSnapshotID
-		existingClass[h.InstrumentID] = frozenClassification{assetClass: h.AssetClass, region: h.Region}
+		if h.SimulationSnapshotID != "" {
+			existingSnap[h.AssetKey] = h.SimulationSnapshotID
+		}
 	}
 
+	seen := make(map[string]struct{}, len(req.Holdings))
 	pendingSnaps := make([]pendingHoldingSnap, 0)
 	built := make([]repository.PlanHolding, 0, len(req.Holdings))
 	for _, item := range req.Holdings {
-		holding, pending, err := s.buildOnePreparedHolding(ctx, plan, item, existingSnap, existingClass)
+		dupKey := item.AssetKey + "|" + item.AssetClass + "|" + item.Region
+		if _, ok := seen[dupKey]; ok {
+			return nil, newErr("holding_duplicate",
+				"duplicate asset_key + asset_class + region within the plan",
+				map[string]any{"asset_key": item.AssetKey})
+		}
+		seen[dupKey] = struct{}{}
+		holding, pending, err := s.buildOnePreparedHolding(ctx, plan, item, existingSnap)
 		if err != nil {
 			return nil, err
 		}
 		if pending != nil {
 			pendingSnaps = append(pendingSnaps, *pending)
+		}
+		// Rows sharing one asset_key (different classification) share the
+		// snapshot; record it so later rows in this request reuse it.
+		if holding.SimulationSnapshotID != "" {
+			existingSnap[item.AssetKey] = holding.SimulationSnapshotID
 		}
 		built = append(built, holding)
 	}

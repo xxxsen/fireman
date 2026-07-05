@@ -351,7 +351,7 @@ export default function RebalanceExecutionWorkspacePage() {
                 <tr key={line.id} className="border-t border-line">
                   <td className="px-3 py-2">
                     <Link
-                      href={`/assets/${line.instrument_id}`}
+                      href={`/assets/market/${encodeURIComponent(line.asset_key)}`}
                       className="font-medium text-brand underline-offset-2 hover:underline"
                     >
                       {line.instrument_name ?? line.instrument_code}
@@ -421,7 +421,7 @@ export default function RebalanceExecutionWorkspacePage() {
               <div key={line.id} className="px-4 py-3">
                 <div className="flex items-start justify-between gap-2">
                   <Link
-                    href={`/assets/${line.instrument_id}`}
+                    href={`/assets/market/${encodeURIComponent(line.asset_key)}`}
                     className="font-medium text-brand underline-offset-2 hover:underline"
                   >
                     {line.instrument_name ?? line.instrument_code}

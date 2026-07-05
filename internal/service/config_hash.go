@@ -142,14 +142,14 @@ func regionToMaps(targets []repository.RegionTarget) []map[string]any {
 func holdingsToMaps(holds []repository.PlanHolding,
 	overrides []repository.PlanReturnOverride,
 ) []map[string]any {
-	byInstrument := make(map[string]repository.PlanReturnOverride, len(overrides))
+	byAsset := make(map[string]repository.PlanReturnOverride, len(overrides))
 	for _, o := range overrides {
-		byInstrument[o.InstrumentID] = o
+		byAsset[o.AssetKey] = o
 	}
 	out := make([]map[string]any, 0, len(holds))
 	for _, h := range holds {
 		m := map[string]any{
-			"instrument_id": h.InstrumentID, "enabled": h.Enabled,
+			"asset_key": h.AssetKey, "enabled": h.Enabled,
 			"weight_within_group":    h.WeightWithinGroup,
 			"current_amount_minor":   h.CurrentAmountMinor,
 			"simulation_snapshot_id": h.SimulationSnapshotID,
@@ -157,8 +157,8 @@ func holdingsToMaps(holds []repository.PlanHolding,
 		}
 		// Fold the asset-level override into the hash so editing it marks existing
 		// runs stale and changes the input hash. Overrides for
-		// instruments not held don't affect simulation, so they're ignored here.
-		if o, ok := byInstrument[h.InstrumentID]; ok {
+		// assets not held don't affect simulation, so they're ignored here.
+		if o, ok := byAsset[h.AssetKey]; ok {
 			m["override_forward_return"] = o.ForwardReturn
 			m["override_annual_volatility"] = o.AnnualVolatility
 			m["override_reason"] = o.Reason

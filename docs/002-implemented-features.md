@@ -48,7 +48,7 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| AKShare sidecar | `POST /v1/instruments/fetch`、`POST /v1/instruments/resolve` |
+| 市场数据 worker sidecar | 纯任务 worker（对外仅 `GET /healthz`）；Go 建任务、sidecar 执行、Go post-process 落库，见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md) |
 | 支持市场 | CN（场内 ETF/LOF、A 股、公募基金）、HK、US |
 | TickFlow 优先行情源 | 可选（默认关闭）：已解析 A 股与场内 `etf/index_etf` 在未复权口径下优先 `tickflow.klines:1d`，未命中自动回退 AKShare；LOF/公募基金/resolve 不接入；官方 SDK 接入，支持 free/paid（API key）两种模式 |
 | 数据清洗 | 日收益异常检测、年度收益、CAGR/波动/回撤指标 |
@@ -72,34 +72,24 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 
 - **1 天 TTL**（`MARKET_PROVIDER_MUTUAL_FUND_CACHE_TTL`，默认 86400s）+ 磁盘快照（Docker volume `/cache`）
 - 过期同步刷新 + **singleflight** 去重；失败时未过期旧数据继续服务
-- 启动后台预热；`POST /v1/metadata/refresh` 手动强制刷新
-- `fund_name_em` 专用 60s 超时，不受 5s resolve deadline 限制
+- 启动后台预热（可用 `MARKET_PROVIDER_STARTUP_WARM_ENABLED=false` 关闭）
+- `fund_name_em` 专用 60s 超时
 
-详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md)、[001-asset-import.md](./001-asset-import.md) 与 [017-market-data-quality-and-return-metrics.md](./017-market-data-quality-and-return-metrics.md)。
+详见 [003-mutual-fund-cache-wizard-holdings.md](./003-mutual-fund-cache-wizard-holdings.md) 与 [017-market-data-quality-and-return-metrics.md](./017-market-data-quality-and-return-metrics.md)。
 
 ---
 
-## 4. 资产异步录入
+## 4. 计划持仓直接引用市场资产
 
 | 能力 | 说明 |
 | --- | --- |
-| 轻量 resolve | 只查 spot/名称，不拉全量历史 |
-| 编码去歧义 | 多候选时前端选择；`candidate_id` 稳定标识 |
-| Resolution ticket | 15 分钟 TTL，一次性消费（migration 0005） |
-| 异步抓取 | `POST /import-async` → 占位 `pending_fetch` → Worker 单次全量 fetch |
-| 任务幂等 | 同一 `(market, type, code, adjust)` 仅一条 queued/running job |
-| 计划门禁 | 非 `active` 或质量不足标的不可加入 FIRE 计划 |
-| 抓取状态 | `GET /fetch-status`；失败可 `POST /retry-fetch` |
-| 取消恢复 | 运行中取消 → `fetch_failed` + 可重试 |
-| 类型不匹配提示 | 场外公募基金误选场内类型 → `instrument_type_mismatch` + 前端自动切换 |
+| 全局资产目录 | `market_assets` 由后台任务同步；无“用户录入/资产库”中间层 |
+| 持仓引用 | `plan_holdings.asset_key` 直接引用目录；系统现金为内置资产（`SYS\|cash\|\|CNY` 等） |
+| 用户指定分类 | 持仓的 `asset_class`（equity/bond/cash）与 `region` 由用户选择，不从资产类型硬编码推断 |
+| 懒快照 | 缺历史的资产可先保存到计划；模拟前由 readiness 检查拦截（`market_asset_history_missing`） |
+| 一键补历史 | `POST /plans/{id}/sync-missing-asset-history` 批量创建/复用历史同步任务 |
 
-### 4.1 用户指定资产类别（近期增强）
-
-- 确认页必选 **equity / bond / cash**，不再依赖 AKShare 自动分类
-- 抓取完成后以用户选择为准写入 `asset_class`
-- resolve 阶段名称（如「长城短债A」）在 fetch 返回裸码时 **不会被覆盖**
-
-详见 [asset-import.md](./asset-import.md)。
+详见 [021-market-data-task-worker-architecture.md](./021-market-data-task-worker-architecture.md)。
 
 ---
 
@@ -131,9 +121,8 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | `/plans/{id}/rebalance/executions` | 多日调仓执行列表 |
 | `/plans/{id}/rebalance/executions/{executionId}` | 调仓执行工作区：登记卖出、买入、备注、完成或取消 |
 | `/plans/{id}/settings` | 切换当前计划使用的配置模板、编辑计划参数、运行模拟 |
-| `/assets` | 全局资产资料库 |
-| `/assets/import` | AKShare 解析 → 选类 → 异步抓取 |
-| `/assets/{id}` | 详情、年度收益、抓取进度 |
+| `/assets` | 全市场资产目录（同步状态面板、筛选、分页）|
+| `/assets/market/{assetKey}` | 市场资产详情、历史同步、年度收益 |
 | `/scenarios` | 全局配置模板管理 |
 | `/settings` | 备份与恢复 |
 

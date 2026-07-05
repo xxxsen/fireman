@@ -94,7 +94,7 @@ func TestConfigHashStudentTDfLegacySemantics(t *testing.T) {
 // editing one (for a held instrument) must change the config hash that marks
 // existing runs stale.
 func TestConfigHashChangesWithReturnOverride(t *testing.T) {
-	holds := []repository.PlanHolding{{InstrumentID: "ins_1", Enabled: true, WeightWithinGroup: 1}}
+	holds := []repository.PlanHolding{{AssetKey: "ins_1", Enabled: true, WeightWithinGroup: 1}}
 	hashOf := func(overrides []repository.PlanReturnOverride) string {
 		h, err := domain.ComputeConfigHash(domain.ConfigHashInput{
 			PlanID:   "plan_1",
@@ -109,7 +109,7 @@ func TestConfigHashChangesWithReturnOverride(t *testing.T) {
 	r := 0.2
 	base := hashOf(nil)
 	added := hashOf([]repository.PlanReturnOverride{
-		{InstrumentID: "ins_1", ForwardReturn: &r, Reason: "x", ExpiresAt: "2099-12-31"},
+		{AssetKey: "ins_1", ForwardReturn: &r, Reason: "x", ExpiresAt: "2099-12-31"},
 	})
 	if base == added {
 		t.Fatal("adding an override must change the config hash")
@@ -117,7 +117,7 @@ func TestConfigHashChangesWithReturnOverride(t *testing.T) {
 
 	r2 := 0.3
 	edited := hashOf([]repository.PlanReturnOverride{
-		{InstrumentID: "ins_1", ForwardReturn: &r2, Reason: "x", ExpiresAt: "2099-12-31"},
+		{AssetKey: "ins_1", ForwardReturn: &r2, Reason: "x", ExpiresAt: "2099-12-31"},
 	})
 	if edited == added {
 		t.Fatal("editing an override's value must change the config hash")
@@ -126,7 +126,7 @@ func TestConfigHashChangesWithReturnOverride(t *testing.T) {
 	// An override for an instrument the plan does not hold has no simulation
 	// effect, so it must not change the hash.
 	unrelated := hashOf([]repository.PlanReturnOverride{
-		{InstrumentID: "ins_other", ForwardReturn: &r, Reason: "x", ExpiresAt: "2099-12-31"},
+		{AssetKey: "ins_other", ForwardReturn: &r, Reason: "x", ExpiresAt: "2099-12-31"},
 	})
 	if unrelated != base {
 		t.Fatal("override for an unheld instrument must not change the config hash")

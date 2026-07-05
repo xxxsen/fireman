@@ -15,9 +15,8 @@ func TestSnapshotMonthsRoundTripAndCascade(t *testing.T) {
 	ctx := context.Background()
 	repo := NewSnapshotRepo(db)
 
-	if err := repo.EnsureInstrument(ctx, Instrument{
-		ID: "ins_m", Code: "M001", Name: "月度", Market: "CN",
-		AssetClass: "equity", Region: "domestic", Currency: "CNY",
+	if err := repo.EnsureMarketAsset(ctx, MarketAsset{
+		AssetKey: "CN|test|sh|M001", Symbol: "M001", Name: "月度",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +35,7 @@ func TestSnapshotMonthsRoundTripAndCascade(t *testing.T) {
 		{Year: 2024, Month: 3, LogReturn: 0.03},
 	}
 	if err := repo.CreatePlanSnapshot(ctx, nil, SimulationSnapshot{
-		ID: snapID, InstrumentID: "ins_m", PlanID: &planID,
+		ID: snapID, AssetKey: "CN|test|sh|M001", PlanID: &planID,
 		InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
 		CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 3,
 		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -63,7 +62,7 @@ func TestSnapshotMonthsRoundTripAndCascade(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `DELETE FROM instrument_simulation_snapshots WHERE id=?`, snapID); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM market_asset_simulation_snapshots WHERE id=?`, snapID); err != nil {
 		t.Fatal(err)
 	}
 	after, err := repo.ListSnapshotMonths(ctx, snapID)

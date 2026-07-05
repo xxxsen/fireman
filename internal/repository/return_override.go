@@ -13,7 +13,7 @@ import (
 // when that dimension is not overridden.
 type PlanReturnOverride struct {
 	PlanID           string
-	InstrumentID     string
+	AssetKey         string
 	ForwardReturn    *float64
 	AnnualVolatility *float64
 	Reason           string
@@ -22,7 +22,7 @@ type PlanReturnOverride struct {
 	UpdatedAt        int64
 }
 
-// ReturnOverrideRepo persists per-plan, per-instrument return overrides.
+// ReturnOverrideRepo persists per-plan, per-asset return overrides.
 type ReturnOverrideRepo struct {
 	db *sql.DB
 }
@@ -31,13 +31,13 @@ func NewReturnOverrideRepo(db *sql.DB) *ReturnOverrideRepo {
 	return &ReturnOverrideRepo{db: db}
 }
 
-// ListByPlan returns all overrides configured for a plan, ordered by instrument.
+// ListByPlan returns all overrides configured for a plan, ordered by asset key.
 func (r *ReturnOverrideRepo) ListByPlan(ctx context.Context, planID string) ([]PlanReturnOverride, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT plan_id, instrument_id, forward_return, annual_volatility,
+		SELECT plan_id, asset_key, forward_return, annual_volatility,
 		       reason, expires_at, created_at, updated_at
 		FROM plan_return_assumption_overrides
-		WHERE plan_id=? ORDER BY instrument_id`, planID)
+		WHERE plan_id=? ORDER BY asset_key`, planID)
 	if err != nil {
 		return nil, wrapSQL("list return overrides", err)
 	}
@@ -45,7 +45,7 @@ func (r *ReturnOverrideRepo) ListByPlan(ctx context.Context, planID string) ([]P
 	var out []PlanReturnOverride
 	for rows.Next() {
 		var o PlanReturnOverride
-		if err := rows.Scan(&o.PlanID, &o.InstrumentID, &o.ForwardReturn, &o.AnnualVolatility,
+		if err := rows.Scan(&o.PlanID, &o.AssetKey, &o.ForwardReturn, &o.AnnualVolatility,
 			&o.Reason, &o.ExpiresAt, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			return nil, wrapSQL("scan return override", err)
 		}
@@ -71,22 +71,22 @@ func (r *ReturnOverrideRepo) Upsert(ctx context.Context, tx *sql.Tx, o PlanRetur
 	}
 	err := exec(`
 		INSERT INTO plan_return_assumption_overrides (
-			plan_id, instrument_id, forward_return, annual_volatility,
+			plan_id, asset_key, forward_return, annual_volatility,
 			reason, expires_at, created_at, updated_at
 		) VALUES (?,?,?,?,?,?,?,?)
-		ON CONFLICT(plan_id, instrument_id) DO UPDATE SET
+		ON CONFLICT(plan_id, asset_key) DO UPDATE SET
 			forward_return=excluded.forward_return,
 			annual_volatility=excluded.annual_volatility,
 			reason=excluded.reason,
 			expires_at=excluded.expires_at,
 			updated_at=excluded.updated_at`,
-		o.PlanID, o.InstrumentID, o.ForwardReturn, o.AnnualVolatility,
+		o.PlanID, o.AssetKey, o.ForwardReturn, o.AnnualVolatility,
 		o.Reason, o.ExpiresAt, o.CreatedAt, now)
 	return err
 }
 
 // Delete removes an override; deleting a missing override is a no-op.
-func (r *ReturnOverrideRepo) Delete(ctx context.Context, tx *sql.Tx, planID, instrumentID string) error {
+func (r *ReturnOverrideRepo) Delete(ctx context.Context, tx *sql.Tx, planID, assetKey string) error {
 	exec := func(q string, args ...any) error {
 		var e error
 		if tx != nil {
@@ -96,6 +96,6 @@ func (r *ReturnOverrideRepo) Delete(ctx context.Context, tx *sql.Tx, planID, ins
 		}
 		return wrapSQL("exec return override sql", e)
 	}
-	return exec(`DELETE FROM plan_return_assumption_overrides WHERE plan_id=? AND instrument_id=?`,
-		planID, instrumentID)
+	return exec(`DELETE FROM plan_return_assumption_overrides WHERE plan_id=? AND asset_key=?`,
+		planID, assetKey)
 }

@@ -302,6 +302,29 @@ def test_try_tickflow_klines_converts_payload(monkeypatch: pytest.MonkeyPatch) -
     assert isinstance(call["end_time"], int)
 
 
+def test_try_tickflow_klines_converts_recorded_159032_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recorded 159032 daily klines payload converts without hitting the network."""
+    from .dataload import load_json_gz
+
+    _enable_tickflow(monkeypatch)
+    fixture = load_json_gz("tickflow_159032_1d.json.gz")
+    fake = _FakeClient(result=fixture["result"])
+    with _patch_client(fake):
+        df = try_tickflow_klines(
+            _stock_request(source_code="159032"),
+            fixture["symbol"],
+            "20240101",
+            "20240131",
+        )
+    assert df is not None
+    assert [str(d) for d in df["日期"]] == ["2024-01-02", "2024-01-03", "2024-01-04"]
+    assert list(df["收盘"]) == fixture["result"]["close"]
+    assert fake.calls[0]["symbol"] == "159032.SZ"
+    assert fake.calls[0]["adjust"] == fixture["adjust"]
+
+
 def test_try_tickflow_klines_filters_to_requested_range(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_tickflow(monkeypatch)
     payload = _payload([_TS_20240102, _TS_20240103, _TS_20240104], [10.2, 10.3, 10.4])

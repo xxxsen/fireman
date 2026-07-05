@@ -150,7 +150,7 @@ func (s *SystemService) ExportTargetsCSV(ctx context.Context, planID string) ([]
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
 	_ = w.Write([]string{
-		"instrument_id", "asset_class", "region", "weight_within_group", "portfolio_target_weight",
+		"asset_key", "asset_class", "region", "weight_within_group", "portfolio_target_weight",
 		"target_amount_minor", "current_amount_minor",
 	})
 	for _, h := range targets.Holdings {
@@ -158,7 +158,7 @@ func (s *SystemService) ExportTargetsCSV(ctx context.Context, planID string) ([]
 			continue
 		}
 		_ = w.Write([]string{
-			h.InstrumentID,
+			h.AssetKey,
 			h.AssetClass,
 			h.Region,
 			fmt.Sprintf("%.6f", h.WeightWithinGroup),
@@ -179,7 +179,7 @@ func (s *SystemService) ExportRebalanceCSV(ctx context.Context, planID string) (
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
 	_ = w.Write([]string{
-		"instrument_id", "structural_action", "structural_suggested_trade_minor",
+		"asset_key", "structural_action", "structural_suggested_trade_minor",
 		"structural_gap_weight", "portfolio_target_weight", "structural_current_weight",
 		"plan_scale_action", "plan_scale_suggested_trade_minor",
 	})
@@ -188,7 +188,7 @@ func (s *SystemService) ExportRebalanceCSV(ctx context.Context, planID string) (
 			continue
 		}
 		_ = w.Write([]string{
-			line.InstrumentID,
+			line.AssetKey,
 			line.Action,
 			fmt.Sprintf("%d", line.SuggestedTradeMinor),
 			fmt.Sprintf("%.6f", line.StructuralGapWeight),

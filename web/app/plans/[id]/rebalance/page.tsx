@@ -92,10 +92,10 @@ export default function RebalancePage() {
   const draft = activeDraft.data;
   const draftInProgress = !!draft?.draft;
 
-  const executionLineByInstrument = useMemo(() => {
+  const executionLineByAsset = useMemo(() => {
     const map = new Map<string, { status: string; remaining_delta_minor: number }>();
     for (const line of active?.lines ?? []) {
-      map.set(line.instrument_id, {
+      map.set(line.asset_key, {
         status: line.execution_status,
         remaining_delta_minor: line.remaining_delta_minor,
       });
@@ -206,8 +206,8 @@ export default function RebalancePage() {
 
   const holdingCardRow = (row: RebalanceWorkspaceRow) => {
     const execLine =
-      row.level === "holding" && row.instrument_id
-        ? executionLineByInstrument.get(row.instrument_id)
+      row.level === "holding" && row.asset_key
+        ? executionLineByAsset.get(row.asset_key)
         : undefined;
     const execHint = execLine
       ? lineStatusHint(execLine.status, execLine.remaining_delta_minor)
@@ -216,9 +216,9 @@ export default function RebalancePage() {
       <div key={row.key} className="px-4 py-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            {row.instrument_id ? (
+            {row.asset_key ? (
               <Link
-                href={`/assets/${row.instrument_id}`}
+                href={`/assets/market/${encodeURIComponent(row.asset_key)}`}
                 className="font-medium text-brand underline-offset-2 hover:underline"
               >
                 {row.label}
@@ -437,8 +437,8 @@ export default function RebalancePage() {
               <tbody>
                 {workspaceRows.map((row) => {
                   const execLine =
-                    row.level === "holding" && row.instrument_id
-                      ? executionLineByInstrument.get(row.instrument_id)
+                    row.level === "holding" && row.asset_key
+                      ? executionLineByAsset.get(row.asset_key)
                       : undefined;
                   const execHint = execLine
                     ? lineStatusHint(execLine.status, execLine.remaining_delta_minor)
@@ -451,9 +451,9 @@ export default function RebalancePage() {
                       }`}
                     >
                       <td className={`px-3 py-2 ${dimensionClass(row)}`}>
-                        {row.level === "holding" && row.instrument_id ? (
+                        {row.level === "holding" && row.asset_key ? (
                           <Link
-                            href={`/assets/${row.instrument_id}`}
+                            href={`/assets/market/${encodeURIComponent(row.asset_key)}`}
                             className="font-medium text-brand underline-offset-2 hover:underline"
                           >
                             {dimensionLabel(row)}

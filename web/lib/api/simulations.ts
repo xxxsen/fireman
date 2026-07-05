@@ -47,7 +47,7 @@ export function getReturnOverrides(
 
 export function setReturnOverride(
   planId: string,
-  instrumentId: string,
+  assetKey: string,
   body: {
     forward_return: number | null;
     annual_volatility: number | null;
@@ -55,14 +55,54 @@ export function setReturnOverride(
     expires_at: string;
   },
 ): Promise<ReturnOverride> {
-  return apiPut(`/api/v1/plans/${planId}/return-overrides/${instrumentId}`, body);
+  return apiPut(
+    `/api/v1/plans/${planId}/return-overrides/${encodeURIComponent(assetKey)}`,
+    body,
+  );
 }
 
 export function deleteReturnOverride(
   planId: string,
-  instrumentId: string,
+  assetKey: string,
 ): Promise<{ deleted: boolean }> {
-  return apiDelete(`/api/v1/plans/${planId}/return-overrides/${instrumentId}`);
+  return apiDelete(
+    `/api/v1/plans/${planId}/return-overrides/${encodeURIComponent(assetKey)}`,
+  );
+}
+
+// ---- Simulation readiness (missing asset history gate) ----
+
+export interface MissingHistoryItem {
+  holding_id: string;
+  asset_key: string;
+  symbol: string;
+  name: string;
+  reason: string;
+}
+
+export interface SimulationReadiness {
+  ready: boolean;
+  missing_history: MissingHistoryItem[];
+  active_tasks: import("@/lib/api/market-assets").WorkerTask[];
+}
+
+export function getSimulationReadiness(planId: string): Promise<SimulationReadiness> {
+  return apiGet(`/api/v1/plans/${planId}/simulation-readiness`);
+}
+
+export interface SyncMissingAssetEntry {
+  asset_key: string;
+  task?: import("@/lib/api/market-assets").WorkerTask | null;
+}
+
+export interface SyncMissingHistoryResult {
+  created: SyncMissingAssetEntry[];
+  existing: SyncMissingAssetEntry[];
+  ready: SyncMissingAssetEntry[];
+}
+
+export function syncMissingAssetHistory(planId: string): Promise<SyncMissingHistoryResult> {
+  return apiPost(`/api/v1/plans/${planId}/sync-missing-asset-history`, {});
 }
 
 export function getJob(jobId: string) {

@@ -55,7 +55,7 @@ func (s *RebalanceDraftService) recordCommitSnapshot(
 			amount = planned
 		}
 		items = append(items, repository.PortfolioSnapshotItem{
-			InstrumentID: h.InstrumentID, AmountMinor: amount,
+			AssetKey: h.AssetKey, AmountMinor: amount,
 		})
 		total += amount
 	}

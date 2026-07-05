@@ -23,7 +23,7 @@ const targets: TargetView = {
   holdings: [
     {
       holding_id: "h1",
-      instrument_id: "i1",
+      asset_key: "i1",
       asset_class: "equity",
       region: "domestic",
       enabled: true,
@@ -47,7 +47,7 @@ const targets: TargetView = {
     },
     {
       holding_id: "h2",
-      instrument_id: "i2",
+      asset_key: "i2",
       asset_class: "equity",
       region: "foreign",
       enabled: true,

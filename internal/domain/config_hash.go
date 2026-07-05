@@ -40,7 +40,7 @@ func sortConfigForHash(in *ConfigHashInput) {
 		return a < b
 	})
 	sort.Slice(in.Holdings, func(i, j int) bool {
-		return stringVal(in.Holdings[i]["instrument_id"]) < stringVal(in.Holdings[j]["instrument_id"])
+		return stringVal(in.Holdings[i]["asset_key"]) < stringVal(in.Holdings[j]["asset_key"])
 	})
 }
 

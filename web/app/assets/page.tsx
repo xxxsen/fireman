@@ -39,6 +39,19 @@ const MARKET_FILTERS: { value: string; label: string }[] = [
   { value: "CN", label: "中国市场" },
   { value: "HK", label: "香港市场" },
   { value: "US", label: "美国市场" },
+  { value: "SYS", label: "系统内置" },
+];
+
+const TYPE_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "全部类型" },
+  { value: "cn_exchange_stock", label: "A 股" },
+  { value: "cn_exchange_fund", label: "场内 ETF / LOF" },
+  { value: "cn_mutual_fund", label: "公募基金" },
+  { value: "hk_stock", label: "港股" },
+  { value: "hk_etf", label: "香港 ETF" },
+  { value: "us_stock", label: "美国股票" },
+  { value: "us_etf", label: "美国 ETF" },
+  { value: "cash", label: "现金" },
 ];
 
 const DIRECTORY_TASK_LABELS = { complete: "最近同步成功" } as const;
@@ -189,27 +202,45 @@ function FXSyncRow({
 
 export default function MarketAssetsPage() {
   const qc = useQueryClient();
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const [symbolInput, setSymbolInput] = useState("");
+  const [nameInput, setNameInput] = useState("");
+  const [symbolQ, setSymbolQ] = useState("");
+  const [nameQ, setNameQ] = useState("");
   const [market, setMarket] = useState("");
+  const [instrumentType, setInstrumentType] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [pageInput, setPageInput] = useState("");
+  // null = auto (derived from sync state); true/false = user's explicit choice
+  // which is respected for the rest of the page lifetime.
+  const [panelOpenOverride, setPanelOpenOverride] = useState<boolean | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setSearch(searchInput.trim());
+      setSymbolQ(symbolInput.trim());
+      setNameQ(nameInput.trim());
       setOffset(0);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchInput]);
+  }, [symbolInput, nameInput]);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
-    queryKey: ["market-assets", market, search, includeInactive, offset],
+    queryKey: [
+      "market-assets",
+      market,
+      instrumentType,
+      symbolQ,
+      nameQ,
+      includeInactive,
+      offset,
+    ],
     // fetchedAt is captured at request time so staleness checks stay pure in render.
     queryFn: async () => {
       const result = await listMarketAssets({
         market: market || undefined,
-        q: search || undefined,
+        instrumentTypes: instrumentType ? [instrumentType] : undefined,
+        symbolQ: symbolQ || undefined,
+        nameQ: nameQ || undefined,
         includeInactive: includeInactive || undefined,
         limit: PAGE_SIZE,
         offset,
@@ -221,39 +252,98 @@ export default function MarketAssetsPage() {
 
   const syncs = useMemo(() => data?.syncs ?? [], [data]);
   const assets = data?.assets ?? [];
+  const total = data?.total ?? 0;
   const everSynced = syncs.some((s) => s.last_success_at);
   const fetchedAt = data?.fetchedAt ?? 0;
   const staleScopes = syncs.filter(
     (s) => s.last_success_at && fetchedAt - s.last_success_at > STALE_AFTER_MS,
   );
+  const hasFilters = Boolean(symbolQ || nameQ || market || instrumentType);
   const invalidateDirectory = () => {
     void qc.invalidateQueries({ queryKey: ["market-assets"] });
   };
 
+  // Panel default: collapsed only when every directory scope has a success
+  // record with no failure and no active task; otherwise expanded.
+  const panelAutoOpen = useMemo(() => {
+    if (!data) return true;
+    if (!syncs.length) return true;
+    return syncs.some(
+      (s) =>
+        !s.last_success_at ||
+        s.task?.status === "failed" ||
+        isTaskActive(s.task?.status),
+    );
+  }, [data, syncs]);
+  const panelOpen = panelOpenOverride ?? panelAutoOpen;
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  const rangeStart = total === 0 ? 0 : offset + 1;
+  const rangeEnd = Math.min(offset + assets.length, offset + PAGE_SIZE);
+
+  const jumpToPage = () => {
+    const page = Number.parseInt(pageInput, 10);
+    if (!Number.isFinite(page)) return;
+    const clamped = Math.min(Math.max(page, 1), totalPages);
+    setOffset((clamped - 1) * PAGE_SIZE);
+    setPageInput("");
+  };
+
   const syncPanel = (
     <section
-      className="mb-4 divide-y divide-line rounded-lg border border-line bg-surface px-4 py-1"
+      className="mb-4 rounded-lg border border-line bg-surface"
       aria-label="资产目录同步状态"
       data-testid="directory-sync-panel"
     >
-      {syncs.map((view) => (
-        <DirectorySyncRow key={view.scope} view={view} onChanged={invalidateDirectory} />
-      ))}
-      <FXSyncRow view={data?.fx_sync} onChanged={invalidateDirectory} />
+      <button
+        type="button"
+        className="flex w-full items-center justify-between px-4 py-2.5 text-left"
+        onClick={() => setPanelOpenOverride(!panelOpen)}
+        aria-expanded={panelOpen}
+        data-testid="directory-sync-toggle"
+      >
+        <span className="text-sm font-medium text-ink">资产目录同步状态</span>
+        <span className="flex items-center gap-3 text-xs text-ink-muted">
+          {!panelOpen && (
+            <span data-testid="directory-sync-summary">
+              {everSynced ? "目录已同步" : "尚未同步"}
+            </span>
+          )}
+          <span aria-hidden>{panelOpen ? "收起 ▲" : "展开 ▼"}</span>
+        </span>
+      </button>
+      {panelOpen && (
+        <div className="divide-y divide-line border-t border-line px-4 py-1">
+          {syncs.map((view) => (
+            <DirectorySyncRow key={view.scope} view={view} onChanged={invalidateDirectory} />
+          ))}
+          <FXSyncRow view={data?.fx_sync} onChanged={invalidateDirectory} />
+        </div>
+      )}
     </section>
   );
 
   const toolbar = (
     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <input
           type="search"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="搜索代码或名称（本地目录）…"
-          className="input-base max-w-md"
-          aria-label="搜索市场资产"
-          data-testid="market-assets-search"
+          value={symbolInput}
+          onChange={(e) => setSymbolInput(e.target.value)}
+          placeholder="按代码搜索…"
+          className="input-base max-w-48"
+          aria-label="按代码搜索市场资产"
+          data-testid="market-assets-symbol-search"
+        />
+        <input
+          type="search"
+          value={nameInput}
+          onChange={(e) => setNameInput(e.target.value)}
+          placeholder="按名称搜索…"
+          className="input-base max-w-56"
+          aria-label="按名称搜索市场资产"
+          data-testid="market-assets-name-search"
         />
         <select
           value={market}
@@ -266,6 +356,22 @@ export default function MarketAssetsPage() {
           data-testid="market-assets-market-filter"
         >
           {MARKET_FILTERS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={instrumentType}
+          onChange={(e) => {
+            setInstrumentType(e.target.value);
+            setOffset(0);
+          }}
+          className="input-base max-w-xs"
+          aria-label="按资产类型筛选"
+          data-testid="market-assets-type-filter"
+        >
+          {TYPE_FILTERS.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label}
             </option>
@@ -322,13 +428,7 @@ export default function MarketAssetsPage() {
     <div className="content-enter">
       <PageHeader
         title="资产目录"
-        description="全市场资产基础信息由后台任务同步，搜索仅查询本地目录，不触发外部请求。"
-        secondaryActions={
-          <Button variant="secondary" href="/assets/library" data-testid="my-library-link">
-            我的资产库
-          </Button>
-        }
-        primaryAction={{ label: "录入资产", href: "/assets/import" }}
+        description="全市场资产基础信息由后台任务同步，搜索仅查询本地目录，不触发外部请求。计划持仓直接引用目录资产，无需单独录入。"
       />
 
       {syncPanel}
@@ -346,10 +446,10 @@ export default function MarketAssetsPage() {
 
       {toolbar}
 
-      {!assets.length && !search && !everSynced ? (
+      {!assets.length && !hasFilters && !everSynced ? (
         <EmptyState
           title="当前没有资产基础信息"
-          description="请先同步资产列表，同步完成后即可搜索并录入资产。"
+          description="请先同步资产列表，同步完成后即可搜索资产。"
         />
       ) : !assets.length ? (
         <EmptyState
@@ -358,8 +458,10 @@ export default function MarketAssetsPage() {
           action={{
             label: "清除筛选",
             onClick: () => {
-              setSearchInput("");
+              setSymbolInput("");
+              setNameInput("");
               setMarket("");
+              setInstrumentType("");
               setOffset(0);
             },
           }}
@@ -375,11 +477,10 @@ export default function MarketAssetsPage() {
                   <th className="px-3 py-2.5 font-medium">市场</th>
                   <th className="px-3 py-2.5 font-medium">类型</th>
                   <th className="px-3 py-2.5 font-medium">交易所</th>
-                  <th className="px-3 py-2.5 font-medium">资产 kind</th>
                   <th className="px-3 py-2.5 font-medium">币种</th>
+                  <th className="px-3 py-2.5 font-medium">历史数据</th>
                   <th className="px-3 py-2.5 font-medium">来源</th>
                   <th className="px-3 py-2.5 font-medium">基础信息刷新时间</th>
-                  <th className="px-3 py-2.5 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -411,21 +512,21 @@ export default function MarketAssetsPage() {
                     <td className="px-3 py-2.5">{asset.market}</td>
                     <td className="px-3 py-2.5">{instrumentTypeLabel(asset.instrument_type)}</td>
                     <td className="px-3 py-2.5">{asset.exchange || "—"}</td>
-                    <td className="px-3 py-2.5">{asset.instrument_kind || "—"}</td>
                     <td className="px-3 py-2.5">{asset.currency || "—"}</td>
+                    <td className="px-3 py-2.5 text-xs">
+                      {asset.has_history ? (
+                        <span className="text-ink-muted">
+                          截至 <span className="font-mono-numeric">{asset.history_data_as_of || "—"}</span>
+                        </span>
+                      ) : (
+                        <span className="text-warning">未同步</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-xs text-ink-muted">
                       {dataSourceLabel(asset.source_name)}
                     </td>
                     <td className="px-3 py-2.5 font-mono-numeric text-xs text-ink-muted">
                       {formatDateTimeFromMs(asset.refreshed_at)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <Link
-                        href={`/assets/import?asset_key=${encodeURIComponent(asset.asset_key)}`}
-                        className="text-xs text-brand underline-offset-2 hover:underline"
-                      >
-                        录入
-                      </Link>
                     </td>
                   </tr>
                 ))}
@@ -433,11 +534,15 @@ export default function MarketAssetsPage() {
             </table>
           </div>
 
-          <div className="mt-3 flex items-center justify-between text-sm text-ink-muted">
-            <span>
-              第 {Math.floor(offset / PAGE_SIZE) + 1} 页 · 本页 {assets.length} 条
+          <div
+            className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-ink-muted"
+            data-testid="market-assets-pagination"
+          >
+            <span data-testid="market-assets-range">
+              当前第 {rangeStart}-{rangeEnd} 条，共 {total} 条 · 第 {currentPage} /{" "}
+              {totalPages} 页
             </span>
-            <span className="flex gap-2">
+            <span className="flex items-center gap-2">
               <Button
                 variant="secondary"
                 className="min-h-8 px-3 py-1 text-xs"
@@ -449,10 +554,35 @@ export default function MarketAssetsPage() {
               <Button
                 variant="secondary"
                 className="min-h-8 px-3 py-1 text-xs"
-                disabled={assets.length < PAGE_SIZE}
+                disabled={currentPage >= totalPages}
                 onClick={() => setOffset(offset + PAGE_SIZE)}
               >
                 下一页
+              </Button>
+              <label className="flex items-center gap-1 text-xs">
+                跳至
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={pageInput}
+                  onChange={(e) => setPageInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") jumpToPage();
+                  }}
+                  className="input-base w-16 px-2 py-1 text-xs"
+                  aria-label="跳转页码"
+                  data-testid="market-assets-page-input"
+                />
+                页
+              </label>
+              <Button
+                variant="secondary"
+                className="min-h-8 px-3 py-1 text-xs"
+                onClick={jumpToPage}
+                data-testid="market-assets-page-jump"
+              >
+                跳转
               </Button>
             </span>
           </div>

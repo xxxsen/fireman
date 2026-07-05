@@ -28,15 +28,15 @@ func seedThreeHoldingsRebalancePlan(t *testing.T, db *sql.DB) (string, []string)
 	instIDs := []string{"ins_rbd_a", "ins_rbd_b", "ins_rbd_c"}
 
 	for i, instID := range instIDs {
-		if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
-			ID: instID, Code: "RB" + string(rune('A'+i)), Name: "测试标的" + string(rune('A'+i)),
-			Market: "CN", AssetClass: "equity", Region: "domestic", Currency: "CNY",
+		if err := snapRepo.EnsureMarketAsset(context.Background(), repository.MarketAsset{
+			AssetKey: instID, Symbol: "RB" + string(rune('A'+i)), Name: "测试标的" + string(rune('A'+i)),
+			Market: "CN", Currency: "CNY",
 		}); err != nil {
 			t.Fatal(err)
 		}
 		snapID := "snap_" + instID
 		if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
-			ID: snapID, InstrumentID: instID, PlanID: &planID,
+			ID: snapID, AssetKey: instID, PlanID: &planID,
 			InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
 			CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
 			VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -50,7 +50,7 @@ func seedThreeHoldingsRebalancePlan(t *testing.T, db *sql.DB) (string, []string)
 		}
 		if _, err := db.ExecContext(context.Background(), `
 			INSERT INTO plan_holdings (
-				id, plan_id, instrument_id, enabled, asset_class, region,
+				id, plan_id, asset_key, enabled, asset_class, region,
 				weight_within_group, current_amount_minor, simulation_snapshot_id,
 				sort_order, created_at, updated_at
 			) VALUES (?,?,?,1,'equity','domestic',?,?,?,?,?,?)`,
@@ -81,15 +81,15 @@ func seedThreeHoldingsRebalancePlan(t *testing.T, db *sql.DB) (string, []string)
 	return planID, instIDs
 }
 
-func seedInstrumentMarketData(t *testing.T, db *sql.DB, instID string) {
+func seedInstrumentMarketData(t *testing.T, db *sql.DB, assetKey string) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UnixMilli()
 	for _, p := range buildTwentyYearFixturePoints() {
 		if _, err := db.ExecContext(ctx, `
-			INSERT OR IGNORE INTO market_data_points (instrument_id, trade_date, value, point_type, source_name, fetched_at)
-			VALUES (?, ?, ?, 'adjusted_close', 'fixture', ?)`,
-			instID, p.Date, p.Value, now); err != nil {
+			INSERT OR IGNORE INTO market_asset_points (asset_key, adjust_policy, point_type, trade_date, value, source_name, fetched_at)
+			VALUES (?, 'none', 'adjusted_close', ?, ?, 'fixture', ?)`,
+			assetKey, p.Date, p.Value, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -225,7 +225,7 @@ func TestRebalanceDraftCRUDFlow(t *testing.T) {
 
 	var committedAmount int64
 	err = db.QueryRowContext(context.Background(),
-		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
+		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
 		planID, instIDs[0]).Scan(&committedAmount)
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +319,7 @@ func TestAssetRefreshPOST(t *testing.T) {
 	newAmounts := []int64{130_000_00, 85_000_00, 85_000_00}
 	holdings := make([]map[string]any, len(instIDs))
 	for i, id := range instIDs {
-		holdings[i] = map[string]any{"instrument_id": id, "current_amount_minor": newAmounts[i]}
+		holdings[i] = map[string]any{"asset_key": id, "current_amount_minor": newAmounts[i]}
 	}
 	body, _ := json.Marshal(map[string]any{
 		"config_version":          version,
@@ -593,7 +593,7 @@ func TestAssetRefreshSyncScaleAndAuditEvent(t *testing.T) {
 	newAmounts := []int64{100_000_00, 100_000_00, 100_000_00}
 	holdings := make([]map[string]any, len(instIDs))
 	for i, id := range instIDs {
-		holdings[i] = map[string]any{"instrument_id": id, "current_amount_minor": newAmounts[i]}
+		holdings[i] = map[string]any{"asset_key": id, "current_amount_minor": newAmounts[i]}
 	}
 	body, _ := json.Marshal(map[string]any{
 		"config_version":          version,
@@ -675,7 +675,7 @@ func TestAssetRefreshAtomicRollbackOnSyncFailure(t *testing.T) {
 	holdings := make([]map[string]any, len(instIDs))
 	for i, id := range instIDs {
 		holdings[i] = map[string]any{
-			"instrument_id":        id,
+			"asset_key":            id,
 			"current_amount_minor": amounts[i],
 			"weight_within_group":  weights[i],
 			"sort_order":           i * 10,
@@ -762,7 +762,7 @@ func TestAssetRefreshAtomicScenarioAndStructure(t *testing.T) {
 	holdings := make([]map[string]any, 0, len(instIDs)+2)
 	for i, id := range instIDs {
 		holdings = append(holdings, map[string]any{
-			"instrument_id":        id,
+			"asset_key":            id,
 			"current_amount_minor": equityAmounts[i],
 			"weight_within_group":  equityWeights[i],
 			"sort_order":           i * 10,
@@ -770,13 +770,17 @@ func TestAssetRefreshAtomicScenarioAndStructure(t *testing.T) {
 	}
 	holdings = append(holdings,
 		map[string]any{
-			"instrument_id":        bondInstID,
+			"asset_key":            bondInstID,
+			"asset_class":          "bond",
+			"region":               "domestic",
 			"current_amount_minor": 105_000_00,
 			"weight_within_group":  1.0,
 			"sort_order":           30,
 		},
 		map[string]any{
-			"instrument_id":        repository.SystemCashInstrumentID,
+			"asset_key":            repository.SystemCashAssetKey,
+			"asset_class":          "cash",
+			"region":               "domestic",
 			"current_amount_minor": 30_000_00,
 			"weight_within_group":  1.0,
 			"sort_order":           40,
@@ -819,7 +823,7 @@ func TestAssetRefreshAtomicScenarioAndStructure(t *testing.T) {
 	var weight float64
 	if err := db.QueryRowContext(context.Background(), `
 		SELECT weight_within_group FROM plan_holdings
-		WHERE plan_id=? AND instrument_id=?`, planID, instIDs[0]).Scan(&weight); err != nil {
+		WHERE plan_id=? AND asset_key=?`, planID, instIDs[0]).Scan(&weight); err != nil {
 		t.Fatal(err)
 	}
 	if weight != 0.5 {
@@ -854,7 +858,7 @@ func TestAssetRefreshScenarioSwitchRejectsMismatchedHoldings(t *testing.T) {
 	holdings := make([]map[string]any, len(instIDs))
 	for i, id := range instIDs {
 		holdings[i] = map[string]any{
-			"instrument_id":        id,
+			"asset_key":            id,
 			"current_amount_minor": amounts[i],
 			"weight_within_group":  weights[i],
 			"sort_order":           i * 10,
@@ -897,15 +901,15 @@ func seedBondInstrumentForPlan(t *testing.T, db *sql.DB, planID string) string {
 	snapRepo := repository.NewSnapshotRepo(db)
 	instID := "ins_rbd_bond"
 	now := time.Now().UnixMilli()
-	if err := snapRepo.EnsureInstrument(context.Background(), repository.Instrument{
-		ID: instID, Code: "RBOND", Name: "测试债券基金", Market: "CN",
-		AssetClass: "bond", Region: "domestic", Currency: "CNY",
+	if err := snapRepo.EnsureMarketAsset(context.Background(), repository.MarketAsset{
+		AssetKey: instID, Symbol: "RBOND", Name: "测试债券基金",
+		Market: "CN", Currency: "CNY",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	snapID := "snap_" + instID
 	if err := snapRepo.CreatePlanSnapshot(context.Background(), nil, repository.SimulationSnapshot{
-		ID: snapID, InstrumentID: instID, PlanID: &planID,
+		ID: snapID, AssetKey: instID, PlanID: &planID,
 		InclusionDate: "2026-06-09", AsOfDate: "2026-06-09",
 		CompleteYearCount: 5, DailyObservationCount: 100, MonthlyReturnCount: 60,
 		VolatilityMethod: "monthly_log_return_sample_stddev_annualized",
@@ -927,11 +931,11 @@ func seedCashHolding(t *testing.T, db *sql.DB, planID string, amountMinor int64)
 	holdID := "hold_system_cash"
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO plan_holdings (
-			id, plan_id, instrument_id, enabled, asset_class, region,
+			id, plan_id, asset_key, enabled, asset_class, region,
 			weight_within_group, current_amount_minor, simulation_snapshot_id,
 			sort_order, created_at, updated_at
 		) VALUES (?,?,?,1,'cash','domestic',1.0,?,'sim_snapshot_system_cash_cny',0,?,?)`,
-		holdID, planID, repository.SystemCashInstrumentID, amountMinor, now, now); err != nil {
+		holdID, planID, repository.SystemCashAssetKey, amountMinor, now, now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1022,13 +1026,13 @@ func TestRebalanceDraftCommitCashSweep_CS1(t *testing.T) {
 
 	var equityAmount, cashAmount int64
 	if err := db.QueryRowContext(context.Background(),
-		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
+		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
 		planID, instIDs[0]).Scan(&equityAmount); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRowContext(context.Background(),
-		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
-		planID, repository.SystemCashInstrumentID).Scan(&cashAmount); err != nil {
+		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
+		planID, repository.SystemCashAssetKey).Scan(&cashAmount); err != nil {
 		t.Fatal(err)
 	}
 	if equityAmount != planned {
@@ -1119,7 +1123,7 @@ func TestRebalanceDraftCommitScaleShrink_CS3(t *testing.T) {
 	for _, instID := range instIDs {
 		var amount int64
 		if err := db.QueryRowContext(context.Background(),
-			`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
+			`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
 			planID, instID).Scan(&amount); err != nil {
 			t.Fatal(err)
 		}
@@ -1241,8 +1245,8 @@ func TestRebalanceDraftCommitCashSweepPostDraft_CS5(t *testing.T) {
 
 	var cashAmount int64
 	if err := db.QueryRowContext(context.Background(),
-		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
-		planID, repository.SystemCashInstrumentID).Scan(&cashAmount); err != nil {
+		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
+		planID, repository.SystemCashAssetKey).Scan(&cashAmount); err != nil {
 		t.Fatal(err)
 	}
 	if cashAmount != 30_000_00 {
@@ -1253,9 +1257,9 @@ func TestRebalanceDraftCommitCashSweepPostDraft_CS5(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `
 		SELECT psi.amount_minor FROM portfolio_snapshot_items psi
 		JOIN portfolio_snapshots ps ON ps.id = psi.snapshot_id
-		WHERE ps.plan_id=? AND psi.instrument_id=?
+		WHERE ps.plan_id=? AND psi.asset_key=?
 		ORDER BY ps.created_at DESC LIMIT 1`,
-		planID, repository.SystemCashInstrumentID).Scan(&cashSnapAmount); err != nil {
+		planID, repository.SystemCashAssetKey).Scan(&cashSnapAmount); err != nil {
 		t.Fatal(err)
 	}
 	if cashSnapAmount != 30_000_00 {
@@ -1264,7 +1268,7 @@ func TestRebalanceDraftCommitCashSweepPostDraft_CS5(t *testing.T) {
 
 	var equityAmount int64
 	if err := db.QueryRowContext(context.Background(),
-		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
+		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
 		planID, instIDs[0]).Scan(&equityAmount); err != nil {
 		t.Fatal(err)
 	}
@@ -1329,9 +1333,9 @@ func TestRebalanceDraftCommitCashSweepSnapshot_CS4(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `
 		SELECT psi.amount_minor FROM portfolio_snapshot_items psi
 		JOIN portfolio_snapshots ps ON ps.id = psi.snapshot_id
-		WHERE ps.plan_id=? AND psi.instrument_id=?
+		WHERE ps.plan_id=? AND psi.asset_key=?
 		ORDER BY ps.created_at DESC LIMIT 1`,
-		planID, repository.SystemCashInstrumentID).Scan(&cashSnapAmount); err != nil {
+		planID, repository.SystemCashAssetKey).Scan(&cashSnapAmount); err != nil {
 		t.Fatal(err)
 	}
 	if cashSnapAmount != 30_000_00 {
@@ -1340,7 +1344,7 @@ func TestRebalanceDraftCommitCashSweepSnapshot_CS4(t *testing.T) {
 
 	var equityAmount int64
 	if err := db.QueryRowContext(context.Background(),
-		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND instrument_id=?`,
+		`SELECT current_amount_minor FROM plan_holdings WHERE plan_id=? AND asset_key=?`,
 		planID, instIDs[0]).Scan(&equityAmount); err != nil {
 		t.Fatal(err)
 	}

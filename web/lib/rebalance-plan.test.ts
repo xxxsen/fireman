@@ -94,7 +94,7 @@ describe("findCashSweepHolding", () => {
     const got = findCashSweepHolding([
       {
         id: "h1",
-        instrument_id: "other_cash",
+        asset_key: "other_cash",
         enabled: true,
         asset_class: "cash",
         sort_order: 0,
@@ -102,7 +102,7 @@ describe("findCashSweepHolding", () => {
       },
       {
         id: "h2",
-        instrument_id: "system_cash_cny",
+        asset_key: "SYS|cash||CNY",
         enabled: true,
         asset_class: "cash",
         sort_order: 10,
@@ -116,7 +116,7 @@ describe("findCashSweepHolding", () => {
     const got = findCashSweepHolding([
       {
         id: "h1",
-        instrument_id: "c1",
+        asset_key: "c1",
         enabled: true,
         asset_class: "cash",
         sort_order: 5,
@@ -124,7 +124,7 @@ describe("findCashSweepHolding", () => {
       },
       {
         id: "h2",
-        instrument_id: "c2",
+        asset_key: "c2",
         enabled: true,
         asset_class: "cash",
         sort_order: 1,
