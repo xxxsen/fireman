@@ -44,7 +44,30 @@ class TaskDB:
     # --- claim ---
 
     def claim_next(self) -> ClaimedTask | None:
-        """Atomically claim the oldest pending task (pending -> running)."""
+        """Atomically claim the oldest pending task (pending -> running).
+
+        Two-phase: a transaction-free read probe first, so idle workers
+        polling an empty queue never take SQLite's RESERVED write lock
+        (``BEGIN IMMEDIATE``) and never compete with the Go process's writes.
+        Only when the probe sees a pending row does the claim enter a write
+        transaction, which re-checks under the lock to keep the original CAS
+        semantics.
+        """
+        probe = self._conn.execute(
+            "SELECT 1 FROM worker_tasks WHERE status='pending' LIMIT 1"
+        ).fetchone()
+        if probe is None:
+            return None
+        return self._claim_oldest_pending()
+
+    def _claim_oldest_pending(self) -> ClaimedTask | None:
+        """Write-transaction claim; None when another worker won the race.
+
+        The probe in claim_next runs outside the transaction, so the pending
+        row it saw may already be taken: the SELECT/UPDATE here re-check
+        under BEGIN IMMEDIATE and simply miss in that case — the next poll
+        retries.
+        """
         with self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             row = self._conn.execute(

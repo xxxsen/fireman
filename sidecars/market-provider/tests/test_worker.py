@@ -126,6 +126,55 @@ class TestTaskDB:
         assert second is not None and second.id == "wt_new"
         assert task_db.claim_next() is None
 
+    def test_claim_next_empty_queue_takes_no_write_lock(
+        self, db_path: str, task_db: TaskDB
+    ) -> None:
+        """Idle polling must stay read-only: an empty queue is probed without
+        BEGIN IMMEDIATE, so workers never compete for SQLite's RESERVED lock
+        with the Go process."""
+        statements: list[str] = []
+        task_db._conn.set_trace_callback(statements.append)  # noqa: SLF001 - test seam
+        try:
+            assert task_db.claim_next() is None
+        finally:
+            task_db._conn.set_trace_callback(None)  # noqa: SLF001 - test seam
+        writes = [s for s in statements if "BEGIN IMMEDIATE" in s.upper()]
+        assert writes == [], f"empty-queue claim_next must not open a write tx: {statements}"
+
+    def test_claim_next_with_pending_enters_write_tx_and_claims(
+        self, db_path: str, task_db: TaskDB
+    ) -> None:
+        insert_task(db_path, "wt_probe")
+        statements: list[str] = []
+        task_db._conn.set_trace_callback(statements.append)  # noqa: SLF001 - test seam
+        try:
+            claimed = task_db.claim_next()
+        finally:
+            task_db._conn.set_trace_callback(None)  # noqa: SLF001 - test seam
+        assert claimed is not None and claimed.id == "wt_probe"
+        assert get_task(db_path, "wt_probe")["status"] == "running"
+        # The actual claim still runs under BEGIN IMMEDIATE (CAS semantics).
+        assert any("BEGIN IMMEDIATE" in s.upper() for s in statements)
+
+    def test_claim_next_returns_none_when_probed_task_is_stolen(
+        self, db_path: str, task_db: TaskDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The probe runs outside the transaction; if another worker takes the
+        task in between, the in-transaction re-check must miss gracefully."""
+        insert_task(db_path, "wt_race")
+        original = TaskDB._claim_oldest_pending
+
+        def steal_then_claim(self: TaskDB):
+            other = sqlite3.connect(db_path)
+            other.execute("UPDATE worker_tasks SET status='running' WHERE id='wt_race'")
+            other.commit()
+            other.close()
+            return original(self)
+
+        monkeypatch.setattr(TaskDB, "_claim_oldest_pending", steal_then_claim)
+        assert task_db.claim_next() is None
+        assert get_task(db_path, "wt_race")["status"] == "running"
+
     def test_heartbeat_only_updates_running(self, db_path: str, task_db: TaskDB) -> None:
         insert_task(db_path, "wt_run")
         assert task_db.claim_next() is not None

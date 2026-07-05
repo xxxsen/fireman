@@ -21,17 +21,20 @@ const EngineVersion = "3.1.0"
 // frozen at this version must keep replaying with the independent sampler.
 const LegacyEngineVersion = "2.0.0"
 
-// annualResetGuardrailLastVersion is the last engine version whose guardrail
-// strategy reset spending to the inflation baseline every anniversary.
-const annualResetGuardrailLastVersion = "3.0.0"
-
 // GuardrailUsesLegacyAnnualReset reports whether a snapshot frozen at the
 // given engine version must replay the pre-3.1.0 guardrail semantics
 // (anniversary proposal resets to the inflation baseline before the single
 // ±10% adjustment). Persisted summaries and path indexes of such runs were
 // computed with that behavior, so path regeneration must match it exactly.
+// Every engine version shipped before 3.1.0 (1.0.0, 2.0.0, 3.0.0) carried
+// the annual-reset behavior.
 func GuardrailUsesLegacyAnnualReset(engineVersion string) bool {
-	return engineVersion == LegacyEngineVersion || engineVersion == annualResetGuardrailLastVersion
+	switch engineVersion {
+	case "1.0.0", LegacyEngineVersion, "3.0.0":
+		return true
+	default:
+		return false
+	}
 }
 
 // Random factor model identifiers (InputSnapshot.RandomFactorModel).

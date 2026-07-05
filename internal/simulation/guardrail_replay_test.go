@@ -104,8 +104,10 @@ func TestGuardrailReplayReproducesAnnualResetSemantics(t *testing.T) {
 }
 
 func TestGuardrailReplayLegacyEngineVersionAlsoGated(t *testing.T) {
-	if !GuardrailUsesLegacyAnnualReset("2.0.0") || !GuardrailUsesLegacyAnnualReset("3.0.0") {
-		t.Fatal("2.0.0 and 3.0.0 snapshots must replay annual-reset guardrail semantics")
+	for _, v := range []string{"1.0.0", "2.0.0", "3.0.0"} {
+		if !GuardrailUsesLegacyAnnualReset(v) {
+			t.Fatalf("%s snapshots must replay annual-reset guardrail semantics", v)
+		}
 	}
 	if GuardrailUsesLegacyAnnualReset("3.1.0") || GuardrailUsesLegacyAnnualReset(EngineVersion) {
 		t.Fatal("3.1.0+ snapshots must use compounding guardrail semantics")

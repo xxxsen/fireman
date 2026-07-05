@@ -11,7 +11,7 @@
 | 路由 | 用途 |
 | --- | --- |
 | `/plans/{id}/overview` | 查看总资产、持仓合计、大类/地区配置、主要偏离与关键入口 |
-| `/plans/{id}/rebalance` | 作为“调仓工作台”查看当前持仓、目标结构，并进入持仓校正、调仓计划或调仓执行 |
+| `/plans/{id}/rebalance` | 作为“调仓工作台”查看当前持仓、目标结构，并进入持仓校正或调仓执行 |
 | `/plans/{id}/settings` | 切换当前计划使用的配置模板、编辑计划参数、运行模拟 |
 
 旧 `holdings`、`scenarios`、`dashboard`、`targets`、`instruments`、`parameters`、`analysis`
@@ -23,7 +23,7 @@
 组合总览
   → 调仓工作台
   → 持仓校正
-  → 调仓计划
+  → 调仓执行
   →（可选）计划设置 / FIRE 模拟
 ```
 

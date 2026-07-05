@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0021） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0024） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -117,7 +117,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | --- | --- |
 | `/plans/new` | 四步计划向导；模拟可选且不阻塞进入计划 |
 | `/plans/{id}/overview` | 组合总览、大类/地区配置、偏离摘要、折叠式可选模拟 |
-| `/plans/{id}/rebalance` | 调仓工作台；查看当前持仓、目标结构、结构偏差，并进入持仓校正、调仓计划或调仓执行 |
+| `/plans/{id}/rebalance` | 调仓工作台；查看当前持仓、目标结构、结构偏差，并进入持仓校正或调仓执行 |
 | `/plans/{id}/rebalance/executions` | 多日调仓执行列表 |
 | `/plans/{id}/rebalance/executions/{executionId}` | 调仓执行工作区：登记卖出、买入、备注、完成或取消 |
 | `/plans/{id}/settings` | 切换当前计划使用的配置模板、编辑计划参数、运行模拟 |
@@ -131,7 +131,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 [004-portfolio-first-ui.md](./004-portfolio-first-ui.md) 与
 [008-plan-settings-holdings-preview.md](./008-plan-settings-holdings-preview.md)。
 
-调仓计划与执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
+调仓执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 
 ---
