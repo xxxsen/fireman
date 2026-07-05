@@ -314,7 +314,7 @@ func TestListMarketAssets_SearchAndSyncBlock(t *testing.T) {
 	}
 }
 
-// TestListMarketAssets_ScopeAggregation covers the td/090 scope status rules:
+// TestListMarketAssets_ScopeAggregation covers the directory scope status rules:
 // partial while only some units succeeded, complete (with min success time)
 // once every unit succeeded, running with an active unit task and failed when
 // nothing ever succeeded and the latest task failed.

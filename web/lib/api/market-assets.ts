@@ -71,7 +71,7 @@ export interface DirectorySyncUnitView {
   last_success_task_id: string;
 }
 
-/** Scope aggregate status computed by the backend (td/090). */
+/** Scope aggregate status computed by the backend from directory sync units. */
 export type DirectoryScopeStatus = "running" | "complete" | "partial" | "failed" | "never";
 
 /** Aggregated sync view of one directory scope. */

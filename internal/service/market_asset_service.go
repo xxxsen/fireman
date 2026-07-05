@@ -237,7 +237,7 @@ type DirectoryScopeSyncView struct {
 }
 
 // aggregateDirectoryScope derives the scope status and full-success time from
-// unit views, following the td/090 rules.
+// directory sync unit views.
 func aggregateDirectoryScope(units []DirectorySyncUnitView) (string, *int64) {
 	if len(units) == 0 {
 		return DirectoryScopeStatusNever, nil
