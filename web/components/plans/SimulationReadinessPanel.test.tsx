@@ -194,6 +194,106 @@ describe("SimulationReadinessPanel", () => {
       "已创建 1 个同步任务，1 个资产历史已同步但不可用于模拟，请按提示处理",
     );
   });
+
+  it("disables the sync button while the mutation is in flight", async () => {
+    getSimulationReadiness.mockResolvedValue(makeReadiness());
+    let resolveSync: (value: SyncMissingHistoryResult) => void = () => {};
+    syncMissingAssetHistory.mockImplementation(
+      () => new Promise<SyncMissingHistoryResult>((resolve) => (resolveSync = resolve)),
+    );
+    renderPanel();
+    const button = await screen.findByTestId("sync-missing-history-button");
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    resolveSync(emptySyncResult({ blocked: [{ asset_key: "x", reason: "r" }] }));
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it("keeps the button locked after tasks are created until readiness reports them", async () => {
+    // First readiness snapshot has no active tasks; the refetch after sync
+    // still reports none (simulating the stale window before active_tasks
+    // shows up). The local lock must keep the button disabled.
+    getSimulationReadiness.mockResolvedValue(makeReadiness());
+    syncMissingAssetHistory.mockResolvedValue(
+      emptySyncResult({ created: [{ asset_key: "CN|cn_exchange_fund|sz|150015" }] }),
+    );
+    renderPanel();
+    const button = await screen.findByTestId("sync-missing-history-button");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(screen.getByTestId("readiness-sync-message")).toHaveTextContent(
+        "已创建 1 个同步任务",
+      ),
+    );
+    expect(button).toBeDisabled();
+  });
+
+  it("releases the local lock once readiness reports the active task and stays disabled via activeCount", async () => {
+    getSimulationReadiness
+      .mockResolvedValueOnce(makeReadiness())
+      .mockResolvedValue(
+        makeReadiness({
+          blocking_assets: [
+            {
+              holding_id: "hold_1",
+              asset_key: "CN|cn_exchange_fund|sz|150015",
+              symbol: "150015",
+              name: "银河银富货币B",
+              reason: "history_sync_running",
+            },
+          ],
+          active_tasks: [{ id: "task_1", status: "running" } as never],
+        }),
+      );
+    syncMissingAssetHistory.mockResolvedValue(
+      emptySyncResult({ existing: [{ asset_key: "CN|cn_exchange_fund|sz|150015" }] }),
+    );
+    renderPanel();
+    const button = await screen.findByTestId("sync-missing-history-button");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(screen.getByTestId("readiness-active-tasks")).toHaveTextContent(
+        "1 个同步任务进行中",
+      ),
+    );
+    expect(button).toBeDisabled();
+  });
+
+  it("re-enables the button when the sync only returns blocked assets", async () => {
+    getSimulationReadiness.mockResolvedValue(
+      makeReadiness({
+        blocking_assets: [
+          {
+            holding_id: "hold_1",
+            asset_key: "CN|cn_exchange_fund|sz|150015",
+            symbol: "150015",
+            name: "银河银富货币B",
+            reason: "asset_identity_conflict",
+          },
+        ],
+      }),
+    );
+    syncMissingAssetHistory.mockResolvedValue(
+      emptySyncResult({
+        blocked: [
+          {
+            asset_key: "CN|cn_exchange_fund|sz|150015",
+            reason: "asset_identity_conflict",
+            message: "请切换资产身份",
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const button = await screen.findByTestId("sync-missing-history-button");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(screen.getByTestId("readiness-sync-message")).toHaveTextContent(
+        "没有可创建的同步任务",
+      ),
+    );
+    expect(button).not.toBeDisabled();
+  });
 });
 
 describe("readinessPollInterval", () => {

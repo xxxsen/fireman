@@ -1,5 +1,6 @@
 "use client";
 
+import { cn } from "@/lib/cn";
 import { Tooltip } from "./Tooltip";
 
 const MAX_INLINE_CHARS = 80;
@@ -26,7 +27,10 @@ export function TaskErrorInline({ errorCode, errorMessage, className }: TaskErro
     <Tooltip
       content={full}
       align="end"
-      className={className}
+      // The tooltip wrapper is a flex/grid child at both call sites; without
+      // min-w-0 its implicit min-width:auto lets long errors overflow the
+      // container instead of truncating.
+      className={cn("min-w-0 max-w-full overflow-hidden", className)}
       triggerTestId="task-error-inline"
       contentTestId="task-error-tooltip"
       contentClassName="max-w-sm whitespace-pre-line break-words text-left"
@@ -34,7 +38,7 @@ export function TaskErrorInline({ errorCode, errorMessage, className }: TaskErro
       <span
         role="button"
         tabIndex={0}
-        className="min-w-0 max-w-full cursor-help truncate text-xs text-danger underline decoration-dotted decoration-danger/50 underline-offset-2"
+        className="block min-w-0 max-w-full cursor-help truncate text-xs text-danger underline decoration-dotted decoration-danger/50 underline-offset-2"
       >
         {truncated}
       </span>

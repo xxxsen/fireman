@@ -3,8 +3,8 @@
 Run explicitly: FIREMAN_LIVE_AKSHARE=1 uv run pytest -m live
 
 Regression funds (see tests/test_fetch_regression.py):
-- 510300: cn_exchange_fund, bare code + adjust none
-- 000001: cn_mutual_fund, hybrid open fund NAV-only classification
+- sh510300: cn_exchange_fund, adjust none on the primary ETF source
+- 000001: cn_mutual_fund, NAV-only open fund frame
 """
 
 import os
@@ -22,7 +22,7 @@ def test_live_cn_etf_smoke() -> None:
         {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
-            "source_code": "510300",
+            "source_code": "sh510300",
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "adjust_policy": "none",
@@ -50,5 +50,5 @@ def test_live_cn_mutual_fund_000001_smoke() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["code"] == 0
-    assert body["data"]["asset_class"] == "equity"
+    assert "asset_class" not in body["data"]
     assert len(body["data"]["points"]) > 0

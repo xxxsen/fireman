@@ -232,16 +232,22 @@ export default function MarketAssetDetailPage() {
               {history.adjust_policy || "—"} / {pointTypeLabel(history.point_type)}
             </dd>
           </div>
-          <div>
+          <div className="min-w-0">
             <dt className="text-ink-muted">当前任务</dt>
-            <dd className="flex items-center gap-2 text-ink">
+            <dd className="flex min-w-0 items-center gap-2 text-ink" data-testid="history-current-task">
               {task ? (
-                <TaskStatusBadge status={task.status} labels={HISTORY_TASK_LABELS} />
+                <span className="shrink-0">
+                  <TaskStatusBadge status={task.status} labels={HISTORY_TASK_LABELS} />
+                </span>
               ) : (
                 "无进行中任务"
               )}
               {task?.status === "failed" && (
-                <TaskErrorInline errorCode={task.error_code} errorMessage={task.error_message} />
+                <TaskErrorInline
+                  className="min-w-0 max-w-full overflow-hidden"
+                  errorCode={task.error_code}
+                  errorMessage={task.error_message}
+                />
               )}
             </dd>
           </div>

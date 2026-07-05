@@ -52,7 +52,7 @@ def test_fetch_all_sources_fail_classified_unavailable() -> None:
             {
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             }
@@ -70,7 +70,7 @@ def test_fetch_timeout_classified_timeout() -> None:
             {
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             }
@@ -84,7 +84,7 @@ def test_fetch_rejects_unknown_fields() -> None:
         {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
-            "source_code": "510300",
+            "source_code": "sh510300",
             "end_date": "2026-06-09",
             "expense_ratio": 0.5,
         }

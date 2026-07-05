@@ -19,8 +19,9 @@ from typing import Any, Callable
 import pandas as pd
 
 from ...adapters.cn_code import (
-    cn_exchange_code_from_explicit_or_heuristic,
-    resolve_cn_etf_fetch_code,
+    AssetIdentityError,
+    CNExchangeCode,
+    build_cn_exchange_code,
 )
 from ...adapters.registry import fetch_instrument
 from ...adapters.symbols import (
@@ -52,13 +53,57 @@ def _compact(date_iso: str) -> str:
     return date_iso.replace("-", "")
 
 
+_CN_EXCHANGE_TYPES = ("cn_exchange_stock", "cn_exchange_fund")
+_REGION_BY_EXCHANGE = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
+
+
+def _cn_directory_identity(payload: dict[str, Any]) -> CNExchangeCode:
+    """Build the CN on-exchange identity strictly from directory fields.
+
+    The payload's ``region_code``/``exchange``/``symbol`` come from
+    ``market_assets``. Only format conversion happens here — a missing
+    exchange fails as non-retryable ``asset_identity_incomplete`` and
+    conflicting fields fail as ``directory_identity_invalid``; the code
+    prefix is never used to infer an exchange.
+    """
+    region = str(payload.get("region_code", "") or "").strip().lower()
+    exchange = str(payload.get("exchange", "") or "").strip().upper()
+    symbol = str(payload.get("symbol", "") or "").strip()
+
+    if region and region not in _REGION_BY_EXCHANGE.values():
+        raise TaskFailure(
+            "directory_identity_invalid",
+            f"region_code {region!r} is not a valid CN exchange region",
+        )
+    if exchange and exchange not in _REGION_BY_EXCHANGE:
+        raise TaskFailure(
+            "directory_identity_invalid",
+            f"exchange {exchange!r} is not a valid CN exchange",
+        )
+    if region and exchange and _REGION_BY_EXCHANGE[exchange] != region:
+        raise TaskFailure(
+            "directory_identity_invalid",
+            f"directory region_code {region!r} conflicts with exchange {exchange!r}",
+        )
+    if not region and exchange:
+        region = _REGION_BY_EXCHANGE[exchange]
+    if not region:
+        raise TaskFailure(
+            "asset_identity_incomplete",
+            "the asset directory does not provide region_code/exchange for this "
+            "CN on-exchange asset; fix the directory data instead of guessing",
+        )
+    try:
+        return build_cn_exchange_code(region, symbol)
+    except AssetIdentityError as exc:
+        raise TaskFailure("directory_identity_invalid", str(exc)) from exc
+
+
 def _source_code(payload: dict[str, Any]) -> str:
-    """Provider-facing code: region_code + symbol for CN, bare symbol otherwise."""
-    region = str(payload.get("region_code", "") or "")
+    """Provider-facing code from directory identity fields (no inference)."""
     symbol = str(payload.get("symbol", "") or "")
-    market = str(payload.get("market", "") or "").upper()
-    if market == "CN" and region:
-        return region + symbol
+    if str(payload.get("instrument_type", "") or "") in _CN_EXCHANGE_TYPES:
+        return _cn_directory_identity(payload).canonical_code
     return symbol
 
 
@@ -77,9 +122,10 @@ def _fetch_request(payload: dict[str, Any], start_date: str | None) -> FetchRequ
 
 # --- source-pinned call builders ---
 # Each builder returns an UpstreamCall for (payload, start, end) with compact
-# YYYYMMDD dates, or None when the source cannot serve this asset.
+# YYYYMMDD dates. CN builders read the validated directory identity and raise
+# TaskFailure when it is missing or inconsistent.
 
-CallBuilder = Callable[[dict[str, Any], str, str], UpstreamCall | None]
+CallBuilder = Callable[[dict[str, Any], str, str], UpstreamCall]
 
 
 def _cn_em_adjust(adjust_policy: str) -> str:
@@ -90,17 +136,12 @@ def _cn_em_adjust(adjust_policy: str) -> str:
     return "qfq"
 
 
-def _cn_identity(payload: dict[str, Any]):
-    code = _source_code(payload)
-    if payload.get("instrument_type") == "cn_exchange_fund":
-        return resolve_cn_etf_fetch_code(code)
-    return cn_exchange_code_from_explicit_or_heuristic(code)
+def _cn_identity(payload: dict[str, Any]) -> CNExchangeCode:
+    return _cn_directory_identity(payload)
 
 
-def _build_stock_zh_a_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_zh_a_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall(
         "stock_zh_a_hist",
         kwargs=(
@@ -113,10 +154,8 @@ def _build_stock_zh_a_hist(payload: dict[str, Any], start: str, end: str) -> Ups
     )
 
 
-def _build_stock_zh_a_hist_tx(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_zh_a_hist_tx(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall(
         "stock_zh_a_hist_tx",
         kwargs=(
@@ -128,10 +167,8 @@ def _build_stock_zh_a_hist_tx(payload: dict[str, Any], start: str, end: str) -> 
     )
 
 
-def _build_stock_zh_a_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_zh_a_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall(
         "stock_zh_a_daily",
         kwargs=(
@@ -143,10 +180,8 @@ def _build_stock_zh_a_daily(payload: dict[str, Any], start: str, end: str) -> Up
     )
 
 
-def _build_fund_etf_hist_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_fund_etf_hist_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall(
         "fund_etf_hist_em",
         kwargs=(
@@ -159,10 +194,8 @@ def _build_fund_etf_hist_em(payload: dict[str, Any], start: str, end: str) -> Up
     )
 
 
-def _build_fund_lof_hist_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_fund_lof_hist_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall(
         "fund_lof_hist_em",
         kwargs=(
@@ -175,18 +208,14 @@ def _build_fund_lof_hist_em(payload: dict[str, Any], start: str, end: str) -> Up
     )
 
 
-def _build_fund_etf_hist_sina(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_fund_etf_hist_sina(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall("fund_etf_hist_sina", kwargs=(("symbol", identity.prefixed_symbol),))
 
 
-def _build_fund_etf_fund_info_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_fund_etf_fund_info_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     identity = _cn_identity(payload)
-    if identity is None:
-        return None
     return UpstreamCall(
         "fund_etf_fund_info_em",
         kwargs=(("fund", identity.eastmoney_symbol), ("start_date", start), ("end_date", end)),
@@ -194,7 +223,7 @@ def _build_fund_etf_fund_info_em(payload: dict[str, Any], start: str, end: str) 
 
 
 def _build_open_fund_info(indicator: str) -> CallBuilder:
-    def build(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+    def build(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
         del start, end
         return UpstreamCall(
             "fund_open_fund_info_em",
@@ -208,19 +237,19 @@ def _build_open_fund_info(indicator: str) -> CallBuilder:
     return build
 
 
-def _build_money_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_money_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
     return UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", str(payload.get("symbol", ""))),))
 
 
-def _build_financial_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_financial_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
     return UpstreamCall(
         "fund_financial_fund_info_em", kwargs=(("symbol", str(payload.get("symbol", ""))),)
     )
 
 
-def _build_stock_hk_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_hk_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     return UpstreamCall(
         "stock_hk_hist",
         kwargs=(
@@ -233,7 +262,7 @@ def _build_stock_hk_hist(payload: dict[str, Any], start: str, end: str) -> Upstr
     )
 
 
-def _build_stock_hk_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_hk_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
     return UpstreamCall(
         "stock_hk_daily",
@@ -244,7 +273,7 @@ def _build_stock_hk_daily(payload: dict[str, Any], start: str, end: str) -> Upst
     )
 
 
-def _build_stock_us_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_us_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
     return UpstreamCall(
         "stock_us_daily",
@@ -252,7 +281,7 @@ def _build_stock_us_daily(payload: dict[str, Any], start: str, end: str) -> Upst
     )
 
 
-def _build_stock_us_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall | None:
+def _build_stock_us_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     return UpstreamCall(
         "stock_us_hist",
         kwargs=(
@@ -314,11 +343,9 @@ def _filter_points(points: list, start_iso: str | None) -> list:
 def _fetch_pinned_tickflow(payload: dict[str, Any], start: str, end: str) -> pd.DataFrame:
     if not tickflow_enabled():
         raise SourceUnavailable("tickflow source is disabled in this deployment")
-    if payload.get("instrument_type") not in ("cn_exchange_stock", "cn_exchange_fund"):
+    if payload.get("instrument_type") not in _CN_EXCHANGE_TYPES:
         raise SourceUnavailable("tickflow does not serve this instrument type")
     identity = _cn_identity(payload)
-    if identity is None:
-        raise SourceUnavailable("exchange identity could not be resolved for tickflow")
     req = _fetch_request(payload, None)
     df = try_tickflow_klines(
         req, tickflow_symbol(identity.eastmoney_symbol, identity.exchange), start, end
@@ -346,10 +373,6 @@ def _execute_pinned(payload: dict[str, Any], source_name: str) -> list:
             f"source {source_name} is not applicable to instrument type {instrument_type}"
         )
     call = builder(payload, start, end)
-    if call is None:
-        raise SourceUnavailable(
-            f"source {source_name} cannot resolve the exchange identity of this asset"
-        )
     try:
         df = call_with_timeout(call, fetch_timeout_seconds())
     except TimeoutError as exc:
@@ -370,6 +393,12 @@ def _execute_unpinned(payload: dict[str, Any]) -> tuple[list, str]:
         data = fetch_instrument(req)
     except TimeoutError as exc:
         raise TaskFailure("market_provider_timeout", "history fetch timed out") from exc
+    except TaskFailure:
+        raise
+    except AssetIdentityError as exc:
+        # Defense in depth: identity is validated up front, but the fetch
+        # chain must never degrade an identity failure into a retryable one.
+        raise TaskFailure("asset_identity_incomplete", str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise TaskFailure("market_provider_unavailable", f"history fetch failed: {exc}") from exc
     return list(data.points), data.source_name
@@ -386,6 +415,12 @@ def execute_history_sync(payload: dict[str, Any]) -> dict[str, Any]:
     point_type = str(payload.get("point_type", "") or "adjusted_close")
     required_source = str(payload.get("required_source_name", "") or "").strip()
     replacement_mode = str(payload.get("replacement_mode", "full") or "full")
+
+    # Directory identity gate: CN on-exchange assets must carry a definite
+    # exchange from market_assets before any upstream call happens. Fails
+    # non-retryably (asset_identity_incomplete / directory_identity_invalid).
+    if instrument_type in _CN_EXCHANGE_TYPES:
+        _cn_directory_identity(payload)
 
     if required_source:
         points = _execute_pinned(payload, required_source)

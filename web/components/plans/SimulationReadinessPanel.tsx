@@ -95,6 +95,10 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
   const qc = useQueryClient();
   const readinessQ = useSimulationReadiness(planId);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  // Local lock covering the window between the sync mutation resolving (tasks
+  // created/reused) and the readiness query refetching active_tasks. Without
+  // it the button briefly re-enables and can be double-clicked.
+  const [syncLocked, setSyncLocked] = useState(false);
 
   const data = readinessQ.data;
   const wasBlocked = useRef(false);
@@ -105,24 +109,32 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
     if (!data) return;
     if (!data.ready) {
       wasBlocked.current = true;
-      return;
-    }
-    if (wasBlocked.current) {
+    } else if (wasBlocked.current) {
       wasBlocked.current = false;
       setSyncMessage(null);
       void qc.invalidateQueries({ queryKey: ["holdings", planId] });
       void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
+    }
+    // Release the local lock once readiness reflects reality again: either
+    // the tasks now show up as active_tasks (activeCount disables the button)
+    // or everything became ready.
+    if (data.ready || data.active_tasks.length > 0) {
+      setSyncLocked(false);
     }
   }, [data, planId, qc]);
 
   const syncMut = useMutation({
     mutationFn: () => syncMissingAssetHistory(planId),
     onSuccess: (res) => {
+      const hasTask = res.created.length > 0 || res.existing.length > 0;
+      setSyncLocked(hasTask);
       setSyncMessage(buildSyncResultMessage(res));
       void qc.invalidateQueries({ queryKey: ["simulation-readiness", planId] });
     },
-    onError: (e) =>
-      setSyncMessage(e instanceof Error ? `同步任务创建失败：${e.message}` : "同步任务创建失败"),
+    onError: (e) => {
+      setSyncLocked(false);
+      setSyncMessage(e instanceof Error ? `同步任务创建失败：${e.message}` : "同步任务创建失败");
+    },
   });
 
   if (!data || data.ready) return null;
@@ -157,7 +169,8 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
         <Button
           variant="secondary"
           className="min-h-8 px-3 py-1 text-sm"
-          disabled={syncMut.isPending}
+          pending={syncMut.isPending || syncLocked}
+          disabled={syncMut.isPending || syncLocked || activeCount > 0}
           onClick={() => syncMut.mutate()}
           data-testid="sync-missing-history-button"
         >

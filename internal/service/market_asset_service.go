@@ -72,11 +72,15 @@ type AssetDirectorySyncPayload struct {
 
 // AssetHistorySyncPayload is the worker payload for asset_history_sync. Go
 // derives it from the narrow frontend request; the sidecar never sees "mode".
+// The identity fields (market/instrument_type/region_code/exchange/symbol/
+// instrument_kind) always come from the market_assets directory row — never
+// re-parsed from user input or the asset key string.
 type AssetHistorySyncPayload struct {
 	AssetKey           string `json:"asset_key"`
 	Market             string `json:"market"`
 	InstrumentType     string `json:"instrument_type"`
 	RegionCode         string `json:"region_code"`
+	Exchange           string `json:"exchange"`
 	Symbol             string `json:"symbol"`
 	InstrumentKind     string `json:"instrument_kind"`
 	AdjustPolicy       string `json:"adjust_policy"`
@@ -696,6 +700,24 @@ func (s *MarketAssetService) SyncHistory(
 		})
 }
 
+// requireDirectoryIdentity rejects history sync for assets whose directory
+// row lacks the definite exchange identity the sidecar needs. CN on-exchange
+// history must never be fetched by re-inferring the exchange from the code.
+func requireDirectoryIdentity(asset repository.MarketAsset) error {
+	if !strings.EqualFold(asset.Market, "CN") {
+		return nil
+	}
+	switch asset.InstrumentType {
+	case "cn_exchange_stock", "cn_exchange_fund":
+		if strings.TrimSpace(asset.RegionCode) == "" && strings.TrimSpace(asset.Exchange) == "" {
+			return newErr("asset_identity_incomplete",
+				"市场资产目录缺少该场内资产的交易所信息，无法创建历史同步任务；请先修正资产目录数据",
+				map[string]any{"asset_key": asset.AssetKey})
+		}
+	}
+	return nil
+}
+
 func (s *MarketAssetService) buildHistoryPayload(
 	ctx context.Context, asset repository.MarketAsset, req HistorySyncRequest,
 ) (AssetHistorySyncPayload, error) {
@@ -704,10 +726,14 @@ func (s *MarketAssetService) buildHistoryPayload(
 		Market:         asset.Market,
 		InstrumentType: asset.InstrumentType,
 		RegionCode:     asset.RegionCode,
+		Exchange:       asset.Exchange,
 		Symbol:         asset.Symbol,
 		InstrumentKind: asset.InstrumentKind,
 		AdjustPolicy:   req.AdjustPolicy,
 		PointType:      req.PointType,
+	}
+	if err := requireDirectoryIdentity(asset); err != nil {
+		return base, err
 	}
 
 	st, hasState, err := s.assets.GetHistoryState(ctx, req.AssetKey, req.AdjustPolicy, req.PointType)

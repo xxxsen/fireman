@@ -131,7 +131,7 @@ def test_fetch_cn_exchange_fund_resolves_display_name() -> None:
         payload = {
             "market": "CN",
             "instrument_type": "cn_exchange_fund",
-            "source_code": "510300",
+            "source_code": "sh510300",
             "resolved_name": "沪深300ETF华泰柏瑞",
             "start_date": None,
             "end_date": "2026-06-09",
@@ -161,7 +161,7 @@ def test_fetch_fallback_second_source() -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -188,7 +188,7 @@ def test_fetch_cn_stock_fallback_tx() -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "600519",
+                "source_code": "sh600519",
                 "start_date": "2024-01-01",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
@@ -218,7 +218,7 @@ def test_fetch_cn_stock_fallback_sina() -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "000001",
+                "source_code": "sz000001",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -239,7 +239,7 @@ def test_fetch_cn_exchange_fund_qfq_skips_sina() -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -257,7 +257,7 @@ def test_fetch_cn_exchange_fund_third_source() -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -296,8 +296,8 @@ def test_fetch_mutual_fund_money_fallback() -> None:
         body = response.json()
         assert body["code"] == 0
         assert body["data"]["source_name"] == "ak.fund_money_fund_info_em"
-        assert body["data"]["asset_class"] == "cash"
         assert body["data"]["source_kind"] == "money_fund"
+        assert "asset_class" not in body["data"]
 
 
 def test_fetch_mutual_fund_hybrid_open_success() -> None:
@@ -328,12 +328,15 @@ def test_fetch_mutual_fund_hybrid_open_success() -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["code"] == 0
-        assert body["data"]["asset_class"] == "equity"
         assert body["data"]["source_kind"] == "open_fund"
         assert "ak.fund_open_fund_info_em" in body["data"]["source_name"]
+        assert "asset_class" not in body["data"]
 
 
-def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
+def test_fetch_mutual_fund_open_fail_falls_through_fixed_candidates() -> None:
+    """Candidate order is fixed and name-independent: when both open-fund
+    indicators fail, the money source is still attempted — the fund's name
+    never routes or blocks the source list (td/086)."""
     money_df = pd.DataFrame(
         {
             "净值日期": ["2024-01-02"],
@@ -357,7 +360,10 @@ def test_fetch_mutual_fund_hybrid_open_fail_no_money_fallback() -> None:
                 "adjust_policy": "none",
             },
         )
-        assert response.status_code != 200 or response.json()["code"] != 0
+        assert response.status_code == 200
+        body = response.json()
+        assert body["data"]["source_name"] == "ak.fund_money_fund_info_em"
+        assert body["data"]["source_kind"] == "money_fund"
 
 
 def test_fetch_mutual_fund_skips_name_upstream_calls() -> None:
@@ -408,7 +414,7 @@ def test_fetch_timeout_returns_provider_error_envelope() -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -416,7 +422,9 @@ def test_fetch_timeout_returns_provider_error_envelope() -> None:
         assert response.status_code == 504
 
 
-def test_mutual_fund_unsupported_classification() -> None:
+def test_mutual_fund_fof_no_longer_gated_by_classification() -> None:
+    """FOF/commodity/unknown fund types fetch fine: the provider classification
+    gate ("unsupported fund classification") is removed by td/086."""
     df = pd.DataFrame(
         {
             "净值日期": ["2024-01-02"],
@@ -438,5 +446,8 @@ def test_mutual_fund_unsupported_classification() -> None:
                 "adjust_policy": "none",
             },
         )
+        assert response.status_code == 200
         body = response.json()
-        assert body["code"] == 1
+        assert body["code"] == 0
+        assert body["data"]["name"] == "测试混合FOF"
+        assert body["data"]["points"]

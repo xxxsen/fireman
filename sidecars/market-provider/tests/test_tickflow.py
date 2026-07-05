@@ -89,7 +89,7 @@ def _stock_request(**overrides) -> FetchRequest:
     base = {
         "market": "CN",
         "instrument_type": "cn_exchange_stock",
-        "source_code": "600519",
+        "source_code": "sh600519",
         "start_date": "2024-01-01",
         "end_date": "2024-12-31",
         "adjust_policy": "none",
@@ -437,7 +437,7 @@ def test_fetch_stock_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "600519",
+                "source_code": "sh600519",
                 "resolved_name": "贵州茅台",
                 "start_date": "2024-01-01",
                 "end_date": "2024-12-31",
@@ -449,7 +449,7 @@ def test_fetch_stock_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["code"] == 0
     assert body["data"]["source_name"] == TICKFLOW_KLINES_SOURCE
     assert body["data"]["name"] == "贵州茅台"
-    assert body["data"]["asset_class"] == "equity"
+    assert "asset_class" not in body["data"]
     assert body["data"]["currency"] == "CNY"
     assert body["data"]["point_type"] == "adjusted_close"
     assert [p["value"] for p in body["data"]["points"]] == [10.2, 10.3]
@@ -467,7 +467,7 @@ def test_fetch_stock_tickflow_empty_falls_back_to_akshare(
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "600519",
+                "source_code": "sh600519",
                 "end_date": "2026-06-09",
                 "adjust_policy": "none",
             },
@@ -489,7 +489,7 @@ def test_fetch_stock_tickflow_timeout_falls_back_to_akshare(
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "600519",
+                "source_code": "sh600519",
                 "end_date": "2026-06-09",
                 "adjust_policy": "none",
             },
@@ -506,7 +506,7 @@ def test_fetch_stock_qfq_does_not_call_tickflow(monkeypatch: pytest.MonkeyPatch)
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "600519",
+                "source_code": "sh600519",
                 "end_date": "2026-06-09",
                 "adjust_policy": "qfq",
             },
@@ -618,7 +618,7 @@ def test_fetch_default_config_never_calls_tickflow(monkeypatch: pytest.MonkeyPat
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
-                "source_code": "600519",
+                "source_code": "sh600519",
                 "end_date": "2026-06-09",
                 "adjust_policy": "none",
             },

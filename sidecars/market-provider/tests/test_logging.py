@@ -13,7 +13,7 @@ def test_fetch_failure_propagates_and_logs_sources(caplog) -> None:
     req = FetchRequest(
         market="CN",
         instrument_type="cn_exchange_fund",
-        source_code="510300",
+        source_code="sh510300",
         start_date=None,
         end_date="2026-06-09",
         adjust_policy="qfq",

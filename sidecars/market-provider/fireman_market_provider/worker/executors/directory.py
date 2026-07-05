@@ -14,7 +14,6 @@ from typing import Any
 
 import pandas as pd
 
-from ...adapters.cn_code import heuristic_cn_stock_from_bare
 from ...logutil import get_logger
 from ...timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds
 from ..errors import TaskFailure
@@ -95,66 +94,118 @@ def _asset(
     }
 
 
+# Per-exchange spot boards: the exchange is a property of the queried board
+# (an upstream structural fact), so no code-prefix inference is needed.
+_CN_STOCK_BOARDS = (
+    ("stock_sh_a_spot_em", "ak.stock_sh_a_spot_em", "sh", "SH"),
+    ("stock_sz_a_spot_em", "ak.stock_sz_a_spot_em", "sz", "SZ"),
+    ("stock_bj_a_spot_em", "ak.stock_bj_a_spot_em", "bj", "BJ"),
+)
+
+# Eastmoney market ids as returned by the CN fund boards (f13).
+_CN_REGION_BY_MARKET_ID = {1: ("sh", "SH"), 0: ("sz", "SZ")}
+
+
+def _valid_cn_symbol(code: str) -> str | None:
+    digits = "".join(ch for ch in code if ch.isdigit())
+    if len(digits) != 6:
+        return None
+    return digits
+
+
 def _list_cn_exchange_stock() -> list[dict[str, Any]]:
-    source = "ak.stock_zh_a_spot_em"
-    df = _call("stock_zh_a_spot_em")
-    code_col, name_col = _require_columns(df, source)
     as_of = _today()
     out: list[dict[str, Any]] = []
     skipped = 0
-    for code, name in _rows(df, code_col, name_col):
-        parsed = heuristic_cn_stock_from_bare(code)
-        if parsed is None:
-            skipped += 1
-            continue
-        out.append(
-            _asset(
-                market="CN",
-                instrument_type="cn_exchange_stock",
-                region_code=parsed.canonical_code[:2],
-                symbol=parsed.eastmoney_symbol,
-                name=name,
-                exchange=parsed.exchange,
-                kind="stock",
-                currency="CNY",
-                source_name=source,
-                as_of=as_of,
+    for operation, source, region, exchange in _CN_STOCK_BOARDS:
+        df = _call(operation)
+        code_col, name_col = _require_columns(df, source)
+        for code, name in _rows(df, code_col, name_col):
+            symbol = _valid_cn_symbol(code)
+            if symbol is None:
+                skipped += 1
+                continue
+            out.append(
+                _asset(
+                    market="CN",
+                    instrument_type="cn_exchange_stock",
+                    region_code=region,
+                    symbol=symbol,
+                    name=name,
+                    exchange=exchange,
+                    kind="stock",
+                    currency="CNY",
+                    source_name=source,
+                    as_of=as_of,
+                )
             )
-        )
     if skipped:
-        logger.info("directory cn stock: skipped %d rows without exchange identity", skipped)
+        logger.info(
+            "directory cn stock: skipped %d rows with directory_data_incomplete identity",
+            skipped,
+        )
     return out
 
 
 def _cn_fund_entries(operation: str, source: str, kind: str) -> list[dict[str, Any]]:
+    """CN fund board entries with the upstream market id as the exchange source.
+
+    Rows whose market id is absent or unknown are skipped and counted as
+    directory_data_incomplete — the exchange is never inferred from the code.
+    """
     df = _call(operation)
     code_col, name_col = _require_columns(df, source)
+    market_col = "市场标识"
+    if market_col not in df.columns:
+        raise TaskFailure(
+            "directory_data_incomplete",
+            f"{source} did not return the upstream market id column",
+        )
     as_of = _today()
     out: list[dict[str, Any]] = []
-    for code, name in _rows(df, code_col, name_col):
-        parsed = heuristic_cn_stock_from_bare(code)
-        if parsed is None:
+    skipped = 0
+    for _, row in df.iterrows():
+        code = str(row[code_col]).strip()
+        symbol = _valid_cn_symbol(code) if code and code.lower() != "nan" else None
+        raw_market = row[market_col]
+        try:
+            market_id = int(raw_market)
+        except (TypeError, ValueError):
+            market_id = -1
+        region_exchange = _CN_REGION_BY_MARKET_ID.get(market_id)
+        if symbol is None or region_exchange is None:
+            skipped += 1
             continue
+        name = str(row[name_col]).strip()
+        if not name or name.lower() == "nan":
+            name = symbol
+        region, exchange = region_exchange
         out.append(
             _asset(
                 market="CN",
                 instrument_type="cn_exchange_fund",
-                region_code=parsed.canonical_code[:2],
-                symbol=parsed.eastmoney_symbol,
+                region_code=region,
+                symbol=symbol,
                 name=name,
-                exchange=parsed.exchange,
+                exchange=exchange,
                 kind=kind,
                 currency="CNY",
                 source_name=source,
                 as_of=as_of,
             )
         )
+    if skipped:
+        logger.info(
+            "directory %s: skipped %d rows with directory_data_incomplete identity",
+            source,
+            skipped,
+        )
     return out
 
 
 def _list_cn_exchange_fund() -> list[dict[str, Any]]:
-    etf = _cn_fund_entries("fund_etf_spot_em", "ak.fund_etf_spot_em", "etf")
-    lof = _cn_fund_entries("fund_lof_spot_em", "ak.fund_lof_spot_em", "lof")
+    etf = _cn_fund_entries("em_cn_etf_list", "em.cn_etf_list", "etf")
+    lof = _cn_fund_entries("em_cn_lof_list", "em.cn_lof_list", "lof")
     # ETF entries win on symbol collisions (shouldn't happen; defensive).
     seen = {a["symbol"] for a in etf}
     return etf + [a for a in lof if a["symbol"] not in seen]
@@ -198,109 +249,139 @@ def _hk_symbol(code: str) -> str:
     return digits.zfill(5) if digits else ""
 
 
-# Trust markers inside the Eastmoney HK fund board (fs m:116 t:1): REITs and
-# listed trusts share the board with ETFs but are separate directory kinds.
-_HK_TRUST_NAME_MARKERS = ("信托", "房托", "房产")
-# HKEX allocates ETF/ETP codes from 2800 upward; the fund-board entries below
-# that line are REITs/trusts living in the ordinary stock code space.
-_HK_ETP_MIN_CODE = 2800
+# HKEX List of Securities category/sub-category -> directory identity. This is
+# the authoritative upstream classification: no name markers, no code-range
+# splits, and the per-counter Trading Currency replaces -U/-R name suffix
+# guessing. Categories outside this map (bonds, warrants, CBBCs, unit trusts)
+# are intentionally not listed.
+_HKEX_SOURCE = "hkex.list_of_securities"
+_HKEX_EQUITY_SUB_CATEGORIES = {
+    "Equity Securities (Main Board)": "stock",
+    "Equity Securities (GEM)": "stock",
+}
+_HKEX_ETP_SUB_CATEGORIES = {
+    "Exchange Traded Funds": "etf",
+    "Leveraged and Inverse": "leveraged_inverse",
+}
 
 
-def _is_hk_trust(symbol: str, name: str) -> bool:
-    if any(marker in name for marker in _HK_TRUST_NAME_MARKERS):
-        return True
-    try:
-        return int(symbol) < _HK_ETP_MIN_CODE
-    except ValueError:
-        return True
+def _hkex_rows() -> pd.DataFrame:
+    df = _call("hkex_list_of_securities")
+    if df is None or df.empty:
+        raise TaskFailure("directory_data_incomplete", f"{_HKEX_SOURCE} returned no rows")
+    required = ("symbol", "name_en", "category", "sub_category", "currency")
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise TaskFailure(
+            "directory_data_incomplete",
+            f"{_HKEX_SOURCE} returned unexpected columns (missing {missing})",
+        )
+    return df
 
 
-def _hk_fund_currency(name: str) -> str:
-    """HKEX currency counters carry a -U (USD) / -R (RMB) name suffix."""
-    if name.endswith("-U"):
-        return "USD"
-    if name.endswith("-R"):
-        return "CNY"
-    return "HKD"
+def _hk_display_names() -> dict[str, str]:
+    """Chinese display names from the Eastmoney HK boards, keyed by symbol.
+
+    Display-only enrichment: identity (category/kind/currency) always comes
+    from the HKEX list. Both board calls are required so a transient board
+    failure never silently downgrades every name to English.
+    """
+    names: dict[str, str] = {}
+    for operation, source in (("em_hk_equity_list", "em.hk_equity_list"), ("em_hk_fund_list", "em.hk_fund_list")):
+        df = _call(operation)
+        code_col, name_col = _require_columns(df, source)
+        for code, name in _rows(df, code_col, name_col):
+            symbol = _hk_symbol(code)
+            if symbol and name:
+                names[symbol] = name
+    return names
+
+
+def _hk_assets_from_hkex(
+    hkex: pd.DataFrame,
+    display_names: dict[str, str],
+    *,
+    instrument_type: str,
+    kind_by_row,
+    as_of: str,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    skipped = 0
+    seen: set[str] = set()
+    for _, row in hkex.iterrows():
+        kind = kind_by_row(str(row["category"]), str(row["sub_category"]))
+        if kind is None:
+            continue
+        symbol = _hk_symbol(str(row["symbol"]))
+        currency = str(row["currency"]).strip()
+        if not symbol or symbol in seen:
+            continue
+        if not currency:
+            # Trading currency is part of the counter identity; skip rather
+            # than guess when the upstream field is absent.
+            skipped += 1
+            continue
+        seen.add(symbol)
+        name = display_names.get(symbol) or str(row["name_en"]).strip() or symbol
+        out.append(
+            _asset(
+                market="HK",
+                instrument_type=instrument_type,
+                region_code="hk",
+                symbol=symbol,
+                name=name,
+                exchange="HK",
+                kind=kind,
+                currency=currency,
+                source_name=_HKEX_SOURCE,
+                as_of=as_of,
+            )
+        )
+    if skipped:
+        logger.info(
+            "directory %s: skipped %d rows with directory_data_incomplete identity",
+            instrument_type,
+            skipped,
+        )
+    return out
 
 
 def _list_hk_stock() -> list[dict[str, Any]]:
-    equity_source = "em.hk_equity_list"
-    df = _call("em_hk_equity_list")
-    code_col, name_col = _require_columns(df, equity_source)
-    as_of = _today()
-    out: list[dict[str, Any]] = []
-    for code, name in _rows(df, code_col, name_col):
-        symbol = _hk_symbol(code)
-        if not symbol:
-            continue
-        out.append(
-            _asset(
-                market="HK",
-                instrument_type="hk_stock",
-                region_code="hk",
-                symbol=symbol,
-                name=name,
-                exchange="HK",
-                kind="stock",
-                currency="HKD",
-                source_name=equity_source,
-                as_of=as_of,
-            )
-        )
+    hkex = _hkex_rows()
+    display_names = _hk_display_names()
 
-    # REITs / listed trusts live on the fund board upstream but trade (and
-    # import) like stocks, so they stay in hk_stock with kind=reit.
-    fund_source = "em.hk_fund_list"
-    fund_df = _call("em_hk_fund_list")
-    fund_code_col, fund_name_col = _require_columns(fund_df, fund_source)
-    seen = {a["symbol"] for a in out}
-    for code, name in _rows(fund_df, fund_code_col, fund_name_col):
-        symbol = _hk_symbol(code)
-        if not symbol or symbol in seen or not _is_hk_trust(symbol, name):
-            continue
-        out.append(
-            _asset(
-                market="HK",
-                instrument_type="hk_stock",
-                region_code="hk",
-                symbol=symbol,
-                name=name,
-                exchange="HK",
-                kind="reit",
-                currency="HKD",
-                source_name=fund_source,
-                as_of=as_of,
-            )
-        )
-    return out
+    def kind_by_row(category: str, sub_category: str) -> str | None:
+        if category == "Equity":
+            return _HKEX_EQUITY_SUB_CATEGORIES.get(sub_category)
+        if category == "Real Estate Investment Trusts":
+            return "reit"
+        return None
+
+    return _hk_assets_from_hkex(
+        hkex,
+        display_names,
+        instrument_type="hk_stock",
+        kind_by_row=kind_by_row,
+        as_of=_today(),
+    )
 
 
 def _list_hk_etf() -> list[dict[str, Any]]:
-    source = "em.hk_fund_list"
-    df = _call("em_hk_fund_list")
-    code_col, name_col = _require_columns(df, source)
-    as_of = _today()
-    out: list[dict[str, Any]] = []
-    for code, name in _rows(df, code_col, name_col):
-        symbol = _hk_symbol(code)
-        if not symbol or _is_hk_trust(symbol, name):
-            continue
-        out.append(
-            _asset(
-                market="HK",
-                instrument_type="hk_etf",
-                region_code="hk",
-                symbol=symbol,
-                name=name,
-                exchange="HK",
-                kind="etf",
-                currency=_hk_fund_currency(name),
-                source_name=source,
-                as_of=as_of,
-            )
-        )
-    return out
+    hkex = _hkex_rows()
+    display_names = _hk_display_names()
+
+    def kind_by_row(category: str, sub_category: str) -> str | None:
+        if category == "Exchange Traded Products":
+            return _HKEX_ETP_SUB_CATEGORIES.get(sub_category)
+        return None
+
+    return _hk_assets_from_hkex(
+        hkex,
+        display_names,
+        instrument_type="hk_etf",
+        kind_by_row=kind_by_row,
+        as_of=_today(),
+    )
 
 
 def _us_entries(operation: str, source: str, instrument_type: str, kind: str) -> list[dict[str, Any]]:

@@ -2,7 +2,6 @@ package marketdata
 
 import (
 	"errors"
-	"strings"
 )
 
 // Classification holds resolved instrument metadata.
@@ -59,55 +58,6 @@ func UserClassification(market, instrumentType, assetClass, region, currency str
 		Region:     region,
 		Currency:   currency,
 	}, nil
-}
-
-// ResolveClassification maps provider metadata to persisted classification fields.
-func ResolveClassification(market, instrumentType string, data *FetchData) (Classification, error) {
-	if data.AssetClass == "fx" {
-		return Classification{}, errClassificationUnsupported
-	}
-	if _, ok := supportedAssetClasses[data.AssetClass]; !ok {
-		return Classification{}, errClassificationUnsupported
-	}
-
-	region := regionFromComponents(data.ExpenseRatioComponents)
-	if region == "" {
-		region = defaultRegion(market, instrumentType)
-	}
-	if region != "domestic" && region != "foreign" {
-		return Classification{}, errMetadataConflict
-	}
-	if data.Currency == "" {
-		return Classification{}, errMetadataConflict
-	}
-	return Classification{
-		AssetClass: data.AssetClass,
-		Region:     region,
-		Currency:   data.Currency,
-	}, nil
-}
-
-func regionFromComponents(components map[string]any) string {
-	if components == nil {
-		return ""
-	}
-	if v, ok := components["region"]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func defaultRegion(market, _ string) string {
-	switch strings.ToUpper(market) {
-	case "US":
-		return "foreign"
-	case "HK":
-		return "foreign"
-	default:
-		return "domestic"
-	}
 }
 
 // FeeTreatmentForType reports whether historical values already include holding fees.

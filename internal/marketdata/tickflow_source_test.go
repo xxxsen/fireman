@@ -14,7 +14,6 @@ func tickflowFetchData() *FetchData {
 		Provider:       "akshare",
 		ProviderSymbol: "sh510300",
 		Name:           "沪深300ETF",
-		AssetClass:     "equity",
 		Currency:       "CNY",
 		PointType:      "adjusted_close",
 		Points: []HistoricalPoint{

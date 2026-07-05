@@ -25,7 +25,6 @@ InstrumentType = Literal[
     "us_etf",
     "fx_rate",
 ]
-AssetClass = Literal["equity", "bond", "cash", "fx"]
 PointType = Literal["adjusted_close", "nav", "total_return_index", "fx_rate"]
 ExpenseRatioStatus = Literal["provider_verified", "unavailable", "not_applicable"]
 SourceQuality = Literal["full", "partial", "empty"]
@@ -57,7 +56,6 @@ class FetchData(BaseModel):
     provider: str
     provider_symbol: str
     name: str
-    asset_class: AssetClass
     currency: str
     point_type: PointType
     expense_ratio_status: ExpenseRatioStatus

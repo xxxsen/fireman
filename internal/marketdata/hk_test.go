@@ -39,11 +39,10 @@ func TestHKAssetTwentyCompleteYearsGoldenMetrics(t *testing.T) {
 	}
 }
 
-func TestHKClassificationDefaultsForeign(t *testing.T) {
-	cls, err := ResolveClassification("HK", "hk_stock", &FetchData{
-		AssetClass: "equity",
-		Currency:   "HKD",
-	})
+func TestHKUserClassificationForeign(t *testing.T) {
+	// Classification comes from the user's plan holdings only; the provider
+	// never returns a FIRE asset class for HK instruments.
+	cls, err := UserClassification("HK", "hk_stock", "equity", "foreign", "HKD")
 	if err != nil {
 		t.Fatal(err)
 	}

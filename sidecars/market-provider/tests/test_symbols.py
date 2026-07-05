@@ -1,7 +1,6 @@
 """Tests for symbol normalization."""
 
 from fireman_market_provider.adapters.symbols import (
-    cn_exchange_symbol,
     hk_exchange_symbol,
     sina_adjust_policy,
     tx_adjust_policy,
@@ -22,19 +21,11 @@ def test_hk_exchange_symbol() -> None:
     assert hk_exchange_symbol("HK02800") == "02800"
 
 
-def test_cn_exchange_symbol_shanghai() -> None:
-    assert cn_exchange_symbol("600519") == "sh600519"
-    assert cn_exchange_symbol("510300") == "sh510300"
+def test_cn_prefix_guessing_removed() -> None:
+    """cn_exchange_symbol (code-prefix exchange inference) must stay deleted."""
+    import fireman_market_provider.adapters.symbols as symbols
 
-
-def test_cn_exchange_symbol_shenzhen() -> None:
-    assert cn_exchange_symbol("000001") == "sz000001"
-    assert cn_exchange_symbol("159915") == "sz159915"
-
-
-def test_cn_exchange_symbol_passthrough() -> None:
-    assert cn_exchange_symbol("sh600519") == "sh600519"
-    assert cn_exchange_symbol("SZ000001") == "sz000001"
+    assert not hasattr(symbols, "cn_exchange_symbol")
 
 
 def test_adjust_policy_mapping() -> None:

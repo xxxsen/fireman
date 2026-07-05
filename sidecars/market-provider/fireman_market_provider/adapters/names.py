@@ -22,16 +22,13 @@ from ..timeout_util import (
 _ETF_NAME_MAP: dict[str, str] | None = None
 _LOF_NAME_MAP: dict[str, str] | None = None
 _STOCK_NAME_MAP: dict[str, str] | None = None
-_INDEX_NAME_MAP: dict[str, str] | None = None
 _HK_NAME_MAP: dict[str, str] | None = None
 _MUTUAL_FUND_NAME_MAP: dict[str, str] | None = None
 _ETF_LOADED_AT: float = 0.0
 _LOF_LOADED_AT: float = 0.0
 _STOCK_LOADED_AT: float = 0.0
-_INDEX_LOADED_AT: float = 0.0
 _HK_LOADED_AT: float = 0.0
 _MUTUAL_FUND_LOADED_AT: float = 0.0
-_CROSS_LIST_BARE_PREFIXES = ("00", "30")
 _MUTUAL_FUND_REFRESHED_AT: str | None = None
 _MUTUAL_FUND_REFRESH_LOCK = threading.Lock()
 _MUTUAL_FUND_REFRESH_EVENT: threading.Event | None = None
@@ -66,22 +63,18 @@ def _cache_ttl() -> float:
 
 def reset_name_caches() -> None:
     """Clear cached spot tables (for tests only)."""
-    from .cn_code import reset_cn_code_caches
-
-    global _ETF_NAME_MAP, _LOF_NAME_MAP, _STOCK_NAME_MAP, _INDEX_NAME_MAP, _HK_NAME_MAP, _MUTUAL_FUND_NAME_MAP
-    global _ETF_LOADED_AT, _LOF_LOADED_AT, _STOCK_LOADED_AT, _INDEX_LOADED_AT, _HK_LOADED_AT, _MUTUAL_FUND_LOADED_AT
+    global _ETF_NAME_MAP, _LOF_NAME_MAP, _STOCK_NAME_MAP, _HK_NAME_MAP, _MUTUAL_FUND_NAME_MAP
+    global _ETF_LOADED_AT, _LOF_LOADED_AT, _STOCK_LOADED_AT, _HK_LOADED_AT, _MUTUAL_FUND_LOADED_AT
     global _MUTUAL_FUND_REFRESHED_AT, _MUTUAL_FUND_REFRESH_EVENT, _XQ_NAME_CACHE, _XQ_NAME_LOADED_AT
     global _XQ_NEGATIVE_AT, _INDIVIDUAL_NEGATIVE_AT
     _ETF_NAME_MAP = None
     _LOF_NAME_MAP = None
     _STOCK_NAME_MAP = None
-    _INDEX_NAME_MAP = None
     _HK_NAME_MAP = None
     _MUTUAL_FUND_NAME_MAP = None
     _ETF_LOADED_AT = 0.0
     _LOF_LOADED_AT = 0.0
     _STOCK_LOADED_AT = 0.0
-    _INDEX_LOADED_AT = 0.0
     _HK_LOADED_AT = 0.0
     _MUTUAL_FUND_LOADED_AT = 0.0
     _MUTUAL_FUND_REFRESHED_AT = None
@@ -94,7 +87,6 @@ def reset_name_caches() -> None:
             _MUTUAL_FUND_REFRESH_EVENT.set()
         _MUTUAL_FUND_REFRESH_EVENT = None
     _clear_mutual_fund_disk_cache()
-    reset_cn_code_caches()
 
 
 def _mutual_fund_cache_path() -> Path:
@@ -312,31 +304,6 @@ def _load_lof_name_map(deadline: float | None = None) -> dict[str, str]:
     return _LOF_NAME_MAP
 
 
-def _load_index_name_map(deadline: float | None = None) -> dict[str, str]:
-    global _INDEX_NAME_MAP, _INDEX_LOADED_AT
-    ttl = _cache_ttl()
-    now = time.monotonic()
-    if _INDEX_NAME_MAP is not None and now - _INDEX_LOADED_AT < ttl:
-        return _INDEX_NAME_MAP
-    import akshare as ak
-
-    timeout = _remaining_deadline(deadline)
-    df = call_with_timeout(UpstreamCall("index_stock_info"), timeout)
-    code_col = "index_code" if "index_code" in df.columns else None
-    name_col = "display_name" if "display_name" in df.columns else None
-    if code_col is None or name_col is None:
-        _INDEX_NAME_MAP = {}
-        _INDEX_LOADED_AT = now
-        return _INDEX_NAME_MAP
-    _INDEX_NAME_MAP = {
-        _normalize_code(str(row[code_col])): str(row[name_col]).strip()
-        for _, row in df.iterrows()
-        if str(row.get(code_col, "")).strip() and str(row.get(name_col, "")).strip()
-    }
-    _INDEX_LOADED_AT = now
-    return _INDEX_NAME_MAP
-
-
 def _load_stock_name_map(deadline: float | None = None) -> dict[str, str]:
     global _STOCK_NAME_MAP, _STOCK_LOADED_AT
     ttl = _cache_ttl()
@@ -404,23 +371,6 @@ def _lookup_cn_exchange_fund_name_xq(bare: str, deadline: float | None = None) -
     return name
 
 
-def lookup_cross_listed_etf_name(symbol: str, deadline: float | None = None) -> str | None:
-    """Name for SH index ETF sharing a bare code with an SZ stock (e.g. 000510)."""
-    code = _normalize_code(symbol)
-    if not code.startswith(_CROSS_LIST_BARE_PREFIXES):
-        return None
-    try:
-        name = _load_index_name_map(deadline).get(code)
-        if name:
-            return name
-    except Exception:  # noqa: BLE001 - fallback to ETF spot lookup
-        pass
-    try:
-        return _load_etf_name_map(deadline).get(code)
-    except Exception:  # noqa: BLE001 - name lookup is best-effort
-        return None
-
-
 def _lookup_cn_stock_name_individual(bare: str, deadline: float | None = None) -> str | None:
     code = _normalize_code(bare)
     now = time.monotonic()
@@ -456,14 +406,12 @@ def lookup_cn_stock_name(symbol: str, deadline: float | None = None) -> str | No
 
 
 def lookup_cn_exchange_fund_name(symbol: str, deadline: float | None = None) -> str | None:
+    """Display-name lookup across the definite fund spot sources, in fixed order.
+
+    Queries the ETF, LOF and XQ sources for every code — never routes by code
+    prefix, and never feeds results back into directory identity.
+    """
     code = _normalize_code(symbol)
-    if code.startswith(_CROSS_LIST_BARE_PREFIXES):
-        cross = lookup_cross_listed_etf_name(code, deadline)
-        if cross:
-            return cross
-        if lookup_cn_mutual_fund_name(code, deadline):
-            return None
-        return None
     try:
         name = _load_etf_name_map(deadline).get(code)
         if name:

@@ -70,15 +70,16 @@ def dispatch_upstream_call(call: UpstreamCall) -> Any:
             raise ValueError(f"unsupported upstream operation: {call.operation}")
         return fn(*call.args, **_kwargs_dict(call))
 
+    # HKEX official directory listings (authoritative HK security categories).
+    if call.operation.startswith("hkex_"):
+        from .adapters import hkex_directory
+
+        fn = getattr(hkex_directory, call.operation, None)
+        if fn is None:
+            raise ValueError(f"unsupported upstream operation: {call.operation}")
+        return fn(*call.args, **_kwargs_dict(call))
+
     import akshare as ak
-
-    if call.operation == "fund_lof_code_id_map_em":
-        if os.environ.get("MARKET_PROVIDER_TEST_SLOW_LOF") == "1":
-            time.sleep(10)
-            return {}
-        from akshare.fund.fund_lof_em import _fund_lof_code_id_map_em
-
-        return _fund_lof_code_id_map_em()
 
     fn = getattr(ak, call.operation, None)
     if fn is None:

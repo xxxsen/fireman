@@ -13,7 +13,6 @@ type FetchData struct {
 	Provider               string            `json:"provider"`
 	ProviderSymbol         string            `json:"provider_symbol"`
 	Name                   string            `json:"name"`
-	AssetClass             string            `json:"asset_class"`
 	Currency               string            `json:"currency"`
 	PointType              string            `json:"point_type"`
 	ExpenseRatioStatus     string            `json:"expense_ratio_status"`

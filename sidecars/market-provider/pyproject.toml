@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "akshare>=1.16.0",
     "fastapi>=0.115.0",
+    "openpyxl>=3.1.0",
     "pydantic>=2.9.0",
     "requests>=2.31.0",
     "tickflow[pandas]>=0.1.24",

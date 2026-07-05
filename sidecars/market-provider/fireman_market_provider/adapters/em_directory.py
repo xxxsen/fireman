@@ -53,6 +53,11 @@ _HK_EQUITY_FS = "m:116 t:3,m:116 t:4"
 _HK_FUND_FS = "m:116 t:1"
 _US_EQUITY_FS = ",".join(f"m:{m} t:{t}" for m in (105, 106, 107) for t in (1, 2, 3, 4, 10))
 _US_ETF_FS = ",".join(f"m:{m} t:5" for m in (105, 106, 107))
+# CN fund boards (the filters akshare's fund_etf_spot_em / fund_lof_spot_em
+# use). Each row's f13 is Eastmoney's authoritative market id (1=SH, 0=SZ),
+# which replaces any code-prefix exchange inference in directory sync.
+_CN_ETF_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827"
+_CN_LOF_FS = "b:MK0404,b:MK0405,b:MK0406,b:MK0407"
 
 
 def _fetch_page(url: str, fs: str, page: int) -> dict[str, Any]:
@@ -122,6 +127,26 @@ def _to_frame(rows: list[dict[str, Any]], with_market_prefix: bool) -> pd.DataFr
     return pd.DataFrame({"代码": codes, "名称": names})
 
 
+def _to_frame_with_market_id(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Frame with the upstream market id kept as a structured column."""
+    codes: list[str] = []
+    names: list[str] = []
+    market_ids: list[int | None] = []
+    for row in rows:
+        code = str(row.get("f12") or "").strip()
+        if not code:
+            continue
+        raw_market = row.get("f13")
+        try:
+            market_id: int | None = int(raw_market)
+        except (TypeError, ValueError):
+            market_id = None
+        codes.append(code)
+        names.append(str(row.get("f14") or "").strip())
+        market_ids.append(market_id)
+    return pd.DataFrame({"代码": codes, "名称": names, "市场标识": market_ids})
+
+
 def em_hk_equity_list() -> pd.DataFrame:
     """HK main-board + GEM equities (no funds, bonds, warrants or CBBCs)."""
     return _to_frame(_fetch_board(_HK_EQUITY_FS), with_market_prefix=False)
@@ -140,3 +165,13 @@ def em_us_equity_list() -> pd.DataFrame:
 def em_us_etf_list() -> pd.DataFrame:
     """US exchange-traded funds as ``107.SPY`` style codes."""
     return _to_frame(_fetch_board(_US_ETF_FS), with_market_prefix=True)
+
+
+def em_cn_etf_list() -> pd.DataFrame:
+    """CN exchange ETF board with the authoritative per-code market id."""
+    return _to_frame_with_market_id(_fetch_board(_CN_ETF_FS))
+
+
+def em_cn_lof_list() -> pd.DataFrame:
+    """CN exchange LOF board with the authoritative per-code market id."""
+    return _to_frame_with_market_id(_fetch_board(_CN_LOF_FS))

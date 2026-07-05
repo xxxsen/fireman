@@ -32,7 +32,7 @@ def test_fetch_cn_exchange_fund_uses_resolved_name_without_name_upstream() -> No
             {
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "resolved_name": "沪深300ETF",
                 "end_date": "2026-06-13",
                 "adjust_policy": "none",

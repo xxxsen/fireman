@@ -17,15 +17,20 @@ from .fetch_compat import fetch
 
 # Known anomaly symbols — extend when new production bugs are fixed.
 REGRESSION_FUNDS = {
-    "510300": {
+    "sh510300": {
         "instrument_type": "cn_exchange_fund",
         "name": "沪深300ETF",
-        "description": "bare code + adjust none broke primary ETF source",
+        "description": "adjust none broke primary ETF source",
     },
     "000001": {
         "instrument_type": "cn_mutual_fund",
         "name": "华夏成长混合",
-        "description": "NAV-only akshare frame lacks fund name for classification",
+        "description": "NAV-only akshare frame lacks fund name metadata",
+    },
+    "007194": {
+        "instrument_type": "cn_mutual_fund",
+        "name": "长城短债A",
+        "description": "short-bond fund was rejected by the provider classification gate",
     },
     "270042": {
         "instrument_type": "cn_exchange_fund",
@@ -35,8 +40,8 @@ REGRESSION_FUNDS = {
 }
 
 
-def test_regression_510300_bare_code_none_adjust_hits_primary_etf_source() -> None:
-    """510300: fund_etf_hist_em rejects adjust='none'; bare code must resolve to sh510300."""
+def test_regression_510300_directory_code_none_adjust_hits_primary_etf_source() -> None:
+    """sh510300: fund_etf_hist_em rejects adjust='none'; directory code drives the symbol."""
     df = pd.DataFrame({"日期": ["2024-01-02", "2024-01-03"], "收盘": [4.5, 4.6]})
     captured: dict[str, str] = {}
 
@@ -50,7 +55,7 @@ def test_regression_510300_bare_code_none_adjust_hits_primary_etf_source() -> No
             {
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
-                "source_code": "510300",
+                "source_code": "sh510300",
                 "end_date": "2026-06-13",
                 "adjust_policy": "none",
             }
@@ -66,8 +71,24 @@ def test_regression_510300_bare_code_none_adjust_hits_primary_etf_source() -> No
     assert len(body["data"]["points"]) == 2
 
 
-def test_regression_000001_open_fund_nav_frame_classifies_via_name_cache() -> None:
-    """000001: akshare NAV history omits 基金简称; name cache must drive classification."""
+def test_regression_cn_exchange_bare_code_is_identity_error_not_guess() -> None:
+    """A bare CN on-exchange code must fail loudly, never fall back to sh/sz guessing."""
+    df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [4.5]})
+    with patch("akshare.fund_etf_hist_em", return_value=df):
+        response = fetch(
+            {
+                "market": "CN",
+                "instrument_type": "cn_exchange_fund",
+                "source_code": "510300",
+                "end_date": "2026-06-13",
+                "adjust_policy": "none",
+            }
+        )
+    assert response.json()["code"] == 1
+
+
+def test_regression_000001_open_fund_nav_frame_names_via_cache() -> None:
+    """000001: akshare NAV history omits 基金简称; name cache provides the display name."""
     reset_name_caches()
     nav_df = pd.DataFrame(
         {
@@ -94,10 +115,46 @@ def test_regression_000001_open_fund_nav_frame_classifies_via_name_cache() -> No
     assert response.status_code == 200
     body = response.json()
     assert body["code"] == 0
-    assert body["data"]["asset_class"] == "equity"
     assert body["data"]["name"] == REGRESSION_FUNDS["000001"]["name"]
     assert body["data"]["source_kind"] == "open_fund"
+    assert "asset_class" not in body["data"]
     assert len(body["data"]["points"]) == 2
+
+
+def test_regression_007194_short_bond_fund_fetches_via_open_fund() -> None:
+    """007194 长城短债A: history must fetch via the open-fund NAV sources.
+
+    Before td/086, the provider classification gate rejected this frame as
+    "unsupported fund classification" because '短债' matched no keyword.
+    """
+    reset_name_caches()
+    nav_df = pd.DataFrame(
+        {
+            "净值日期": ["2024-01-02", "2024-01-03"],
+            "单位净值": [1.05, 1.051],
+            "日增长率": [0.0, 0.1],
+        }
+    )
+
+    with patch("akshare.fund_open_fund_info_em", return_value=nav_df):
+        response = fetch(
+            {
+                "market": "CN",
+                "instrument_type": "cn_mutual_fund",
+                "source_code": "007194",
+                "resolved_name": REGRESSION_FUNDS["007194"]["name"],
+                "end_date": "2026-06-13",
+                "adjust_policy": "none",
+            }
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["data"]["name"] == "长城短债A"
+    assert body["data"]["source_name"].startswith("ak.fund_open_fund_info_em:")
+    assert body["data"]["points"]
+    assert "asset_class" not in body["data"]
 
 
 def test_regression_270042_fetch_open_fund_with_resolved_name() -> None:

@@ -1,4 +1,12 @@
-"""Instrument-type adapters with ordered AKShare fallback chains."""
+"""Instrument-type adapters with ordered AKShare fallback chains.
+
+Adapters return market data only (points, currency, point type, source
+semantics). They never emit FIRE asset classes — that classification lives
+exclusively in the user's plan holdings. CN on-exchange requests must carry
+an explicit sh/sz/bj region prefix sourced from the asset directory; the
+adapters only convert that identity into upstream query formats and never
+infer an exchange from code prefixes or names.
+"""
 
 from __future__ import annotations
 
@@ -10,22 +18,14 @@ import pandas as pd
 
 from ..logutil import get_logger
 from ..normalize import normalize_dataframe
-from ..schemas import AssetClass, FetchData, FetchRequest, PointType
+from ..schemas import FetchData, FetchRequest, PointType
 from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds, fetch_upstream_timeout_seconds
 from .classification import (
     CnMutualFundSourceKind,
-    FundMeta,
-    classify_cn_mutual_fund,
-    classify_us_symbol,
     default_region,
-    detect_cn_mutual_fund_source_kind,
+    describe_cn_mutual_fund,
 )
-from .cn_code import (
-    cn_exchange_code_from_explicit_or_heuristic,
-    eastmoney_symbol_from_canonical,
-    prefixed_symbol_from_canonical,
-    resolve_cn_etf_fetch_code,
-)
+from .cn_code import require_explicit_cn_code
 from .fallback import try_sources
 from .names import lookup_cn_mutual_fund_name_readonly, name_from_dataframe
 from .symbols import hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
@@ -42,7 +42,6 @@ class AdapterResult:
     df: pd.DataFrame
     source_name: str
     name: str
-    asset_class: AssetClass
     currency: str
     point_type: PointType
     expense_ratio: float | None = None
@@ -103,40 +102,34 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
-    canonical = req.source_code.strip().lower()
-    em_symbol = eastmoney_symbol_from_canonical(canonical)
-    prefixed = prefixed_symbol_from_canonical(canonical)
+    # Exchange identity must be explicit (directory-provided region prefix);
+    # raises AssetIdentityError otherwise instead of guessing from prefixes.
+    identity = require_explicit_cn_code(req.source_code)
+    canonical = identity.canonical_code
+    em_symbol = identity.eastmoney_symbol
+    prefixed = identity.prefixed_symbol
     policy = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
     em_adjust = _cn_stock_em_adjust(policy)
     tx_adjust = tx_adjust_policy(policy)
     sina_adjust = sina_adjust_policy(policy)
 
     if tickflow_allowed_for_request(req):
-        parsed_identity = cn_exchange_code_from_explicit_or_heuristic(canonical)
-        if parsed_identity is None:
-            logger.info(
-                "tickflow klines skip: source_code=%s instrument_type=%s fallback_reason=exchange_identity_unresolved",
-                req.source_code,
-                req.instrument_type,
+        tf_df = try_tickflow_klines(
+            req,
+            tickflow_symbol(identity.eastmoney_symbol, identity.exchange),
+            start,
+            end,
+        )
+        if tf_df is not None:
+            name = (req.resolved_name or "").strip() or canonical
+            return AdapterResult(
+                df=tf_df,
+                source_name=TICKFLOW_KLINES_SOURCE,
+                name=name,
+                currency="CNY",
+                point_type="adjusted_close",
+                region="domestic",
             )
-        else:
-            tf_df = try_tickflow_klines(
-                req,
-                tickflow_symbol(parsed_identity.eastmoney_symbol, parsed_identity.exchange),
-                start,
-                end,
-            )
-            if tf_df is not None:
-                name = (req.resolved_name or "").strip() or canonical
-                return AdapterResult(
-                    df=tf_df,
-                    source_name=TICKFLOW_KLINES_SOURCE,
-                    name=name,
-                    asset_class="equity",
-                    currency="CNY",
-                    point_type="adjusted_close",
-                    region="domestic",
-                )
 
     sources: list[tuple[str, UpstreamCall]] = [
         (
@@ -186,7 +179,6 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
         df=df,
         source_name=source_name,
         name=name,
-        asset_class="equity",
         currency="CNY",
         point_type="adjusted_close",
         region="domestic",
@@ -209,10 +201,11 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
-    parsed = resolve_cn_etf_fetch_code(req.source_code)
-    canonical = parsed.canonical_code
-    em_symbol = parsed.eastmoney_symbol
-    prefixed = parsed.prefixed_symbol
+    # Directory identity only: the request must carry an explicit region
+    # prefix; the parse below is pure format conversion.
+    identity = require_explicit_cn_code(req.source_code)
+    em_symbol = identity.eastmoney_symbol
+    prefixed = identity.prefixed_symbol
     adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
     em_adjust = _cn_em_adjust(adjust)
     tx_adjust = tx_adjust_policy(adjust)
@@ -223,7 +216,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     if tickflow_allowed_for_request(req):
         tf_df = try_tickflow_klines(
             req,
-            tickflow_symbol(parsed.eastmoney_symbol, parsed.exchange),
+            tickflow_symbol(identity.eastmoney_symbol, identity.exchange),
             start,
             end,
         )
@@ -232,7 +225,6 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
                 df=tf_df,
                 source_name=TICKFLOW_KLINES_SOURCE,
                 name=_fetch_display_name(req.resolved_name, em_symbol, tf_df),
-                asset_class="equity",
                 currency="CNY",
                 point_type="adjusted_close",
                 region="domestic",
@@ -290,10 +282,12 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
         ),
     )
 
-    # Select an identity-consistent source set from the resolved kind so a code that
-    # collides across ETF/LOF/stock never gets its history silently pulled from the
-    # wrong instrument. fund_etf_hist_em (ETF) and fund_lof_hist_em (LOF) are both keyed
-    # by the bare 6-digit code, so mixing them is the core data-mixing risk.
+    # Select an identity-consistent source set from the directory-resolved kind
+    # so a code that collides across ETF/LOF/stock never gets its history
+    # silently pulled from the wrong instrument. fund_etf_hist_em (ETF) and
+    # fund_lof_hist_em (LOF) are both keyed by the bare 6-digit code, so mixing
+    # them is the core data-mixing risk. The kind is only ever the directory's
+    # structured field — never guessed from names or codes.
     kind = (req.instrument_kind or "").strip().lower()
     sources: list[tuple[str, UpstreamCall]]
     if kind == "lof":
@@ -306,7 +300,8 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
             sources.append(sina_hist)
         sources.append(etf_info)
     else:
-        # Unknown/absent kind (e.g. refresh path): keep the legacy full chain.
+        # Unknown/absent kind: try every compatible source in a fixed order.
+        # A failing source never feeds back into the asset's identity.
         sources = [etf_hist, tx_hist]
         if adjust == "none":
             sources.append(sina_hist)
@@ -320,90 +315,81 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
         df=df,
         source_name=source_name,
         name=name,
-        asset_class="equity",
         currency="CNY",
         point_type="adjusted_close",
         region="domestic",
     )
 
 
+# Fixed candidate sources for cn_mutual_fund, tried in this order for every
+# fund regardless of its name. CSRC mutual fund codes are unique across the
+# open/money/financial fund families, so trying every family is identity-safe;
+# the successful source decides source_kind. Name keywords must never route
+# or gate these attempts.
+_CN_MUTUAL_FUND_ATTEMPTS: tuple[tuple[CnMutualFundSourceKind, str, str], ...] = (
+    ("open_fund", "total_return_index", "ak.fund_open_fund_info_em:累计净值走势"),
+    ("open_fund", "nav", "ak.fund_open_fund_info_em:单位净值走势"),
+    ("money_fund", "nav", "ak.fund_money_fund_info_em"),
+    ("financial_fund", "nav", "ak.fund_financial_fund_info_em"),
+)
+
+
+def _cn_mutual_fund_call(source_name: str, symbol: str) -> UpstreamCall:
+    if source_name == "ak.fund_open_fund_info_em:累计净值走势":
+        return UpstreamCall(
+            "fund_open_fund_info_em",
+            kwargs=(("symbol", symbol), ("indicator", "累计净值走势"), ("period", "成立来")),
+        )
+    if source_name == "ak.fund_open_fund_info_em:单位净值走势":
+        return UpstreamCall(
+            "fund_open_fund_info_em",
+            kwargs=(("symbol", symbol), ("indicator", "单位净值走势"), ("period", "成立来")),
+        )
+    if source_name == "ak.fund_money_fund_info_em":
+        return UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", symbol),))
+    return UpstreamCall("fund_financial_fund_info_em", kwargs=(("symbol", symbol),))
+
+
 def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
     symbol = req.source_code
-    source_kind = detect_cn_mutual_fund_source_kind(symbol, req.resolved_name)
     errors: list[str] = []
 
-    all_attempts: list[tuple[CnMutualFundSourceKind, str, str, str, UpstreamCall]] = [
-        (
-            "open_fund",
-            "累计净值走势",
-            "total_return_index",
-            "ak.fund_open_fund_info_em:累计净值走势",
-            UpstreamCall(
-                "fund_open_fund_info_em",
-                kwargs=(("symbol", symbol), ("indicator", "累计净值走势"), ("period", "成立来")),
-            ),
-        ),
-        (
-            "open_fund",
-            "单位净值走势",
-            "nav",
-            "ak.fund_open_fund_info_em:单位净值走势",
-            UpstreamCall(
-                "fund_open_fund_info_em",
-                kwargs=(("symbol", symbol), ("indicator", "单位净值走势"), ("period", "成立来")),
-            ),
-        ),
-        (
-            "money_fund",
-            "money",
-            "nav",
-            "ak.fund_money_fund_info_em",
-            UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", symbol),)),
-        ),
-        (
-            "financial_fund",
-            "financial",
-            "nav",
-            "ak.fund_financial_fund_info_em",
-            UpstreamCall("fund_financial_fund_info_em", kwargs=(("symbol", symbol),)),
-        ),
-    ]
-    attempts = [item for item in all_attempts if item[0] == source_kind]
     logger.info(
-        "fetch cn_mutual_fund %s: date range %s..%s source_kind=%s (%d candidate sources)",
+        "fetch cn_mutual_fund %s: date range %s..%s (%d fixed candidate sources)",
         symbol,
         start,
         end,
-        source_kind,
-        len(attempts),
+        len(_CN_MUTUAL_FUND_ATTEMPTS),
     )
 
-    for _kind, _label, point_type, source_name, call in attempts:
+    for source_kind, point_type, source_name in _CN_MUTUAL_FUND_ATTEMPTS:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:
             raise TimeoutError(f"fetch cn_mutual_fund {symbol}: deadline exceeded")
         timeout = fetch_upstream_timeout_seconds(remaining)
+        call = _cn_mutual_fund_call(source_name, symbol)
         try:
             df = call_with_timeout(call, timeout)
             if df is None or df.empty:
                 errors.append(f"{source_name}: empty")
                 logger.warning("fetch cn_mutual_fund %s: %s returned empty", symbol, source_name)
                 continue
-            meta = classify_cn_mutual_fund(df, symbol, req.resolved_name)
-            if meta.asset_class is None:
-                errors.append(f"{source_name}: unsupported fund classification")
-                logger.warning(
-                    "fetch cn_mutual_fund %s: %s unsupported classification",
-                    symbol,
-                    source_name,
-                )
-                continue
+            meta = describe_cn_mutual_fund(df, symbol, req.resolved_name)
             df = _filter_df_by_date(df, start, end)
             if df.empty:
                 errors.append(f"{source_name}: empty after date filter")
                 logger.warning(
                     "fetch cn_mutual_fund %s: %s empty after date filter",
+                    symbol,
+                    source_name,
+                )
+                continue
+            points_probe = normalize_dataframe(df)
+            if not points_probe:
+                errors.append(f"{source_name}: no parseable points")
+                logger.warning(
+                    "fetch cn_mutual_fund %s: %s produced no parseable points",
                     symbol,
                     source_name,
                 )
@@ -419,7 +405,6 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                 df=df,
                 source_name=source_name,
                 name=meta.name,
-                asset_class=meta.asset_class,
                 currency="CNY",
                 point_type=point_type,  # type: ignore[arg-type]
                 expense_ratio=meta.expense_ratio,
@@ -440,12 +425,12 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                 exc,
             )
 
-    summary = "; ".join(errors) or f"cn_mutual_fund fetch failed for source_kind={source_kind}"
+    summary = "; ".join(errors) or "cn_mutual_fund fetch failed for all candidate sources"
     logger.error("fetch cn_mutual_fund %s: all sources failed: %s", symbol, summary)
     raise RuntimeError(summary)
 
 
-def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: AssetClass) -> AdapterResult:
+def _fetch_us_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
@@ -469,19 +454,18 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str, default_type: Asse
         ),
     ]
     df, source_name = try_sources("us equity", sources, deadline)
-    meta = classify_us_symbol(symbol, default_type)
+    name = (req.resolved_name or "").strip() or symbol
     return AdapterResult(
         df=df,
         source_name=source_name,
-        name=meta.name,
-        asset_class=meta.asset_class,
+        name=name,
         currency="USD",
         point_type="adjusted_close",
         region="foreign",
     )
 
 
-def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: AssetClass) -> AdapterResult:
+def _fetch_hk_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
     import akshare as ak
 
@@ -510,12 +494,10 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str, default_type: Asse
     if source_name == "ak.stock_hk_daily":
         df = _filter_df_by_date(df, start, end)
     name = _fetch_display_name(req.resolved_name, symbol, df)
-    meta = classify_us_symbol(name, default_type)
     return AdapterResult(
         df=df,
         source_name=source_name,
-        name=meta.name,
-        asset_class=meta.asset_class,
+        name=name,
         currency="HKD",
         point_type="adjusted_close",
         region="foreign",
@@ -543,7 +525,6 @@ def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
         df=df,
         source_name=source_name,
         name=code,
-        asset_class="fx",
         currency="CNY",
         point_type="fx_rate",
         region="domestic",
@@ -554,10 +535,10 @@ _REGISTRY: dict[str, ProviderFn] = {
     "cn_exchange_stock": _fetch_cn_exchange_stock,
     "cn_exchange_fund": _fetch_cn_exchange_fund,
     "cn_mutual_fund": _fetch_cn_mutual_fund,
-    "hk_stock": lambda req, s, e: _fetch_hk_equity(req, s, e, "equity"),
-    "hk_etf": lambda req, s, e: _fetch_hk_equity(req, s, e, "equity"),
-    "us_stock": lambda req, s, e: _fetch_us_equity(req, s, e, "equity"),
-    "us_etf": lambda req, s, e: _fetch_us_equity(req, s, e, "equity"),
+    "hk_stock": _fetch_hk_equity,
+    "hk_etf": _fetch_hk_equity,
+    "us_stock": _fetch_us_equity,
+    "us_etf": _fetch_us_equity,
     "fx_rate": _fetch_fx_rate,
 }
 
@@ -606,10 +587,8 @@ def fetch_instrument(req: FetchRequest) -> FetchData:
         quality = "partial"
 
     provider_symbol = req.source_code.strip().lower()
-    if req.instrument_type == "cn_exchange_fund":
-        provider_symbol = resolve_cn_etf_fetch_code(req.source_code).canonical_code
-    elif req.instrument_type == "cn_exchange_stock":
-        provider_symbol = prefixed_symbol_from_canonical(provider_symbol)
+    if req.instrument_type in ("cn_exchange_fund", "cn_exchange_stock"):
+        provider_symbol = require_explicit_cn_code(req.source_code).canonical_code
     elif req.instrument_type in ("hk_stock", "hk_etf"):
         provider_symbol = hk_exchange_symbol(req.source_code)
 
@@ -617,7 +596,6 @@ def fetch_instrument(req: FetchRequest) -> FetchData:
         provider="akshare",
         provider_symbol=provider_symbol,
         name=result.name,
-        asset_class=result.asset_class,
         currency=result.currency,
         point_type=result.point_type,
         expense_ratio_status=expense_status,  # type: ignore[arg-type]

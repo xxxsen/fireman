@@ -61,18 +61,20 @@ def test_lookup_cn_exchange_fund_name_uses_xq_when_spot_missing() -> None:
         assert lookup_cn_exchange_fund_name("270042") == "广发纳指100ETF联接（QDII）人民币A"
 
 
-def test_lookup_cross_listed_etf_name_uses_index_not_xq() -> None:
+def test_lookup_fund_name_never_routes_by_code_prefix() -> None:
+    """Cross-list prefix rules are gone: every code walks ETF → LOF → XQ."""
     empty = pd.DataFrame({"代码": [], "名称": []})
-    index = pd.DataFrame({"index_code": ["000510"], "display_name": ["中证A500"], "publish_date": ["2005-01-04"]})
     xq = pd.DataFrame({"item": ["基金名称"], "value": ["诺安永鑫一年定开债券"]})
 
-    def _xq_should_not_run(**_kwargs: str) -> pd.DataFrame:
-        raise AssertionError("XQ lookup must not run for cross-listed bare codes")
+    def _index_should_not_run(**_kwargs: str) -> pd.DataFrame:
+        raise AssertionError("index lookup must not run; prefix routing was removed")
 
     with patch("akshare.fund_etf_spot_em", return_value=empty), patch(
-        "akshare.index_stock_info", return_value=index
-    ), patch("akshare.fund_individual_basic_info_xq", side_effect=_xq_should_not_run):
-        assert lookup_cn_exchange_fund_name("000510") == "中证A500"
+        "akshare.fund_lof_spot_em", return_value=empty
+    ), patch("akshare.index_stock_info", side_effect=_index_should_not_run), patch(
+        "akshare.fund_individual_basic_info_xq", return_value=xq
+    ):
+        assert lookup_cn_exchange_fund_name("000510") == "诺安永鑫一年定开债券"
 
 
 def test_lookup_cn_stock_name_uses_individual_when_spot_missing() -> None:
