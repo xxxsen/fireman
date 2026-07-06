@@ -76,7 +76,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	runner := jobs.NewSimulationRunner(pool, simRepo)
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(pool))
 	worker := jobs.NewWorker(
-		pool, jobRepo, simRepo, runner, analysisRunner,
+		pool, jobRepo, simRepo, runner, analysisRunner, services.Research,
 		services.EventHub, logger, maintenance.Active,
 	)
 

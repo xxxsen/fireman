@@ -57,7 +57,7 @@ func TestCancelRequestedDuringWorkerShutdown(t *testing.T) {
 	}
 
 	probe := make(chan func() bool, 1)
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), cancelProbeRunner{probe: probe}, nil, NewEventHub(),
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), cancelProbeRunner{probe: probe}, nil, nil, NewEventHub(),
 		nil, nil)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

@@ -23,7 +23,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner,
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, services.Research,
 		services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -127,7 +127,7 @@ func TestAttachedAnalysisListByRunRejectsForeignRun(t *testing.T) {
 	services := buildServices(db)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner,
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, services.Research,
 		services.EventHub, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

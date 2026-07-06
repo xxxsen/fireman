@@ -29,7 +29,7 @@ func setupFullStackIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.C
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
 	worker := jobs.NewWorker(
 		db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
-		runner, analysisRunner, services.EventHub, nil, nil,
+		runner, analysisRunner, services.Research, services.EventHub, nil, nil,
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

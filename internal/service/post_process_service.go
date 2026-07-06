@@ -72,6 +72,7 @@ type PostProcessService struct {
 	assets     *repository.MarketAssetRepo
 	instRepo   *repository.InstrumentRepo
 	marketRepo *repository.MarketDataRepo
+	research   *repository.ResearchRepo
 	resources  *resourcedb.DB
 	records    postProcessRecordStore
 	now        func() time.Time
@@ -89,6 +90,7 @@ func NewPostProcessService(
 	return &PostProcessService{
 		sql: sqlDB, tasks: tasks, assets: assets,
 		instRepo: instRepo, marketRepo: marketRepo,
+		research:  repository.NewResearchRepo(sqlDB),
 		resources: resources, records: records,
 		now: time.Now,
 	}

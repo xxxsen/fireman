@@ -538,6 +538,14 @@ func (s *PostProcessService) finishHistoryCommit(
 		return err
 	}
 
+	// Research screener metrics projection (td/099): keep it in the same
+	// transaction so the screener never sees points without metrics.
+	metrics := ComputeResearchAssetMetrics(
+		payload.AssetKey, payload.AdjustPolicy, payload.PointType, series, now.UnixMilli())
+	if err := s.research.UpsertMetricsTx(ctx, tx, metrics); err != nil {
+		return err
+	}
+
 	successAt := now.UnixMilli()
 	sourceName := result.SourceName
 	if payload.ReplacementMode == "merge" {

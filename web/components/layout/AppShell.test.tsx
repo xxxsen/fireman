@@ -36,6 +36,39 @@ describe("AppShell", () => {
     }
   });
 
+  it("includes 组合研究 entry and marks it active on /research routes", () => {
+    for (const pathname of ["/research", "/research/screener", "/research/collections/rc_1"]) {
+      mockPathname.mockReturnValue(pathname);
+      const { unmount } = render(
+        <AppShell>
+          <div>content</div>
+        </AppShell>,
+      );
+
+      for (const link of screen.getAllByRole("link", { name: "组合研究" })) {
+        expect(link).toHaveAttribute("href", "/research");
+        expect(link).toHaveAttribute("aria-current", "page");
+      }
+      for (const link of screen.getAllByRole("link", { name: "计划" })) {
+        expect(link).not.toHaveAttribute("aria-current", "page");
+      }
+
+      unmount();
+    }
+  });
+
+  it("does not highlight 组合研究 outside /research", () => {
+    mockPathname.mockReturnValue("/assets");
+    render(
+      <AppShell>
+        <div>content</div>
+      </AppShell>,
+    );
+    for (const link of screen.getAllByRole("link", { name: "组合研究" })) {
+      expect(link).not.toHaveAttribute("aria-current", "page");
+    }
+  });
+
   it("includes 配置模板 navigation entry", () => {
     mockPathname.mockReturnValue("/scenarios");
     render(

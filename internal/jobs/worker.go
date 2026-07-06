@@ -33,6 +33,16 @@ type Runner interface {
 	) error
 }
 
+// ResearchRunnerIface executes research portfolio backtest jobs.
+type ResearchRunnerIface interface {
+	ExecuteBacktestJob(
+		ctx context.Context,
+		jobID string,
+		cancelCheck func() bool,
+		progress func(done, total int, phase string),
+	) error
+}
+
 // AnalysisRunnerIface executes stress and sensitivity jobs.
 type AnalysisRunnerIface interface {
 	RunStress(
@@ -56,6 +66,7 @@ type Worker struct {
 	sims              *repository.SimulationRepo
 	runner            Runner
 	analysis          AnalysisRunnerIface
+	research          ResearchRunnerIface
 	events            *EventHub
 	logger            *slog.Logger
 	interval          time.Duration
@@ -69,6 +80,7 @@ func NewWorker(
 	sims *repository.SimulationRepo,
 	runner Runner,
 	analysis AnalysisRunnerIface,
+	research ResearchRunnerIface,
 	events *EventHub,
 	logger *slog.Logger,
 	maintenance func() bool,
@@ -78,7 +90,8 @@ func NewWorker(
 	}
 	return &Worker{
 		db: db, jobs: jobs, sims: sims, runner: runner, analysis: analysis,
-		events: events, logger: logger, maintenance: maintenance,
+		research: research,
+		events:   events, logger: logger, maintenance: maintenance,
 		interval: 500 * time.Millisecond,
 	}
 }
@@ -234,6 +247,9 @@ func (w *Worker) execute(ctx context.Context, job repository.Job) {
 	case repository.JobTypeSensitivity:
 		w.executeSensitivity(ctx, job)
 		return
+	case repository.JobTypeResearchBacktest:
+		w.executeResearch(ctx, job)
+		return
 	}
 	run, err := w.sims.GetByJobID(ctx, job.ID)
 	if err != nil {
@@ -336,6 +352,32 @@ func (w *Worker) finishAnalysis(ctx context.Context, jobID string, computeSuccee
 	w.events.Publish(Event{
 		JobID: jobID, Status: repository.JobStatusCanceled, ErrorCode: code, ErrorMessage: msg,
 	})
+}
+
+// executeResearch delegates one research_backtest job to the research
+// runner. The runner keeps run status converged with the outcome; here only
+// the job row is finalized. Shutdowns without a pending cancel leave the job
+// running so the stale reconciler can requeue it.
+func (w *Worker) executeResearch(ctx context.Context, job repository.Job) {
+	if w.research == nil {
+		w.fail(ctx, job.ID, "runner_missing", "research runner not configured")
+		return
+	}
+	cancelCheck := w.cancelCheck(ctx, job.ID)
+	progress := w.jobProgress(ctx, job.ID)
+	err := w.research.ExecuteBacktestJob(ctx, job.ID, cancelCheck, progress)
+	if err != nil {
+		if ctx.Err() != nil && !cancelCheck() {
+			return
+		}
+		if cancelCheck() || errors.Is(err, context.Canceled) {
+			w.finish(ctx, job.ID, repository.JobStatusCanceled, "canceled by user", "")
+			return
+		}
+		w.fail(ctx, job.ID, "research_backtest_failed", err.Error())
+		return
+	}
+	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
 }
 
 func (w *Worker) executeStress(ctx context.Context, job repository.Job) {

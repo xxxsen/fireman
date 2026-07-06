@@ -34,7 +34,7 @@ func TestWorkerRequeuesRunningJobOnShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil,
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil,
 		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,7 +96,7 @@ func TestWorkerStartBlocksUntilActiveJobExits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil,
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil,
 		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -163,7 +163,7 @@ func TestWorkerLoopExitsOnContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil,
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 30 * time.Second}, nil, nil,
 		NewEventHub(), nil, nil)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -228,7 +228,7 @@ func TestWorkerHeartbeatStopsAfterJobCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, sims, NewSimulationRunner(db, sims), nil, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, sims, NewSimulationRunner(db, sims), nil, nil, NewEventHub(), nil, nil)
 	w.heartbeatInterval = 50 * time.Millisecond
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -284,7 +284,7 @@ func TestWorkerSingleHeartbeatTickerDuringLongTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil,
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), blockingRunner{block: 2 * time.Second}, nil, nil,
 		NewEventHub(), nil, nil)
 	w.heartbeatInterval = 50 * time.Millisecond
 	runCtx, cancel := context.WithCancel(context.Background())

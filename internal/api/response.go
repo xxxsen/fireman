@@ -61,6 +61,9 @@ func FailErr(c *gin.Context, err error) {
 		case "simulation_not_found", "path_not_found", "job_not_found",
 			"task_not_found", "market_asset_not_found":
 			status = http.StatusNotFound
+		case "research_collection_not_found", "research_item_not_found",
+			"research_run_not_found", "saved_filter_not_found":
+			status = http.StatusNotFound
 		case "market_asset_history_empty":
 			status = http.StatusBadRequest
 		case "simulation_input_invalid", "plan_weights_invalid", "invalid_backup", "invalid_request":

@@ -60,7 +60,7 @@ func TestAnalysisSupersededRunningJobConvergesToCanceled(t *testing.T) {
 	}
 
 	runner := &barrierAnalysisRunner{reached: make(chan struct{}), release: make(chan struct{})}
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), nil, runner, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), nil, runner, nil, NewEventHub(), nil, nil)
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 	go w.Start(workerCtx, 1)
@@ -123,7 +123,7 @@ func TestAnalysisRunningJobSucceedsWithoutSupersede(t *testing.T) {
 	}
 
 	runner := &barrierAnalysisRunner{reached: make(chan struct{}), release: make(chan struct{})}
-	w := NewWorker(db, repo, repository.NewSimulationRepo(db), nil, runner, NewEventHub(), nil, nil)
+	w := NewWorker(db, repo, repository.NewSimulationRepo(db), nil, runner, nil, NewEventHub(), nil, nil)
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 	go w.Start(workerCtx, 1)

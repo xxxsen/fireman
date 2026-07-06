@@ -32,6 +32,7 @@ type Services struct {
 	Stress              *service.StressService
 	Sensitivity         *service.SensitivityService
 	Jobs                *service.JobService
+	Research            *service.ResearchService
 	Dashboard           *service.DashboardService
 	System              *service.SystemService
 	Admin               *service.AdminService
@@ -83,6 +84,10 @@ func NewServices(
 	)
 
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, marketAssetRepo, hash, snapSvc)
+	researchSvc := service.NewResearchService(
+		db, repository.NewResearchRepo(db), marketAssetRepo, workerTaskRepo, jobRepo,
+		instRepo, marketRepo, plans, holdings, marketAssetSvc,
+	)
 	adminSvc := service.NewAdminService(
 		workerTaskRepo, jobRepo, repository.NewPostProcessRecordRepo(db),
 		marketAssetRepo, marketAssetSvc, resources, dbPath,
@@ -105,6 +110,7 @@ func NewServices(
 		Stress:              stressSvc,
 		Sensitivity:         sensitivitySvc,
 		Jobs:                service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),
+		Research:            researchSvc,
 		Dashboard:           dashboardSvc,
 		System:              service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
 		Admin:               adminSvc,

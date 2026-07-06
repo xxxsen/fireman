@@ -50,7 +50,7 @@ func TestShutdownWaitsForWorkerBeforeDBClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := jobs.NewWorker(db, repo, repository.NewSimulationRepo(db), shutdownBlockingRunner{block: 35 * time.Second}, nil,
+	w := jobs.NewWorker(db, repo, repository.NewSimulationRepo(db), shutdownBlockingRunner{block: 35 * time.Second}, nil, nil,
 		jobs.NewEventHub(), nil, nil)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	workerDone := make(chan struct{})
