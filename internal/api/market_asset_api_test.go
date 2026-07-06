@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-func postJSON(t *testing.T, client *http.Client, url string, body any) (*http.Response, []byte) {
+type testResponse struct {
+	StatusCode int
+}
+
+func postJSON(t *testing.T, client *http.Client, url string, body any) (testResponse, []byte) {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -20,26 +24,26 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) (*http.Re
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, readBody(t, resp)
+	return testResponse{StatusCode: resp.StatusCode}, readBody(t, resp)
 }
 
-func getJSON(t *testing.T, client *http.Client, url string) (*http.Response, []byte) {
+func getJSON(t *testing.T, client *http.Client, url string) (testResponse, []byte) {
 	t.Helper()
 	resp, err := client.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, readBody(t, resp)
+	return testResponse{StatusCode: resp.StatusCode}, readBody(t, resp)
 }
 
-func taskFromResult(t *testing.T, body []byte) (task map[string]any, existed bool) {
+func taskFromResult(t *testing.T, body []byte) (map[string]any, bool) {
 	t.Helper()
 	data := decodeEnvelope(t, body)["data"].(map[string]any)
-	task, _ = data["task"].(map[string]any)
+	task, _ := data["task"].(map[string]any)
 	if task == nil {
 		t.Fatalf("response has no task: %s", body)
 	}
-	existed, _ = data["existed"].(bool)
+	existed, _ := data["existed"].(bool)
 	return task, existed
 }
 

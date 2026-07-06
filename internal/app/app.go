@@ -93,7 +93,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		DB: pool, DBPath: cfg.DBPath, Logger: logger, Services: services,
 	})
 
-	internalRouter := api.NewInternalRouter(api.InternalDeps{
+	internalRouter := api.NewInternalRouter(ctx, api.InternalDeps{
 		Logger: logger, PostProcess: newPostProcessService(pool, resources), Resources: resources,
 	})
 
