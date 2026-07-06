@@ -214,7 +214,7 @@ func (r *MarketAssetRepo) ListAssetsByMarketSymbol(
 	if err != nil {
 		return nil, wrapSQL("list market assets by market+symbol", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []MarketAsset
 	for rows.Next() {
 		a, err := scanMarketAsset(rows)
@@ -505,7 +505,7 @@ func scanHistoryState(row rowScanner) (MarketAssetHistoryState, error) {
 		&st.DataAsOf, &st.PointCount, &st.SourceName, &st.UpdatedAt,
 	)
 	if err != nil {
-		return MarketAssetHistoryState{}, err
+		return MarketAssetHistoryState{}, wrapSQL("scan market asset history state", err)
 	}
 	return st, nil
 }

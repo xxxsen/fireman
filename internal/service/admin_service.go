@@ -200,10 +200,34 @@ func (s *AdminService) syncHealth(ctx context.Context, now time.Time) (AdminSync
 	var health AdminSyncHealth
 	staleBefore := now.Add(-adminStaleSync).UnixMilli()
 
+	directoryScopes, err := s.directoryScopeHealth(ctx, staleBefore)
+	if err != nil {
+		return AdminSyncHealth{}, err
+	}
+	health.DirectoryScopes = directoryScopes
+
+	fxPairs, err := s.fxPairHealth(ctx)
+	if err != nil {
+		return AdminSyncHealth{}, err
+	}
+	health.FXPairs = fxPairs
+
+	agg, err := s.assets.AggregateHistoryStates(ctx, staleBefore)
+	if err != nil {
+		return AdminSyncHealth{}, wrapRepo("aggregate history states", err)
+	}
+	health.HistoryDimensions = agg
+	return health, nil
+}
+
+func (s *AdminService) directoryScopeHealth(
+	ctx context.Context, staleBefore int64,
+) ([]AdminDirectoryScopeHealth, error) {
+	out := make([]AdminDirectoryScopeHealth, 0, len(DirectoryScopes))
 	for _, scope := range DirectoryScopes {
 		view, err := s.marketAssets.BuildScopeSyncView(ctx, scope)
 		if err != nil {
-			return AdminSyncHealth{}, err
+			return nil, err
 		}
 		item := AdminDirectoryScopeHealth{
 			Scope:         scope,
@@ -232,34 +256,30 @@ func (s *AdminService) syncHealth(ctx context.Context, now time.Time) (AdminSync
 			}
 			item.Units = append(item.Units, unit)
 		}
-		health.DirectoryScopes = append(health.DirectoryScopes, item)
+		out = append(out, item)
 	}
+	return out, nil
+}
 
-	// FX pairs: per-pair last success comes from the fx_rate|{pair} version
-	// keys market_data_versions already maintains.
+func (s *AdminService) fxPairHealth(ctx context.Context) ([]AdminFXPairHealth, error) {
 	fxVersions, _, err := s.assets.ListDataVersions(ctx, "fx_rate|", len(FXPairs)+8, 0)
 	if err != nil {
-		return AdminSyncHealth{}, wrapRepo("list fx data versions", err)
+		return nil, wrapRepo("list fx data versions", err)
 	}
 	fxByPair := make(map[string]int64, len(fxVersions))
 	for _, v := range fxVersions {
 		fxByPair[v.VersionKey] = v.UpdatedAt
 	}
+	out := make([]AdminFXPairHealth, 0, len(FXPairs))
 	for _, pair := range FXPairs {
 		item := AdminFXPairHealth{Pair: pair}
 		if at, ok := fxByPair["fx_rate|"+pair]; ok {
 			v := at
 			item.LastSuccessAt = &v
 		}
-		health.FXPairs = append(health.FXPairs, item)
+		out = append(out, item)
 	}
-
-	agg, err := s.assets.AggregateHistoryStates(ctx, staleBefore)
-	if err != nil {
-		return AdminSyncHealth{}, wrapRepo("aggregate history states", err)
-	}
-	health.HistoryDimensions = agg
-	return health, nil
+	return out, nil
 }
 
 // storageStats never fails the overview: sizes degrade to zero when a file or

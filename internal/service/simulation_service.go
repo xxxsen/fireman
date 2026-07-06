@@ -201,19 +201,8 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 	// Simulation readiness gate: lazily-saved holdings get their snapshots
 	// built now that history may have arrived; assets that still cannot build
 	// a snapshot block the run with market_asset_history_missing.
-	if s.readiness != nil {
-		if err := s.readiness.EnsureHoldingSnapshots(ctx, req.PlanID); err != nil {
-			return CreateSimulationResponse{}, err
-		}
-		readiness, err := s.readiness.Check(ctx, req.PlanID)
-		if err != nil {
-			return CreateSimulationResponse{}, err
-		}
-		if !readiness.Ready {
-			return CreateSimulationResponse{}, newErr("market_asset_history_missing",
-				"部分计划持仓的市场资产暂时无法用于模拟",
-				map[string]any{"blocking_assets": readiness.BlockingAssets})
-		}
+	if err := s.ensureSimulationReadiness(ctx, req.PlanID); err != nil {
+		return CreateSimulationResponse{}, err
 	}
 
 	snap, inputHash, err := s.buildInputSnapshot(ctx, plan, req, "")
@@ -225,6 +214,34 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 		return resp, err
 	}
 
+	return s.createSimulationRun(ctx, req, snap, inputHash)
+}
+
+func (s *SimulationService) ensureSimulationReadiness(ctx context.Context, planID string) error {
+	if s.readiness == nil {
+		return nil
+	}
+	if err := s.readiness.EnsureHoldingSnapshots(ctx, planID); err != nil {
+		return err
+	}
+	readiness, err := s.readiness.Check(ctx, planID)
+	if err != nil {
+		return err
+	}
+	if readiness.Ready {
+		return nil
+	}
+	return newErr("market_asset_history_missing",
+		"部分计划持仓的市场资产暂时无法用于模拟",
+		map[string]any{"blocking_assets": readiness.BlockingAssets})
+}
+
+func (s *SimulationService) createSimulationRun(
+	ctx context.Context,
+	req CreateSimulationRequest,
+	snap *simulation.InputSnapshot,
+	inputHash string,
+) (CreateSimulationResponse, error) {
 	jobID := "job_" + uuid.New().String()
 	runID := "simrun_" + uuid.New().String()
 	snapJSON, err := json.Marshal(snap)

@@ -87,7 +87,12 @@ func Open(ctx context.Context, path string) (*DB, error) {
 }
 
 // Close releases the underlying pool.
-func (d *DB) Close() error { return d.pool.Close() }
+func (d *DB) Close() error {
+	if err := d.pool.Close(); err != nil {
+		return fmt.Errorf("resourcedb: close: %w", err)
+	}
+	return nil
+}
 
 // Pool exposes the raw pool for tests.
 func (d *DB) Pool() *sql.DB { return d.pool }

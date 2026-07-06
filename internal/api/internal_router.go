@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -39,7 +40,7 @@ type InternalDeps struct {
 //   - POST /internal/tasks/:task_id/post-process: apply a pre_complete task's
 //     result to business tables; returns the success/retryable/permanent
 //     classification.
-func NewInternalRouter(deps InternalDeps) *gin.Engine {
+func NewInternalRouter(ctx context.Context, deps InternalDeps) *gin.Engine {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -53,56 +54,71 @@ func NewInternalRouter(deps InternalDeps) *gin.Engine {
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	r.POST("/internal/resources", uploadResourceHandler(deps))
-	r.POST("/internal/tasks/:task_id/post-process", postProcessHandler(deps))
+	r.POST("/internal/resources", uploadResourceHandler(ctx, deps))
+	r.POST("/internal/tasks/:task_id/post-process", postProcessHandler(ctx, deps))
 	return r
 }
 
-func uploadResourceHandler(deps InternalDeps) gin.HandlerFunc {
+func uploadResourceHandler(ctx context.Context, deps InternalDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxResourceUploadBytes))
-		if err != nil {
-			Fail(c, http.StatusRequestEntityTooLarge, "resource_too_large",
-				"resource payload exceeds upload limit", nil)
-			return
-		}
-		if len(body) == 0 {
-			Fail(c, http.StatusBadRequest, "invalid_request", "resource payload is empty", nil)
-			return
-		}
-
-		contentType := headerOrDefault(c, "X-Fireman-Content-Type", "application/json")
-		contentEncoding := headerOrDefault(c, "X-Fireman-Content-Encoding", "gzip")
-		schemaVersion, err := strconv.Atoi(headerOrDefault(c, "X-Fireman-Schema-Version", "1"))
-		if err != nil || schemaVersion <= 0 {
-			Fail(c, http.StatusBadRequest, "invalid_request", "X-Fireman-Schema-Version must be a positive integer", nil)
-			return
-		}
-
-		// Optional end-to-end integrity check: when the sidecar precomputes the
-		// digest, a transport corruption is rejected before any write.
-		if declared := strings.ToLower(strings.TrimSpace(
-			c.GetHeader("X-Fireman-Content-SHA256"))); declared != "" {
-			sum := sha256.Sum256(body)
-			if actual := hex.EncodeToString(sum[:]); actual != declared {
-				Fail(c, http.StatusBadRequest, "resource_checksum_mismatch",
-					"declared sha256 does not match uploaded payload", map[string]any{
-						"declared": declared, "actual": actual,
-					})
-				return
-			}
-		}
-
-		env, err := deps.Resources.InsertContent(
-			c.Request.Context(), contentType, contentEncoding, schemaVersion,
-			body, time.Now(), resourceTTL,
-		)
-		if err != nil {
-			Fail(c, http.StatusInternalServerError, "resource_store_failed", err.Error(), nil)
-			return
-		}
-		OK(c, env)
+		reqCtx, cancel := requestScopedContext(ctx, c.Request.Context())
+		defer cancel()
+		handleResourceUpload(reqCtx, c, deps)
 	}
+}
+
+func requestScopedContext(parent, request context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(request)
+	stopParent := context.AfterFunc(parent, cancel)
+	return ctx, func() {
+		stopParent()
+		cancel()
+	}
+}
+
+func handleResourceUpload(ctx context.Context, c *gin.Context, deps InternalDeps) {
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxResourceUploadBytes))
+	if err != nil {
+		Fail(c, http.StatusRequestEntityTooLarge, "resource_too_large",
+			"resource payload exceeds upload limit", nil)
+		return
+	}
+	if len(body) == 0 {
+		Fail(c, http.StatusBadRequest, "invalid_request", "resource payload is empty", nil)
+		return
+	}
+
+	contentType := headerOrDefault(c, "X-Fireman-Content-Type", "application/json")
+	contentEncoding := headerOrDefault(c, "X-Fireman-Content-Encoding", "gzip")
+	schemaVersion, err := strconv.Atoi(headerOrDefault(c, "X-Fireman-Schema-Version", "1"))
+	if err != nil || schemaVersion <= 0 {
+		Fail(c, http.StatusBadRequest, "invalid_request", "X-Fireman-Schema-Version must be a positive integer", nil)
+		return
+	}
+
+	// Optional end-to-end integrity check: when the sidecar precomputes the
+	// digest, a transport corruption is rejected before any write.
+	if declared := strings.ToLower(strings.TrimSpace(
+		c.GetHeader("X-Fireman-Content-SHA256"))); declared != "" {
+		sum := sha256.Sum256(body)
+		if actual := hex.EncodeToString(sum[:]); actual != declared {
+			Fail(c, http.StatusBadRequest, "resource_checksum_mismatch",
+				"declared sha256 does not match uploaded payload", map[string]any{
+					"declared": declared, "actual": actual,
+				})
+			return
+		}
+	}
+
+	env, err := deps.Resources.InsertContent(
+		ctx, contentType, contentEncoding, schemaVersion,
+		body, time.Now(), resourceTTL,
+	)
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "resource_store_failed", err.Error(), nil)
+		return
+	}
+	OK(c, env)
 }
 
 func headerOrDefault(c *gin.Context, key, fallback string) string {
@@ -112,9 +128,11 @@ func headerOrDefault(c *gin.Context, key, fallback string) string {
 	return fallback
 }
 
-func postProcessHandler(deps InternalDeps) gin.HandlerFunc {
+func postProcessHandler(ctx context.Context, deps InternalDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		result := deps.PostProcess.Process(c.Request.Context(), c.Param("task_id"))
+		reqCtx, cancel := requestScopedContext(ctx, c.Request.Context())
+		defer cancel()
+		result := deps.PostProcess.Process(reqCtx, c.Param("task_id"))
 		// Always 200: the classification travels in the body and the sidecar
 		// drives retry/terminal-state decisions from it, not from HTTP codes.
 		OK(c, result)

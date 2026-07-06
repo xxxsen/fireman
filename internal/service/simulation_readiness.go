@@ -360,37 +360,65 @@ func (s *SimulationReadinessService) EnsureHoldingSnapshots(
 		if !h.Enabled || h.SimulationSnapshotID != "" {
 			continue
 		}
-		snap, ok := builtByAsset[h.AssetKey]
-		if !ok {
-			built, err := s.snapSvc.BuildSnapshotForHolding(ctx, plan.ID, h.AssetKey, plan.ValuationDate)
-			if err != nil {
-				var snapErr *marketdata.SnapshotError
-				if errors.As(err, &snapErr) {
-					// Still not buildable; the readiness gate reports it.
-					continue
-				}
-				return wrapRepo("build holding snapshot", err)
-			}
-			snap = built
-			builtByAsset[h.AssetKey] = built
-		}
-		holdingID := h.ID
-		_, isCash := repository.SystemCashSnapshotIDForAsset(h.AssetKey)
-		needPersist := !isCash && !persisted[h.AssetKey]
-		err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-			if needPersist {
-				if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, snap); err != nil {
-					return err
-				}
-			}
-			return s.holdings.UpdateSnapshotID(ctx, tx, holdingID, snap.ID)
-		})
+		err := s.ensureOneHoldingSnapshot(ctx, plan, h, builtByAsset, persisted)
 		if err != nil {
-			return wrapRepo("persist holding snapshot", err)
+			return err
 		}
-		persisted[h.AssetKey] = true
 	}
 	return nil
+}
+
+func (s *SimulationReadinessService) ensureOneHoldingSnapshot(
+	ctx context.Context,
+	plan repository.Plan,
+	holding repository.PlanHolding,
+	builtByAsset map[string]repository.SimulationSnapshot,
+	persisted map[string]bool,
+) error {
+	snap, ok, err := s.snapshotForHolding(ctx, plan, holding, builtByAsset)
+	if err != nil || !ok {
+		return err
+	}
+	_, isCash := repository.SystemCashSnapshotIDForAsset(holding.AssetKey)
+	needPersist := !isCash && !persisted[holding.AssetKey]
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if needPersist {
+			if err := s.snapSvc.CreatePlanSnapshotTx(ctx, tx, snap); err != nil {
+				return wrapRepo("create holding snapshot", err)
+			}
+		}
+		if err := s.holdings.UpdateSnapshotID(ctx, tx, holding.ID, snap.ID); err != nil {
+			return wrapRepo("update holding snapshot id", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return wrapRepo("persist holding snapshot", err)
+	}
+	persisted[holding.AssetKey] = true
+	return nil
+}
+
+func (s *SimulationReadinessService) snapshotForHolding(
+	ctx context.Context,
+	plan repository.Plan,
+	holding repository.PlanHolding,
+	builtByAsset map[string]repository.SimulationSnapshot,
+) (repository.SimulationSnapshot, bool, error) {
+	snap, ok := builtByAsset[holding.AssetKey]
+	if ok {
+		return snap, true, nil
+	}
+	built, err := s.snapSvc.BuildSnapshotForHolding(ctx, plan.ID, holding.AssetKey, plan.ValuationDate)
+	if err != nil {
+		var snapErr *marketdata.SnapshotError
+		if errors.As(err, &snapErr) {
+			return repository.SimulationSnapshot{}, false, nil
+		}
+		return repository.SimulationSnapshot{}, false, wrapRepo("build holding snapshot", err)
+	}
+	builtByAsset[holding.AssetKey] = built
+	return built, true, nil
 }
 
 // SyncMissingHistory creates (or reuses) default-refresh history sync tasks

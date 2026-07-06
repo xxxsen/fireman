@@ -46,7 +46,7 @@ func newInternalStack(t *testing.T) internalStack {
 		resources,
 		repository.NewPostProcessRecordRepo(db),
 	)
-	srv := httptest.NewServer(NewInternalRouter(InternalDeps{
+	srv := httptest.NewServer(NewInternalRouter(context.Background(), InternalDeps{
 		PostProcess: postProcess, Resources: resources,
 	}))
 	t.Cleanup(srv.Close)
@@ -74,7 +74,7 @@ func uploadResult(t *testing.T, st internalStack, raw []byte) resourcedb.Envelop
 	req.Header.Set("X-Fireman-Content-Type", "application/json")
 	req.Header.Set("X-Fireman-Content-Encoding", "gzip")
 	req.Header.Set("X-Fireman-Schema-Version", "1")
-	req.Header.Set("X-Fireman-Content-SHA256", hex.EncodeToString(sum[:]))
+	req.Header.Set("X-Fireman-Content-Sha256", hex.EncodeToString(sum[:]))
 	resp, err := st.client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestInternalResourceUpload_ChecksumAndValidation(t *testing.T) {
 	// Declared checksum that does not match the body is rejected before any
 	// write.
 	req, _ := http.NewRequest(http.MethodPost, st.srv.URL+"/internal/resources", bytes.NewReader(gz))
-	req.Header.Set("X-Fireman-Content-SHA256", "deadbeef")
+	req.Header.Set("X-Fireman-Content-Sha256", "deadbeef")
 	resp, err := st.client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -238,18 +238,26 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 
 	taskID := syncUnitTask(t, st, "hk_stock")
 	raw := directoryUnitResult("hk_stock", "hk_all", []map[string]any{
-		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+		{
+			"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
 			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
-			"source_name": "ak_hk", "source_as_of": "2026-07-04"},
-		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00005",
+			"source_name": "ak_hk", "source_as_of": "2026-07-04",
+		},
+		{
+			"market": "HK", "instrument_type": "hk_stock", "symbol": "00005",
 			"name": "汇丰控股", "instrument_kind": "stock", "currency": "HKD",
-			"source_name": "ak_hk", "source_as_of": "2026-07-04"},
+			"source_name": "ak_hk", "source_as_of": "2026-07-04",
+		},
 		// Out-of-unit entries must be ignored, never written.
-		{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+		{
+			"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
 			"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
-			"source_name": "ak_hk_fund", "source_as_of": "2026-07-04"},
-		{"market": "CN", "instrument_type": "cn_exchange_stock", "symbol": "600000",
-			"name": "浦发银行", "currency": "CNY", "source_name": "ak_cn", "source_as_of": ""},
+			"source_name": "ak_hk_fund", "source_as_of": "2026-07-04",
+		},
+		{
+			"market": "CN", "instrument_type": "cn_exchange_stock", "symbol": "600000",
+			"name": "浦发银行", "currency": "CNY", "source_name": "ak_cn", "source_as_of": "",
+		},
 	})
 	markPreComplete(t, st.db, taskID, uploadResult(t, st, raw))
 
@@ -312,8 +320,10 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	// for a same-source category is rejected without touching the directory.
 	shrunkTaskID := syncUnitTask(t, st, "hk_stock")
 	shrunk := directoryUnitResult("hk_stock", "hk_all", []map[string]any{
-		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
-			"name": "腾讯控股", "currency": "HKD", "source_name": "ak_hk", "source_as_of": ""},
+		{
+			"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+			"name": "腾讯控股", "currency": "HKD", "source_name": "ak_hk", "source_as_of": "",
+		},
 	})
 	markPreComplete(t, st.db, shrunkTaskID, uploadResult(t, st, shrunk))
 	assertOutcome(t, notifyPostProcess(t, st, shrunkTaskID),
@@ -329,9 +339,11 @@ func TestInternalPostProcess_DirectoryLifecycle(t *testing.T) {
 	// a smaller snapshot still commits instead of tripping the 90% gate.
 	migratedTaskID := syncUnitTask(t, st, "hk_stock")
 	migrated := directoryUnitResult("hk_stock", "hk_all", []map[string]any{
-		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+		{
+			"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
 			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
-			"source_name": "em.hk_equity_list", "source_as_of": ""},
+			"source_name": "em.hk_equity_list", "source_as_of": "",
+		},
 	})
 	markPreComplete(t, st.db, migratedTaskID, uploadResult(t, st, migrated))
 	assertOutcome(t, notifyPostProcess(t, st, migratedTaskID), "success", "")
@@ -371,10 +383,12 @@ func TestInternalPostProcess_DirectoryUnitIsolation(t *testing.T) {
 
 	fundTaskID := syncUnitTask(t, st, "cn_exchange_fund")
 	fund := directoryUnitResult("cn_exchange_fund", "cn_all", []map[string]any{
-		{"market": "CN", "instrument_type": "cn_exchange_fund", "region_code": "sh",
+		{
+			"market": "CN", "instrument_type": "cn_exchange_fund", "region_code": "sh",
 			"symbol": "510300", "name": "沪深300ETF", "exchange": "SH",
 			"instrument_kind": "etf", "currency": "CNY",
-			"source_name": "em.cn_etf_list", "source_as_of": "2026-07-05"},
+			"source_name": "em.cn_etf_list", "source_as_of": "2026-07-05",
+		},
 	})
 	markPreComplete(t, st.db, fundTaskID, uploadResult(t, st, fund))
 	assertOutcome(t, notifyPostProcess(t, st, fundTaskID), "success", "")
@@ -420,9 +434,11 @@ func TestInternalPostProcess_DirectoryUnitIsolation(t *testing.T) {
 	// sync_key mismatch between result and payload is a permanent error.
 	mismatchTaskID := syncUnitTask(t, st, "cn_mutual_fund")
 	mismatch := directoryUnitResult("cn_exchange_fund", "cn_all", []map[string]any{
-		{"market": "CN", "instrument_type": "cn_mutual_fund", "symbol": "000001",
+		{
+			"market": "CN", "instrument_type": "cn_mutual_fund", "symbol": "000001",
 			"name": "华夏成长", "currency": "CNY",
-			"source_name": "ak.fund_name_em", "source_as_of": ""},
+			"source_name": "ak.fund_name_em", "source_as_of": "",
+		},
 	})
 	markPreComplete(t, st.db, mismatchTaskID, uploadResult(t, st, mismatch))
 	assertOutcome(t, notifyPostProcess(t, st, mismatchTaskID),
@@ -664,24 +680,32 @@ func TestInternalPostProcess_ETFSearchableViaPublicAPI(t *testing.T) {
 	}
 
 	runDirectory("hk_stock", "hk_all", []map[string]any{
-		{"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
+		{
+			"market": "HK", "instrument_type": "hk_stock", "symbol": "00700",
 			"name": "腾讯控股", "instrument_kind": "stock", "currency": "HKD",
-			"source_name": "em.hk_equity_list", "source_as_of": "2026-07-05"},
+			"source_name": "em.hk_equity_list", "source_as_of": "2026-07-05",
+		},
 	})
 	runDirectory("hk_etf", "hk_all", []map[string]any{
-		{"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
+		{
+			"market": "HK", "instrument_type": "hk_etf", "symbol": "02800",
 			"name": "盈富基金", "instrument_kind": "etf", "currency": "HKD",
-			"source_name": "em.hk_fund_list", "source_as_of": "2026-07-05"},
+			"source_name": "em.hk_fund_list", "source_as_of": "2026-07-05",
+		},
 	})
 	runDirectory("us_stock", "us_all", []map[string]any{
-		{"market": "US", "instrument_type": "us_stock", "symbol": "AAPL",
+		{
+			"market": "US", "instrument_type": "us_stock", "symbol": "AAPL",
 			"name": "苹果", "instrument_kind": "stock", "currency": "USD",
-			"source_name": "em.us_equity_list", "source_as_of": "2026-07-05"},
+			"source_name": "em.us_equity_list", "source_as_of": "2026-07-05",
+		},
 	})
 	runDirectory("us_etf", "us_all", []map[string]any{
-		{"market": "US", "instrument_type": "us_etf", "symbol": "SPY",
+		{
+			"market": "US", "instrument_type": "us_etf", "symbol": "SPY",
 			"name": "标普500ETF-SPDR", "instrument_kind": "etf", "currency": "USD",
-			"source_name": "em.us_etf_list", "source_as_of": "2026-07-05"},
+			"source_name": "em.us_etf_list", "source_as_of": "2026-07-05",
+		},
 	})
 
 	assertSearchable := func(url, wantType, wantSymbol string) {

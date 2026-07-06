@@ -21,7 +21,7 @@ const (
 
 // ReturnOverrideView is the API view of one asset-level override.
 type ReturnOverrideView struct {
-	AssetKey     string   `json:"asset_key"`
+	AssetKey         string   `json:"asset_key"`
 	ForwardReturn    *float64 `json:"forward_return"`
 	AnnualVolatility *float64 `json:"annual_volatility"`
 	Reason           string   `json:"reason"`
@@ -85,7 +85,7 @@ func (s *SimulationService) SetReturnOverride(
 
 	o := repository.PlanReturnOverride{
 		PlanID:           planID,
-		AssetKey:     instrumentID,
+		AssetKey:         instrumentID,
 		ForwardReturn:    req.ForwardReturn,
 		AnnualVolatility: req.AnnualVolatility,
 		Reason:           strings.TrimSpace(req.Reason),
@@ -168,7 +168,7 @@ func validateOverrideRequest(req SetReturnOverrideRequest) error {
 
 func toReturnOverrideView(o repository.PlanReturnOverride, valuationDate string) ReturnOverrideView {
 	return ReturnOverrideView{
-		AssetKey:     o.AssetKey,
+		AssetKey:         o.AssetKey,
 		ForwardReturn:    o.ForwardReturn,
 		AnnualVolatility: o.AnnualVolatility,
 		Reason:           o.Reason,

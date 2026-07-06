@@ -24,34 +24,10 @@ func NewScenarioRepo(db *sql.DB) *ScenarioRepo {
 }
 
 func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, s.name, s.description, s.is_builtin, s.created_at, s.updated_at,
-			(SELECT COUNT(*) FROM plan_parameters p WHERE p.selected_scenario_id = s.id) AS plan_count
-		FROM allocation_scenarios s ORDER BY s.is_builtin DESC, s.name`)
+	out, err := r.listScenarioHeaders(ctx)
 	if err != nil {
-		return nil, wrapSQL("list allocation scenarios", err)
+		return nil, err
 	}
-	// Collect headers before the per-scenario child queries: nested queries
-	// while rows are open would exhaust the single-connection pool.
-	var out []AllocationScenario
-	for rows.Next() {
-		var s AllocationScenario
-		var builtin int
-		if err := rows.Scan(
-			&s.ID, &s.Name, &s.Description, &builtin,
-			&s.CreatedAt, &s.UpdatedAt, &s.PlanCount,
-		); err != nil {
-			_ = rows.Close()
-			return nil, wrapSQL("scan allocation scenario", err)
-		}
-		s.IsBuiltin = builtin == 1
-		out = append(out, s)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, wrapSQL("iterate allocation scenarios", err)
-	}
-	_ = rows.Close()
 	for i := range out {
 		weights, err := r.getWeights(ctx, out[i].ID)
 		if err != nil {
@@ -63,6 +39,35 @@ func (r *ScenarioRepo) List(ctx context.Context) ([]AllocationScenario, error) {
 			return nil, err
 		}
 		out[i].RegionTargets = regions
+	}
+	return out, nil
+}
+
+func (r *ScenarioRepo) listScenarioHeaders(ctx context.Context) ([]AllocationScenario, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT s.id, s.name, s.description, s.is_builtin, s.created_at, s.updated_at,
+			(SELECT COUNT(*) FROM plan_parameters p WHERE p.selected_scenario_id = s.id) AS plan_count
+		FROM allocation_scenarios s ORDER BY s.is_builtin DESC, s.name`)
+	if err != nil {
+		return nil, wrapSQL("list allocation scenarios", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []AllocationScenario
+	for rows.Next() {
+		var s AllocationScenario
+		var builtin int
+		if err := rows.Scan(
+			&s.ID, &s.Name, &s.Description, &builtin,
+			&s.CreatedAt, &s.UpdatedAt, &s.PlanCount,
+		); err != nil {
+			return nil, wrapSQL("scan allocation scenario", err)
+		}
+		s.IsBuiltin = builtin == 1
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapSQL("iterate allocation scenarios", err)
 	}
 	return out, nil
 }

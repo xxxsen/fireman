@@ -35,9 +35,7 @@ func TestConcurrentWrites_NoBusyErrors(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, goroutines*writesPerGoroutine)
 	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func(g int) {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := 0; i < writesPerGoroutine; i++ {
 				scope := fmt.Sprintf("scope_%d", i%4)
 				_, err := pool.ExecContext(ctx, `
@@ -50,7 +48,7 @@ func TestConcurrentWrites_NoBusyErrors(t *testing.T) {
 					errCh <- err
 				}
 			}
-		}(g)
+		})
 	}
 	wg.Wait()
 	close(errCh)
