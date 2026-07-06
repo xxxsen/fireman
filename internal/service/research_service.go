@@ -1472,6 +1472,11 @@ type researchSnapshotAsset struct {
 type researchSnapshotSeries struct {
 	Pair       string `json:"pair,omitempty"`
 	SourceName string `json:"source_name,omitempty"`
+	// AnchorDate is the pre-window forward-fill anchor (last observation
+	// strictly before the window start) when the series has no observation
+	// on the window start day itself (td/100 Finding 1). When set it equals
+	// FirstDate.
+	AnchorDate string `json:"anchor_date,omitempty"`
 	FirstDate  string `json:"first_date,omitempty"`
 	LastDate   string `json:"last_date,omitempty"`
 	PointCount int    `json:"point_count"`
@@ -1653,75 +1658,106 @@ func buildResearchSnapshot(ds *researchDataset, readiness ResearchReadiness) res
 	return snapshot
 }
 
-// summarizeAssetSeries hashes the in-window slice of one asset series.
-func summarizeAssetSeries(points []repository.MarketAssetPoint, winLo, winHi string) researchSnapshotSeries {
-	h := sha256.New()
+// researchSeriesObs is the source-agnostic observation shape shared by the
+// asset and FX series summaries.
+type researchSeriesObs struct {
+	date   string
+	value  float64
+	source string
+}
+
+// summarizeResearchSeries hashes the minimal closure of observations the
+// valuation actually uses (td/100 Finding 1): the in-window slice plus, when
+// the series has no observation on the window start day, the last pre-window
+// observation that forward-fill anchors on. Changing that anchor point must
+// change the source hash.
+func summarizeResearchSeries(obs []researchSeriesObs, winLo, winHi string) researchSnapshotSeries {
 	out := researchSnapshotSeries{}
-	for _, p := range points {
-		if winLo != "" && p.TradeDate < winLo {
+	includeFrom := winLo
+	if winLo != "" {
+		hasOnStart := false
+		anchor := ""
+		for _, p := range obs {
+			if p.date == winLo {
+				hasOnStart = true
+			}
+			if p.date < winLo && p.date > anchor {
+				anchor = p.date
+			}
+		}
+		if !hasOnStart && anchor != "" {
+			out.AnchorDate = anchor
+			includeFrom = anchor
+		}
+	}
+
+	h := sha256.New()
+	if out.AnchorDate != "" {
+		fmt.Fprintf(h, "anchor:%s\n", out.AnchorDate)
+	}
+	for _, p := range obs {
+		if includeFrom != "" && p.date < includeFrom {
 			continue
 		}
-		if winHi != "" && p.TradeDate > winHi {
+		if winHi != "" && p.date > winHi {
 			continue
 		}
-		if out.FirstDate == "" || p.TradeDate < out.FirstDate {
-			out.FirstDate = p.TradeDate
+		if out.FirstDate == "" || p.date < out.FirstDate {
+			out.FirstDate = p.date
 		}
-		if p.TradeDate > out.LastDate {
-			out.LastDate = p.TradeDate
+		if p.date > out.LastDate {
+			out.LastDate = p.date
 		}
 		out.PointCount++
-		fmt.Fprintf(h, "%s:%s\n", p.TradeDate, strconv.FormatFloat(p.Value, 'g', 17, 64))
+		fmt.Fprintf(h, "%s:%s\n", p.date, strconv.FormatFloat(p.value, 'g', 17, 64))
 		if out.SourceName == "" {
-			out.SourceName = p.SourceName
+			out.SourceName = p.source
 		}
 	}
 	out.PointsHash = hex.EncodeToString(h.Sum(nil))
 	return out
+}
+
+// summarizeAssetSeries hashes the usable slice of one asset series
+// (in-window points plus the pre-window forward-fill anchor).
+func summarizeAssetSeries(points []repository.MarketAssetPoint, winLo, winHi string) researchSnapshotSeries {
+	obs := make([]researchSeriesObs, len(points))
+	for i, p := range points {
+		obs[i] = researchSeriesObs{date: p.TradeDate, value: p.Value, source: p.SourceName}
+	}
+	return summarizeResearchSeries(obs, winLo, winHi)
 }
 
 func summarizeFXSeries(points []repository.MarketDataPoint, winLo, winHi string) researchSnapshotSeries {
-	h := sha256.New()
-	out := researchSnapshotSeries{}
-	for _, p := range points {
-		if winLo != "" && p.TradeDate < winLo {
-			continue
-		}
-		if winHi != "" && p.TradeDate > winHi {
-			continue
-		}
-		if out.FirstDate == "" || p.TradeDate < out.FirstDate {
-			out.FirstDate = p.TradeDate
-		}
-		if p.TradeDate > out.LastDate {
-			out.LastDate = p.TradeDate
-		}
-		out.PointCount++
-		fmt.Fprintf(h, "%s:%s\n", p.TradeDate, strconv.FormatFloat(p.Value, 'g', 17, 64))
+	obs := make([]researchSeriesObs, len(points))
+	for i, p := range points {
+		obs[i] = researchSeriesObs{date: p.TradeDate, value: p.Value, source: p.SourceName}
 	}
-	out.PointsHash = hex.EncodeToString(h.Sum(nil))
-	return out
+	return summarizeResearchSeries(obs, winLo, winHi)
 }
 
 // computeResearchSourceHash hashes the market-data facts of one snapshot
-// (td/099 §5.6): per-series identity, coverage, per-point hash and the
-// common window.
+// (td/099 §5.6): per-series identity, coverage, the pre-window forward-fill
+// anchor, per-point hash and the common window. Anchor values are already
+// part of PointsHash; the anchor date is written explicitly so the hash
+// distinguishes anchored from non-anchored coverage (td/100 Finding 1).
 func computeResearchSourceHash(snapshot researchInputSnapshot) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "common:%s..%s\n", snapshot.CommonStart, snapshot.CommonEnd)
 	for _, a := range snapshot.Assets {
-		fmt.Fprintf(h, "asset:%s|%s|%s|%s|%s|%s|%d|%s\n",
+		fmt.Fprintf(h, "asset:%s|%s|%s|%s|%s|%s|%s|%d|%s\n",
 			a.AssetKey, a.AdjustPolicy, a.PointType, a.SourceName,
-			a.FirstDate, a.LastDate, a.PointCount, a.PointsHash)
+			a.AnchorDate, a.FirstDate, a.LastDate, a.PointCount, a.PointsHash)
 	}
 	for _, fx := range snapshot.FX {
-		fmt.Fprintf(h, "fx:%s|%s|%s|%s|%d|%s\n",
-			fx.Pair, fx.SourceName, fx.FirstDate, fx.LastDate, fx.PointCount, fx.PointsHash)
+		fmt.Fprintf(h, "fx:%s|%s|%s|%s|%s|%d|%s\n",
+			fx.Pair, fx.SourceName, fx.AnchorDate, fx.FirstDate, fx.LastDate,
+			fx.PointCount, fx.PointsHash)
 	}
 	if b := snapshot.Benchmark; b != nil {
-		fmt.Fprintf(h, "benchmark:%s|%s|%s|%s|%s|%s|%d|%s\n",
+		fmt.Fprintf(h, "benchmark:%s|%s|%s|%s|%s|%s|%s|%d|%s\n",
 			b.AssetKey, b.AdjustPolicy, b.PointType, b.SourceName,
-			b.FirstDate, b.LastDate, b.PointCount, b.PointsHash)
+			b.AnchorDate, b.FirstDate, b.LastDate, b.PointCount, b.PointsHash)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

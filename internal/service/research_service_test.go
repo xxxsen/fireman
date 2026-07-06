@@ -344,6 +344,151 @@ func TestResearchBacktestEndToEnd(t *testing.T) {
 	}
 }
 
+// TestResearchSourceHashIncludesForwardFillAnchor covers td/100 Finding 1:
+// when a series has no observation on the window start day, the valuation
+// forward-fills from the last pre-window point, so that anchor must be part
+// of source_hash / input_hash. Points before the anchor stay outside the
+// minimal closure and must not affect the hash.
+func TestResearchSourceHashIncludesForwardFillAnchor(t *testing.T) {
+	buildDataset := func(anchorValue, preAnchorValue float64) *researchDataset {
+		a := rdAsset(t, "A", 0.5, "2020-01-01", 1642)
+		b := rdAsset(t, "B", 0.5, "2020-06-01", 1490)
+		// Drop A's observation on the common window start (B's first day)
+		// so day one forward-fills from A's 2020-05-31 point.
+		filtered := make([]repository.MarketAssetPoint, 0, len(a.Points))
+		for _, p := range a.Points {
+			switch p.TradeDate {
+			case "2020-06-01":
+				continue
+			case "2020-05-31":
+				p.Value = anchorValue
+			case "2020-05-15":
+				p.Value = preAnchorValue
+			}
+			filtered = append(filtered, p)
+		}
+		a.Points = filtered
+		return rdDataset(a, b)
+	}
+
+	snapshotFor := func(ds *researchDataset) (researchInputSnapshot, string) {
+		readiness := evaluateResearchReadiness(ds, rdNow(t))
+		if !readiness.Ready {
+			t.Fatalf("expected ready, got %+v", readiness.BlockingReasons)
+		}
+		if readiness.WindowStart != "2020-06-01" {
+			t.Fatalf("window start expected 2020-06-01, got %s", readiness.WindowStart)
+		}
+		snapshot := buildResearchSnapshot(ds, readiness)
+		return snapshot, computeResearchInputHash(snapshot, ds)
+	}
+
+	base, baseInput := snapshotFor(buildDataset(100, 100))
+
+	var entryA researchSnapshotAsset
+	for _, entry := range base.Assets {
+		if entry.AssetKey == "A" {
+			entryA = entry
+		}
+	}
+	if entryA.AnchorDate != "2020-05-31" || entryA.FirstDate != "2020-05-31" {
+		t.Fatalf("anchor not captured: anchor=%s first=%s", entryA.AnchorDate, entryA.FirstDate)
+	}
+
+	// Mutating the forward-fill anchor must change both hashes.
+	moved, movedInput := snapshotFor(buildDataset(150, 100))
+	if moved.SourceHash == base.SourceHash {
+		t.Fatal("source_hash must change when the forward-fill anchor changes")
+	}
+	if movedInput == baseInput {
+		t.Fatal("input_hash must change when the forward-fill anchor changes")
+	}
+
+	// Mutating a point strictly before the anchor stays outside the minimal
+	// closure and must not change the hashes.
+	unrelated, unrelatedInput := snapshotFor(buildDataset(100, 150))
+	if unrelated.SourceHash != base.SourceHash {
+		t.Fatal("source_hash must ignore points before the forward-fill anchor")
+	}
+	if unrelatedInput != baseInput {
+		t.Fatal("input_hash must ignore points before the forward-fill anchor")
+	}
+
+	// A series that does observe the window start day has no anchor.
+	withStart := rdDataset(rdAsset(t, "A", 0.5, "2020-01-01", 1642), rdAsset(t, "B", 0.5, "2020-06-01", 1490))
+	snapshot := buildResearchSnapshot(withStart, evaluateResearchReadiness(withStart, rdNow(t)))
+	for _, entry := range snapshot.Assets {
+		if entry.AnchorDate != "" {
+			t.Fatalf("unexpected anchor for %s: %s", entry.AssetKey, entry.AnchorDate)
+		}
+	}
+}
+
+// TestResearchBacktestAnchorChangeCreatesFreshRun is the service-level
+// acceptance for td/100 Finding 1: after a successful run, changing only the
+// pre-window forward-fill anchor must not reuse the old run.
+func TestResearchBacktestAnchorChangeCreatesFreshRun(t *testing.T) {
+	svc, db := newResearchTestService(t)
+	ctx := context.Background()
+	insertResearchFixtureAsset(t, db, "D1", "早资产", "CNY", "2020-01-01", 1643, growthValue(100))
+	insertResearchFixtureAsset(t, db, "D2", "晚资产", "CNY", "2020-06-01", 1491,
+		func(i int) float64 { return 50 * (1 + 0.02*math.Cos(float64(i)/11)) })
+	// Common window starts at D2's first day; drop D1's observation there so
+	// its 2020-05-31 point becomes the forward-fill anchor.
+	if _, err := db.ExecContext(ctx, `
+		DELETE FROM market_asset_points WHERE asset_key='D1' AND trade_date='2020-06-01'`); err != nil {
+		t.Fatalf("delete window-start point: %v", err)
+	}
+
+	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
+		Name: "锚点组合",
+		Items: []ResearchCollectionItemInput{
+			{AssetKey: "D1", Weight: fptr(0.5)},
+			{AssetKey: "D2", Weight: fptr(0.5)},
+		},
+	})
+	created, err := svc.CreateBacktest(ctx, detail.ID)
+	if err != nil {
+		t.Fatalf("create backtest: %v", err)
+	}
+	if err := svc.ExecuteBacktestJob(ctx, created.Run.JobID, nil, nil); err != nil {
+		t.Fatalf("execute backtest job: %v", err)
+	}
+
+	// Only the pre-window anchor changes; every in-window point is intact.
+	if _, err := db.ExecContext(ctx, `
+		UPDATE market_asset_points SET value = value * 1.5
+		WHERE asset_key='D1' AND trade_date='2020-05-31'`); err != nil {
+		t.Fatalf("mutate anchor: %v", err)
+	}
+
+	again, err := svc.CreateBacktest(ctx, detail.ID)
+	if err != nil {
+		t.Fatalf("re-create backtest: %v", err)
+	}
+	if again.Reused || again.Run.ID == created.Run.ID {
+		t.Fatalf("anchor change must not reuse the old run: %+v", again)
+	}
+	if again.Run.SourceHash == created.Run.SourceHash {
+		t.Fatal("source_hash must change with the anchor")
+	}
+	if again.Run.InputHash == created.Run.InputHash {
+		t.Fatal("input_hash must change with the anchor")
+	}
+
+	// Anchor drift between freeze and execution is caught by the pre-run
+	// source verification.
+	if _, err := db.ExecContext(ctx, `
+		UPDATE market_asset_points SET value = value * 1.1
+		WHERE asset_key='D1' AND trade_date='2020-05-31'`); err != nil {
+		t.Fatalf("mutate anchor again: %v", err)
+	}
+	err = svc.ExecuteBacktestJob(ctx, again.Run.JobID, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "source data changed") {
+		t.Fatalf("expected source-changed error for anchor drift, got %v", err)
+	}
+}
+
 func TestResearchBacktestSourceChanged(t *testing.T) {
 	svc, db := newResearchTestService(t)
 	ctx := context.Background()

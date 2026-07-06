@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0024） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0025） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -123,6 +123,10 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | `/plans/{id}/settings` | 切换当前计划使用的配置模板、编辑计划参数、运行模拟 |
 | `/assets` | 全市场资产目录（同步状态面板、筛选、分页）|
 | `/assets/market/{assetKey}` | 市场资产详情、历史同步、年度收益 |
+| `/research` | 组合研究首页：研究集合、最近回测运行、JSON 导入导出 |
+| `/research/screener` | 资产筛选器、候选池与候选比较 |
+| `/research/collections/{id}` | 研究集合编辑、readiness、批量数据更新、回测入口 |
+| `/research/collections/{id}/runs/{runId}` | 确定性历史回测结果（图表/年度表/热力图/贡献/相关性/数据质量） |
 | `/scenarios` | 全局配置模板管理 |
 | `/settings` | 备份与恢复 |
 
@@ -133,6 +137,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 
 调仓执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
+组合研究模块详见 [024-portfolio-research.md](./024-portfolio-research.md)。
 
 ---
 
