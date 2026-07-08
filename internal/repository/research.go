@@ -10,10 +10,11 @@ import (
 
 // Research module errors.
 var (
-	ErrResearchCollectionNotFound = errors.New("research collection not found")
-	ErrResearchItemNotFound       = errors.New("research collection item not found")
-	ErrResearchFilterNotFound     = errors.New("research saved filter not found")
-	ErrResearchRunNotFound        = errors.New("research backtest run not found")
+	ErrResearchCollectionNotFound      = errors.New("research collection not found")
+	ErrResearchItemNotFound            = errors.New("research collection item not found")
+	ErrResearchFilterNotFound          = errors.New("research saved filter not found")
+	ErrResearchRunNotFound             = errors.New("research backtest run not found")
+	ErrResearchOptimizationRunNotFound = errors.New("research optimization run not found")
 )
 
 // Research collection status values.
@@ -1362,4 +1363,171 @@ func (r *ResearchRepo) ListStaleMetricsDimensions(
 		},
 		"query stale metrics dimensions", "scan stale metrics dimension", "iterate stale metrics dimensions",
 	)
+}
+
+// --- optimization runs (td/103) ---
+
+// ResearchOptimizationRun mirrors a research_optimization_runs row.
+type ResearchOptimizationRun struct {
+	ID                string `json:"id"`
+	CollectionID      string `json:"collection_id"`
+	JobID             string `json:"job_id"`
+	Status            string `json:"status"`
+	InputHash         string `json:"input_hash"`
+	SourceHash        string `json:"source_hash"`
+	EngineVersion     string `json:"engine_version"`
+	BaseCurrency      string `json:"base_currency"`
+	RebalancePolicy   string `json:"rebalance_policy"`
+	WindowStart       string `json:"window_start"`
+	WindowEnd         string `json:"window_end"`
+	ConfigJSON        string `json:"config_json"`
+	InputSnapshotJSON string `json:"input_snapshot_json,omitempty"`
+	CandidateCount    int    `json:"candidate_count"`
+	EvaluatedCount    int    `json:"evaluated_count"`
+	ResultJSON        string `json:"result_json"`
+	ErrorCode         string `json:"error_code,omitempty"`
+	ErrorMessage      string `json:"error_message,omitempty"`
+	CreatedAt         int64  `json:"created_at"`
+	CompletedAt       *int64 `json:"completed_at,omitempty"`
+}
+
+const optimizationRunColumns = `
+	id, collection_id, job_id, status, input_hash, source_hash,
+	engine_version, base_currency, rebalance_policy, window_start, window_end,
+	config_json, input_snapshot_json, candidate_count, evaluated_count,
+	result_json, error_code, error_message, created_at, completed_at`
+
+const optimizationRunListColumns = `
+	id, collection_id, job_id, status, input_hash, source_hash,
+	engine_version, base_currency, rebalance_policy, window_start, window_end,
+	config_json, '' AS input_snapshot_json, candidate_count, evaluated_count,
+	result_json, error_code, error_message, created_at, completed_at`
+
+func scanOptimizationRun(row rowScanner) (ResearchOptimizationRun, error) {
+	var run ResearchOptimizationRun
+	err := row.Scan(
+		&run.ID, &run.CollectionID, &run.JobID, &run.Status,
+		&run.InputHash, &run.SourceHash, &run.EngineVersion,
+		&run.BaseCurrency, &run.RebalancePolicy, &run.WindowStart, &run.WindowEnd,
+		&run.ConfigJSON, &run.InputSnapshotJSON, &run.CandidateCount, &run.EvaluatedCount,
+		&run.ResultJSON, &run.ErrorCode, &run.ErrorMessage,
+		&run.CreatedAt, &run.CompletedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ResearchOptimizationRun{}, ErrResearchOptimizationRunNotFound
+	}
+	if err != nil {
+		return ResearchOptimizationRun{}, wrapSQL("scan optimization run", err)
+	}
+	return run, nil
+}
+
+func (r *ResearchRepo) CreateOptimizationRunTx(
+	ctx context.Context, tx *sql.Tx, run ResearchOptimizationRun,
+) error {
+	_, err := r.exec(tx).ExecContext(ctx, `
+		INSERT INTO research_optimization_runs (
+			id, collection_id, job_id, status, input_hash, source_hash,
+			engine_version, base_currency, rebalance_policy, window_start, window_end,
+			config_json, input_snapshot_json, candidate_count, evaluated_count,
+			result_json, error_code, error_message, created_at, completed_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		run.ID, run.CollectionID, run.JobID, run.Status,
+		run.InputHash, run.SourceHash, run.EngineVersion,
+		run.BaseCurrency, run.RebalancePolicy, run.WindowStart, run.WindowEnd,
+		run.ConfigJSON, run.InputSnapshotJSON, run.CandidateCount, run.EvaluatedCount,
+		run.ResultJSON, run.ErrorCode, run.ErrorMessage,
+		run.CreatedAt, run.CompletedAt)
+	return wrapSQL("insert optimization run", err)
+}
+
+func (r *ResearchRepo) GetOptimizationRun(
+	ctx context.Context, id string,
+) (ResearchOptimizationRun, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs WHERE id=?`, id)
+	return scanOptimizationRun(row)
+}
+
+func (r *ResearchRepo) GetOptimizationRunByJobID(
+	ctx context.Context, jobID string,
+) (ResearchOptimizationRun, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs WHERE job_id=?`, jobID)
+	return scanOptimizationRun(row)
+}
+
+// FindActiveOptimizationByInputHash returns a queued/running optimization
+// with the same (collection, input_hash) so duplicate requests can poll.
+func (r *ResearchRepo) FindActiveOptimizationByInputHash(
+	ctx context.Context, collectionID, inputHash string,
+) (ResearchOptimizationRun, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs
+		 WHERE collection_id=? AND input_hash=? AND status IN (?,?)
+		 ORDER BY created_at DESC LIMIT 1`,
+		collectionID, inputHash, ResearchRunStatusQueued, ResearchRunStatusRunning)
+	return scanOptimizationRun(row)
+}
+
+// FindSucceededOptimizationByInputHash returns the succeeded optimization
+// with the same (collection, input_hash).
+func (r *ResearchRepo) FindSucceededOptimizationByInputHash(
+	ctx context.Context, collectionID, inputHash string,
+) (ResearchOptimizationRun, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs
+		 WHERE collection_id=? AND input_hash=? AND status=?
+		 ORDER BY created_at DESC LIMIT 1`,
+		collectionID, inputHash, ResearchRunStatusSucceeded)
+	return scanOptimizationRun(row)
+}
+
+func (r *ResearchRepo) MarkOptimizationRunning(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE research_optimization_runs SET status=? WHERE id=? AND status=?`,
+		ResearchRunStatusRunning, id, ResearchRunStatusQueued)
+	return wrapSQL("mark optimization run running", err)
+}
+
+func (r *ResearchRepo) UpdateOptimizationProgress(
+	ctx context.Context, id string, evaluated int,
+) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE research_optimization_runs SET evaluated_count=? WHERE id=?`,
+		evaluated, id)
+	return wrapSQL("update optimization progress", err)
+}
+
+func (r *ResearchRepo) CompleteOptimizationRun(
+	ctx context.Context, id, resultJSON string, evaluated int, completedAt int64,
+) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE research_optimization_runs
+		SET status=?, result_json=?, evaluated_count=?, completed_at=?
+		WHERE id=?`,
+		ResearchRunStatusSucceeded, resultJSON, evaluated, completedAt, id)
+	return wrapSQL("complete optimization run", err)
+}
+
+func (r *ResearchRepo) FailOptimizationRun(
+	ctx context.Context, id, status, errorCode, errorMessage string, completedAt int64,
+) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE research_optimization_runs
+		SET status=?, error_code=?, error_message=?, completed_at=?
+		WHERE id=?`,
+		status, errorCode, errorMessage, completedAt, id)
+	return wrapSQL("fail optimization run", err)
+}
+
+// LatestOptimizationByCollection returns the most recent optimization run
+// for a collection (any status).
+func (r *ResearchRepo) LatestOptimizationByCollection(
+	ctx context.Context, collectionID string,
+) (ResearchOptimizationRun, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+optimizationRunListColumns+` FROM research_optimization_runs
+		 WHERE collection_id=? ORDER BY created_at DESC LIMIT 1`, collectionID)
+	return scanOptimizationRun(row)
 }

@@ -44,6 +44,11 @@ func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 	research.GET("/runs/:run_id/export.csv", s.exportResearchRunCSV)
 
 	research.POST("/collections/:collection_id/copy-to-plan", s.copyResearchToPlan)
+
+	research.GET("/collections/:collection_id/optimization-readiness", s.getOptimizationReadiness)
+	research.POST("/collections/:collection_id/optimizations", s.createOptimization)
+	research.GET("/collections/:collection_id/optimizations/latest", s.getLatestOptimization)
+	research.GET("/optimizations/:optimization_id", s.getOptimization)
 }
 
 // --- screener ---
@@ -371,6 +376,67 @@ func (s Services) exportResearchRunCSV(c *gin.Context) {
 	}
 	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", []byte(csv))
+}
+
+// --- plan interop ---
+
+// --- optimization ---
+
+func (s Services) getOptimizationReadiness(c *gin.Context) {
+	weightStep := 0.05
+	if raw := strings.TrimSpace(c.Query("weight_step")); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
+			weightStep = v
+		}
+	}
+	out, err := s.Research.GetOptimizationReadiness(
+		c.Request.Context(), c.Param("collection_id"), weightStep)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) createOptimization(c *gin.Context) {
+	var req service.ResearchOptimizationRequest
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+			return
+		}
+	}
+	out, err := s.Research.CreateOptimization(
+		c.Request.Context(), c.Param("collection_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) getLatestOptimization(c *gin.Context) {
+	out, err := s.Research.GetLatestOptimization(
+		c.Request.Context(), c.Param("collection_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	if out == nil {
+		OK(c, nil)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) getOptimization(c *gin.Context) {
+	out, err := s.Research.GetOptimization(
+		c.Request.Context(), c.Param("optimization_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 // --- plan interop ---

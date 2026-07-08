@@ -33,9 +33,15 @@ type Runner interface {
 	) error
 }
 
-// ResearchRunnerIface executes research portfolio backtest jobs.
+// ResearchRunnerIface executes research portfolio backtest and optimization jobs.
 type ResearchRunnerIface interface {
 	ExecuteBacktestJob(
+		ctx context.Context,
+		jobID string,
+		cancelCheck func() bool,
+		progress func(done, total int, phase string),
+	) error
+	ExecuteOptimizationJob(
 		ctx context.Context,
 		jobID string,
 		cancelCheck func() bool,
@@ -250,6 +256,9 @@ func (w *Worker) execute(ctx context.Context, job repository.Job) {
 	case repository.JobTypeResearchBacktest:
 		w.executeResearch(ctx, job)
 		return
+	case repository.JobTypeResearchOptimization:
+		w.executeResearchOptimization(ctx, job)
+		return
 	}
 	run, err := w.sims.GetByJobID(ctx, job.ID)
 	if err != nil {
@@ -375,6 +384,30 @@ func (w *Worker) executeResearch(ctx context.Context, job repository.Job) {
 			return
 		}
 		w.fail(ctx, job.ID, "research_backtest_failed", err.Error())
+		return
+	}
+	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
+}
+
+// executeResearchOptimization delegates one research_optimization_backtest
+// job to the research runner's optimization executor.
+func (w *Worker) executeResearchOptimization(ctx context.Context, job repository.Job) {
+	if w.research == nil {
+		w.fail(ctx, job.ID, "runner_missing", "research runner not configured")
+		return
+	}
+	cancelCheck := w.cancelCheck(ctx, job.ID)
+	progress := w.jobProgress(ctx, job.ID)
+	err := w.research.ExecuteOptimizationJob(ctx, job.ID, cancelCheck, progress)
+	if err != nil {
+		if ctx.Err() != nil && !cancelCheck() {
+			return
+		}
+		if cancelCheck() || errors.Is(err, context.Canceled) {
+			w.finish(ctx, job.ID, repository.JobStatusCanceled, "canceled by user", "")
+			return
+		}
+		w.fail(ctx, job.ID, "research_optimization_failed", err.Error())
 		return
 	}
 	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")

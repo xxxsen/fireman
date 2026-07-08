@@ -683,3 +683,106 @@ export function copyToPlan(
     { plan_id: planId },
   );
 }
+
+// --- optimization (td/103) ---
+
+export interface ResearchOptimizationConfig {
+  weight_step: number;
+  max_candidate_count?: number;
+  top_k?: number;
+}
+
+export interface ResearchOptimizationWeightEntry {
+  item_id: string;
+  asset_key: string;
+  name: string;
+  weight: number;
+  locked: boolean;
+}
+
+export interface ResearchOptimizationResultItem {
+  rank: number;
+  objective: "max_cagr" | "min_drawdown" | "max_calmar";
+  score: number;
+  weights: ResearchOptimizationWeightEntry[];
+  summary: ResearchRunSummary;
+}
+
+export interface ResearchOptimizationResult {
+  candidate_count: number;
+  evaluated_count: number;
+  skipped_count: number;
+  best_by_cagr: ResearchOptimizationResultItem[];
+  best_by_drawdown: ResearchOptimizationResultItem[];
+  best_by_calmar: ResearchOptimizationResultItem[];
+}
+
+export interface ResearchOptimizationRun {
+  id: string;
+  collection_id: string;
+  job_id: string;
+  status: ResearchRunStatus;
+  config: ResearchOptimizationConfig;
+  candidate_count: number;
+  evaluated_count: number;
+  result?: ResearchOptimizationResult | null;
+  error_code?: string;
+  error_message?: string;
+  base_currency: string;
+  rebalance_policy: string;
+  window_start: string;
+  window_end: string;
+  engine_version: string;
+  created_at: number;
+  completed_at?: number | null;
+  job?: ResearchJobView | null;
+}
+
+export interface ResearchOptimizationReadiness {
+  ready: boolean;
+  candidate_count: number;
+  enabled_count: number;
+  locked_count: number;
+  tunable_count: number;
+  locked_weight_sum: number;
+  blocking_reasons: ResearchReadinessIssue[];
+  warnings: ResearchReadinessIssue[];
+}
+
+export function getOptimizationReadiness(
+  collectionId: string,
+  weightStep?: number,
+): Promise<ResearchOptimizationReadiness> {
+  const qs = new URLSearchParams();
+  if (weightStep !== undefined) qs.set("weight_step", String(weightStep));
+  const query = qs.toString();
+  return apiGet(
+    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/optimization-readiness${query ? `?${query}` : ""}`,
+  );
+}
+
+export function createOptimization(
+  collectionId: string,
+  config?: Partial<ResearchOptimizationConfig>,
+): Promise<{ optimization: ResearchOptimizationRun; reused: boolean }> {
+  return apiPost(
+    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/optimizations`,
+    config ?? {},
+  );
+}
+
+export function getOptimization(
+  optimizationId: string,
+): Promise<ResearchOptimizationRun> {
+  return apiGet(
+    `/api/v1/research/optimizations/${encodeURIComponent(optimizationId)}`,
+  );
+}
+
+export function getLatestOptimization(
+  collectionId: string,
+): Promise<ResearchOptimizationRun | null> {
+  return apiGet(
+    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/optimizations/latest`,
+  );
+}

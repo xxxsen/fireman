@@ -384,13 +384,24 @@ export function WeightEditor({
                       />
                     </td>
                     <td className="px-2 py-2">
-                      <input
-                        type="checkbox"
-                        checked={it.weight_locked}
-                        disabled={pending || !it.enabled}
-                        onChange={(e) => onUpdateItem(it.id, { weight_locked: e.target.checked })}
-                        aria-label={`锁定 ${it.name} 权重`}
-                      />
+                      <span className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={it.weight_locked}
+                          disabled={pending || !it.enabled}
+                          onChange={(e) => onUpdateItem(it.id, { weight_locked: e.target.checked })}
+                          aria-label={`锁定 ${it.name} 权重`}
+                        />
+                        <span className="text-[10px] text-ink-muted" data-testid={`opt-hint-${it.id}`}>
+                          {!it.enabled
+                            ? "不参与"
+                            : it.weight_locked
+                              ? "固定权重"
+                              : it.weight > 0
+                                ? "可被调优"
+                                : "参与调优"}
+                        </span>
+                      </span>
                     </td>
                     <td className="px-2 py-2 text-xs">{it.currency}</td>
                     <td className="px-2 py-2">

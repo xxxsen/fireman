@@ -2,11 +2,16 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   createBacktest,
+  createOptimization,
+  getLatestOptimization,
+  getOptimizationReadiness,
   type ResearchCollectionDetail,
+  type ResearchOptimizationReadiness,
+  type ResearchOptimizationRun,
   type ResearchReadiness,
   type ResearchRunView,
 } from "@/lib/api/research";
@@ -15,6 +20,7 @@ import { formatDateTimeFromMs, formatNullablePercent, formatPercent } from "@/li
 import { Button } from "@/components/ui/Button";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
+import { OptimizationConfigDialog } from "@/components/research/OptimizationConfigDialog";
 
 /**
  * The run button's disabled explanation, derived from readiness in priority
@@ -55,6 +61,30 @@ export function runDisabledReason(readiness: ResearchReadiness | undefined): str
   return readiness.blocking_reasons[0]?.message ?? "数据未就绪";
 }
 
+export function optimizationDisabledReason(
+  readiness: ResearchReadiness | undefined,
+  optReadiness: ResearchOptimizationReadiness | undefined,
+): string | null {
+  if (!readiness || !optReadiness) return "正在检查调优就绪状态…";
+  if (optReadiness.ready) return null;
+  for (const b of optReadiness.blocking_reasons) {
+    if (b.reason === "no_enabled_assets") return "集合没有启用的资产";
+    if (b.reason === "too_many_enabled_assets")
+      return `启用资产 ${optReadiness.enabled_count} 个超过上限 10 个`;
+    if (b.reason === "locked_weight_exceeds_100")
+      return `锁定权重合计 ${formatPercent(optReadiness.locked_weight_sum)} 超过 100%`;
+    if (b.reason === "candidate_count_exceeds_limit")
+      return `候选组合 ${optReadiness.candidate_count} 超过上限，请增大步长或减少资产`;
+    if (b.reason === "history_missing" || b.reason === "history_sync_failed")
+      return "存在缺历史资产，请先同步数据";
+    if (b.reason === "history_syncing" || b.reason === "fx_syncing")
+      return "数据同步任务进行中，完成后可运行";
+    if (b.reason === "fx_missing" || b.reason === "fx_gap_exceeded")
+      return "汇率数据缺失或存在缺口";
+  }
+  return optReadiness.blocking_reasons[0]?.message ?? "调优条件未满足";
+}
+
 export interface BacktestPanelProps {
   detail: ResearchCollectionDetail;
   readiness?: ResearchReadiness;
@@ -64,14 +94,42 @@ export interface BacktestPanelProps {
 export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelProps) {
   const router = useRouter();
   const [reusedNotice, setReusedNotice] = useState(false);
+  const [optDialogOpen, setOptDialogOpen] = useState(false);
 
   const disabledReason = useMemo(() => runDisabledReason(readiness), [readiness]);
+
+  const optReadinessQuery = useQuery({
+    queryKey: ["research", "optimization-readiness", detail.id],
+    queryFn: () => getOptimizationReadiness(detail.id),
+    enabled: !!readiness,
+  });
+
+  const latestOptQuery = useQuery({
+    queryKey: ["research", "latest-optimization", detail.id],
+    queryFn: () => getLatestOptimization(detail.id),
+  });
+
+  const optDisabledReason = useMemo(
+    () => optimizationDisabledReason(readiness, optReadinessQuery.data),
+    [readiness, optReadinessQuery.data],
+  );
 
   const runMutation = useMutation({
     mutationFn: () => createBacktest(detail.id),
     onSuccess: (result) => {
       setReusedNotice(result.reused);
       router.push(`/research/collections/${detail.id}/runs/${result.run.id}`);
+    },
+  });
+
+  const optimizeMutation = useMutation({
+    mutationFn: (config: { weight_step: number; top_k: number }) =>
+      createOptimization(detail.id, config),
+    onSuccess: (result) => {
+      setOptDialogOpen(false);
+      router.push(
+        `/research/collections/${detail.id}/optimizations/${result.optimization.id}`,
+      );
     },
   });
 
@@ -127,9 +185,23 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         >
           运行回测
         </Button>
-        {disabledReason && (
+        <Button
+          variant="secondary"
+          disabled={optDisabledReason !== null}
+          pending={optimizeMutation.isPending}
+          onClick={() => setOptDialogOpen(true)}
+          data-testid="find-optimal"
+        >
+          寻找最优组合
+        </Button>
+        {disabledReason && !optDisabledReason && (
           <p className="text-xs text-warning" data-testid="run-disabled-reason">
             {disabledReason}
+          </p>
+        )}
+        {optDisabledReason && (
+          <p className="text-xs text-warning" data-testid="opt-disabled-reason">
+            {optDisabledReason}
           </p>
         )}
         {reusedNotice && (
@@ -145,9 +217,27 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         </p>
       )}
 
+      {optimizeMutation.isError && (
+        <p className="mt-2 text-sm text-danger" role="alert">
+          创建调优失败：{queryErrorMessage(optimizeMutation.error)}
+        </p>
+      )}
+
+      <OptimizationConfigDialog
+        open={optDialogOpen}
+        onClose={() => setOptDialogOpen(false)}
+        optReadiness={optReadinessQuery.data}
+        pending={optimizeMutation.isPending}
+        onSubmit={(config) => optimizeMutation.mutate(config)}
+        onWeightStepChange={(step) => {
+          void optReadinessQuery.refetch();
+        }}
+        collectionId={detail.id}
+      />
+
       {latest && (
         <div className="mt-4 border-t border-line pt-3" data-testid="latest-run">
-          <h3 className="mb-1.5 text-sm font-semibold text-ink">最近一次运行</h3>
+          <h3 className="mb-1.5 text-sm font-semibold text-ink">最近一次回测</h3>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
             <Link
               href={`/research/collections/${detail.id}/runs/${latest.id}`}
@@ -167,6 +257,44 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
           </div>
         </div>
       )}
+
+      {latestOptQuery.data && (
+        <LatestOptimizationEntry
+          collectionId={detail.id}
+          optimization={latestOptQuery.data}
+        />
+      )}
     </section>
+  );
+}
+
+function LatestOptimizationEntry({
+  collectionId,
+  optimization,
+}: {
+  collectionId: string;
+  optimization: ResearchOptimizationRun;
+}) {
+  return (
+    <div className="mt-4 border-t border-line pt-3" data-testid="latest-optimization">
+      <h3 className="mb-1.5 text-sm font-semibold text-ink">最近一次自动调优</h3>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+        <Link
+          href={`/research/collections/${collectionId}/optimizations/${optimization.id}`}
+          className="text-brand underline-offset-2 hover:underline"
+        >
+          {optimization.window_start} ~ {optimization.window_end}
+        </Link>
+        {runStatusBadge(optimization.status)}
+        {optimization.status === "succeeded" && (
+          <span className="text-xs text-ink-muted">
+            候选 {optimization.candidate_count} · 已评估 {optimization.evaluated_count}
+          </span>
+        )}
+        <span className="text-xs text-ink-muted">
+          {formatDateTimeFromMs(optimization.created_at)}
+        </span>
+      </div>
+    </div>
   );
 }
