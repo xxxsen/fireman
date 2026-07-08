@@ -1,11 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  getOptimizationReadiness,
-  type ResearchOptimizationReadiness,
-} from "@/lib/api/research";
+import { getOptimizationReadiness } from "@/lib/api/research";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 
@@ -19,10 +16,8 @@ const WEIGHT_STEP_OPTIONS = [
 export interface OptimizationConfigDialogProps {
   open: boolean;
   onClose: () => void;
-  optReadiness?: ResearchOptimizationReadiness;
   pending: boolean;
   onSubmit: (config: { weight_step: number; top_k: number }) => void;
-  onWeightStepChange: (step: number) => void;
   collectionId: string;
 }
 
@@ -43,13 +38,6 @@ export function OptimizationConfigDialog({
   });
 
   const optReadiness = readinessQuery.data;
-
-  useEffect(() => {
-    if (!open) {
-      setWeightStep(0.05);
-      setTopK(20);
-    }
-  }, [open]);
 
   const handleSubmit = useCallback(() => {
     onSubmit({ weight_step: weightStep, top_k: topK });

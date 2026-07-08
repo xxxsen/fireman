@@ -358,7 +358,7 @@ func TestOptimizationReadiness_WeightSumDoesNotBlock(t *testing.T) {
 		},
 		FX: map[string]*researchFXData{},
 	}
-	r := evaluateOptimizationReadiness(ds, 0.05)
+	r := evaluateOptimizationReadiness(ds, OptimizationConfig{WeightStep: 0.05})
 	if !r.Ready {
 		t.Errorf("expected ready despite weight sum != 100%%, blocking: %v", r.BlockingReasons)
 	}
@@ -380,7 +380,7 @@ func TestOptimizationReadiness_HistoryMissingBlocks(t *testing.T) {
 		},
 		FX: map[string]*researchFXData{},
 	}
-	r := evaluateOptimizationReadiness(ds, 0.05)
+	r := evaluateOptimizationReadiness(ds, OptimizationConfig{WeightStep: 0.05})
 	if r.Ready {
 		t.Error("expected not ready due to missing history")
 	}
@@ -409,7 +409,7 @@ func TestOptimizationReadiness_FXMissingBlocks(t *testing.T) {
 		},
 		FX: map[string]*researchFXData{},
 	}
-	r := evaluateOptimizationReadiness(ds, 0.05)
+	r := evaluateOptimizationReadiness(ds, OptimizationConfig{WeightStep: 0.05})
 	if r.Ready {
 		t.Error("expected not ready due to missing FX")
 	}
@@ -421,6 +421,73 @@ func TestOptimizationReadiness_FXMissingBlocks(t *testing.T) {
 	}
 	if !foundFXMissing {
 		t.Error("expected fx_missing blocking reason")
+	}
+}
+
+func TestOptimizationReadiness_MaxCandidateCountBlocks(t *testing.T) {
+	ds := &researchDataset{
+		Enabled: []researchAssetData{
+			{
+				Item: repository.ResearchCollectionItem{
+					ID: "i1", AssetKey: "A", Weight: 0, WeightLocked: false, Enabled: true,
+				},
+				Asset:  repository.MarketAsset{Name: "A"},
+				Points: []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
+			},
+			{
+				Item: repository.ResearchCollectionItem{
+					ID: "i2", AssetKey: "B", Weight: 0, WeightLocked: false, Enabled: true,
+				},
+				Asset:  repository.MarketAsset{Name: "B"},
+				Points: []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
+			},
+		},
+		FX: map[string]*researchFXData{},
+	}
+	r := evaluateOptimizationReadiness(ds, OptimizationConfig{
+		WeightStep:        0.05,
+		MaxCandidateCount: 1,
+	})
+	if r.Ready {
+		t.Error("expected not ready when candidate count exceeds max_candidate_count")
+	}
+	found := false
+	for _, b := range r.BlockingReasons {
+		if b.Reason == "candidate_count_exceeds_limit" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected candidate_count_exceeds_limit blocking reason")
+	}
+}
+
+func TestOptimizationReadiness_MaxCandidateCountAllows(t *testing.T) {
+	ds := &researchDataset{
+		Enabled: []researchAssetData{
+			{
+				Item: repository.ResearchCollectionItem{
+					ID: "i1", AssetKey: "A", Weight: 0.5, WeightLocked: true, Enabled: true,
+				},
+				Asset:  repository.MarketAsset{Name: "A"},
+				Points: []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
+			},
+			{
+				Item: repository.ResearchCollectionItem{
+					ID: "i2", AssetKey: "B", Weight: 0, WeightLocked: false, Enabled: true,
+				},
+				Asset:  repository.MarketAsset{Name: "B"},
+				Points: []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
+			},
+		},
+		FX: map[string]*researchFXData{},
+	}
+	r := evaluateOptimizationReadiness(ds, OptimizationConfig{
+		WeightStep:        0.05,
+		MaxCandidateCount: 20000,
+	})
+	if !r.Ready {
+		t.Errorf("expected ready when candidate count within limit, blocking: %v", r.BlockingReasons)
 	}
 }
 

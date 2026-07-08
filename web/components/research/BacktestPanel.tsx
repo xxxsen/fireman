@@ -176,6 +176,7 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         </div>
       </dl>
 
+      {/* Normal backtest button + its own disabled reason */}
       <div className="flex flex-wrap items-center gap-3">
         <Button
           disabled={disabledReason !== null}
@@ -185,23 +186,9 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         >
           运行回测
         </Button>
-        <Button
-          variant="secondary"
-          disabled={optDisabledReason !== null}
-          pending={optimizeMutation.isPending}
-          onClick={() => setOptDialogOpen(true)}
-          data-testid="find-optimal"
-        >
-          寻找最优组合
-        </Button>
-        {disabledReason && !optDisabledReason && (
+        {disabledReason && (
           <p className="text-xs text-warning" data-testid="run-disabled-reason">
             {disabledReason}
-          </p>
-        )}
-        {optDisabledReason && (
-          <p className="text-xs text-warning" data-testid="opt-disabled-reason">
-            {optDisabledReason}
           </p>
         )}
         {reusedNotice && (
@@ -217,23 +204,40 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         </p>
       )}
 
+      {/* Optimization button + its own disabled reason */}
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          disabled={optDisabledReason !== null}
+          pending={optimizeMutation.isPending}
+          onClick={() => setOptDialogOpen(true)}
+          data-testid="find-optimal"
+        >
+          寻找最优组合
+        </Button>
+        {optDisabledReason && (
+          <p className="text-xs text-warning" data-testid="opt-disabled-reason">
+            {optDisabledReason}
+          </p>
+        )}
+      </div>
+
       {optimizeMutation.isError && (
         <p className="mt-2 text-sm text-danger" role="alert">
           创建调优失败：{queryErrorMessage(optimizeMutation.error)}
         </p>
       )}
 
-      <OptimizationConfigDialog
-        open={optDialogOpen}
-        onClose={() => setOptDialogOpen(false)}
-        optReadiness={optReadinessQuery.data}
-        pending={optimizeMutation.isPending}
-        onSubmit={(config) => optimizeMutation.mutate(config)}
-        onWeightStepChange={(step) => {
-          void optReadinessQuery.refetch();
-        }}
-        collectionId={detail.id}
-      />
+      {/* Remount dialog on open so state resets to defaults */}
+      {optDialogOpen && (
+        <OptimizationConfigDialog
+          open={optDialogOpen}
+          onClose={() => setOptDialogOpen(false)}
+          pending={optimizeMutation.isPending}
+          onSubmit={(config) => optimizeMutation.mutate(config)}
+          collectionId={detail.id}
+        />
+      )}
 
       {latest && (
         <div className="mt-4 border-t border-line pt-3" data-testid="latest-run">

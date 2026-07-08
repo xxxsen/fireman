@@ -3,12 +3,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ResearchCollectionDetail,
+  ResearchOptimizationReadiness,
   ResearchReadiness,
   ResearchRunView,
 } from "@/lib/api/research";
 import { BacktestPanel, runDisabledReason } from "./BacktestPanel";
 
 const createBacktestMock = vi.hoisted(() => vi.fn());
+const getOptimizationReadinessMock = vi.hoisted(() => vi.fn());
+const getLatestOptimizationMock = vi.hoisted(() => vi.fn());
+const createOptimizationMock = vi.hoisted(() => vi.fn());
 const routerPushMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
@@ -18,6 +22,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api/research", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/research")>()),
   createBacktest: (...args: unknown[]) => createBacktestMock(...args),
+  getOptimizationReadiness: (...args: unknown[]) => getOptimizationReadinessMock(...args),
+  getLatestOptimization: (...args: unknown[]) => getLatestOptimizationMock(...args),
+  createOptimization: (...args: unknown[]) => createOptimizationMock(...args),
 }));
 
 function detail(): ResearchCollectionDetail {
@@ -59,6 +66,22 @@ function readiness(overrides: Partial<ResearchReadiness> = {}): ResearchReadines
       stale_asset_count: 0,
       missing_history_count: 0,
     },
+    ...overrides,
+  };
+}
+
+function optReadiness(
+  overrides: Partial<ResearchOptimizationReadiness> = {},
+): ResearchOptimizationReadiness {
+  return {
+    ready: true,
+    enabled_count: 2,
+    locked_count: 0,
+    tunable_count: 2,
+    locked_weight_sum: 0,
+    candidate_count: 10,
+    blocking_reasons: [],
+    warnings: [],
     ...overrides,
   };
 }
@@ -178,7 +201,11 @@ describe("runDisabledReason", () => {
 });
 
 describe("BacktestPanel", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getOptimizationReadinessMock.mockResolvedValue(optReadiness());
+    getLatestOptimizationMock.mockResolvedValue(null);
+  });
 
   it("disables the run button with the reason when blocked", () => {
     renderPanel(
@@ -186,6 +213,23 @@ describe("BacktestPanel", () => {
     );
     expect(screen.getByTestId("run-backtest")).toBeDisabled();
     expect(screen.getByTestId("run-disabled-reason")).toHaveTextContent("汇率");
+  });
+
+  it("shows both run and optimization disabled reasons simultaneously", async () => {
+    getOptimizationReadinessMock.mockResolvedValue(
+      optReadiness({
+        ready: false,
+        blocking_reasons: [issue("too_many_enabled_assets")],
+        enabled_count: 12,
+      }),
+    );
+    renderPanel(
+      readiness({ ready: false, blocking_reasons: [issue("fx_missing")] }),
+    );
+    expect(screen.getByTestId("run-disabled-reason")).toHaveTextContent("汇率");
+    await waitFor(() =>
+      expect(screen.getByTestId("opt-disabled-reason")).toHaveTextContent("超过上限"),
+    );
   });
 
   it("runs a backtest and navigates to the run page", async () => {
@@ -217,5 +261,27 @@ describe("BacktestPanel", () => {
     expect(screen.getByTestId("backtest-window")).toHaveTextContent(
       "2018-01-01 ~ 2026-07-01",
     );
+  });
+
+  it("enables the find-optimal button when optimization readiness is ready", async () => {
+    renderPanel(readiness());
+    await waitFor(() =>
+      expect(screen.getByTestId("find-optimal")).toBeEnabled(),
+    );
+  });
+
+  it("disables the find-optimal button when optimization is not ready", async () => {
+    getOptimizationReadinessMock.mockResolvedValue(
+      optReadiness({
+        ready: false,
+        blocking_reasons: [issue("too_many_enabled_assets")],
+        enabled_count: 12,
+      }),
+    );
+    renderPanel(readiness());
+    await waitFor(() =>
+      expect(screen.getByTestId("opt-disabled-reason")).toHaveTextContent("超过上限"),
+    );
+    expect(screen.getByTestId("find-optimal")).toBeDisabled();
   });
 });

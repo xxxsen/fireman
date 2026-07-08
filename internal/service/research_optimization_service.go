@@ -60,7 +60,7 @@ func (s *ResearchService) GetOptimizationReadiness(
 		return zero, err
 	}
 
-	out := evaluateOptimizationReadiness(ds, weightStep)
+	out := evaluateOptimizationReadiness(ds, OptimizationConfig{WeightStep: weightStep})
 
 	// Merge data-dependency blocking reasons from standard readiness
 	// (excluding weight_sum_invalid) so the readiness endpoint is
@@ -87,11 +87,9 @@ func (s *ResearchService) GetOptimizationReadiness(
 }
 
 func evaluateOptimizationReadiness(
-	ds *researchDataset, weightStep float64,
+	ds *researchDataset, config OptimizationConfig,
 ) OptimizationReadiness {
-	if weightStep <= 0 {
-		weightStep = OptimizationDefaultWeightStep
-	}
+	config.NormalizeDefaults()
 
 	out := OptimizationReadiness{
 		BlockingReasons: []ResearchReadinessIssue{},
@@ -167,12 +165,12 @@ func evaluateOptimizationReadiness(
 	}
 
 	if out.EnabledCount > 0 && out.EnabledCount <= OptimizationMaxEnabledAssets {
-		out.CandidateCount = CountCandidates(assets, weightStep)
-		if out.CandidateCount > OptimizationHardMaxCandidate {
+		out.CandidateCount = CountCandidates(assets, config.WeightStep)
+		if out.CandidateCount > config.MaxCandidateCount {
 			block(ResearchReadinessIssue{
 				Reason: "candidate_count_exceeds_limit",
 				Message: fmt.Sprintf("候选数量 %d 超过上限 %d，请增大步长或减少资产",
-					out.CandidateCount, OptimizationHardMaxCandidate),
+					out.CandidateCount, config.MaxCandidateCount),
 			})
 		}
 		if out.CandidateCount == 0 && out.TunableCount == 0 &&
@@ -297,7 +295,7 @@ func (s *ResearchService) CreateOptimization(
 	}
 	config.NormalizeDefaults()
 
-	optReadiness := evaluateOptimizationReadiness(ds, config.WeightStep)
+	optReadiness := evaluateOptimizationReadiness(ds, config)
 	if !optReadiness.Ready {
 		return zero, newErr("research_optimization_not_ready",
 			"集合未通过调优准入检查",

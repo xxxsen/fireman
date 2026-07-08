@@ -405,6 +405,26 @@ func TestAdminListJobs_Validation(t *testing.T) {
 	}
 }
 
+func TestAdminListJobs_ResearchOptimizationType(t *testing.T) {
+	svc, db := newAdminStack(t)
+	ctx := context.Background()
+
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO jobs (id, type, status, input_hash, progress_current, progress_total,
+			phase, cancel_requested, retry_count, created_at)
+		VALUES ('j_opt','research_optimization_backtest','queued','',0,0,'',0,0,?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.ListJobs(ctx, AdminJobListParams{Type: "research_optimization_backtest"})
+	if err != nil {
+		t.Fatalf("expected research_optimization_backtest to be valid type: %v", err)
+	}
+	if page.Total != 1 || page.Items[0].ID != "j_opt" {
+		t.Fatalf("expected 1 optimization job, got %+v", page)
+	}
+}
+
 func TestAdminListPostProcessRecords_Validation(t *testing.T) {
 	svc, db := newAdminStack(t)
 	ctx := context.Background()

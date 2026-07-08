@@ -512,10 +512,11 @@ type AdminJobItem struct {
 }
 
 var adminJobTypes = map[string]bool{
-	repository.JobTypeSimulation:       true,
-	repository.JobTypeStress:           true,
-	repository.JobTypeSensitivity:      true,
-	repository.JobTypeResearchBacktest: true,
+	repository.JobTypeSimulation:           true,
+	repository.JobTypeStress:               true,
+	repository.JobTypeSensitivity:          true,
+	repository.JobTypeResearchBacktest:     true,
+	repository.JobTypeResearchOptimization: true,
 }
 
 var adminJobStatuses = map[string]bool{
@@ -533,7 +534,7 @@ func (s *AdminService) ListJobs(
 	var zero Page[AdminJobItem]
 	if params.Type != "" && !adminJobTypes[params.Type] {
 		return zero, newErr("invalid_request",
-			"type must be one of simulation, stress, sensitivity, research_backtest", nil)
+			"type must be one of simulation, stress, sensitivity, research_backtest, research_optimization_backtest", nil)
 	}
 	var statuses []string
 	switch {
