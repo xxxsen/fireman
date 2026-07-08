@@ -294,8 +294,8 @@ export interface ResearchDataQuality {
   common_end: string;
   window_start: string;
   window_end: string;
-  assets: ResearchSeriesQuality[];
-  fx: ResearchSeriesQuality[];
+  assets?: ResearchSeriesQuality[] | null;
+  fx?: ResearchSeriesQuality[] | null;
   benchmark?: ResearchSeriesQuality | null;
 }
 

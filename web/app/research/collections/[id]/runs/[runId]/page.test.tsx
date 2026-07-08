@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResearchRunDetail, ResearchRunPoint } from "@/lib/api/research";
 import ResearchRunDetailPage from "./page";
@@ -110,11 +110,15 @@ function runDetail(overrides: Partial<ResearchRunDetail> = {}): ResearchRunDetai
       ],
     },
     data_quality: {
+      common_start_policy: "max_asset_start",
+      common_end_policy: "min_asset_end",
+      forward_fill_days_max: 7,
       common_start: "2024-01-01",
       common_end: "2024-01-30",
+      window_start: "2024-01-01",
+      window_end: "2024-01-30",
       assets: [],
       fx: [],
-      warnings: [],
     },
     ...overrides,
   } as ResearchRunDetail;
@@ -185,6 +189,43 @@ describe("ResearchRunDetailPage", () => {
     expect(screen.getByTestId("export-json")).toBeInTheDocument();
     expect(screen.getByTestId("compare-run")).toBeInTheDocument();
     expect(screen.getByTestId("clone-params")).toBeInTheDocument();
+  });
+
+  it("renders data quality when historical run stores fx as null", async () => {
+    getRunMock.mockResolvedValue(
+      runDetail({
+        data_quality: {
+          common_start_policy: "max_asset_start",
+          common_end_policy: "min_asset_end",
+          forward_fill_days_max: 7,
+          common_start: "2024-01-01",
+          common_end: "2024-01-30",
+          window_start: "2024-01-01",
+          window_end: "2024-01-30",
+          assets: [
+            {
+              asset_key: "CN|a",
+              name: "资产A",
+              currency: "CNY",
+              raw_start: "2024-01-01",
+              raw_end: "2024-01-30",
+              raw_point_count: 30,
+              usable_start: "2024-01-01",
+              usable_end: "2024-01-30",
+              fill_count: 0,
+              max_fill_gap_days: 0,
+              fill_tolerance_days: 7,
+              fill_gap_exceeded: false,
+            },
+          ],
+          fx: null,
+        },
+      }),
+    );
+    renderPage();
+    const dataQuality = await screen.findByTestId("data-quality");
+    expect(within(dataQuality).getByText("资产A")).toBeInTheDocument();
+    expect(within(dataQuality).queryByText(/^汇率/)).not.toBeInTheDocument();
   });
 
   it("shows the failure state with the job error", async () => {

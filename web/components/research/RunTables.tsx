@@ -304,6 +304,8 @@ export function RunDataQuality({
   quality: ResearchDataQuality;
   sources?: { asset_key: string; source_name?: string; point_type?: string; points_hash?: string }[];
 }) {
+  const assets = Array.isArray(quality.assets) ? quality.assets : [];
+  const fx = Array.isArray(quality.fx) ? quality.fx : [];
   const sourceByKey = useMemo(() => {
     const map = new Map<string, { source_name?: string; point_type?: string; points_hash?: string }>();
     for (const s of sources ?? []) map.set(s.asset_key, s);
@@ -355,7 +357,7 @@ export function RunDataQuality({
             </tr>
           </thead>
           <tbody>
-            {quality.assets.map((q) => {
+            {assets.map((q) => {
               const src = sourceByKey.get(q.asset_key ?? "");
               const extras: string[] = [];
               if (q.is_cash) extras.push("现金（恒值 1.0）");
@@ -372,7 +374,7 @@ export function RunDataQuality({
                 />
               );
             })}
-            {quality.fx.map((q) => (
+            {fx.map((q) => (
               <QualityRow key={`fx-${q.pair}`} label={`汇率 ${q.pair ?? ""}`} q={q} />
             ))}
             {quality.benchmark && (

@@ -1,8 +1,10 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -943,6 +945,34 @@ func TestRunBacktestDataQualityFillFacts(t *testing.T) {
 	}
 	if res.DataQuality.CommonStart == "" || res.DataQuality.CommonEnd == "" {
 		t.Fatal("common window facts missing")
+	}
+}
+
+func TestRunBacktestDataQualityJSONUsesEmptyArrays(t *testing.T) {
+	points := genDailySeries(t, "2020-01-01", 400, func(i int) float64 {
+		return 100 + float64(i)
+	})
+	res, err := RunResearchBacktest(singleAssetInput(t, points))
+	if err != nil {
+		t.Fatalf("RunResearchBacktest: %v", err)
+	}
+
+	b, err := json.Marshal(res.DataQuality)
+	if err != nil {
+		t.Fatalf("marshal data quality: %v", err)
+	}
+	got := string(b)
+	if strings.Contains(got, `"fx":null`) {
+		t.Fatalf("fx must encode as an empty array, got %s", got)
+	}
+	if !strings.Contains(got, `"fx":[]`) {
+		t.Fatalf("expected empty fx array, got %s", got)
+	}
+	if strings.Contains(got, `"assets":null`) {
+		t.Fatalf("assets must encode as an array, got %s", got)
+	}
+	if !strings.Contains(got, `"assets":[`) {
+		t.Fatalf("expected assets array, got %s", got)
 	}
 }
 

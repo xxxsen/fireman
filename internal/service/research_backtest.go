@@ -1381,6 +1381,8 @@ func buildDataQuality(
 		ForwardFillDaysMax: researchFillGapDefaultDays,
 		WindowStart:        researchDayToDate(lo),
 		WindowEnd:          researchDayToDate(hi),
+		Assets:             make([]BacktestSeriesQuality, 0, len(assets)),
+		FX:                 make([]BacktestSeriesQuality, 0),
 	}
 	commonLo, commonHi, err := commonWindow(assets)
 	if err == nil {
