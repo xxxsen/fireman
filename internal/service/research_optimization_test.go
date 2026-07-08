@@ -1,11 +1,35 @@
 package service
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 
 	"github.com/fireman/fireman/internal/repository"
 )
+
+func TestOptimizationWeightEntryJSONUsesAPIFieldNames(t *testing.T) {
+	data, err := json.Marshal(OptimizationWeightEntry{
+		ItemID: "item_1", AssetKey: "CN|x", Name: "资产A", Weight: 0.5, Locked: true,
+	})
+	if err != nil {
+		t.Fatalf("marshal weight entry: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal weight entry: %v", err)
+	}
+	for _, key := range []string{"item_id", "asset_key", "name", "weight", "locked"} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("expected key %q in %s", key, string(data))
+		}
+	}
+	for _, key := range []string{"ItemID", "AssetKey", "Name", "Weight", "Locked"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("unexpected legacy key %q in %s", key, string(data))
+		}
+	}
+}
 
 // --- input hash determinism ---
 
@@ -367,6 +391,32 @@ func TestOptimizationReadiness_WeightSumDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestOptimizationReadiness_AllZeroWeightsReady(t *testing.T) {
+	ds := &researchDataset{
+		FX: map[string]*researchFXData{},
+	}
+	for _, key := range []string{"A", "B", "C", "D"} {
+		ds.Enabled = append(ds.Enabled, researchAssetData{
+			Item: repository.ResearchCollectionItem{
+				ID: "i" + key, AssetKey: key, Weight: 0, WeightLocked: false, Enabled: true,
+			},
+			Asset:  repository.MarketAsset{Name: key},
+			Points: []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
+		})
+	}
+
+	r := evaluateOptimizationReadiness(ds, OptimizationConfig{WeightStep: 0.05})
+	if !r.Ready {
+		t.Fatalf("expected all-zero enabled assets to be ready for optimization, blocking: %v", r.BlockingReasons)
+	}
+	if r.EnabledCount != 4 || r.TunableCount != 4 {
+		t.Fatalf("unexpected counts: enabled=%d tunable=%d", r.EnabledCount, r.TunableCount)
+	}
+	if r.CandidateCount == 0 {
+		t.Fatal("expected positive candidate count")
+	}
+}
+
 func TestOptimizationReadiness_HistoryMissingBlocks(t *testing.T) {
 	ds := &researchDataset{
 		Enabled: []researchAssetData{
@@ -402,8 +452,8 @@ func TestOptimizationReadiness_FXMissingBlocks(t *testing.T) {
 				Item: repository.ResearchCollectionItem{
 					ID: "i1", AssetKey: "A", Weight: 0, WeightLocked: false, Enabled: true,
 				},
-				Asset:  repository.MarketAsset{Name: "A", Currency: "USD"},
-				Points: []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
+				Asset:   repository.MarketAsset{Name: "A", Currency: "USD"},
+				Points:  []repository.MarketAssetPoint{{TradeDate: "2020-01-01", Value: 1}},
 				FXPairs: []string{"USDCNY"},
 			},
 		},

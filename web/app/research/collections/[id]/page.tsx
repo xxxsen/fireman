@@ -59,6 +59,9 @@ export default function ResearchCollectionPage() {
     (detail: ResearchCollectionDetail) => {
       queryClient.setQueryData(["research", "collection", id], detail);
       void queryClient.invalidateQueries({ queryKey: ["research", "readiness", id] });
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "optimization-readiness", id],
+      });
     },
     [queryClient, id],
   );

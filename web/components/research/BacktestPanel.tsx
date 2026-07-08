@@ -179,6 +179,7 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
       {/* Normal backtest button + its own disabled reason */}
       <div className="flex flex-wrap items-center gap-3">
         <Button
+          className="w-32"
           disabled={disabledReason !== null}
           pending={runMutation.isPending}
           onClick={() => runMutation.mutate()}
@@ -208,6 +209,7 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button
           variant="secondary"
+          className="w-32"
           disabled={optDisabledReason !== null}
           pending={optimizeMutation.isPending}
           onClick={() => setOptDialogOpen(true)}

@@ -7,7 +7,11 @@ import type {
   ResearchReadiness,
   ResearchRunView,
 } from "@/lib/api/research";
-import { BacktestPanel, runDisabledReason } from "./BacktestPanel";
+import {
+  BacktestPanel,
+  optimizationDisabledReason,
+  runDisabledReason,
+} from "./BacktestPanel";
 
 const createBacktestMock = vi.hoisted(() => vi.fn());
 const getOptimizationReadinessMock = vi.hoisted(() => vi.fn());
@@ -197,6 +201,26 @@ describe("runDisabledReason", () => {
       ],
     });
     expect(runDisabledReason(r)).toBe("共同历史区间不足（受限于 新发基金）");
+  });
+});
+
+describe("optimizationDisabledReason", () => {
+  it("does not inherit the normal backtest weight-sum block", () => {
+    expect(
+      optimizationDisabledReason(
+        readiness({
+          ready: false,
+          weight_sum: 0,
+          blocking_reasons: [issue("weight_sum_invalid")],
+        }),
+        optReadiness({
+          ready: true,
+          enabled_count: 4,
+          tunable_count: 4,
+          candidate_count: 8855,
+        }),
+      ),
+    ).toBeNull();
   });
 });
 

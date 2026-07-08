@@ -19,6 +19,13 @@ import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsF
 import type { ResearchRebalancePolicy } from "@/lib/api/research";
 
 type TabKey = "cagr" | "drawdown" | "calmar";
+type LegacyOptimizationWeightEntry = ResearchOptimizationResultItem["weights"][number] & {
+  ItemID?: string;
+  AssetKey?: string;
+  Name?: string;
+  Weight?: number;
+  Locked?: boolean;
+};
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "cagr", label: "最高收益" },
@@ -30,6 +37,29 @@ function scoreFmt(tab: TabKey, score: number): string {
   if (tab === "drawdown") return formatPercent(score);
   if (tab === "calmar") return score.toFixed(3);
   return formatPercent(score);
+}
+
+function weightValue(w: LegacyOptimizationWeightEntry): number {
+  return w.weight ?? w.Weight ?? 0;
+}
+
+function firstNonBlank(...values: Array<string | undefined>): string | null {
+  for (const value of values) {
+    if (value && value.trim().length > 0) return value;
+  }
+  return null;
+}
+
+function weightName(w: LegacyOptimizationWeightEntry): string {
+  return firstNonBlank(w.name, w.Name, w.asset_key, w.AssetKey) ?? "未命名资产";
+}
+
+function weightKey(w: LegacyOptimizationWeightEntry): string {
+  return firstNonBlank(w.item_id, w.ItemID, w.asset_key, w.AssetKey, w.name, w.Name) ?? "weight";
+}
+
+function weightLocked(w: LegacyOptimizationWeightEntry): boolean {
+  return w.locked ?? w.Locked ?? false;
 }
 
 function ResultTable({
@@ -50,12 +80,12 @@ function ResultTable({
           <tr className="border-b border-line text-left text-xs text-ink-muted">
             <th className="px-2 py-2 font-medium">#</th>
             <th className="px-2 py-2 font-medium">得分</th>
-            <th className="px-2 py-2 font-medium">CAGR</th>
+            <th className="px-2 py-2 font-medium">年化收益</th>
             <th className="px-2 py-2 font-medium">累计收益</th>
             <th className="px-2 py-2 font-medium">最大回撤</th>
             <th className="px-2 py-2 font-medium">波动率</th>
-            <th className="px-2 py-2 font-medium">Sharpe</th>
-            <th className="px-2 py-2 font-medium">Calmar</th>
+            <th className="px-2 py-2 font-medium">夏普比率</th>
+            <th className="px-2 py-2 font-medium">卡玛比率</th>
             <th className="px-2 py-2 font-medium">权重分配</th>
           </tr>
         </thead>
@@ -104,18 +134,31 @@ function WeightBar({
 }: {
   weights: ResearchOptimizationResultItem["weights"];
 }) {
-  const active = weights.filter((w) => w.weight > 0);
+  const normalized = weights.map((w, index) => {
+    const entry = w as LegacyOptimizationWeightEntry;
+    return {
+      key: `${weightKey(entry)}-${index}`,
+      name: weightName(entry),
+      weight: weightValue(entry),
+      locked: weightLocked(entry),
+    };
+  });
+  const active = normalized.filter((w) => w.weight > 0);
   if (active.length === 0) return <span className="text-ink-muted">—</span>;
+  const title = active.map((w) => `${w.name}: ${formatPercent(w.weight)}`).join(" / ");
 
   return (
-    <div className="space-y-0.5">
+    <div className="max-w-[22rem] space-y-0.5" title={title}>
       {active.map((w) => (
-        <div key={w.item_id} className="flex items-center gap-1.5 text-xs">
+        <div
+          key={w.key}
+          className="grid grid-cols-[56px_minmax(7rem,1fr)_auto_auto] items-center gap-1.5 text-xs"
+        >
           <div
             className="h-2 rounded-sm bg-brand/70"
-            style={{ width: `${Math.max(4, w.weight * 100)}px` }}
+            style={{ width: `${Math.max(4, Math.min(56, w.weight * 56))}px` }}
           />
-          <span className="truncate text-ink" title={w.name}>
+          <span className="truncate text-ink">
             {w.name}
           </span>
           <span className="font-mono-numeric text-ink-muted">

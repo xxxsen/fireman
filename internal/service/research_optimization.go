@@ -67,20 +67,20 @@ type OptimizationWeightVector struct {
 
 // OptimizationWeightEntry is one asset's weight in a candidate.
 type OptimizationWeightEntry struct {
-	ItemID   string
-	AssetKey string
-	Name     string
-	Weight   float64
-	Locked   bool
+	ItemID   string  `json:"item_id"`
+	AssetKey string  `json:"asset_key"`
+	Name     string  `json:"name"`
+	Weight   float64 `json:"weight"`
+	Locked   bool    `json:"locked"`
 }
 
 // OptimizationResultItem is one ranked candidate result.
 type OptimizationResultItem struct {
-	Rank      int                        `json:"rank"`
-	Objective OptimizationObjective      `json:"objective"`
-	Score     float64                    `json:"score"`
-	Weights   []OptimizationWeightEntry  `json:"weights"`
-	Summary   BacktestSummary            `json:"summary"`
+	Rank      int                       `json:"rank"`
+	Objective OptimizationObjective     `json:"objective"`
+	Score     float64                   `json:"score"`
+	Weights   []OptimizationWeightEntry `json:"weights"`
+	Summary   BacktestSummary           `json:"summary"`
 }
 
 // OptimizationResult is the final output of one optimization run.
