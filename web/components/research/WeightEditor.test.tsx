@@ -186,6 +186,25 @@ describe("WeightEditor", () => {
     expect(onUpdateItem).toHaveBeenCalledWith("a", { weight: 0.35 });
   });
 
+  it("clears a zero weight draft on focus so typing replaces 0", () => {
+    const onUpdateItem = vi.fn();
+    render(
+      <WeightEditor
+        detail={detail([item("a", { weight: 0 }), item("b", { weight: 1 })])}
+        {...baseHandlers}
+        onUpdateItem={onUpdateItem}
+      />,
+    );
+    const input = screen.getAllByLabelText("权重百分比")[0]!;
+    fireEvent.focus(input);
+    expect(input).toHaveValue("");
+
+    fireEvent.change(input, { target: { value: "50" } });
+    fireEvent.blur(input);
+
+    expect(onUpdateItem).toHaveBeenCalledWith("a", { weight: 0.5 });
+  });
+
   it("applies equal weights across enabled items", () => {
     const onApplyWeights = vi.fn();
     render(

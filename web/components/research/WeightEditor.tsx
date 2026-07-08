@@ -119,12 +119,16 @@ function WeightInput({
   return (
     <span className="flex items-center gap-1">
       <input
-        type="number"
-        step="0.01"
-        min="0"
+        type="text"
+        inputMode="decimal"
         value={draft ?? String(display)}
         disabled={disabled}
         onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => {
+          if (draft === null && display === 0) {
+            setDraft("");
+          }
+        }}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
