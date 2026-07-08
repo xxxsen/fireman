@@ -61,7 +61,7 @@ func buildShortFixturePoints() []marketdata.HistoricalPoint {
 
 // insertHoldingRow stores one enabled lazy holding (empty snapshot id)
 // directly, bypassing the holdings API so tests can pin arbitrary states.
-func insertHoldingRow(t *testing.T, db *sql.DB, planID, assetKey string) string {
+func insertHoldingRow(t *testing.T, db *sql.DB, planID, assetKey string) {
 	t.Helper()
 	id := "hold_test_" + fmt.Sprintf("%d", time.Now().UnixNano())
 	now := time.Now().UnixMilli()
@@ -74,7 +74,6 @@ func insertHoldingRow(t *testing.T, db *sql.DB, planID, assetKey string) string 
 		id, planID, assetKey, now, now); err != nil {
 		t.Fatal(err)
 	}
-	return id
 }
 
 func getReadiness(t *testing.T, client *http.Client, baseURL, planID string) map[string]any {

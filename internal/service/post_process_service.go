@@ -249,5 +249,5 @@ func (s *PostProcessService) withPostProcessTx(ctx context.Context, fn func(tx *
 	if errors.As(err, &ppe) {
 		return ppe
 	}
-	return err
+	return fmt.Errorf("post-process transaction: %w", err)
 }

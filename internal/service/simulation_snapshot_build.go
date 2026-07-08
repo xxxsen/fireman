@@ -92,33 +92,11 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		return simulation.SnapshotAsset{}, newErr("snapshot_not_found", "simulation snapshot missing for holding",
 			map[string]any{"holding_id": line.HoldingID})
 	}
-	if snap.SourceMode != "system_cash" {
-		if err := marketdata.ValidateSimulationSnapshot(snap); err != nil {
-			return simulation.SnapshotAsset{}, newErr("instrument_insufficient_history",
-				"holding snapshot does not meet simulation eligibility",
-				map[string]any{
-					"holding_id":           line.HoldingID,
-					"complete_year_count":  snap.CompleteYearCount,
-					"monthly_return_count": snap.MonthlyReturnCount,
-					"quality_status":       snap.QualityStatus,
-					"metrics_version":      snap.MetricsVersion,
-					"volatility_method":    snap.VolatilityMethod,
-					"validation_error":     err.Error(),
-				})
-		}
+	if err := validateHoldingSnapshot(line, snap); err != nil {
+		return simulation.SnapshotAsset{}, err
 	}
 	years := toSimSnapshotYears(snap.Years)
-	asset, err := s.assetRepo.GetByKey(ctx, line.AssetKey)
-	currency := plan.BaseCurrency
-	instrumentName := ""
-	instrumentCode := ""
-	if err == nil {
-		if asset.Currency != "" {
-			currency = asset.Currency
-		}
-		instrumentName = asset.Name
-		instrumentCode = asset.Symbol
-	}
+	currency, instrumentName, instrumentCode := s.snapshotAssetIdentity(ctx, plan, line)
 	isCash := snap.SourceMode == "system_cash" || line.AssetClass == domain.AssetClassCash
 	region := line.Region
 	if isCash {
@@ -160,6 +138,42 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		return sa, nil
 	}
 	return s.enrichSnapshotAssetFX(ctx, plan, line, sa, currency, fxCache, resolved)
+}
+
+func validateHoldingSnapshot(line domain.HoldingTargetLine, snap repository.SimulationSnapshot) error {
+	if snap.SourceMode == "system_cash" {
+		return nil
+	}
+	if err := marketdata.ValidateSimulationSnapshot(snap); err != nil {
+		return newErr("instrument_insufficient_history",
+			"holding snapshot does not meet simulation eligibility",
+			map[string]any{
+				"holding_id":           line.HoldingID,
+				"complete_year_count":  snap.CompleteYearCount,
+				"monthly_return_count": snap.MonthlyReturnCount,
+				"quality_status":       snap.QualityStatus,
+				"metrics_version":      snap.MetricsVersion,
+				"volatility_method":    snap.VolatilityMethod,
+				"validation_error":     err.Error(),
+			})
+	}
+	return nil
+}
+
+func (s *SimulationService) snapshotAssetIdentity(
+	ctx context.Context,
+	plan repository.Plan,
+	line domain.HoldingTargetLine,
+) (string, string, string) {
+	asset, err := s.assetRepo.GetByKey(ctx, line.AssetKey)
+	if err != nil {
+		return plan.BaseCurrency, "", ""
+	}
+	currency := plan.BaseCurrency
+	if asset.Currency != "" {
+		currency = asset.Currency
+	}
+	return currency, asset.Name, asset.Symbol
 }
 
 func toSimSnapshotYears(years []repository.SnapshotYear) []simulation.SnapshotYear {

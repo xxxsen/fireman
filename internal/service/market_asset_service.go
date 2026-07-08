@@ -256,47 +256,65 @@ func aggregateDirectoryScope(units []DirectorySyncUnitView) (string, *int64) {
 	if len(units) == 0 {
 		return DirectoryScopeStatusNever, nil
 	}
-	var (
-		anyActive, anyFailed, anySuccess, anyTask bool
-		allSuccess                                = true
-		minSuccess                                int64
-	)
-	for _, u := range units {
-		if u.Task != nil {
-			anyTask = true
-			if repository.IsActiveWorkerTaskStatus(u.Task.Status) {
-				anyActive = true
-			}
-			if u.Task.Status == repository.WorkerTaskStatusFailed {
-				anyFailed = true
-			}
-		}
-		if u.LastSuccessAt == nil {
-			allSuccess = false
-			continue
-		}
-		anySuccess = true
-		if minSuccess == 0 || *u.LastSuccessAt < minSuccess {
-			minSuccess = *u.LastSuccessAt
-		}
-	}
-	var lastSuccessAt *int64
-	if allSuccess {
-		v := minSuccess
-		lastSuccessAt = &v
-	}
+	facts := directoryScopeFacts(units)
+	lastSuccessAt := directoryScopeLastSuccess(facts.allSuccess, facts.minSuccess)
 	switch {
-	case anyActive:
+	case facts.anyActive:
 		return DirectoryScopeStatusRunning, lastSuccessAt
-	case allSuccess && !anyFailed:
+	case facts.allSuccess && !facts.anyFailed:
 		return DirectoryScopeStatusComplete, lastSuccessAt
-	case !anySuccess && !anyTask:
+	case !facts.anySuccess && !facts.anyTask:
 		return DirectoryScopeStatusNever, lastSuccessAt
-	case !anySuccess && anyFailed:
+	case !facts.anySuccess && facts.anyFailed:
 		return DirectoryScopeStatusFailed, lastSuccessAt
 	default:
 		return DirectoryScopeStatusPartial, lastSuccessAt
 	}
+}
+
+type directoryScopeStatusFacts struct {
+	anyActive  bool
+	anyFailed  bool
+	anySuccess bool
+	anyTask    bool
+	allSuccess bool
+	minSuccess int64
+}
+
+func directoryScopeFacts(units []DirectorySyncUnitView) directoryScopeStatusFacts {
+	facts := directoryScopeStatusFacts{allSuccess: true}
+	for _, u := range units {
+		facts.applyUnit(u)
+	}
+	return facts
+}
+
+func (f *directoryScopeStatusFacts) applyUnit(u DirectorySyncUnitView) {
+	if u.Task != nil {
+		f.anyTask = true
+		if repository.IsActiveWorkerTaskStatus(u.Task.Status) {
+			f.anyActive = true
+		}
+		if u.Task.Status == repository.WorkerTaskStatusFailed {
+			f.anyFailed = true
+		}
+	}
+	if u.LastSuccessAt == nil {
+		f.allSuccess = false
+		return
+	}
+	f.anySuccess = true
+	if f.minSuccess == 0 || *u.LastSuccessAt < f.minSuccess {
+		f.minSuccess = *u.LastSuccessAt
+	}
+}
+
+func directoryScopeLastSuccess(allSuccess bool, minSuccess int64) *int64 {
+	if !allSuccess {
+		return nil
+	}
+	v := minSuccess
+	return &v
 }
 
 // MarketAssetListItem is one directory row plus its local history readiness
@@ -374,28 +392,42 @@ func (s *MarketAssetService) BuildScopeSyncView(
 ) (DirectoryScopeSyncView, error) {
 	view := DirectoryScopeSyncView{Scope: scope, Label: DirectoryScopeLabel(scope)}
 	for _, unit := range DirectoryUnitsByScope(scope) {
-		unitView := DirectorySyncUnitView{SyncKey: unit.SyncKey, Label: unit.Label}
-		st, ok, err := s.assets.GetSyncState(ctx, unit.SyncKey)
+		unitView, err := s.buildDirectoryUnitSyncView(ctx, unit)
 		if err != nil {
-			return view, wrapRepo("load sync state", err)
-		}
-		if ok {
-			unitView.LastSuccessAt = st.LastSuccessAt
-			unitView.LastSuccessTaskID = st.LastSuccessTaskID
-			if st.LastTaskID != "" {
-				task, err := s.tasks.GetByID(ctx, st.LastTaskID)
-				if err == nil {
-					v := taskToView(task)
-					unitView.Task = &v
-				} else if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
-					return view, wrapRepo("load sync task", err)
-				}
-			}
+			return view, err
 		}
 		view.Units = append(view.Units, unitView)
 	}
 	view.Status, view.LastSuccessAt = aggregateDirectoryScope(view.Units)
 	return view, nil
+}
+
+func (s *MarketAssetService) buildDirectoryUnitSyncView(
+	ctx context.Context, unit DirectorySyncUnit,
+) (DirectorySyncUnitView, error) {
+	unitView := DirectorySyncUnitView{SyncKey: unit.SyncKey, Label: unit.Label}
+	st, ok, err := s.assets.GetSyncState(ctx, unit.SyncKey)
+	if err != nil {
+		return unitView, wrapRepo("load sync state", err)
+	}
+	if !ok {
+		return unitView, nil
+	}
+	unitView.LastSuccessAt = st.LastSuccessAt
+	unitView.LastSuccessTaskID = st.LastSuccessTaskID
+	if st.LastTaskID == "" {
+		return unitView, nil
+	}
+	task, err := s.tasks.GetByID(ctx, st.LastTaskID)
+	if errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return unitView, nil
+	}
+	if err != nil {
+		return unitView, wrapRepo("load sync task", err)
+	}
+	v := taskToView(task)
+	unitView.Task = &v
+	return unitView, nil
 }
 
 // ListAssets searches the local market asset directory and attaches the sync
@@ -689,10 +721,12 @@ func (s *MarketAssetService) createTask(
 				duplicate = existing
 				return nil
 			}
-			return err
+			return fmt.Errorf("create worker task: %w", err)
 		}
 		if onCreated != nil {
-			return onCreated(ctx, tx, task.ID)
+			if err := onCreated(ctx, tx, task.ID); err != nil {
+				return fmt.Errorf("run worker task creation hook: %w", err)
+			}
 		}
 		return nil
 	})
@@ -791,20 +825,8 @@ func (s *MarketAssetService) GetDetail(
 		return MarketAssetDetail{}, wrapRepo("load history state", err)
 	}
 	if ok {
-		detail.History.DataAsOf = st.DataAsOf
-		detail.History.PointCount = st.PointCount
-		detail.History.SourceName = st.SourceName
-		detail.History.LastSuccessAt = st.LastSuccessAt
-		detail.History.LastSuccessTaskID = st.LastSuccessTaskID
-		if st.LastTaskID != "" {
-			task, err := s.tasks.GetByID(ctx, st.LastTaskID)
-			if err == nil {
-				v := taskToView(task)
-				detail.History.Task = &v
-				detail.History.CanSwitchSource = canSwitchSource(task)
-			} else if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
-				return MarketAssetDetail{}, wrapRepo("load history task", err)
-			}
+		if err := s.attachDetailHistoryTask(ctx, &detail.History, st); err != nil {
+			return MarketAssetDetail{}, err
 		}
 	}
 
@@ -821,14 +843,44 @@ func (s *MarketAssetService) GetDetail(
 		return MarketAssetDetail{}, wrapRepo("load detail projection", err)
 	}
 	if ok {
-		if proj.AnnualReturnsJSON != "" {
-			detail.AnnualReturns = json.RawMessage(proj.AnnualReturnsJSON)
-		}
-		if proj.TrailingReturnsJSON != "" && proj.TrailingReturnsJSON != "{}" {
-			detail.TrailingReturns = json.RawMessage(proj.TrailingReturnsJSON)
-		}
+		applyDetailProjection(&detail, proj)
 	}
 	return detail, nil
+}
+
+func (s *MarketAssetService) attachDetailHistoryTask(
+	ctx context.Context,
+	history *MarketAssetHistoryView,
+	st repository.MarketAssetHistoryState,
+) error {
+	history.DataAsOf = st.DataAsOf
+	history.PointCount = st.PointCount
+	history.SourceName = st.SourceName
+	history.LastSuccessAt = st.LastSuccessAt
+	history.LastSuccessTaskID = st.LastSuccessTaskID
+	if st.LastTaskID == "" {
+		return nil
+	}
+	task, err := s.tasks.GetByID(ctx, st.LastTaskID)
+	if errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return nil
+	}
+	if err != nil {
+		return wrapRepo("load history task", err)
+	}
+	v := taskToView(task)
+	history.Task = &v
+	history.CanSwitchSource = canSwitchSource(task)
+	return nil
+}
+
+func applyDetailProjection(detail *MarketAssetDetail, proj repository.MarketAssetDetailProjection) {
+	if proj.AnnualReturnsJSON != "" {
+		detail.AnnualReturns = json.RawMessage(proj.AnnualReturnsJSON)
+	}
+	if proj.TrailingReturnsJSON != "" && proj.TrailingReturnsJSON != "{}" {
+		detail.TrailingReturns = json.RawMessage(proj.TrailingReturnsJSON)
+	}
 }
 
 // resolveHistoryDimension picks the history dimension: explicit params win,
@@ -1005,27 +1057,7 @@ func (s *MarketAssetService) buildHistoryPayload(
 	hasHistory := hasState && st.SourceName != "" && st.PointCount > 0 && st.DataAsOf != ""
 
 	if req.Mode == historyModeSwitchSourceFull {
-		if !hasState || st.LastTaskID == "" {
-			return base, newErr("invalid_request",
-				"switch_source_full requires a prior failed same-source refresh", nil)
-		}
-		lastTask, err := s.tasks.GetByID(ctx, st.LastTaskID)
-		if err != nil {
-			if errors.Is(err, repository.ErrWorkerTaskNotFound) {
-				return base, newErr("invalid_request",
-					"switch_source_full requires a prior failed same-source refresh", nil)
-			}
-			return base, wrapRepo("load last history task", err)
-		}
-		if !canSwitchSource(lastTask) {
-			return base, newErr("invalid_request",
-				"switch_source_full is only allowed after a source_unavailable failure", nil)
-		}
-		base.RequestedRange = "full"
-		base.RequiredSourceName = ""
-		base.AllowSourceSwitch = true
-		base.ReplacementMode = "full"
-		return base, nil
+		return s.buildSwitchSourcePayload(ctx, base, st, hasState)
 	}
 
 	// default_refresh
@@ -1061,6 +1093,35 @@ func (s *MarketAssetService) buildHistoryPayload(
 	base.StartDate = startDate
 	base.AllowSourceSwitch = false
 	base.ReplacementMode = "merge"
+	return base, nil
+}
+
+func (s *MarketAssetService) buildSwitchSourcePayload(
+	ctx context.Context,
+	base AssetHistorySyncPayload,
+	st repository.MarketAssetHistoryState,
+	hasState bool,
+) (AssetHistorySyncPayload, error) {
+	if !hasState || st.LastTaskID == "" {
+		return base, newErr("invalid_request",
+			"switch_source_full requires a prior failed same-source refresh", nil)
+	}
+	lastTask, err := s.tasks.GetByID(ctx, st.LastTaskID)
+	if errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return base, newErr("invalid_request",
+			"switch_source_full requires a prior failed same-source refresh", nil)
+	}
+	if err != nil {
+		return base, wrapRepo("load last history task", err)
+	}
+	if !canSwitchSource(lastTask) {
+		return base, newErr("invalid_request",
+			"switch_source_full is only allowed after a source_unavailable failure", nil)
+	}
+	base.RequestedRange = "full"
+	base.RequiredSourceName = ""
+	base.AllowSourceSwitch = true
+	base.ReplacementMode = "full"
 	return base, nil
 }
 
