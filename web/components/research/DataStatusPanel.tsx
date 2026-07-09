@@ -164,13 +164,14 @@ export function DataStatusPanel({
     }
   }, [onReadinessRefresh]);
 
-  const blocking = readiness?.blocking_reasons ?? [];
+  const rawBlocking = readiness?.blocking_reasons ?? [];
+  const blocking = rawBlocking.filter((issue) => issue.reason !== "weight_sum_invalid");
   const warnings = readiness?.warnings ?? [];
 
   const readinessBadge = useMemo(() => {
     if (readinessLoading) return <Badge variant="neutral">检查中…</Badge>;
     if (!readiness) return <Badge variant="neutral">—</Badge>;
-    return readiness.ready ? (
+    return blocking.length === 0 ? (
       <Badge variant="positive">数据就绪</Badge>
     ) : (
       <Badge variant="danger">{blocking.length} 项阻断</Badge>

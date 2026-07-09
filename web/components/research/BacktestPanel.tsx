@@ -37,9 +37,8 @@ export function runDisabledReason(readiness: ResearchReadiness | undefined): str
     reasons.has("negative_weight") ||
     reasons.has("weight_exceeds_100")
   ) {
-    const gap = 1 - readiness.weight_sum;
     if (reasons.has("no_enabled_assets")) return "集合没有启用的资产";
-    return `权重合计 ${formatPercent(readiness.weight_sum)}，差 ${formatPercent(gap)} 才能运行`;
+    return `当前权重合计 ${formatPercent(readiness.weight_sum)}，未达到 100%，仅允许执行最优组合查找或调整权重`;
   }
   if (reasons.has("history_missing") || reasons.has("history_sync_failed")) {
     return "存在缺历史资产，请先「更新组合数据」";
@@ -66,6 +65,15 @@ export function optimizationDisabledReason(
   optReadiness: ResearchOptimizationReadiness | undefined,
 ): string | null {
   if (!readiness || !optReadiness) return "正在检查调优就绪状态…";
+  if (
+    optReadiness.enabled_count === 0 ||
+    optReadiness.blocking_reasons.some((b) => b.reason === "no_enabled_assets")
+  ) {
+    return "集合没有启用的资产";
+  }
+  if (optReadiness.tunable_count < 2) {
+    return "至少需要 2 个启用且未锁定的资产才能寻找最优组合";
+  }
   if (optReadiness.ready) return null;
   for (const b of optReadiness.blocking_reasons) {
     if (b.reason === "no_enabled_assets") return "集合没有启用的资产";
@@ -74,7 +82,7 @@ export function optimizationDisabledReason(
     if (b.reason === "locked_weight_exceeds_100")
       return `锁定权重合计 ${formatPercent(optReadiness.locked_weight_sum)} 超过 100%`;
     if (b.reason === "candidate_count_exceeds_limit")
-      return `候选组合 ${optReadiness.candidate_count} 超过上限，请增大步长或减少资产`;
+      return b.message || `候选组合 ${optReadiness.candidate_count} 超过上限，请增大步长或减少资产`;
     if (b.reason === "history_missing" || b.reason === "history_sync_failed")
       return "存在缺历史资产，请先同步数据";
     if (b.reason === "history_syncing" || b.reason === "fx_syncing")
@@ -178,15 +186,17 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
 
       {/* Normal backtest button + its own disabled reason */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button
-          className="w-32"
-          disabled={disabledReason !== null}
-          pending={runMutation.isPending}
-          onClick={() => runMutation.mutate()}
-          data-testid="run-backtest"
-        >
-          运行回测
-        </Button>
+        <span className="inline-flex" title={disabledReason ?? undefined}>
+          <Button
+            className={disabledReason ? "pointer-events-none w-32" : "w-32"}
+            disabled={disabledReason !== null}
+            pending={runMutation.isPending}
+            onClick={() => runMutation.mutate()}
+            data-testid="run-backtest"
+          >
+            运行回测
+          </Button>
+        </span>
         {disabledReason && (
           <p className="text-xs text-warning" data-testid="run-disabled-reason">
             {disabledReason}
@@ -207,16 +217,18 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
 
       {/* Optimization button + its own disabled reason */}
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Button
-          variant="secondary"
-          className="w-32"
-          disabled={optDisabledReason !== null}
-          pending={optimizeMutation.isPending}
-          onClick={() => setOptDialogOpen(true)}
-          data-testid="find-optimal"
-        >
-          寻找最优组合
-        </Button>
+        <span className="inline-flex" title={optDisabledReason ?? undefined}>
+          <Button
+            variant="secondary"
+            className={optDisabledReason ? "pointer-events-none w-32" : "w-32"}
+            disabled={optDisabledReason !== null}
+            pending={optimizeMutation.isPending}
+            onClick={() => setOptDialogOpen(true)}
+            data-testid="find-optimal"
+          >
+            寻找最优组合
+          </Button>
+        </span>
         {optDisabledReason && (
           <p className="text-xs text-warning" data-testid="opt-disabled-reason">
             {optDisabledReason}

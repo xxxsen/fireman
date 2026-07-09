@@ -107,6 +107,34 @@ describe("DataStatusPanel", () => {
     expect(screen.getByTestId("warnings")).toHaveTextContent("历史长度不足 3 年");
   });
 
+  it("hides weight-sum blocking from the data status panel", () => {
+    renderPanel({
+      readiness: readiness({
+        ready: false,
+        weight_sum: 0.8,
+        blocking_reasons: [
+          { reason: "weight_sum_invalid", message: "权重合计不是 100%" },
+          { reason: "history_missing", message: "缺少历史数据" },
+        ],
+      }),
+    });
+    expect(screen.getByText("1 项阻断")).toBeInTheDocument();
+    expect(screen.getByTestId("blocking-reasons")).toHaveTextContent("缺少历史数据");
+    expect(screen.getByTestId("blocking-reasons")).not.toHaveTextContent("权重合计不是 100%");
+  });
+
+  it("shows ready when only the weight-sum block exists", () => {
+    renderPanel({
+      readiness: readiness({
+        ready: false,
+        weight_sum: 0.5,
+        blocking_reasons: [{ reason: "weight_sum_invalid", message: "权重合计不是 100%" }],
+      }),
+    });
+    expect(screen.getByText("数据就绪")).toBeInTheDocument();
+    expect(screen.queryByTestId("blocking-reasons")).not.toBeInTheDocument();
+  });
+
   it("creates sync tasks and renders per-asset rows with existed reuse", async () => {
     syncCollectionHistoryMock.mockResolvedValue({
       assets: [

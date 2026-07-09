@@ -34,7 +34,6 @@ export interface WeightEditorProps {
   onDeleteItem: (itemId: string) => void;
   onApplyWeights: (updates: WeightUpdates) => void;
   onNormalize: () => void;
-  onReorder: (orderedItemIds: string[]) => void;
   onAddAsset: () => void;
 }
 
@@ -168,11 +167,8 @@ export function WeightEditor({
   onDeleteItem,
   onApplyWeights,
   onNormalize,
-  onReorder,
   onAddAsset,
 }: WeightEditorProps) {
-  const [dragId, setDragId] = useState<string | null>(null);
-
   const items = detail.items;
   const enabled = useMemo(() => items.filter((it) => it.enabled), [items]);
   const readinessByItem = useMemo(() => {
@@ -231,24 +227,6 @@ export function WeightEditor({
     onApplyWeights(
       Array.from(updates.entries()).map(([itemId, weight]) => ({ itemId, weight })),
     );
-  }
-
-  function handleDrop(targetId: string) {
-    if (!dragId || dragId === targetId) {
-      setDragId(null);
-      return;
-    }
-    const ids = items.map((it) => it.id);
-    const from = ids.indexOf(dragId);
-    const to = ids.indexOf(targetId);
-    if (from === -1 || to === -1) {
-      setDragId(null);
-      return;
-    }
-    ids.splice(from, 1);
-    ids.splice(to, 0, dragId);
-    setDragId(null);
-    onReorder(ids);
   }
 
   function exposureLine(map: Map<string, number>): string {
@@ -312,7 +290,7 @@ export function WeightEditor({
 
       {items.length === 0 ? (
         <p className="rounded-md border border-dashed border-line px-4 py-8 text-center text-sm text-ink-muted">
-          集合还没有资产，点击「添加资产」或从筛选器加入。
+          集合还没有资产，点击「添加资产」加入。
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -338,13 +316,8 @@ export function WeightEditor({
                 return (
                   <tr
                     key={it.id}
-                    draggable
-                    onDragStart={() => setDragId(it.id)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => handleDrop(it.id)}
                     className={
                       "border-b border-line/60 last:border-0 " +
-                      (dragId === it.id ? "opacity-50 " : "") +
                       (it.enabled ? "" : "bg-surface-muted/40 text-ink-muted")
                     }
                     data-testid={`item-row-${it.id}`}
@@ -360,9 +333,6 @@ export function WeightEditor({
                     </td>
                     <td className="px-2 py-2">
                       <span className="flex items-center gap-1.5">
-                        <span className="cursor-grab text-ink-muted" aria-hidden>
-                          ⠿
-                        </span>
                         <span className="min-w-0">
                           <span className="block max-w-44 truncate font-medium text-ink">
                             {it.name}

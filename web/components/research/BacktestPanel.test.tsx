@@ -141,13 +141,15 @@ describe("runDisabledReason", () => {
     expect(runDisabledReason(undefined)).toContain("检查");
   });
 
-  it("prioritizes weight problems with the gap", () => {
+  it("prioritizes weight problems with the optimization hint", () => {
     const r = readiness({
       ready: false,
       weight_sum: 0.8,
       blocking_reasons: [issue("weight_sum_invalid"), issue("history_missing")],
     });
-    expect(runDisabledReason(r)).toBe("权重合计 80%，差 20% 才能运行");
+    expect(runDisabledReason(r)).toBe(
+      "当前权重合计 80%，未达到 100%，仅允许执行最优组合查找或调整权重",
+    );
   });
 
   it("reports no enabled assets", () => {
@@ -221,6 +223,29 @@ describe("optimizationDisabledReason", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("requires at least two tunable assets", () => {
+    expect(
+      optimizationDisabledReason(
+        readiness(),
+        optReadiness({ ready: true, enabled_count: 2, tunable_count: 1 }),
+      ),
+    ).toBe("至少需要 2 个启用且未锁定的资产才能寻找最优组合");
+  });
+
+  it("prioritizes no enabled assets over the tunable count", () => {
+    expect(
+      optimizationDisabledReason(
+        readiness(),
+        optReadiness({
+          ready: false,
+          enabled_count: 0,
+          tunable_count: 0,
+          blocking_reasons: [issue("no_enabled_assets")],
+        }),
+      ),
+    ).toBe("集合没有启用的资产");
   });
 });
 

@@ -671,36 +671,6 @@ func errorsAsAppError(err error, target **AppError) bool {
 	return false
 }
 
-func TestResearchSavedFilterCRUD(t *testing.T) {
-	svc, _ := newResearchTestService(t)
-	ctx := context.Background()
-	created, err := svc.CreateSavedFilter(ctx, ResearchSavedFilterInput{
-		Name: "低波动", Filters: json.RawMessage(`{"max_volatility":0.2}`),
-	})
-	if err != nil {
-		t.Fatalf("create filter: %v", err)
-	}
-	list, err := svc.ListSavedFilters(ctx)
-	if err != nil || len(list) != 1 {
-		t.Fatalf("list filters: %v n=%d", err, len(list))
-	}
-	updated, err := svc.UpdateSavedFilter(ctx, created.ID, ResearchSavedFilterInput{
-		Name: "低波动v2",
-	})
-	if err != nil || updated.Name != "低波动v2" {
-		t.Fatalf("update filter: %v %+v", err, updated)
-	}
-	if updated.FiltersJSON != `{"max_volatility":0.2}` {
-		t.Fatalf("filters must survive rename: %s", updated.FiltersJSON)
-	}
-	if err := svc.DeleteSavedFilter(ctx, created.ID); err != nil {
-		t.Fatalf("delete filter: %v", err)
-	}
-	if _, err := svc.UpdateSavedFilter(ctx, created.ID, ResearchSavedFilterInput{Name: "x"}); err == nil {
-		t.Fatal("update after delete should fail")
-	}
-}
-
 func TestResearchScreenerFiltersAndMetrics(t *testing.T) {
 	svc, db := newResearchTestService(t)
 	ctx := context.Background()

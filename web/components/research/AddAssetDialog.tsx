@@ -49,7 +49,7 @@ export function AddAssetDialog({
         </div>
       }
     >
-      <div className="space-y-3">
+      <div className="flex h-[min(32rem,70vh)] flex-col gap-3">
         <input
           type="search"
           value={query}
@@ -60,40 +60,49 @@ export function AddAssetDialog({
           autoFocus
         />
 
-        {searchQuery.isLoading ? (
-          <LoadingState label="搜索中…" />
-        ) : assets.length === 0 ? (
-          <p className="py-6 text-center text-sm text-ink-muted">无匹配资产。</p>
-        ) : (
-          <ul className="max-h-96 space-y-1 overflow-y-auto">
-            {assets.map((a) => {
-              const added = existingAssetKeys.has(a.asset_key);
-              return (
-                <li
-                  key={a.asset_key}
-                  className="flex items-center gap-3 rounded-md border border-line px-3 py-2 text-sm"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-ink">{a.name}</span>
-                    <span className="block text-xs text-ink-muted">
-                      {a.symbol} · {a.instrument_type_label || instrumentTypeLabel(a.instrument_type)} ·{" "}
-                      {a.currency}
-                    </span>
-                  </span>
-                  <QualityBadges badges={a.quality_badges} />
-                  <Button
-                    variant="secondary"
-                    disabled={added || addPending}
-                    onClick={() => onAdd(a)}
-                    data-testid={`add-${a.asset_key}`}
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          data-testid="add-asset-results"
+        >
+          {searchQuery.isLoading ? (
+            <div className="flex h-full items-center justify-center">
+              <LoadingState label="搜索中…" />
+            </div>
+          ) : assets.length === 0 ? (
+            <p className="flex h-full items-center justify-center text-sm text-ink-muted">
+              无匹配资产。
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {assets.map((a) => {
+                const added = existingAssetKeys.has(a.asset_key);
+                return (
+                  <li
+                    key={a.asset_key}
+                    className="flex items-center gap-3 rounded-md border border-line px-3 py-2 text-sm"
                   >
-                    {added ? "已加入" : "加入"}
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-ink">{a.name}</span>
+                      <span className="block text-xs text-ink-muted">
+                        {a.symbol} · {a.instrument_type_label || instrumentTypeLabel(a.instrument_type)} ·{" "}
+                        {a.currency}
+                      </span>
+                    </span>
+                    <QualityBadges badges={a.quality_badges} />
+                    <Button
+                      variant="secondary"
+                      disabled={added || addPending}
+                      onClick={() => onAdd(a)}
+                      data-testid={`add-${a.asset_key}`}
+                    >
+                      {added ? "已加入" : "加入"}
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
     </Dialog>
   );

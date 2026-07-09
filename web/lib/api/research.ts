@@ -62,98 +62,18 @@ export interface ResearchAssetListResult {
 }
 
 export interface ResearchAssetListParams {
-  market?: string;
-  instrumentTypes?: string[];
   q?: string;
-  currencies?: string[];
-  includeInactive?: boolean;
-  historyStatus?: "synced" | "missing" | "stale" | "syncing" | "failed";
-  dataAsOfMin?: string;
-  minHistoryYears?: number;
-  minCagr?: number;
-  minReturn1y?: number;
-  minReturn3y?: number;
-  minReturn5y?: number;
-  maxVolatility?: number;
-  minMaxDrawdown?: number;
-  minSharpe?: number;
-  minCalmar?: number;
-  maxDownsideVolatility?: number;
-  minReturnDrawdown?: number;
-  backtestReady?: boolean;
-  sortBy?: string;
-  sortDesc?: boolean;
   limit?: number;
-  offset?: number;
 }
 
 export function listResearchAssets(
   params?: ResearchAssetListParams,
 ): Promise<ResearchAssetListResult> {
   const qs = new URLSearchParams();
-  if (params?.market) qs.set("market", params.market);
-  if (params?.instrumentTypes?.length) qs.set("instrument_types", params.instrumentTypes.join(","));
   if (params?.q) qs.set("q", params.q);
-  if (params?.currencies?.length) qs.set("currencies", params.currencies.join(","));
-  if (params?.includeInactive) qs.set("include_inactive", "true");
-  if (params?.historyStatus) qs.set("history_status", params.historyStatus);
-  if (params?.dataAsOfMin) qs.set("data_as_of_min", params.dataAsOfMin);
-  if (params?.minHistoryYears !== undefined) qs.set("min_history_years", String(params.minHistoryYears));
-  if (params?.minCagr !== undefined) qs.set("min_cagr", String(params.minCagr));
-  if (params?.minReturn1y !== undefined) qs.set("min_return_1y", String(params.minReturn1y));
-  if (params?.minReturn3y !== undefined) qs.set("min_return_3y", String(params.minReturn3y));
-  if (params?.minReturn5y !== undefined) qs.set("min_return_5y", String(params.minReturn5y));
-  if (params?.maxVolatility !== undefined) qs.set("max_volatility", String(params.maxVolatility));
-  if (params?.minMaxDrawdown !== undefined) qs.set("min_max_drawdown", String(params.minMaxDrawdown));
-  if (params?.minSharpe !== undefined) qs.set("min_sharpe", String(params.minSharpe));
-  if (params?.minCalmar !== undefined) qs.set("min_calmar", String(params.minCalmar));
-  if (params?.maxDownsideVolatility !== undefined)
-    qs.set("max_downside_volatility", String(params.maxDownsideVolatility));
-  if (params?.minReturnDrawdown !== undefined)
-    qs.set("min_return_drawdown", String(params.minReturnDrawdown));
-  if (params?.backtestReady) qs.set("backtest_ready", "true");
-  if (params?.sortBy) qs.set("sort_by", params.sortBy);
-  if (params?.sortDesc) qs.set("sort_desc", "true");
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
-  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
   const query = qs.toString();
   return apiGet(`/api/v1/research/assets${query ? `?${query}` : ""}`);
-}
-
-// --- saved filters ---
-
-export interface ResearchSavedFilter {
-  id: string;
-  name: string;
-  filters_json: string;
-  sort_order: number;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface ResearchSavedFilterInput {
-  name?: string;
-  filters?: Record<string, unknown>;
-  sort_order?: number;
-}
-
-export function listSavedFilters(): Promise<{ filters: ResearchSavedFilter[] }> {
-  return apiGet("/api/v1/research/saved-filters");
-}
-
-export function createSavedFilter(input: ResearchSavedFilterInput): Promise<ResearchSavedFilter> {
-  return apiPost("/api/v1/research/saved-filters", input);
-}
-
-export function updateSavedFilter(
-  id: string,
-  input: ResearchSavedFilterInput,
-): Promise<ResearchSavedFilter> {
-  return apiPatch(`/api/v1/research/saved-filters/${encodeURIComponent(id)}`, input);
-}
-
-export function deleteSavedFilter(id: string): Promise<{ deleted: boolean }> {
-  return apiDelete(`/api/v1/research/saved-filters/${encodeURIComponent(id)}`);
 }
 
 // --- collections ---

@@ -12,7 +12,6 @@ import (
 var (
 	ErrResearchCollectionNotFound      = errors.New("research collection not found")
 	ErrResearchItemNotFound            = errors.New("research collection item not found")
-	ErrResearchFilterNotFound          = errors.New("research saved filter not found")
 	ErrResearchRunNotFound             = errors.New("research backtest run not found")
 	ErrResearchOptimizationRunNotFound = errors.New("research optimization run not found")
 )
@@ -69,16 +68,6 @@ type ResearchCollectionItem struct {
 	SortOrder    int     `json:"sort_order"`
 	CreatedAt    int64   `json:"created_at"`
 	UpdatedAt    int64   `json:"updated_at"`
-}
-
-// ResearchSavedFilter mirrors a research_saved_filters row.
-type ResearchSavedFilter struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	FiltersJSON string `json:"filters_json"`
-	SortOrder   int    `json:"sort_order"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
 }
 
 // ResearchBacktestRun mirrors a research_backtest_runs row.
@@ -173,8 +162,8 @@ func (m *ResearchAssetMetrics) FillReturnDrawdownRatio() {
 	m.ReturnDrawdownRatio = &ratio
 }
 
-// ResearchRepo persists research collections, items, saved filters, backtest
-// runs and the precomputed screener metrics projection.
+// ResearchRepo persists research collections, items, backtest runs and the
+// precomputed research asset metrics projection.
 type ResearchRepo struct {
 	db *sql.DB
 }
@@ -503,72 +492,6 @@ func (r *ResearchRepo) SumEnabledWeightsByCollections(
 		out[id] = sum
 	}
 	return out, wrapSQL("iterate research weight sums", rows.Err())
-}
-
-// --- saved filters ---
-
-const researchFilterColumns = `id, name, filters_json, sort_order, created_at, updated_at`
-
-func scanResearchFilter(row rowScanner) (ResearchSavedFilter, error) {
-	var f ResearchSavedFilter
-	err := row.Scan(&f.ID, &f.Name, &f.FiltersJSON, &f.SortOrder, &f.CreatedAt, &f.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ResearchSavedFilter{}, ErrResearchFilterNotFound
-	}
-	if err != nil {
-		return ResearchSavedFilter{}, wrapSQL("scan research saved filter", err)
-	}
-	return f, nil
-}
-
-func (r *ResearchRepo) CreateSavedFilter(ctx context.Context, f ResearchSavedFilter) error {
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO research_saved_filters (id, name, filters_json, sort_order, created_at, updated_at)
-		VALUES (?,?,?,?,?,?)`,
-		f.ID, f.Name, f.FiltersJSON, f.SortOrder, f.CreatedAt, f.UpdatedAt)
-	return wrapSQL("insert research saved filter", err)
-}
-
-func (r *ResearchRepo) GetSavedFilter(ctx context.Context, id string) (ResearchSavedFilter, error) {
-	row := r.db.QueryRowContext(ctx,
-		`SELECT `+researchFilterColumns+` FROM research_saved_filters WHERE id=?`, id)
-	return scanResearchFilter(row)
-}
-
-func (r *ResearchRepo) ListSavedFilters(ctx context.Context) ([]ResearchSavedFilter, error) {
-	return queryCollect(ctx, r.db,
-		`SELECT `+researchFilterColumns+` FROM research_saved_filters
-		 ORDER BY sort_order, created_at, id`, nil,
-		func(rows *sql.Rows) (ResearchSavedFilter, error) { return scanResearchFilter(rows) },
-		"query research saved filters", "scan research saved filter", "iterate research saved filters",
-	)
-}
-
-func (r *ResearchRepo) UpdateSavedFilter(ctx context.Context, f ResearchSavedFilter) error {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE research_saved_filters SET name=?, filters_json=?, sort_order=?, updated_at=?
-		WHERE id=?`,
-		f.Name, f.FiltersJSON, f.SortOrder, f.UpdatedAt, f.ID)
-	if err != nil {
-		return wrapSQL("update research saved filter", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrResearchFilterNotFound
-	}
-	return nil
-}
-
-func (r *ResearchRepo) DeleteSavedFilter(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM research_saved_filters WHERE id=?`, id)
-	if err != nil {
-		return wrapSQL("delete research saved filter", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrResearchFilterNotFound
-	}
-	return nil
 }
 
 // --- backtest runs ---
@@ -1037,19 +960,19 @@ type ResearchAssetRow struct {
 
 // researchSortColumns whitelists screener sort keys to SQL expressions.
 var researchSortColumns = map[string]string{
-	"symbol":         "a.symbol",
-	"name":           "a.name",
-	"market":         "a.market",
-	"currency":       "a.currency",
-	"data_as_of":     "h.data_as_of",
-	"point_count":    "h.point_count",
-	"history_years":  "m.history_years",
-	"cagr":           "m.cagr",
-	"return_1y":      "m.return_1y",
-	"return_3y":      "m.return_3y",
-	"return_5y":      "m.return_5y",
-	"volatility":     "m.annual_volatility",
-	"max_drawdown":   "m.max_drawdown",
+	"symbol":          "a.symbol",
+	"name":            "a.name",
+	"market":          "a.market",
+	"currency":        "a.currency",
+	"data_as_of":      "h.data_as_of",
+	"point_count":     "h.point_count",
+	"history_years":   "m.history_years",
+	"cagr":            "m.cagr",
+	"return_1y":       "m.return_1y",
+	"return_3y":       "m.return_3y",
+	"return_5y":       "m.return_5y",
+	"volatility":      "m.annual_volatility",
+	"max_drawdown":    "m.max_drawdown",
 	"sharpe":          "m.sharpe",
 	"calmar":          "m.calmar",
 	"downside_vol":    "m.downside_volatility",

@@ -214,12 +214,9 @@ describe("ResearchHomePage", () => {
     expect(createCollectionMock).not.toHaveBeenCalled();
   });
 
-  it("has screener and copy-from-plan entries", async () => {
+  it("has copy-from-plan entry", async () => {
     renderPage();
-    expect(await screen.findByTestId("screener-entry")).toHaveAttribute(
-      "href",
-      "/research/screener",
-    );
+    await screen.findByTestId("collection-table");
     fireEvent.click(screen.getByTestId("copy-from-plan-entry"));
     expect(await screen.findByTestId("dialog")).toBeInTheDocument();
     expect(screen.getByText("从计划复制", { selector: "h2" })).toBeInTheDocument();

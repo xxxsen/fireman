@@ -43,8 +43,8 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name, currency string, day
 			d := end.AddDate(0, 0, i-days+1)
 			points = append(points, repository.MarketAssetPoint{
 				AssetKey: key, AdjustPolicy: "none", PointType: "adjusted_close",
-				TradeDate: d.Format("2006-01-02"),
-				Value:     base * (1 + 0.03*math.Sin(float64(i)/9)) * math.Pow(1.0002, float64(i)),
+				TradeDate:  d.Format("2006-01-02"),
+				Value:      base * (1 + 0.03*math.Sin(float64(i)/9)) * math.Pow(1.0002, float64(i)),
 				SourceName: "test_source", FetchedAt: now,
 			})
 		}
@@ -361,46 +361,14 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	}
 }
 
-func TestResearchAPISavedFiltersAndSyncHistory(t *testing.T) {
+func TestResearchAPISyncHistory(t *testing.T) {
 	srv, db, _ := testRouterWithDB(t)
 	seedResearchAsset(t, db, "RB1", "有历史", "CNY", 1200, 100)
 	seedResearchAsset(t, db, "RB2", "无历史", "CNY", 0, 0)
 
-	// Saved filter CRUD.
-	resp, body := researchPost(t, srv, "/api/v1/research/saved-filters", map[string]any{
-		"name": "低回撤", "filters": map[string]any{"min_max_drawdown": -0.2},
-	})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("create filter status=%d body=%s", resp.StatusCode, body)
-	}
-	filterID := envData(t, body)["id"].(string)
-
-	resp, body = researchGet(t, srv, "/api/v1/research/saved-filters")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list filters status=%d", resp.StatusCode)
-	}
-	if filters := envData(t, body)["filters"].([]any); len(filters) != 1 {
-		t.Fatalf("expected 1 filter: %s", body)
-	}
-
-	resp, body = researchPatch(t, srv, "/api/v1/research/saved-filters/"+filterID,
-		map[string]any{"name": "低回撤v2"})
-	if resp.StatusCode != http.StatusOK || envData(t, body)["name"].(string) != "低回撤v2" {
-		t.Fatalf("update filter failed: %d %s", resp.StatusCode, body)
-	}
-
-	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/research/saved-filters/"+filterID, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if body = mustRead(t, resp); resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete filter status=%d body=%s", resp.StatusCode, body)
-	}
-
 	// sync-history creates a task for the asset without history and reuses it
 	// on the second call.
-	resp, body = researchPost(t, srv, "/api/v1/research/collections", map[string]any{
+	resp, body := researchPost(t, srv, "/api/v1/research/collections", map[string]any{
 		"name": "同步组合",
 		"items": []map[string]any{
 			{"asset_key": "RB1", "weight": 0.5},

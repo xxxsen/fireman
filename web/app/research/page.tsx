@@ -218,13 +218,10 @@ export default function ResearchHomePage() {
   const header = (
     <PageHeader
       title="组合研究"
-      description="筛选候选资产、构建研究集合、运行历史回测，验证组合表现后再落地到 FIRE 计划。"
+      description="构建研究集合、运行历史回测，验证组合表现后再落地到 FIRE 计划。"
       primaryAction={{ label: "新建集合", href: "/research/collections/new" }}
       secondaryActions={
         <>
-          <Button variant="secondary" href="/research/screener" data-testid="screener-entry">
-            资产筛选器
-          </Button>
           <Button
             variant="secondary"
             onClick={() => setCopyDialogOpen(true)}
@@ -300,7 +297,7 @@ export default function ResearchHomePage() {
           {collections.length === 0 ? (
             <EmptyState
               title="还没有研究集合"
-              description="从资产筛选器挑选候选资产创建集合，或从现有 FIRE 计划复制持仓开始研究。"
+              description="新建研究集合，或从现有 FIRE 计划复制持仓开始研究。"
               action={{ label: "新建集合", href: "/research/collections/new" }}
             />
           ) : (

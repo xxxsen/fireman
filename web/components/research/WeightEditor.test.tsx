@@ -93,7 +93,6 @@ const baseHandlers = {
   onDeleteItem: noop,
   onApplyWeights: noop,
   onNormalize: noop,
-  onReorder: noop,
   onAddAsset: noop,
 };
 
@@ -308,17 +307,15 @@ describe("WeightEditor", () => {
     expect(screen.getByTestId("common-window")).toHaveTextContent("2018-01-01 ~ 2026-07-01");
   });
 
-  it("reorders by drag and drop", () => {
-    const onReorder = vi.fn();
+  it("does not render draggable asset rows or a drag handle", () => {
     render(
       <WeightEditor
         detail={detail([item("a"), item("b", { weight: 0.5 })])}
         {...baseHandlers}
-        onReorder={onReorder}
       />,
     );
-    fireEvent.dragStart(screen.getByTestId("item-row-a"));
-    fireEvent.drop(screen.getByTestId("item-row-b"));
-    expect(onReorder).toHaveBeenCalledWith(["b", "a"]);
+    expect(screen.getByTestId("item-row-a")).not.toHaveAttribute("draggable");
+    expect(screen.getByTestId("item-row-b")).not.toHaveAttribute("draggable");
+    expect(screen.queryByText("⠿")).not.toBeInTheDocument();
   });
 });

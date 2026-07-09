@@ -113,18 +113,18 @@ type ResearchAssetListResult struct {
 
 // ResearchAssetListParams mirrors the screener query string.
 type ResearchAssetListParams struct {
-	Market          string
-	InstrumentTypes []string
-	Query           string
-	Currencies      []string
-	IncludeInactive bool
-	HistoryStatus   string
-	DataAsOfMin     string
-	MinHistoryYears float64
-	MinCAGR         *float64
-	MinReturn1Y     *float64
-	MinReturn3Y     *float64
-	MinReturn5Y     *float64
+	Market                 string
+	InstrumentTypes        []string
+	Query                  string
+	Currencies             []string
+	IncludeInactive        bool
+	HistoryStatus          string
+	DataAsOfMin            string
+	MinHistoryYears        float64
+	MinCAGR                *float64
+	MinReturn1Y            *float64
+	MinReturn3Y            *float64
+	MinReturn5Y            *float64
 	MaxVolatility          *float64
 	MinMaxDrawdown         *float64
 	MinSharpe              *float64
@@ -133,9 +133,9 @@ type ResearchAssetListParams struct {
 	MinReturnDrawdownRatio *float64
 	BacktestReady          bool
 	SortBy                 string
-	SortDesc        bool
-	Limit           int
-	Offset          int
+	SortDesc               bool
+	Limit                  int
+	Offset                 int
 }
 
 // researchMetricsBackfillLimit bounds one lazy backfill pass per screener
@@ -165,18 +165,18 @@ func (s *ResearchService) ListResearchAssets(
 	BackfillResearchAssetMetrics(ctx, s.assets, s.research, researchMetricsBackfillLimit, now.UnixMilli())
 
 	rows, total, err := s.research.SearchResearchAssets(ctx, repository.ResearchAssetSearchFilter{
-		Market:          params.Market,
-		InstrumentTypes: params.InstrumentTypes,
-		Query:           strings.TrimSpace(params.Query),
-		Currencies:      params.Currencies,
-		IncludeInactive: params.IncludeInactive,
-		HistoryStatus:   params.HistoryStatus,
-		DataAsOfMin:     params.DataAsOfMin,
-		MinHistoryYears: params.MinHistoryYears,
-		MinCAGR:         params.MinCAGR,
-		MinReturn1Y:     params.MinReturn1Y,
-		MinReturn3Y:     params.MinReturn3Y,
-		MinReturn5Y:     params.MinReturn5Y,
+		Market:                 params.Market,
+		InstrumentTypes:        params.InstrumentTypes,
+		Query:                  strings.TrimSpace(params.Query),
+		Currencies:             params.Currencies,
+		IncludeInactive:        params.IncludeInactive,
+		HistoryStatus:          params.HistoryStatus,
+		DataAsOfMin:            params.DataAsOfMin,
+		MinHistoryYears:        params.MinHistoryYears,
+		MinCAGR:                params.MinCAGR,
+		MinReturn1Y:            params.MinReturn1Y,
+		MinReturn3Y:            params.MinReturn3Y,
+		MinReturn5Y:            params.MinReturn5Y,
 		MaxVolatility:          params.MaxVolatility,
 		MinMaxDrawdown:         params.MinMaxDrawdown,
 		MinSharpe:              params.MinSharpe,
@@ -184,11 +184,11 @@ func (s *ResearchService) ListResearchAssets(
 		MaxDownsideVolatility:  params.MaxDownsideVolatility,
 		MinReturnDrawdownRatio: params.MinReturnDrawdownRatio,
 		BacktestReady:          params.BacktestReady,
-		NowDate:         now.UTC().Format("2006-01-02"),
-		SortBy:          params.SortBy,
-		SortDesc:        params.SortDesc,
-		Limit:           limit,
-		Offset:          offset,
+		NowDate:                now.UTC().Format("2006-01-02"),
+		SortBy:                 params.SortBy,
+		SortDesc:               params.SortDesc,
+		Limit:                  limit,
+		Offset:                 offset,
 	})
 	if err != nil {
 		return ResearchAssetListResult{}, wrapRepo("search research assets", err)
@@ -277,107 +277,6 @@ func (s *ResearchService) buildAssetView(
 		}
 	}
 	return view
-}
-
-// --- saved filters ---
-
-// ResearchSavedFilterInput is the create/update payload.
-type ResearchSavedFilterInput struct {
-	Name      string          `json:"name"`
-	Filters   json.RawMessage `json:"filters"`
-	SortOrder int             `json:"sort_order"`
-}
-
-func (s *ResearchService) CreateSavedFilter(
-	ctx context.Context, in ResearchSavedFilterInput,
-) (repository.ResearchSavedFilter, error) {
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		return repository.ResearchSavedFilter{}, newErr("invalid_request", "name is required", nil)
-	}
-	filtersJSON, err := normalizeJSONObject(in.Filters)
-	if err != nil {
-		return repository.ResearchSavedFilter{}, newErr("invalid_request", "filters must be a JSON object", nil)
-	}
-	now := s.now().UnixMilli()
-	f := repository.ResearchSavedFilter{
-		ID:          "rsf_" + uuid.New().String(),
-		Name:        name,
-		FiltersJSON: filtersJSON,
-		SortOrder:   in.SortOrder,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	if err := s.research.CreateSavedFilter(ctx, f); err != nil {
-		return repository.ResearchSavedFilter{}, wrapRepo("create saved filter", err)
-	}
-	return f, nil
-}
-
-func (s *ResearchService) ListSavedFilters(ctx context.Context) ([]repository.ResearchSavedFilter, error) {
-	filters, err := s.research.ListSavedFilters(ctx)
-	if err != nil {
-		return nil, wrapRepo("list saved filters", err)
-	}
-	if filters == nil {
-		filters = []repository.ResearchSavedFilter{}
-	}
-	return filters, nil
-}
-
-func (s *ResearchService) UpdateSavedFilter(
-	ctx context.Context, id string, in ResearchSavedFilterInput,
-) (repository.ResearchSavedFilter, error) {
-	existing, err := s.research.GetSavedFilter(ctx, id)
-	if err != nil {
-		if errors.Is(err, repository.ErrResearchFilterNotFound) {
-			return repository.ResearchSavedFilter{}, newErr("saved_filter_not_found", "saved filter not found", nil)
-		}
-		return repository.ResearchSavedFilter{}, wrapRepo("load saved filter", err)
-	}
-	if name := strings.TrimSpace(in.Name); name != "" {
-		existing.Name = name
-	}
-	if len(in.Filters) > 0 {
-		filtersJSON, err := normalizeJSONObject(in.Filters)
-		if err != nil {
-			return repository.ResearchSavedFilter{}, newErr("invalid_request", "filters must be a JSON object", nil)
-		}
-		existing.FiltersJSON = filtersJSON
-	}
-	if in.SortOrder != 0 {
-		existing.SortOrder = in.SortOrder
-	}
-	existing.UpdatedAt = s.now().UnixMilli()
-	if err := s.research.UpdateSavedFilter(ctx, existing); err != nil {
-		return repository.ResearchSavedFilter{}, wrapRepo("update saved filter", err)
-	}
-	return existing, nil
-}
-
-func (s *ResearchService) DeleteSavedFilter(ctx context.Context, id string) error {
-	if err := s.research.DeleteSavedFilter(ctx, id); err != nil {
-		if errors.Is(err, repository.ErrResearchFilterNotFound) {
-			return newErr("saved_filter_not_found", "saved filter not found", nil)
-		}
-		return wrapRepo("delete saved filter", err)
-	}
-	return nil
-}
-
-func normalizeJSONObject(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 {
-		return "{}", nil
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return "", err
-	}
-	normalized, err := json.Marshal(obj)
-	if err != nil {
-		return "", err
-	}
-	return string(normalized), nil
 }
 
 // --- collections ---

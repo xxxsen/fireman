@@ -17,11 +17,6 @@ func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 
 	research.GET("/assets", s.listResearchAssets)
 
-	research.GET("/saved-filters", s.listResearchSavedFilters)
-	research.POST("/saved-filters", s.createResearchSavedFilter)
-	research.PATCH("/saved-filters/:filter_id", s.updateResearchSavedFilter)
-	research.DELETE("/saved-filters/:filter_id", s.deleteResearchSavedFilter)
-
 	research.GET("/collections", s.listResearchCollections)
 	research.POST("/collections", s.createResearchCollection)
 	research.GET("/collections/:collection_id", s.getResearchCollection)
@@ -126,53 +121,6 @@ func (s Services) listResearchAssets(c *gin.Context) {
 		return
 	}
 	OK(c, out)
-}
-
-// --- saved filters ---
-
-func (s Services) listResearchSavedFilters(c *gin.Context) {
-	out, err := s.Research.ListSavedFilters(c.Request.Context())
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, gin.H{"filters": out})
-}
-
-func (s Services) createResearchSavedFilter(c *gin.Context) {
-	var req service.ResearchSavedFilterInput
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	out, err := s.Research.CreateSavedFilter(c.Request.Context(), req)
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) updateResearchSavedFilter(c *gin.Context) {
-	var req service.ResearchSavedFilterInput
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
-		return
-	}
-	out, err := s.Research.UpdateSavedFilter(c.Request.Context(), c.Param("filter_id"), req)
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) deleteResearchSavedFilter(c *gin.Context) {
-	if err := s.Research.DeleteSavedFilter(c.Request.Context(), c.Param("filter_id")); err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, gin.H{"deleted": true})
 }
 
 // --- collections ---

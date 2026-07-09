@@ -37,7 +37,7 @@ describe("AppShell", () => {
   });
 
   it("includes 组合研究 entry and marks it active on /research routes", () => {
-    for (const pathname of ["/research", "/research/screener", "/research/collections/rc_1"]) {
+    for (const pathname of ["/research", "/research/collections/rc_1"]) {
       mockPathname.mockReturnValue(pathname);
       const { unmount } = render(
         <AppShell>

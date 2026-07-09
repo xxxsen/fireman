@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   addCollectionItem,
   deleteCollectionItem,
@@ -33,10 +33,20 @@ import { CopyToPlanDialog } from "@/components/research/CopyToPlanDialog";
 export default function ResearchCollectionPage() {
   const id = useParams().id as string;
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [addAssetOpen, setAddAssetOpen] = useState(false);
   const [copyToPlanOpen, setCopyToPlanOpen] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
+  const optimizedApplied = searchParams.get("optimized_applied") === "1";
+
+  useEffect(() => {
+    if (!optimizedApplied) return;
+    const timer = window.setTimeout(() => {
+      router.replace(`/research/collections/${id}`);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [id, optimizedApplied, router]);
 
   const detailQuery = useQuery({
     queryKey: ["research", "collection", id],
@@ -109,25 +119,6 @@ export default function ResearchCollectionPage() {
     onError: (err) => setItemError(queryErrorMessage(err)),
   });
 
-  const reorderMutation = useMutation({
-    mutationFn: async (orderedItemIds: string[]) => {
-      let latest: ResearchCollectionDetail | null = null;
-      const current = detailQuery.data?.items ?? [];
-      const currentOrder = new Map(current.map((it) => [it.id, it.sort_order]));
-      for (let i = 0; i < orderedItemIds.length; i++) {
-        const itemId = orderedItemIds[i]!;
-        if (currentOrder.get(itemId) === i) continue;
-        latest = await updateCollectionItem(id, itemId, { sort_order: i });
-      }
-      return latest;
-    },
-    onSuccess: (detail) => {
-      setItemError(null);
-      if (detail) applyDetail(detail);
-    },
-    onError: (err) => setItemError(queryErrorMessage(err)),
-  });
-
   const addItemMutation = useMutation({
     mutationFn: (asset: ResearchAssetView) =>
       addCollectionItem(id, {
@@ -190,7 +181,6 @@ export default function ResearchCollectionPage() {
     deleteItemMutation.isPending ||
     batchWeightsMutation.isPending ||
     normalizeMutation.isPending ||
-    reorderMutation.isPending ||
     addItemMutation.isPending;
 
   return (
@@ -215,13 +205,6 @@ export default function ResearchCollectionPage() {
                 恢复集合
               </Button>
             )}
-            <Button
-              variant="secondary"
-              href={`/research/screener?collection=${encodeURIComponent(id)}`}
-              data-testid="screener-add-entry"
-            >
-              从筛选器添加
-            </Button>
             <Button
               variant="secondary"
               onClick={() => setCopyToPlanOpen(true)}
@@ -257,6 +240,15 @@ export default function ResearchCollectionPage() {
           </p>
         )}
 
+        {optimizedApplied && (
+          <p
+            className="rounded-md border border-positive/25 bg-positive/5 px-3 py-2 text-sm text-positive"
+            role="status"
+          >
+            已应用调优结果，相关资产已启用并锁定。
+          </p>
+        )}
+
         <WeightEditor
           detail={detail}
           readiness={readinessQuery.data}
@@ -265,7 +257,6 @@ export default function ResearchCollectionPage() {
           onDeleteItem={(itemId) => deleteItemMutation.mutate(itemId)}
           onApplyWeights={(updates) => batchWeightsMutation.mutate(updates)}
           onNormalize={() => normalizeMutation.mutate()}
-          onReorder={(ids) => reorderMutation.mutate(ids)}
           onAddAsset={() => setAddAssetOpen(true)}
         />
 
