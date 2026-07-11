@@ -113,6 +113,11 @@ describe("AutoUpdatesPage", () => {
     const row = await screen.findByTestId("directory-rule-cn_exchange_stock");
     await within(row).findByText("等待执行");
     expect(within(row).getByLabelText("cn_exchange_stock更新周期")).toHaveValue("6");
+    const select = within(row).getByLabelText("cn_exchange_stock更新周期");
+    const options = Array.from(select.querySelectorAll("option"));
+    expect(options.find((o) => o.value === "24")?.textContent).toBe("1 天");
+    expect(options.find((o) => o.value === "168")?.textContent).toBe("7 天");
+    expect(options.find((o) => o.value === "1")?.textContent).toBe("1 小时");
   });
 
   it("keeps an edited interval visible when a version conflict occurs", async () => {

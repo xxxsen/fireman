@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	AutoUpdateTargetDirectory = "directory_unit"
-	AutoUpdateTargetHistory   = "asset_history"
-	autoUpdateBatchSize       = 100
-	autoUpdateScanTimeout     = 10 * time.Minute
+	AutoUpdateTargetDirectory    = "directory_unit"
+	AutoUpdateTargetHistory      = "asset_history"
+	autoUpdateBatchSize          = 100
+	autoUpdateScanTimeout        = 10 * time.Minute
+	autoUpdateScanMinute         = 10
+	autoUpdateScanIntervalMinute = 10
 )
 
 type AutoUpdateRuleView struct {
@@ -51,6 +53,7 @@ type AutoUpdateService struct {
 	repo   *repository.MarketDataAutoUpdateRepo
 	assets *repository.MarketAssetRepo
 	market *MarketAssetService
+	loc    *time.Location
 	now    func() time.Time
 }
 
@@ -58,10 +61,66 @@ func NewAutoUpdateService(
 	repo *repository.MarketDataAutoUpdateRepo,
 	assets *repository.MarketAssetRepo,
 	market *MarketAssetService,
+	loc *time.Location,
 ) *AutoUpdateService {
-	return &AutoUpdateService{
-		repo: repo, assets: assets, market: market, now: time.Now,
+	if loc == nil {
+		loc = time.UTC
 	}
+	return &AutoUpdateService{
+		repo: repo, assets: assets, market: market, loc: loc, now: time.Now,
+	}
+}
+
+// nextAlignedSlot returns the next crontab-aligned execution time after `after`
+// for the given interval. Slots are aligned to wall-clock boundaries:
+//   - <24h: fires at multiples of intervalHours within each day, at :10
+//   - 24h: daily at 00:10
+//   - >24h: every N days at 00:10, day-aligned via epoch modulo
+func nextAlignedSlot(after time.Time, intervalHours int, loc *time.Location) time.Time {
+	local := after.In(loc)
+
+	if intervalHours < 24 {
+		dayStart := time.Date(local.Year(), local.Month(), local.Day(),
+			0, autoUpdateScanMinute, 0, 0, loc)
+		interval := time.Duration(intervalHours) * time.Hour
+		slot := dayStart
+		for !slot.After(after) {
+			slot = slot.Add(interval)
+		}
+		return slot
+	}
+
+	days := intervalHours / 24
+	todaySlot := time.Date(local.Year(), local.Month(), local.Day(),
+		0, autoUpdateScanMinute, 0, 0, loc)
+
+	if days == 1 {
+		if todaySlot.After(after) {
+			return todaySlot
+		}
+		return todaySlot.AddDate(0, 0, 1)
+	}
+
+	ref := time.Date(2000, 1, 1, 0, 0, 0, 0, loc)
+	for d := 0; d <= days; d++ {
+		candidate := todaySlot.AddDate(0, 0, d)
+		dayNum := int(candidate.Sub(ref).Hours()/24 + 0.5)
+		if candidate.After(after) && dayNum%days == 0 {
+			return candidate
+		}
+	}
+	return todaySlot.AddDate(0, 0, days)
+}
+
+// nextScanTime returns the next 10-minute-aligned wall-clock time after `now`.
+// Scans fire at :00, :10, :20, :30, :40, :50 of every hour.
+func nextScanTime(now time.Time) time.Time {
+	interval := time.Duration(autoUpdateScanIntervalMinute) * time.Minute
+	t := now.Truncate(interval)
+	if !t.After(now) {
+		t = t.Add(interval)
+	}
+	return t
 }
 
 func (s *AutoUpdateService) DirectoryUnits() []AutoUpdateDirectoryUnitView {
@@ -211,8 +270,10 @@ func (s *AutoUpdateService) CreateDirectory(
 	if err := validInterval(intervalHours); err != nil {
 		return AutoUpdateRuleView{}, err
 	}
+	now := s.now()
+	nextRunAt := nextAlignedSlot(now, intervalHours, s.loc).UnixMilli()
 	rule, err := s.repo.UpsertDirectory(
-		ctx, syncKey, intervalHours, s.now().UnixMilli(),
+		ctx, syncKey, intervalHours, now.UnixMilli(), nextRunAt,
 	)
 	if err != nil {
 		return AutoUpdateRuleView{}, wrapRepo("upsert directory automatic update", err)
@@ -268,8 +329,10 @@ func (s *AutoUpdateService) enableHistory(
 	adjustPolicy string,
 	pointType string,
 ) (AutoUpdateRuleView, error) {
+	now := s.now()
+	nextRunAt := nextAlignedSlot(now, 24, s.loc).UnixMilli()
 	rule, err := s.repo.EnableHistory(
-		ctx, assetKey, adjustPolicy, pointType, s.now().UnixMilli(),
+		ctx, assetKey, adjustPolicy, pointType, now.UnixMilli(), nextRunAt,
 	)
 	if err != nil {
 		return AutoUpdateRuleView{}, wrapRepo("enable history automatic update", err)
@@ -293,7 +356,7 @@ func (s *AutoUpdateService) disableHistory(
 		return AutoUpdateRuleView{}, wrapRepo("load history automatic update", err)
 	}
 	updated, err := s.repo.Update(
-		ctx, rule.ID, rule.Version, false, rule.IntervalHours, s.now().UnixMilli(),
+		ctx, rule.ID, rule.Version, false, rule.IntervalHours, s.now().UnixMilli(), nil,
 	)
 	if err != nil {
 		return AutoUpdateRuleView{}, wrapRepo("disable history automatic update", err)
@@ -314,8 +377,14 @@ func (s *AutoUpdateService) Update(
 	if err := s.requireRule(ctx, id); err != nil {
 		return AutoUpdateRuleView{}, err
 	}
+	now := s.now()
+	var nextRunAt *int64
+	if enabled {
+		aligned := nextAlignedSlot(now, intervalHours, s.loc).UnixMilli()
+		nextRunAt = &aligned
+	}
 	rule, err := s.repo.Update(
-		ctx, id, version, enabled, intervalHours, s.now().UnixMilli(),
+		ctx, id, version, enabled, intervalHours, now.UnixMilli(), nextRunAt,
 	)
 	if errors.Is(err, repository.ErrAutoUpdateRuleNotFound) {
 		return AutoUpdateRuleView{}, newErr(
@@ -444,7 +513,8 @@ func (s *AutoUpdateService) enqueueRule(
 	rule repository.MarketDataAutoUpdateRule,
 	now int64,
 ) (TaskCreateResult, error) {
-	next := now + int64(rule.IntervalHours)*int64(time.Hour/time.Millisecond)
+	nowTime := time.UnixMilli(now)
+	next := nextAlignedSlot(nowTime, rule.IntervalHours, s.loc).UnixMilli()
 	bind := func(ctx context.Context, tx *sql.Tx, taskID string) error {
 		return s.repo.BindTaskTx(
 			ctx, tx, rule.ID, rule.Version, taskID, now, next,
@@ -503,10 +573,10 @@ func (s *AutoUpdateService) markScanFailure(
 	cause error,
 ) {
 	code := autoUpdateFailureCode(cause)
-	now := s.now().UnixMilli()
-	next := now + int64(rule.IntervalHours)*int64(time.Hour/time.Millisecond)
+	now := s.now()
+	next := nextAlignedSlot(now, rule.IntervalHours, s.loc).UnixMilli()
 	err := s.repo.MarkScheduleFailure(
-		ctx, rule.ID, rule.Version, code, cause.Error(), now, next,
+		ctx, rule.ID, rule.Version, code, cause.Error(), now.UnixMilli(), next,
 	)
 	if err != nil && !errors.Is(err, repository.ErrAutoUpdateRuleNotFound) {
 		slog.WarnContext(
@@ -532,19 +602,15 @@ func autoUpdateFailureCode(err error) string {
 }
 
 type AutoUpdateScheduler struct {
-	svc      *AutoUpdateService
-	interval time.Duration
-	cancel   context.CancelFunc
-	done     chan struct{}
-	once     sync.Once
+	svc    *AutoUpdateService
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
 }
 
-func NewAutoUpdateScheduler(
-	service *AutoUpdateService,
-	interval time.Duration,
-) *AutoUpdateScheduler {
+func NewAutoUpdateScheduler(service *AutoUpdateService) *AutoUpdateScheduler {
 	return &AutoUpdateScheduler{
-		svc: service, interval: interval, done: make(chan struct{}),
+		svc: service, done: make(chan struct{}),
 	}
 }
 
@@ -561,13 +627,14 @@ func (s *AutoUpdateScheduler) Start(ctx context.Context) {
 
 func (s *AutoUpdateScheduler) run(ctx context.Context) {
 	s.runOnce(ctx)
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
 	for {
+		next := nextScanTime(s.svc.now())
+		timer := time.NewTimer(time.Until(next))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			s.runOnce(ctx)
 		}
 	}

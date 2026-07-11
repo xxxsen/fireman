@@ -5,20 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 )
 
 var (
-	errConfigPathRequired     = errors.New("config path is required")
-	errAddrEmpty              = errors.New("addr must not be empty")
-	errInternalAddrEmpty      = errors.New("internal_addr must not be empty")
-	errDBPathEmpty            = errors.New("db_path must not be empty")
-	errResourceDBPathEmpty    = errors.New("resource_db_path must not be empty")
-	errTimezoneEmpty          = errors.New("timezone must not be empty")
-	errLogLevelEmpty          = errors.New("log_level must not be empty")
-	errWorkerConcurrency      = errors.New("worker_concurrency must be >= 1")
-	errAutoUpdateScanInterval = errors.New("auto_update_scan_interval_minutes must be between 5 and 1440")
+	errConfigPathRequired = errors.New("config path is required")
+	errAddrEmpty          = errors.New("addr must not be empty")
+	errInternalAddrEmpty  = errors.New("internal_addr must not be empty")
+	errDBPathEmpty        = errors.New("db_path must not be empty")
+	errResourceDBPathEmpty = errors.New("resource_db_path must not be empty")
+	errTimezoneEmpty      = errors.New("timezone must not be empty")
+	errLogLevelEmpty      = errors.New("log_level must not be empty")
+	errWorkerConcurrency  = errors.New("worker_concurrency must be >= 1")
 )
 
 // Config holds runtime settings loaded from a JSON config file.
@@ -27,37 +25,34 @@ type Config struct {
 	// InternalAddr serves the sidecar-facing internal API (resource upload,
 	// task post-process). It must never be published outside the docker
 	// network.
-	InternalAddr                  string `json:"internal_addr"`
-	DBPath                        string `json:"db_path"`
-	ResourceDBPath                string `json:"resource_db_path"`
-	Timezone                      string `json:"timezone"`
-	LogLevel                      string `json:"log_level"`
-	WorkerConcurrency             int    `json:"worker_concurrency"`
-	AutoUpdateScanIntervalMinutes int    `json:"auto_update_scan_interval_minutes"`
+	InternalAddr      string `json:"internal_addr"`
+	DBPath            string `json:"db_path"`
+	ResourceDBPath    string `json:"resource_db_path"`
+	Timezone          string `json:"timezone"`
+	LogLevel          string `json:"log_level"`
+	WorkerConcurrency int    `json:"worker_concurrency"`
 }
 
 const (
-	defaultAddr                          = ":8080"
-	defaultInternalAddr                  = ":8081"
-	defaultDBPath                        = "/data/fireman.db"
-	defaultResourceDBPath                = "/data/fireman_resource.db"
-	defaultTimezone                      = "Asia/Shanghai"
-	defaultLogLevel                      = "info"
-	defaultWorkerConcurrency             = 1
-	defaultAutoUpdateScanIntervalMinutes = 60
+	defaultAddr           = ":8080"
+	defaultInternalAddr   = ":8081"
+	defaultDBPath         = "/data/fireman.db"
+	defaultResourceDBPath = "/data/fireman_resource.db"
+	defaultTimezone       = "Asia/Shanghai"
+	defaultLogLevel       = "info"
+	defaultWorkerConcurrency = 1
 )
 
 // Default returns production-oriented defaults before JSON overrides are applied.
 func Default() Config {
 	return Config{
-		Addr:                          defaultAddr,
-		InternalAddr:                  defaultInternalAddr,
-		DBPath:                        defaultDBPath,
-		ResourceDBPath:                defaultResourceDBPath,
-		Timezone:                      defaultTimezone,
-		LogLevel:                      defaultLogLevel,
-		WorkerConcurrency:             defaultWorkerConcurrency,
-		AutoUpdateScanIntervalMinutes: defaultAutoUpdateScanIntervalMinutes,
+		Addr:              defaultAddr,
+		InternalAddr:      defaultInternalAddr,
+		DBPath:            defaultDBPath,
+		ResourceDBPath:    defaultResourceDBPath,
+		Timezone:          defaultTimezone,
+		LogLevel:          defaultLogLevel,
+		WorkerConcurrency: defaultWorkerConcurrency,
 	}
 }
 
@@ -75,13 +70,6 @@ func Load(path string) (Config, error) {
 	cfg := Default()
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
-	}
-	if raw, ok := os.LookupEnv("AUTO_UPDATE_SCAN_INTERVAL_MINUTES"); ok {
-		value, convErr := strconv.Atoi(strings.TrimSpace(raw))
-		if convErr != nil {
-			return Config{}, fmt.Errorf("parse AUTO_UPDATE_SCAN_INTERVAL_MINUTES: %w", convErr)
-		}
-		cfg.AutoUpdateScanIntervalMinutes = value
 	}
 	return validate(cfg)
 }
@@ -107,9 +95,6 @@ func validate(cfg Config) (Config, error) {
 	}
 	if cfg.WorkerConcurrency < 1 {
 		return Config{}, fmt.Errorf("%w, got %d", errWorkerConcurrency, cfg.WorkerConcurrency)
-	}
-	if cfg.AutoUpdateScanIntervalMinutes < 5 || cfg.AutoUpdateScanIntervalMinutes > 1440 {
-		return Config{}, fmt.Errorf("%w, got %d", errAutoUpdateScanInterval, cfg.AutoUpdateScanIntervalMinutes)
 	}
 	return cfg, nil
 }

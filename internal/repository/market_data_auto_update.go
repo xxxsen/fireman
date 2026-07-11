@@ -194,6 +194,7 @@ func (r *MarketDataAutoUpdateRepo) UpsertDirectory(
 	syncKey string,
 	intervalHours int,
 	now int64,
+	nextRunAt int64,
 ) (MarketDataAutoUpdateRule, error) {
 	id := "aur_" + uuid.NewString()
 	_, err := r.db.ExecContext(
@@ -209,7 +210,7 @@ func (r *MarketDataAutoUpdateRepo) UpsertDirectory(
 			next_run_at=excluded.next_run_at,
 			version=market_data_auto_update_rules.version+1,
 			updated_at=excluded.updated_at`,
-		id, syncKey, intervalHours, now, now, now,
+		id, syncKey, intervalHours, nextRunAt, now, now,
 	)
 	if err != nil {
 		return MarketDataAutoUpdateRule{}, fmt.Errorf("upsert directory auto update rule: %w", err)
@@ -237,6 +238,7 @@ func (r *MarketDataAutoUpdateRepo) EnableHistory(
 	adjustPolicy string,
 	pointType string,
 	now int64,
+	nextRunAt int64,
 ) (MarketDataAutoUpdateRule, error) {
 	id := "aur_" + uuid.NewString()
 	_, err := r.db.ExecContext(
@@ -252,7 +254,7 @@ func (r *MarketDataAutoUpdateRepo) EnableHistory(
 			next_run_at=excluded.next_run_at,
 			version=market_data_auto_update_rules.version+1,
 			updated_at=excluded.updated_at`,
-		id, assetKey, adjustPolicy, pointType, now, now, now,
+		id, assetKey, adjustPolicy, pointType, nextRunAt, now, now,
 	)
 	if err != nil {
 		return MarketDataAutoUpdateRule{}, fmt.Errorf("enable history auto update rule: %w", err)
@@ -267,19 +269,18 @@ func (r *MarketDataAutoUpdateRepo) Update(
 	enabled bool,
 	intervalHours int,
 	now int64,
+	nextRunAt *int64,
 ) (MarketDataAutoUpdateRule, error) {
-	nextAfterPeriod := now + int64(intervalHours)*3_600_000
 	result, err := r.db.ExecContext(
 		ctx, `
 		UPDATE market_data_auto_update_rules
 		SET next_run_at=CASE
 				WHEN ?=0 THEN NULL
-				WHEN enabled=0 THEN ?
 				ELSE ?
 			END,
 			enabled=?, interval_hours=?, version=version+1, updated_at=?
 		WHERE id=? AND version=?`,
-		boolInt(enabled), now, nextAfterPeriod,
+		boolInt(enabled), nextRunAt,
 		boolInt(enabled), intervalHours, now, id, version,
 	)
 	if err != nil {
@@ -326,6 +327,11 @@ func (r *MarketDataAutoUpdateRepo) Due(
 		SELECT `+autoUpdateCols+`
 		FROM market_data_auto_update_rules
 		WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=?
+		  AND (last_task_id = '' OR NOT EXISTS (
+			SELECT 1 FROM worker_tasks t
+			WHERE t.id = market_data_auto_update_rules.last_task_id
+			  AND t.status NOT IN ('complete', 'failed', 'canceled')
+		  ))
 		ORDER BY next_run_at
 		LIMIT ?`,
 		now, limit,

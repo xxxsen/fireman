@@ -56,10 +56,10 @@ CHECK 约束确保两种规则的字段互斥填充。
 - `List(filter, page)` — 支持 target_type、enabled（含 `failed` 状态筛选）、关键字搜索
 - `GetHistory(assetKey, adjustPolicy, pointType)` — 查询单个历史规则
 - `UpsertDirectory` / `EnableHistory` — 幂等创建或重新启用
-- `Update(id, version, enabled, intervalHours)` — 乐观锁更新
-- `Due(now, limit)` — 获取到期规则
+- `Update(id, version, enabled, intervalHours, nextRunAt)` — 乐观锁更新，next_run_at 由 service 层计算后传入
+- `Due(now, limit)` — 获取到期且上次任务已终态的规则（排除 last_task_id 仍在 pending/running 的行）
 - `BindTask(id, version, taskID)` / `BindTaskTx` — 在事务内绑定任务
-- `MarkScheduleFailure` — 记录调度失败并推进下一周期
+- `MarkScheduleFailure` — 记录调度失败并推进至下一 crontab 对齐时间
 - `MarkTaskSuccess(taskID)` — post-process 成功回写
 - `Reconcile(now)` — 根据 worker_tasks 终态批量对账
 
@@ -77,32 +77,46 @@ CHECK 约束确保两种规则的字段互斥填充。
    - 历史规则 → `MarketAssetService.SyncHistoryWithTaskHook`
    - 两者在同一事务内完成任务创建和规则绑定（`BindTaskTx`）
    - 若已有 pending/running 同维度任务，绑定既有任务而非创建重复
-4. **失败处理**：目标不存在/无效时记录 `auto_update_target_invalid` 并推进下一周期
+4. **失败处理**：目标不存在/无效时记录 `auto_update_target_invalid` 并推进至下一 crontab 对齐时间
+
+### Crontab 风格调度
+
+调度器和规则的 `next_run_at` 均采用 wall-clock 对齐（crontab 风格），而非"上次执行 + 间隔"的相对计时。
+
+**扫描器触发**：每 10 分钟触发一次（常量 `autoUpdateScanIntervalMinute = 10`），对齐到 :00、:10、:20、:30、:40、:50 时刻。启动后立即执行一次 catch-up 扫描，随后按 wall-clock 对齐到下一个 10 分钟边界。
+
+**规则周期对齐**（`nextAlignedSlot` 函数）：
+
+| 间隔 | 执行时刻（本地时间） | 等价 crontab |
+| --- | --- | --- |
+| 1 小时 | 每小时 :10 | `10 * * * *` |
+| 6 小时 | 00:10, 06:10, 12:10, 18:10 | `10 */6 * * *` |
+| 12 小时 | 00:10, 12:10 | `10 */12 * * *` |
+| 24 小时 (1 天) | 00:10 | `10 0 * * *` |
+| 48 小时 (2 天) | 00:10，epoch-day 对齐 | 每 2 天 |
+| 72 小时 (3 天) | 00:10，epoch-day 对齐 | 每 3 天 |
+| 168 小时 (7 天) | 00:10，epoch-day 对齐 | 每 7 天 |
+
+时区由配置中的 `timezone`（默认 `Asia/Shanghai`）决定，对齐计算基于本地时间。
 
 ### AutoUpdateScheduler
 
 同一文件中的调度器组件：
 
-- `Start(ctx)` — 启动后立即执行一次 `RunOnce`，随后按配置间隔（默认 60 分钟）循环
+- `Start(ctx)` — 启动后立即执行一次 `RunOnce`，随后按 wall-clock 对齐到下一个 10 分钟边界触发
 - `Stop()` — 取消 context 并等待当前扫描退出
 - 每次扫描有 10 分钟超时保护
 
 ### 应用生命周期集成
 
 `internal/app/app.go` 中：
-- DB 迁移和服务构造完成后创建并启动 `AutoUpdateScheduler`
+- 加载 timezone → DB 迁移 → 服务构造（传入 `*time.Location`）→ 启动 `AutoUpdateScheduler`
 - 共用与 API 相同的 DB pool 和 `MarketAssetService`
 - 关闭流程：先停止 HTTP → 停止扫描器 → 停止 worker → 关闭 DB
 
 ### Post-process 集成
 
 `PostProcessService` 在目录/历史 post-process 成功提交后调用 `MarkTaskSuccess(taskID)`。该操作为 best-effort，失败只记日志不影响 post-process 返回；`Reconcile` 在下一轮扫描时以 worker_tasks 终态兜底。
-
-### 配置
-
-| 环境变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `AUTO_UPDATE_SCAN_INTERVAL_MINUTES` | 60 | 扫描间隔（分钟），范围 5–1440 |
 
 ## API 合同
 
@@ -159,17 +173,19 @@ PUT  /api/v1/admin/auto-updates/:id
 1. **资产目录区**：始终按静态注册表列出全部 7 个目录单元。未启用的行显示周期选择和"启用"按钮；已启用的行显示完整规则状态和操作。
 2. **资产历史区**：支持状态筛选（全部/已启用/已暂停/最近失败）和关键字搜索，仅展示已创建的历史规则。
 
-行操作：启用/暂停、修改周期（下拉选项 1/6/12/24/48/72/168 小时）。提交带 `version`，收到 409 时保留用户输入并提示刷新。
+行操作：启用/暂停、修改周期（下拉选项 1 小时/6 小时/12 小时/1 天/2 天/3 天/7 天）。提交带 `version`，收到 409 时保留用户输入并提示刷新。>= 24 小时的周期在前端统一以"天"为单位显示。
 
 ## 时间语义与并发安全
 
-### 周期管理
+### 周期管理（crontab 对齐）
 
-- 规则首次启用：`next_run_at = now`，下一整点扫描进入候选
-- 修改周期：`next_run_at = now + 新周期`
+- 规则首次启用：`next_run_at = nextAlignedSlot(now, interval)`，在下一个对齐时刻进入候选
+- 修改周期：`next_run_at = nextAlignedSlot(now, 新周期)`
 - 暂停：清空 `next_run_at`
-- 重新启用：`next_run_at = now`
-- 创建任务后立即推进 `next_run_at = now + interval`（不等待任务成功）
+- 重新启用：`next_run_at = nextAlignedSlot(now, interval)`
+- 创建任务后推进 `next_run_at = nextAlignedSlot(now, interval)`（不等待任务成功）
+
+所有对齐计算基于配置的本地时区，确保执行时刻在用户视角稳定（如每天 00:10 CST）。
 
 ### 并发保护
 
@@ -177,10 +193,11 @@ PUT  /api/v1/admin/auto-updates/:id
 2. 任务创建和规则绑定在同一 SQLite 事务，失败回滚
 3. 已有 pending/running 任务时复用而非重复创建（active-dedupe）
 4. 两个并发 `RunOnce` 不产生重复任务（数据库条件更新 + worker task dedupe 双保险）
+5. **Due 查询终态门控**：`Due` SQL 在 `next_run_at<=now` 基础上额外排除 `last_task_id` 仍处于非终态（pending/running）的规则。即使 10 分钟一次的扫描多次触发，同一资产只有当上次任务已完成（complete/failed/canceled）后才会再次入队
 
 ### 失败恢复
 
-- 任务失败后仍按下一周期重试，不会每小时重复入队
+- 任务失败后推进到下一 crontab 对齐时刻重试，不会每小时重复入队
 - `Reconcile` 在每轮扫描开始时同步 worker_tasks 终态
 - 进程重启后从持久化 `next_run_at` 恢复，不因启动立即扫描而重复创建未到期任务
 

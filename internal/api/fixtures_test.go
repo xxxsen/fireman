@@ -16,7 +16,7 @@ import (
 )
 
 func buildServices(db *sql.DB) Services {
-	return NewServices(db, "", nil, nil)
+	return NewServices(db, "", nil, nil, time.UTC)
 }
 
 func testRouterWithDB(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {

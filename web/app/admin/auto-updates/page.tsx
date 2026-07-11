@@ -15,6 +15,10 @@ import { formatDateTimeFromMs } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 
 const HOURS = [1, 6, 12, 24, 48, 72, 168];
+function formatInterval(hours: number): string {
+  if (hours >= 24) return `${hours / 24} 天`;
+  return `${hours} 小时`;
+}
 const DIRECTORY_QUERY_KEY = ["admin", "auto-updates", "directories"] as const;
 function TaskLink({ rule }: { rule: AdminAutoUpdateRule }) {
   if (!rule.last_task_id) return <>--</>;
@@ -22,7 +26,7 @@ function TaskLink({ rule }: { rule: AdminAutoUpdateRule }) {
     <span className="inline-flex max-w-48 items-center gap-1 overflow-hidden">
       <Link
         className="truncate text-brand hover:text-brand-strong"
-        href={`/admin/worker-tasks/${encodeURIComponent(rule.last_task_id)}`}
+        href={`/admin/worker-tasks?task_id=${encodeURIComponent(rule.last_task_id)}`}
         title={rule.last_task_id}
       >
         {rule.last_task_id}
@@ -65,7 +69,7 @@ function IntervalEditor({
         disabled={pending}
         onChange={(event) => setDraft(Number(event.target.value))}
       >
-        {HOURS.map((value) => <option key={value} value={value}>{value} 小时</option>)}
+        {HOURS.map((value) => <option key={value} value={value}>{formatInterval(value)}</option>)}
       </select>
       {changed && <>
         <button type="button" disabled={pending} className="text-brand disabled:opacity-60" onClick={() => void onSave(draft)}>{pending ? "保存中…" : "保存"}</button>
@@ -206,7 +210,7 @@ function AutoUpdatesContent() {
                 ? <RuleCells rule={rule} pending={pending} onUpdate={(active, hours) => updateRule(rule, active, hours)} />
                 : <>
                   <td>{directories.isLoading ? "加载中…" : "未启用"}</td>
-				  <td><select aria-label={`${unit.label}更新周期`} value={interval} disabled={directories.isLoading || pending} onChange={(event) => setDirectoryIntervals((current) => ({ ...current, [unit.sync_key]: Number(event.target.value) }))}>{HOURS.map((value) => <option key={value} value={value}>{value} 小时</option>)}</select></td>
+				  <td><select aria-label={`${unit.label}更新周期`} value={interval} disabled={directories.isLoading || pending} onChange={(event) => setDirectoryIntervals((current) => ({ ...current, [unit.sync_key]: Number(event.target.value) }))}>{HOURS.map((value) => <option key={value} value={value}>{formatInterval(value)}</option>)}</select></td>
                   <td>--</td><td>--</td><td>--</td><td>--</td><td>--</td>
 				  <td><button type="button" className="text-brand disabled:opacity-60" disabled={directories.isLoading || directories.isError || pending} onClick={() => void enableDirectory(unit.sync_key)}>{pending ? "启用中…" : "启用"}</button></td>
                 </>}

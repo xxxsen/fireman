@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/fireman/fireman/internal/testutil"
 )
 
 func TestSystemBackupDownload(t *testing.T) {
 	db, dbPath := testutil.OpenTestDBPath(t)
-	services := NewServices(db, dbPath, nil, nil)
+	services := NewServices(db, dbPath, nil, nil, time.UTC)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, DBPath: dbPath, Services: services}))
 	defer srv.Close()
 

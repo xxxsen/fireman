@@ -89,7 +89,7 @@ func TestPostProcess_SuccessUpdatesLinkedAutoUpdateRule(t *testing.T) {
 	seedTaskRow(t, db, "wt_auto_ok", repository.WorkerTaskTypeAssetDirectorySync,
 		repository.WorkerTaskStatusComplete, "", 1)
 	now := time.Now().UnixMilli()
-	rule, err := autoRepo.UpsertDirectory(context.Background(), "cn_exchange_stock", 24, now)
+	rule, err := autoRepo.UpsertDirectory(context.Background(), "cn_exchange_stock", 24, now, now+86_400_000)
 	if err != nil {
 		t.Fatal(err)
 	}

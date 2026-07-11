@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -44,7 +45,7 @@ type Services struct {
 // NewServices wires the business service graph. resources may be nil (tests,
 // router fallback); the admin overview then reports zero resource storage.
 func NewServices(
-	db *sql.DB, dbPath string, maintenance *service.MaintenanceGate, resources *resourcedb.DB,
+	db *sql.DB, dbPath string, maintenance *service.MaintenanceGate, resources *resourcedb.DB, loc *time.Location,
 ) Services {
 	plans := repository.NewPlanRepo(db)
 	params := repository.NewParametersRepo(db)
@@ -94,7 +95,7 @@ func NewServices(
 		marketAssetRepo, marketAssetSvc, resources, dbPath,
 	)
 	autoUpdates := service.NewAutoUpdateService(
-		repository.NewMarketDataAutoUpdateRepo(db), marketAssetRepo, marketAssetSvc,
+		repository.NewMarketDataAutoUpdateRepo(db), marketAssetRepo, marketAssetSvc, loc,
 	)
 	return Services{
 		Plans:               planSvc,

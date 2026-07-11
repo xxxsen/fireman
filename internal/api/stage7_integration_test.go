@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
@@ -24,7 +25,7 @@ import (
 func setupFullStackIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client, string) {
 	t.Helper()
 	db, dbPath := testutil.OpenTestDBPath(t)
-	services := NewServices(db, dbPath, nil, nil)
+	services := NewServices(db, dbPath, nil, nil, time.UTC)
 	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
 	worker := jobs.NewWorker(

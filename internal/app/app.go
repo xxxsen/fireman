@@ -69,8 +69,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("open resource database: %w", err)
 	}
 
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		if closeErr := pool.Close(); closeErr != nil {
+			logger.Error("db close after timezone failure", "error", closeErr)
+		}
+		return fmt.Errorf("load timezone %q: %w", cfg.Timezone, err)
+	}
+
 	maintenance := &service.MaintenanceGate{}
-	services := api.NewServices(pool, cfg.DBPath, maintenance, resources)
+	services := api.NewServices(pool, cfg.DBPath, maintenance, resources, loc)
 	jobRepo := repository.NewJobRepo(pool)
 	simRepo := repository.NewSimulationRepo(pool)
 	runner := jobs.NewSimulationRunner(pool, simRepo)
@@ -79,10 +87,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		pool, jobRepo, simRepo, runner, analysisRunner, services.Research,
 		services.EventHub, logger, maintenance.Active,
 	)
-	autoScheduler := service.NewAutoUpdateScheduler(
-		services.AutoUpdates,
-		time.Duration(cfg.AutoUpdateScanIntervalMinutes)*time.Minute,
-	)
+	autoScheduler := service.NewAutoUpdateScheduler(services.AutoUpdates)
 	autoScheduler.Start(ctx)
 
 	resourcedb.StartCleanup(ctx, resources, resourceCleanupInterval, logger.Warn)

@@ -32,7 +32,7 @@ func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
 		deps.Logger = slog.Default()
 	}
 	if deps.Services.Plans == nil {
-		deps.Services = NewServices(deps.DB, deps.DBPath, nil, nil)
+		deps.Services = NewServices(deps.DB, deps.DBPath, nil, nil, time.UTC)
 	}
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()

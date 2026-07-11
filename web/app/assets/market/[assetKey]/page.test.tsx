@@ -277,7 +277,7 @@ describe("MarketAssetDetailPage automatic update", () => {
       point_type: initial.history.point_type,
       enabled: true,
     }));
-    expect(await screen.findByRole("button", { name: "自动更新：每 24 小时" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "自动更新：每 1 天" })).toBeInTheDocument();
   });
 
   it("pauses an enabled rule without changing its history dimension", async () => {

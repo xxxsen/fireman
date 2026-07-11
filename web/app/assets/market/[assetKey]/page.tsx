@@ -193,7 +193,7 @@ export default function MarketAssetDetailPage() {
           {autoUpdatePending
             ? "更新中…"
             : history.auto_update?.enabled
-              ? `自动更新：每 ${history.auto_update.interval_hours} 小时`
+              ? `自动更新：每 ${history.auto_update.interval_hours >= 24 ? `${history.auto_update.interval_hours / 24} 天` : `${history.auto_update.interval_hours} 小时`}`
               : "启用每日自动更新"}
         </button>
         {history.auto_update?.enabled && (
