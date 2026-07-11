@@ -14,6 +14,8 @@ const baseParams: PlanParameters = {
   annual_savings_minor: 100_000_00,
   annual_savings_growth_rate: 0.03,
   annual_spending_minor: 400_000_00,
+	annual_retirement_income_minor: 0,
+	annual_retirement_income_growth_rate: 0,
   terminal_wealth_floor_minor: 0,
   selected_scenario_id: "scn_1",
   inflation_mode: "fixed_real",

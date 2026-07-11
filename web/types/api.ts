@@ -35,6 +35,8 @@ export interface PlanParameters {
   annual_savings_minor: number;
   annual_savings_growth_rate: number;
   annual_spending_minor: number;
+  annual_retirement_income_minor: number;
+  annual_retirement_income_growth_rate: number;
   terminal_wealth_floor_minor: number;
   selected_scenario_id?: string | null;
   inflation_mode: string;

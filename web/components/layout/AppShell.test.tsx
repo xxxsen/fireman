@@ -69,6 +69,23 @@ describe("AppShell", () => {
     }
   });
 
+  it("includes FIRE 快算 and marks it active only on its route", () => {
+    for (const pathname of ["/quick-fire", "/assets"]) {
+      mockPathname.mockReturnValue(pathname);
+      const { unmount } = render(
+        <AppShell>
+          <div>content</div>
+        </AppShell>,
+      );
+      for (const link of screen.getAllByRole("link", { name: "FIRE 快算" })) {
+        expect(link).toHaveAttribute("href", "/quick-fire");
+        if (pathname === "/quick-fire") expect(link).toHaveAttribute("aria-current", "page");
+        else expect(link).not.toHaveAttribute("aria-current", "page");
+      }
+      unmount();
+    }
+  });
+
   it("includes 配置模板 navigation entry", () => {
     mockPathname.mockReturnValue("/scenarios");
     render(

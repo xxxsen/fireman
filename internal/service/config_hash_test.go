@@ -36,6 +36,12 @@ func TestConfigHashChangesWithAssumptionSelection(t *testing.T) {
 	baseHash := hashOf(base)
 
 	cases := map[string]func(p *repository.PlanParameters){
+		"retirement_income": func(p *repository.PlanParameters) {
+			p.AnnualRetirementIncomeMinor = 100_000_00
+		},
+		"retirement_income_growth": func(p *repository.PlanParameters) {
+			p.AnnualRetirementIncomeGrowthRate = 0.02
+		},
 		"scenario":  func(p *repository.PlanParameters) { p.ReturnAssumptionScenario = "conservative" },
 		"mode":      func(p *repository.PlanParameters) { p.ReturnAssumptionMode = repository.ModeHistoricalCAGR },
 		"version":   func(p *repository.PlanParameters) { p.ReturnAssumptionSetVersion = 2 },

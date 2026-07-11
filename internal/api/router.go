@@ -45,6 +45,7 @@ func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	v1.Use(maintenanceMiddleware(deps.Services.Maintenance))
 	deps.Services.registerPlanRoutes(v1)
+	deps.Services.registerQuickFIRERoutes(v1)
 	deps.Services.registerScenarioRoutes(v1)
 	deps.Services.registerMarketAssetRoutes(v1)
 	deps.Services.registerSimulationRoutes(v1)

@@ -37,6 +37,7 @@ import {
 } from "@/lib/wizard-allocation";
 import type { PlanParameters } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
+import { consumeQuickFireTransfer, QUICK_FIRE_TRANSFER_KEY } from "@/lib/quick-fire-draft";
 
 const STEPS = ["计划目标", "建立持仓", "确认组合"] as const;
 const GOAL_STEP = 0;
@@ -52,6 +53,9 @@ const FIRE_DURATION_PRESETS = [30, 40, 50] as const;
  * panel and editing values flows through to POST /plans/wizard.
  */
 interface AdvancedFireParams {
+	annual_savings_growth_rate: number;
+	annual_retirement_income_growth_rate: number;
+	terminal_wealth_floor_minor: number;
   inflation_mode: string;
   fixed_inflation_rate: number;
   inflation_mu: number;
@@ -66,6 +70,9 @@ interface AdvancedFireParams {
 }
 
 const DEFAULT_ADVANCED: AdvancedFireParams = {
+	annual_savings_growth_rate: 0,
+	annual_retirement_income_growth_rate: 0,
+	terminal_wealth_floor_minor: 0,
   inflation_mode: "fixed_real",
   fixed_inflation_rate: 0.03,
   inflation_mu: 0.03,
@@ -97,6 +104,9 @@ function advancedIsDefault(a: AdvancedFireParams): boolean {
 function validateAdvancedParams(a: AdvancedFireParams): string[] {
   const errs: string[] = [];
   const within = (v: number, min: number, max: number) => v >= min && v <= max;
+	if (!within(a.annual_savings_growth_rate, -0.5, 0.5)) errs.push("储蓄增长率需在 -50% 到 50% 之间。");
+	if (!within(a.annual_retirement_income_growth_rate, -0.5, 0.5)) errs.push("稳定收入增长率需在 -50% 到 50% 之间。");
+	if (a.terminal_wealth_floor_minor < 0) errs.push("期末最低资产不能为负。");
   if (!within(a.fixed_inflation_rate, -0.02, 0.2)) errs.push("固定通胀率需在 -2% 到 20% 之间。");
   if (!within(a.inflation_mu, -0.02, 0.2)) errs.push("通胀均值 μ 需在 -2% 到 20% 之间。");
   if (!within(a.inflation_sigma, 0, 0.2)) errs.push("通胀波动 σ 需在 0% 到 20% 之间。");
@@ -130,6 +140,7 @@ function buildParameters(
     totalAssets: number;
     annualSpending: number;
     annualSavings: number;
+	annualRetirementIncome: number;
     scenarioId: string;
     ages: { current: number; retirement: number; end: number };
   },
@@ -142,9 +153,11 @@ function buildParameters(
     end_age: base.ages.end,
     total_assets_minor: base.totalAssets,
     annual_savings_minor: base.annualSavings,
-    annual_savings_growth_rate: 0,
+    annual_savings_growth_rate: advanced.annual_savings_growth_rate,
     annual_spending_minor: base.annualSpending,
-    terminal_wealth_floor_minor: 0,
+    annual_retirement_income_minor: base.annualRetirementIncome,
+    annual_retirement_income_growth_rate: advanced.annual_retirement_income_growth_rate,
+    terminal_wealth_floor_minor: advanced.terminal_wealth_floor_minor,
     selected_scenario_id: base.scenarioId,
     inflation_mode: advanced.inflation_mode,
     fixed_inflation_rate: advanced.fixed_inflation_rate,
@@ -173,21 +186,41 @@ function buildParameters(
 
 export default function NewPlanWizardPage() {
   const router = useRouter();
+	const [quickFireImport] = useState(() => {
+		if (typeof window === "undefined" || new URLSearchParams(window.location.search).get("source") !== "quick-fire") {
+			return { input: null, invalid: false };
+		}
+		const hasRawTransfer = window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY) !== null;
+		const input = consumeQuickFireTransfer(window.sessionStorage);
+		return { input, invalid: hasRawTransfer && input === null };
+	});
+	const quickFireTransfer = quickFireImport.input;
+	const [showQuickFireImportError, setShowQuickFireImportError] = useState(quickFireImport.invalid);
   const fieldIdPrefix = useId();
   const currentAgeId = `${fieldIdPrefix}-current-age`;
   const retirementAgeId = `${fieldIdPrefix}-retirement-age`;
   const [step, setStep] = useState(0);
   const [name, setName] = useState(defaultPlanName);
   const [valuationDate] = useState(new Date().toISOString().slice(0, 10));
-  const [currentAge, setCurrentAge] = useState(35);
-  const [retirementAge, setRetirementAge] = useState(35);
-  const [fireDurationYears, setFireDurationYears] = useState(30);
-  const [totalAssets, setTotalAssets] = useState(4_000_000_00);
-  const [annualSpending, setAnnualSpending] = useState(120_000_00);
-  const [annualSavings, setAnnualSavings] = useState(100_000_00);
+  const [currentAge, setCurrentAge] = useState(quickFireTransfer?.current_age ?? 35);
+  const [retirementAge, setRetirementAge] = useState(quickFireTransfer?.planned_fire_age ?? 35);
+  const [fireDurationYears, setFireDurationYears] = useState(
+    quickFireTransfer ? quickFireTransfer.end_age - quickFireTransfer.planned_fire_age : 30,
+  );
+  const [totalAssets, setTotalAssets] = useState(quickFireTransfer?.current_assets_minor ?? 4_000_000_00);
+  const [annualSpending, setAnnualSpending] = useState(quickFireTransfer?.annual_spending_minor ?? 120_000_00);
+  const [annualSavings, setAnnualSavings] = useState(quickFireTransfer?.annual_savings_minor ?? 100_000_00);
+	const [annualRetirementIncome, setAnnualRetirementIncome] = useState(quickFireTransfer?.annual_retirement_income_minor ?? 0);
   const [scenarioId, setScenarioId] = useState("");
   const [regionTargets, setRegionTargets] = useState<WizardRegionTargets>(defaultWizardRegionTargets);
-  const [advanced, setAdvanced] = useState<AdvancedFireParams>(DEFAULT_ADVANCED);
+  const [advanced, setAdvanced] = useState<AdvancedFireParams>(() => ({
+		...DEFAULT_ADVANCED,
+		annual_savings_growth_rate: quickFireTransfer?.annual_savings_growth_rate ?? 0,
+		annual_retirement_income_growth_rate: quickFireTransfer?.annual_retirement_income_growth_rate ?? 0,
+		terminal_wealth_floor_minor: quickFireTransfer?.terminal_wealth_floor_minor ?? 0,
+		inflation_mode: quickFireTransfer ? "fixed_real" : DEFAULT_ADVANCED.inflation_mode,
+		fixed_inflation_rate: quickFireTransfer?.inflation_rate ?? DEFAULT_ADVANCED.fixed_inflation_rate,
+	}));
   const [highInflationConfirmed, setHighInflationConfirmed] = useState(false);
   const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
   const [removedByTargets, setRemovedByTargets] = useState<string[]>([]);
@@ -227,6 +260,7 @@ export default function NewPlanWizardPage() {
             totalAssets,
             annualSpending,
             annualSavings,
+			annualRetirementIncome,
             scenarioId,
             ages: { current: currentAge, retirement: retirementAge, end: endAge },
           },
@@ -364,6 +398,7 @@ export default function NewPlanWizardPage() {
       totalAssetsMinor: totalAssets,
       annualSpendingMinor: annualSpending,
       annualSavingsMinor: annualSavings,
+		annualRetirementIncomeMinor: annualRetirementIncome,
     });
     if (!moneyCheck.ok) {
       setError(moneyCheck.message!);
@@ -431,6 +466,17 @@ export default function NewPlanWizardPage() {
       >
         {step === GOAL_STEP && (
           <div className="space-y-8">
+			{quickFireTransfer && (
+			  <p className="rounded-md border border-brand/30 bg-brand/5 p-3 text-sm text-ink" role="status">
+				已从 FIRE 快算带入现金流参数；完整模拟的收益率将根据后续选择的资产和模拟假设生成。
+			  </p>
+			)}
+			{showQuickFireImportError && (
+			  <div className="flex items-start justify-between gap-3 rounded-md border border-danger/30 bg-danger/5 p-3 text-sm text-ink" role="alert">
+				<span>FIRE 快算参数未能读取，已使用新计划默认值。</span>
+				<button type="button" className="text-sm text-ink-muted underline" onClick={() => setShowQuickFireImportError(false)}>关闭</button>
+			  </div>
+			)}
             <section className="space-y-5">
               <h2 className="text-sm font-semibold text-ink">基本资料</h2>
               <label className="block text-sm">
@@ -543,6 +589,12 @@ export default function NewPlanWizardPage() {
                     onChange={setAnnualSavings}
                     plain
                   />
+				  <MoneyInput
+					label="退休后稳定年收入"
+					valueMinor={annualRetirementIncome}
+					onChange={setAnnualRetirementIncome}
+					plain
+				  />
                 </div>
               </div>
             </section>
@@ -1165,6 +1217,21 @@ function AdvancedFireParamsSection({
           value={advanced.taxable_withdrawal_ratio}
           onChange={(v) => onChange("taxable_withdrawal_ratio", v)}
         />
+		<PercentInput
+		  label="储蓄增长率"
+		  value={advanced.annual_savings_growth_rate}
+		  onChange={(v) => onChange("annual_savings_growth_rate", v)}
+		/>
+		<PercentInput
+		  label="稳定收入年增长率"
+		  value={advanced.annual_retirement_income_growth_rate}
+		  onChange={(v) => onChange("annual_retirement_income_growth_rate", v)}
+		/>
+		<MoneyInput
+		  label="期末最低资产"
+		  valueMinor={advanced.terminal_wealth_floor_minor}
+		  onChange={(v) => onChange("terminal_wealth_floor_minor", v)}
+		/>
         {errors.length > 0 && (
           <ul
             className="space-y-1 text-xs text-danger sm:col-span-full"

@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0026） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0027） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -102,6 +102,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | 结果同事务 | 汇总、路径索引、分位序列同一 SQLite 事务提交 |
 | 路径详情 | 按 seed 重算单条路径；列表与详情 seed 一致 |
 | 交易成本与现金池 | 3.2.0 将全部同币种现金聚合为流动性池；现金支出不计费，仅非现金卖出补提款与调仓双边计费；费率范围 `[0,1)` |
+| 退休后稳定收入 | 3.3.0 在 FIRE 月起将税后养老金、净租金或长期副业收入计入现金池；支持年增长率，进入快照、账本和 config hash |
 | 失败状态 | 路径记录资金不足、资产耗尽、期末目标未达等可由账本证明的状态，不推断伪因果标签 |
 | Job + Worker | 异步 `simulation` job，进度与 SSE/轮询 |
 | 参数过期 | 计划参数变更后旧模拟 run 标记 stale |
@@ -117,6 +118,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | 路由 | 功能 |
 | --- | --- |
 | `/plans/new` | 四步计划向导；模拟可选且不阻塞进入计划 |
+| `/quick-fire` | 无需计划、持仓或行情的确定性 FIRE 快算；可将现金流参数一次性带入新建计划 |
 | `/plans/{id}/overview` | 组合总览、大类/地区配置、偏离摘要、折叠式可选模拟 |
 | `/plans/{id}/rebalance` | 调仓工作台；查看当前持仓、目标结构、结构偏差，并进入持仓校正或调仓执行 |
 | `/plans/{id}/rebalance/executions` | 多日调仓执行列表 |
@@ -138,6 +140,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 
 调仓执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
+FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](./027-quick-fire-calculator.md)。
 组合研究模块详见 [024-portfolio-research.md](./024-portfolio-research.md)、[025-research-portfolio-auto-optimization.md](./025-research-portfolio-auto-optimization.md) 与 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md)。
 
 ---

@@ -14,33 +14,35 @@ type Plan struct {
 
 // PlanParameters holds FIRE and simulation parameters.
 type PlanParameters struct {
-	PlanID                   string  `json:"plan_id"`
-	CurrentAge               int     `json:"current_age"`
-	RetirementAge            int     `json:"retirement_age"`
-	EndAge                   int     `json:"end_age"`
-	TotalAssetsMinor         int64   `json:"total_assets_minor"`
-	AnnualSavingsMinor       int64   `json:"annual_savings_minor"`
-	AnnualSavingsGrowthRate  float64 `json:"annual_savings_growth_rate"`
-	AnnualSpendingMinor      int64   `json:"annual_spending_minor"`
-	TerminalWealthFloorMinor int64   `json:"terminal_wealth_floor_minor"`
-	SelectedScenarioID       *string `json:"selected_scenario_id,omitempty"`
-	InflationMode            string  `json:"inflation_mode"`
-	FixedInflationRate       float64 `json:"fixed_inflation_rate"`
-	InflationMu              float64 `json:"inflation_mu"`
-	InflationPhi             float64 `json:"inflation_phi"`
-	InflationSigma           float64 `json:"inflation_sigma"`
-	WithdrawalType           string  `json:"withdrawal_type"`
-	WithdrawalRate           float64 `json:"withdrawal_rate"`
-	WithdrawalFloorRatio     float64 `json:"withdrawal_floor_ratio"`
-	WithdrawalCeilingRatio   float64 `json:"withdrawal_ceiling_ratio"`
-	WithdrawalTaxRate        float64 `json:"withdrawal_tax_rate"`
-	TaxableWithdrawalRatio   float64 `json:"taxable_withdrawal_ratio"`
-	RebalanceFrequency       string  `json:"rebalance_frequency"`
-	RebalanceThreshold       float64 `json:"rebalance_threshold"`
-	TransactionCostRate      float64 `json:"transaction_cost_rate"`
-	SimulationRuns           int     `json:"simulation_runs"`
-	StudentTDf               int     `json:"student_t_df"`
-	Seed                     *int64  `json:"seed,omitempty"`
+	PlanID                           string  `json:"plan_id"`
+	CurrentAge                       int     `json:"current_age"`
+	RetirementAge                    int     `json:"retirement_age"`
+	EndAge                           int     `json:"end_age"`
+	TotalAssetsMinor                 int64   `json:"total_assets_minor"`
+	AnnualSavingsMinor               int64   `json:"annual_savings_minor"`
+	AnnualSavingsGrowthRate          float64 `json:"annual_savings_growth_rate"`
+	AnnualSpendingMinor              int64   `json:"annual_spending_minor"`
+	AnnualRetirementIncomeMinor      int64   `json:"annual_retirement_income_minor"`
+	AnnualRetirementIncomeGrowthRate float64 `json:"annual_retirement_income_growth_rate"`
+	TerminalWealthFloorMinor         int64   `json:"terminal_wealth_floor_minor"`
+	SelectedScenarioID               *string `json:"selected_scenario_id,omitempty"`
+	InflationMode                    string  `json:"inflation_mode"`
+	FixedInflationRate               float64 `json:"fixed_inflation_rate"`
+	InflationMu                      float64 `json:"inflation_mu"`
+	InflationPhi                     float64 `json:"inflation_phi"`
+	InflationSigma                   float64 `json:"inflation_sigma"`
+	WithdrawalType                   string  `json:"withdrawal_type"`
+	WithdrawalRate                   float64 `json:"withdrawal_rate"`
+	WithdrawalFloorRatio             float64 `json:"withdrawal_floor_ratio"`
+	WithdrawalCeilingRatio           float64 `json:"withdrawal_ceiling_ratio"`
+	WithdrawalTaxRate                float64 `json:"withdrawal_tax_rate"`
+	TaxableWithdrawalRatio           float64 `json:"taxable_withdrawal_ratio"`
+	RebalanceFrequency               string  `json:"rebalance_frequency"`
+	RebalanceThreshold               float64 `json:"rebalance_threshold"`
+	TransactionCostRate              float64 `json:"transaction_cost_rate"`
+	SimulationRuns                   int     `json:"simulation_runs"`
+	StudentTDf                       int     `json:"student_t_df"`
+	Seed                             *int64  `json:"seed,omitempty"`
 	// Return-assumption selection. These reference a global profile and
 	// scenario; they never duplicate the profile's numeric values.
 	ReturnAssumptionMode        string `json:"return_assumption_mode"`

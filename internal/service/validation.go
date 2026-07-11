@@ -12,34 +12,39 @@ import (
 )
 
 var (
-	errRegionTargetMissingClass     = errors.New("region_targets missing asset_class")
-	errRegionTargetsSum             = errors.New("region targets must sum to 100%")
-	errAgesMustBePositive           = errors.New("ages must be positive")
-	errAgeOrderingInvalid           = errors.New("must satisfy 0 < current_age <= retirement_age < end_age <= 120")
-	errAssetsSpendingPositive       = errors.New("total_assets and annual_spending must be > 0")
-	errAmountsNonNegative           = errors.New("amounts must be non-negative")
-	errSimulationRunsRange          = errors.New("simulation_runs must be in [1000, 100000]")
-	errStudentTDfRange              = errors.New("student_t_df must be in [5, 30]")
-	errRebalanceThresholdRange      = errors.New("rebalance_threshold must be in [0, 0.5]")
-	errTransactionCostRateRange     = errors.New("transaction_cost_rate must be in [0, 1)")
-	errRebalanceFrequencyInvalid    = errors.New("rebalance_frequency must be monthly, quarterly, or annual")
-	errAnnualSavingsGrowthRateRange = errors.New("annual_savings_growth_rate must be in [-0.5, 0.5]")
-	errWithdrawalTypeInvalid        = errors.New("withdrawal_type must be fixed_real, fixed_portfolio, or guardrail")
-	errInflationModeInvalid         = errors.New("inflation_mode must be fixed_real or random_ar1")
-	errRegionTargetsRequired        = errors.New("region_targets is required")
-	errRegionWeightRange            = errors.New("region weight must be in [0, 1]")
-	errScenarioWeightsSum           = errors.New("scenario weights must sum to 100%")
-	errFixedInflationRange          = errors.New("fixed_inflation_rate must be in [-0.02, 0.20]")
-	errInflationMuRange             = errors.New("inflation_mu must be in [-0.02, 0.20]")
-	errInflationSigmaRange          = errors.New("inflation_sigma must be in [0, 0.20]")
-	errInflationPhiRange            = errors.New("inflation_phi must be in [0, 1]")
-	errWithdrawalRateRange          = errors.New("withdrawal_rate must be in [0, 1]")
-	errWithdrawalFloorRange         = errors.New("withdrawal_floor_ratio must be in (0, 1]")
-	errWithdrawalCeilingRange       = errors.New("withdrawal_ceiling_ratio must be in [1, 2]")
-	errWithdrawalTaxRateRange       = errors.New("withdrawal_tax_rate must be in [0, 1]")
-	errTaxableWithdrawalRange       = errors.New("taxable_withdrawal_ratio must be in [0, 1]")
-	errWithdrawalFloorCeiling       = errors.New("withdrawal_floor_ratio must be < withdrawal_ceiling_ratio")
-	errAssumptionModeInvalid        = errors.New(
+	errRegionTargetMissingClass = errors.New("region_targets missing asset_class")
+	errRegionTargetsSum         = errors.New("region targets must sum to 100%")
+	errAgesMustBePositive       = errors.New("ages must be positive")
+	errAgeOrderingInvalid       = errors.New(
+		"must satisfy 0 < current_age <= retirement_age < end_age <= 120",
+	)
+	errAssetsSpendingPositive                = errors.New("total_assets and annual_spending must be > 0")
+	errAmountsNonNegative                    = errors.New("amounts must be non-negative")
+	errSimulationRunsRange                   = errors.New("simulation_runs must be in [1000, 100000]")
+	errStudentTDfRange                       = errors.New("student_t_df must be in [5, 30]")
+	errRebalanceThresholdRange               = errors.New("rebalance_threshold must be in [0, 0.5]")
+	errTransactionCostRateRange              = errors.New("transaction_cost_rate must be in [0, 1)")
+	errRebalanceFrequencyInvalid             = errors.New("rebalance_frequency must be monthly, quarterly, or annual")
+	errAnnualSavingsGrowthRateRange          = errors.New("annual_savings_growth_rate must be in [-0.5, 0.5]")
+	errAnnualRetirementIncomeGrowthRateRange = errors.New("annual_retirement_income_growth_rate must be in [-0.5, 0.5]")
+	errWithdrawalTypeInvalid                 = errors.New(
+		"withdrawal_type must be fixed_real, fixed_portfolio, or guardrail",
+	)
+	errInflationModeInvalid   = errors.New("inflation_mode must be fixed_real or random_ar1")
+	errRegionTargetsRequired  = errors.New("region_targets is required")
+	errRegionWeightRange      = errors.New("region weight must be in [0, 1]")
+	errScenarioWeightsSum     = errors.New("scenario weights must sum to 100%")
+	errFixedInflationRange    = errors.New("fixed_inflation_rate must be in [-0.02, 0.20]")
+	errInflationMuRange       = errors.New("inflation_mu must be in [-0.02, 0.20]")
+	errInflationSigmaRange    = errors.New("inflation_sigma must be in [0, 0.20]")
+	errInflationPhiRange      = errors.New("inflation_phi must be in [0, 1]")
+	errWithdrawalRateRange    = errors.New("withdrawal_rate must be in [0, 1]")
+	errWithdrawalFloorRange   = errors.New("withdrawal_floor_ratio must be in (0, 1]")
+	errWithdrawalCeilingRange = errors.New("withdrawal_ceiling_ratio must be in [1, 2]")
+	errWithdrawalTaxRateRange = errors.New("withdrawal_tax_rate must be in [0, 1]")
+	errTaxableWithdrawalRange = errors.New("taxable_withdrawal_ratio must be in [0, 1]")
+	errWithdrawalFloorCeiling = errors.New("withdrawal_floor_ratio must be < withdrawal_ceiling_ratio")
+	errAssumptionModeInvalid  = errors.New(
 		"return_assumption_mode must be historical_cagr, blended_prior or custom",
 	)
 	errAssumptionSelectionInvalid = errors.New(
@@ -232,7 +237,7 @@ func validateParameterAmounts(p repository.PlanParameters) error {
 	if p.TotalAssetsMinor <= 0 || p.AnnualSpendingMinor <= 0 {
 		return errAssetsSpendingPositive
 	}
-	if p.AnnualSavingsMinor < 0 || p.TerminalWealthFloorMinor < 0 {
+	if p.AnnualSavingsMinor < 0 || p.AnnualRetirementIncomeMinor < 0 || p.TerminalWealthFloorMinor < 0 {
 		return errAmountsNonNegative
 	}
 	return nil
@@ -253,6 +258,9 @@ func validateParameterRanges(p repository.PlanParameters) error {
 	}
 	if p.AnnualSavingsGrowthRate < -0.5 || p.AnnualSavingsGrowthRate > 0.5 {
 		return errAnnualSavingsGrowthRateRange
+	}
+	if p.AnnualRetirementIncomeGrowthRate < -0.5 || p.AnnualRetirementIncomeGrowthRate > 0.5 {
+		return errAnnualRetirementIncomeGrowthRateRange
 	}
 	return nil
 }

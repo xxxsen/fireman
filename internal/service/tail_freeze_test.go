@@ -27,6 +27,7 @@ func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 	params := repository.PlanParameters{
 		CurrentAge: 30, RetirementAge: 55, EndAge: 90,
 		StudentTDf: 7, SimulationRuns: 100,
+		AnnualRetirementIncomeMinor: 36_000_00, AnnualRetirementIncomeGrowthRate: 0.02,
 	}
 
 	in, err := buildInputSnapshotStruct(plan, params, 42, "cfg", nil, resolved)
@@ -38,6 +39,9 @@ func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 	}
 	if !in.AggregateCashLiquidity {
 		t.Fatal("new snapshot must aggregate every cash slot")
+	}
+	if in.Parameters.AnnualRetirementIncomeMinor != 36_000_00 || in.Parameters.AnnualRetirementIncomeGrowthRate != 0.02 {
+		t.Fatalf("retirement income was not frozen: %+v", in.Parameters)
 	}
 	if in.TailStudentTDf != 11 {
 		t.Fatalf("frozen df = %d, want 11 (profile)", in.TailStudentTDf)

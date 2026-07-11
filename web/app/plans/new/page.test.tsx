@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
+import { QUICK_FIRE_TRANSFER_KEY } from "@/lib/quick-fire-draft";
 
 const routerPush = vi.fn();
 const listMarketAssets = vi.hoisted(() => vi.fn());
@@ -177,6 +178,8 @@ describe("NewPlanWizardPage", () => {
     listMarketAssets.mockImplementation((params: ListParams) => filterSearchPool(params));
     createPlanWizard.mockResolvedValue({ id: "plan_new", config_version: 1 });
     createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
+    window.sessionStorage.clear();
+    window.history.replaceState({}, "", "/plans/new");
   });
 
   it("shows missing-history hint on confirm step for unsynced assets", async () => {
@@ -402,6 +405,52 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByText("3. 确认组合")).toBeInTheDocument();
     expect(screen.queryByText(/^4\. /)).not.toBeInTheDocument();
     expect(screen.queryByText("1. 计划基础")).not.toBeInTheDocument();
+  });
+
+  it("consumes a quick-fire transfer once and never imports its manual return", () => {
+    window.history.replaceState({}, "", "/plans/new?source=quick-fire");
+    window.sessionStorage.setItem(QUICK_FIRE_TRANSFER_KEY, JSON.stringify({
+      version: 1,
+      engine_version: "quick_fire_v1",
+      inputs: {
+        base_currency: "CNY",
+        current_age: 41,
+        planned_fire_age: 49,
+        end_age: 91,
+        current_assets_minor: 543_210_00,
+        annual_savings_minor: 123_400_00,
+        annual_savings_growth_rate: 0.03,
+        annual_spending_minor: 87_600_00,
+        annual_retirement_income_minor: 24_000_00,
+        annual_retirement_income_growth_rate: 0.01,
+        inflation_rate: 0.025,
+        terminal_wealth_floor_minor: 10_000_00,
+      },
+    }));
+
+    const first = renderWizard();
+    expect(screen.getByRole("status")).toHaveTextContent("已从 FIRE 快算带入现金流参数");
+    expect(screen.getByLabelText("当前年龄")).toHaveValue(41);
+    expect(screen.getByLabelText("退休年龄")).toHaveValue(49);
+    expect(screen.getByLabelText("预计 FIRE 时长（年）")).toHaveValue(42);
+    expect(screen.getAllByTestId("money-input")[0]).toHaveValue("543210");
+    expect(window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY)).toBeNull();
+    first.unmount();
+
+    renderWizard();
+    expect(screen.queryByText("已从 FIRE 快算带入现金流参数；完整模拟的收益率将根据后续选择的资产和模拟假设生成。")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("当前年龄")).toHaveValue(35);
+  });
+
+  it("warns and uses defaults when the quick-fire transfer is malformed", () => {
+    window.history.replaceState({}, "", "/plans/new?source=quick-fire");
+    window.sessionStorage.setItem(QUICK_FIRE_TRANSFER_KEY, "not-json");
+    renderWizard();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("FIRE 快算参数未能读取");
+    expect(window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("blocks leaving 计划目标 until a scenario is chosen", async () => {

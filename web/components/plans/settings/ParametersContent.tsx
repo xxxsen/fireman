@@ -319,11 +319,21 @@ export function ParametersContent({
             valueMinor={params.annual_spending_minor}
             onChange={(v) => update("annual_spending_minor", v)}
           />
+		  <MoneyInput
+			label="退休后稳定年收入"
+			valueMinor={params.annual_retirement_income_minor}
+			onChange={(v) => update("annual_retirement_income_minor", v)}
+		  />
           <PercentInput
             label="年储蓄增长率"
             value={params.annual_savings_growth_rate}
             onChange={(v) => update("annual_savings_growth_rate", v)}
           />
+		  <PercentInput
+			label="稳定收入年增长率"
+			value={params.annual_retirement_income_growth_rate}
+			onChange={(v) => update("annual_retirement_income_growth_rate", v)}
+		  />
           <MoneyInput
             label="期末最低资产目标"
             valueMinor={params.terminal_wealth_floor_minor}
@@ -833,6 +843,7 @@ export function ParametersContent({
             totalAssetsMinor: params.total_assets_minor,
             annualSpendingMinor: params.annual_spending_minor,
             annualSavingsMinor: params.annual_savings_minor,
+			annualRetirementIncomeMinor: params.annual_retirement_income_minor,
           });
           if (!moneyCheck.ok) {
             setSaveError(moneyCheck.message!);

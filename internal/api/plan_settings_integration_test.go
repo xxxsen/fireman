@@ -66,6 +66,8 @@ func TestPlanSettingsUpdate_SingleCallAtomicSave(t *testing.T) {
 
 	_, params, _ := getSettingsFixtureState(t, r, plan.ID)
 	params["retirement_age"] = float64(60)
+	params["annual_retirement_income_minor"] = float64(36_000_00)
+	params["annual_retirement_income_growth_rate"] = 0.02
 
 	w := putSettings(t, r, plan.ID, map[string]any{
 		"config_version":            plan.ConfigVersion,
@@ -87,6 +89,12 @@ func TestPlanSettingsUpdate_SingleCallAtomicSave(t *testing.T) {
 	}
 	if got := paramsAfter["retirement_age"].(float64); got != 60 {
 		t.Fatalf("retirement_age = %v, want 60", got)
+	}
+	if got := paramsAfter["annual_retirement_income_minor"].(float64); got != 36_000_00 {
+		t.Fatalf("retirement income = %v, want %d", got, 36_000_00)
+	}
+	if got := paramsAfter["annual_retirement_income_growth_rate"].(float64); got != 0.02 {
+		t.Fatalf("retirement income growth = %v, want 0.02", got)
 	}
 	targets := allocAfter["asset_class_targets"].([]any)
 	weights := map[string]float64{}

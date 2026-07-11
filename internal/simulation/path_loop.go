@@ -107,6 +107,11 @@ func pathMonthIncome(
 		yearIdx := month / 12
 		saving := float64(p.AnnualSavingsMinor) * math.Pow(1+p.AnnualSavingsGrowthRate, float64(yearIdx)) / 12
 		income += int64(math.Round(saving))
+	} else {
+		retiredYear := (month - retire) / 12
+		retirementIncome := float64(p.AnnualRetirementIncomeMinor) *
+			math.Pow(1+p.AnnualRetirementIncomeGrowthRate, float64(retiredYear)) / 12
+		income += int64(math.Round(retirementIncome))
 	}
 	if income > 0 {
 		if in.AggregateCashLiquidity {

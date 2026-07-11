@@ -9,33 +9,35 @@ import (
 
 // PlanParametersAPI is the JSON-facing plan parameters DTO.
 type PlanParametersAPI struct {
-	PlanID                   string  `json:"plan_id"`
-	CurrentAge               int     `json:"current_age"`
-	RetirementAge            int     `json:"retirement_age"`
-	EndAge                   int     `json:"end_age"`
-	TotalAssetsMinor         int64   `json:"total_assets_minor"`
-	AnnualSavingsMinor       int64   `json:"annual_savings_minor"`
-	AnnualSavingsGrowthRate  float64 `json:"annual_savings_growth_rate"`
-	AnnualSpendingMinor      int64   `json:"annual_spending_minor"`
-	TerminalWealthFloorMinor int64   `json:"terminal_wealth_floor_minor"`
-	SelectedScenarioID       *string `json:"selected_scenario_id,omitempty"`
-	InflationMode            string  `json:"inflation_mode"`
-	FixedInflationRate       float64 `json:"fixed_inflation_rate"`
-	InflationMu              float64 `json:"inflation_mu"`
-	InflationPhi             float64 `json:"inflation_phi"`
-	InflationSigma           float64 `json:"inflation_sigma"`
-	WithdrawalType           string  `json:"withdrawal_type"`
-	WithdrawalRate           float64 `json:"withdrawal_rate"`
-	WithdrawalFloorRatio     float64 `json:"withdrawal_floor_ratio"`
-	WithdrawalCeilingRatio   float64 `json:"withdrawal_ceiling_ratio"`
-	WithdrawalTaxRate        float64 `json:"withdrawal_tax_rate"`
-	TaxableWithdrawalRatio   float64 `json:"taxable_withdrawal_ratio"`
-	RebalanceFrequency       string  `json:"rebalance_frequency"`
-	RebalanceThreshold       float64 `json:"rebalance_threshold"`
-	TransactionCostRate      float64 `json:"transaction_cost_rate"`
-	SimulationRuns           int     `json:"simulation_runs"`
-	StudentTDf               int     `json:"student_t_df"`
-	Seed                     *string `json:"seed,omitempty"`
+	PlanID                           string  `json:"plan_id"`
+	CurrentAge                       int     `json:"current_age"`
+	RetirementAge                    int     `json:"retirement_age"`
+	EndAge                           int     `json:"end_age"`
+	TotalAssetsMinor                 int64   `json:"total_assets_minor"`
+	AnnualSavingsMinor               int64   `json:"annual_savings_minor"`
+	AnnualSavingsGrowthRate          float64 `json:"annual_savings_growth_rate"`
+	AnnualSpendingMinor              int64   `json:"annual_spending_minor"`
+	AnnualRetirementIncomeMinor      int64   `json:"annual_retirement_income_minor"`
+	AnnualRetirementIncomeGrowthRate float64 `json:"annual_retirement_income_growth_rate"`
+	TerminalWealthFloorMinor         int64   `json:"terminal_wealth_floor_minor"`
+	SelectedScenarioID               *string `json:"selected_scenario_id,omitempty"`
+	InflationMode                    string  `json:"inflation_mode"`
+	FixedInflationRate               float64 `json:"fixed_inflation_rate"`
+	InflationMu                      float64 `json:"inflation_mu"`
+	InflationPhi                     float64 `json:"inflation_phi"`
+	InflationSigma                   float64 `json:"inflation_sigma"`
+	WithdrawalType                   string  `json:"withdrawal_type"`
+	WithdrawalRate                   float64 `json:"withdrawal_rate"`
+	WithdrawalFloorRatio             float64 `json:"withdrawal_floor_ratio"`
+	WithdrawalCeilingRatio           float64 `json:"withdrawal_ceiling_ratio"`
+	WithdrawalTaxRate                float64 `json:"withdrawal_tax_rate"`
+	TaxableWithdrawalRatio           float64 `json:"taxable_withdrawal_ratio"`
+	RebalanceFrequency               string  `json:"rebalance_frequency"`
+	RebalanceThreshold               float64 `json:"rebalance_threshold"`
+	TransactionCostRate              float64 `json:"transaction_cost_rate"`
+	SimulationRuns                   int     `json:"simulation_runs"`
+	StudentTDf                       int     `json:"student_t_df"`
+	Seed                             *string `json:"seed,omitempty"`
 	// Return-assumption selection. These must round-trip through the API so
 	// the wizard/parameters page can persist blended_prior + profile selection;
 	// otherwise the binding drops them and the plan silently reverts to
@@ -61,7 +63,9 @@ func ParametersToAPI(p repository.PlanParameters) PlanParametersAPI {
 		PlanID: p.PlanID, CurrentAge: p.CurrentAge, RetirementAge: p.RetirementAge, EndAge: p.EndAge,
 		TotalAssetsMinor: p.TotalAssetsMinor, AnnualSavingsMinor: p.AnnualSavingsMinor,
 		AnnualSavingsGrowthRate: p.AnnualSavingsGrowthRate, AnnualSpendingMinor: p.AnnualSpendingMinor,
-		TerminalWealthFloorMinor: p.TerminalWealthFloorMinor, SelectedScenarioID: p.SelectedScenarioID,
+		AnnualRetirementIncomeMinor:      p.AnnualRetirementIncomeMinor,
+		AnnualRetirementIncomeGrowthRate: p.AnnualRetirementIncomeGrowthRate,
+		TerminalWealthFloorMinor:         p.TerminalWealthFloorMinor, SelectedScenarioID: p.SelectedScenarioID,
 		InflationMode: p.InflationMode, FixedInflationRate: p.FixedInflationRate,
 		InflationMu: p.InflationMu, InflationPhi: p.InflationPhi, InflationSigma: p.InflationSigma,
 		WithdrawalType: p.WithdrawalType, WithdrawalRate: p.WithdrawalRate,
@@ -89,7 +93,9 @@ func ParametersFromAPI(p PlanParametersAPI) (repository.PlanParameters, error) {
 		PlanID: p.PlanID, CurrentAge: p.CurrentAge, RetirementAge: p.RetirementAge, EndAge: p.EndAge,
 		TotalAssetsMinor: p.TotalAssetsMinor, AnnualSavingsMinor: p.AnnualSavingsMinor,
 		AnnualSavingsGrowthRate: p.AnnualSavingsGrowthRate, AnnualSpendingMinor: p.AnnualSpendingMinor,
-		TerminalWealthFloorMinor: p.TerminalWealthFloorMinor, SelectedScenarioID: p.SelectedScenarioID,
+		AnnualRetirementIncomeMinor:      p.AnnualRetirementIncomeMinor,
+		AnnualRetirementIncomeGrowthRate: p.AnnualRetirementIncomeGrowthRate,
+		TerminalWealthFloorMinor:         p.TerminalWealthFloorMinor, SelectedScenarioID: p.SelectedScenarioID,
 		InflationMode: p.InflationMode, FixedInflationRate: p.FixedInflationRate,
 		InflationMu: p.InflationMu, InflationPhi: p.InflationPhi, InflationSigma: p.InflationSigma,
 		WithdrawalType: p.WithdrawalType, WithdrawalRate: p.WithdrawalRate,

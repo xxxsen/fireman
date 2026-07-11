@@ -66,6 +66,7 @@ export function validatePositiveMoneyFields(input: {
   totalAssetsMinor: number;
   annualSpendingMinor: number;
   annualSavingsMinor: number;
+	annualRetirementIncomeMinor?: number;
 }): ValidationResult {
   if (input.totalAssetsMinor <= 0) {
     return fail("基准规模需大于 0。");
@@ -76,5 +77,8 @@ export function validatePositiveMoneyFields(input: {
   if (input.annualSavingsMinor < 0) {
     return fail("年储蓄不能为负数。");
   }
+	if (input.annualRetirementIncomeMinor !== undefined && input.annualRetirementIncomeMinor < 0) {
+		return fail("退休后稳定年收入不能为负数。");
+	}
   return ok;
 }

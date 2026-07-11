@@ -23,7 +23,8 @@ func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters
 	err := r.db.QueryRowContext(ctx, `
 		SELECT plan_id, current_age, retirement_age, end_age,
 			total_assets_minor, annual_savings_minor, annual_savings_growth_rate,
-			annual_spending_minor, terminal_wealth_floor_minor, selected_scenario_id,
+			annual_spending_minor, annual_retirement_income_minor, annual_retirement_income_growth_rate,
+			terminal_wealth_floor_minor, selected_scenario_id,
 			inflation_mode, fixed_inflation_rate, inflation_mu, inflation_phi, inflation_sigma,
 			withdrawal_type, withdrawal_rate, withdrawal_floor_ratio, withdrawal_ceiling_ratio,
 			withdrawal_tax_rate, taxable_withdrawal_ratio,
@@ -35,7 +36,8 @@ func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters
 		FROM plan_parameters WHERE plan_id=?`, planID).Scan(
 		&p.PlanID, &p.CurrentAge, &p.RetirementAge, &p.EndAge,
 		&p.TotalAssetsMinor, &p.AnnualSavingsMinor, &p.AnnualSavingsGrowthRate,
-		&p.AnnualSpendingMinor, &p.TerminalWealthFloorMinor, &scenario,
+		&p.AnnualSpendingMinor, &p.AnnualRetirementIncomeMinor, &p.AnnualRetirementIncomeGrowthRate,
+		&p.TerminalWealthFloorMinor, &scenario,
 		&p.InflationMode, &p.FixedInflationRate, &p.InflationMu, &p.InflationPhi, &p.InflationSigma,
 		&p.WithdrawalType, &p.WithdrawalRate, &p.WithdrawalFloorRatio, &p.WithdrawalCeilingRatio,
 		&p.WithdrawalTaxRate, &p.TaxableWithdrawalRatio,
@@ -109,7 +111,8 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 		INSERT INTO plan_parameters (
 			plan_id, current_age, retirement_age, end_age,
 			total_assets_minor, annual_savings_minor, annual_savings_growth_rate,
-			annual_spending_minor, terminal_wealth_floor_minor, selected_scenario_id,
+			annual_spending_minor, annual_retirement_income_minor, annual_retirement_income_growth_rate,
+			terminal_wealth_floor_minor, selected_scenario_id,
 			inflation_mode, fixed_inflation_rate, inflation_mu, inflation_phi, inflation_sigma,
 			withdrawal_type, withdrawal_rate, withdrawal_floor_ratio, withdrawal_ceiling_ratio,
 			withdrawal_tax_rate, taxable_withdrawal_ratio,
@@ -118,12 +121,14 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 			return_assumption_mode, assumption_selection_mode, return_assumption_set_id,
 			return_assumption_set_version, return_assumption_scenario, custom_return_assumptions_json,
 			updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(plan_id) DO UPDATE SET
 			current_age=excluded.current_age, retirement_age=excluded.retirement_age, end_age=excluded.end_age,
 			total_assets_minor=excluded.total_assets_minor, annual_savings_minor=excluded.annual_savings_minor,
 			annual_savings_growth_rate=excluded.annual_savings_growth_rate,
 			annual_spending_minor=excluded.annual_spending_minor,
+			annual_retirement_income_minor=excluded.annual_retirement_income_minor,
+			annual_retirement_income_growth_rate=excluded.annual_retirement_income_growth_rate,
 			terminal_wealth_floor_minor=excluded.terminal_wealth_floor_minor,
 			selected_scenario_id=excluded.selected_scenario_id,
 			inflation_mode=excluded.inflation_mode, fixed_inflation_rate=excluded.fixed_inflation_rate,
@@ -147,7 +152,8 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 			updated_at=excluded.updated_at`,
 		p.PlanID, p.CurrentAge, p.RetirementAge, p.EndAge,
 		p.TotalAssetsMinor, p.AnnualSavingsMinor, p.AnnualSavingsGrowthRate,
-		p.AnnualSpendingMinor, p.TerminalWealthFloorMinor, scenario,
+		p.AnnualSpendingMinor, p.AnnualRetirementIncomeMinor, p.AnnualRetirementIncomeGrowthRate,
+		p.TerminalWealthFloorMinor, scenario,
 		p.InflationMode, p.FixedInflationRate, p.InflationMu, p.InflationPhi, p.InflationSigma,
 		p.WithdrawalType, p.WithdrawalRate, p.WithdrawalFloorRatio, p.WithdrawalCeilingRatio,
 		p.WithdrawalTaxRate, p.TaxableWithdrawalRatio,

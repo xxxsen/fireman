@@ -47,6 +47,8 @@ vi.mock("@/lib/api/plans", () => ({
         annual_savings_minor: 200_000_00,
         annual_savings_growth_rate: 0,
         annual_spending_minor: 400_000_00,
+		annual_retirement_income_minor: 0,
+		annual_retirement_income_growth_rate: 0,
         terminal_wealth_floor_minor: 0,
         inflation_mode: "fixed_real",
         fixed_inflation_rate: 0.03,

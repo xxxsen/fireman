@@ -13,8 +13,8 @@ import (
 // model. 3.1.0 fixes the guardrail withdrawal strategy so anniversary ±10%
 // adjustments compound on the previous year's spending instead of resetting to
 // the inflation baseline every year. 3.2.0 adds aggregate cash liquidity and
-// fact-based failure states.
-const EngineVersion = "3.2.0"
+// fact-based failure states. 3.3.0 adds stable after-retirement net income.
+const EngineVersion = "3.3.0"
 
 // LegacyEngineVersion identifies snapshots created by the former independent
 // factor engine.
@@ -138,31 +138,33 @@ type SnapshotAsset struct {
 
 // SnapshotParameters are plan FIRE parameters frozen for a run.
 type SnapshotParameters struct {
-	CurrentAge               int     `json:"current_age"`
-	RetirementAge            int     `json:"retirement_age"`
-	EndAge                   int     `json:"end_age"`
-	TotalAssetsMinor         int64   `json:"total_assets_minor"`
-	AnnualSavingsMinor       int64   `json:"annual_savings_minor"`
-	AnnualSavingsGrowthRate  float64 `json:"annual_savings_growth_rate"`
-	AnnualSpendingMinor      int64   `json:"annual_spending_minor"`
-	TerminalWealthFloorMinor int64   `json:"terminal_wealth_floor_minor"`
-	InflationMode            string  `json:"inflation_mode"`
-	FixedInflationRate       float64 `json:"fixed_inflation_rate"`
-	InflationMu              float64 `json:"inflation_mu"`
-	InflationPhi             float64 `json:"inflation_phi"`
-	InflationSigma           float64 `json:"inflation_sigma"`
-	WithdrawalType           string  `json:"withdrawal_type"`
-	WithdrawalRate           float64 `json:"withdrawal_rate"`
-	WithdrawalFloorRatio     float64 `json:"withdrawal_floor_ratio"`
-	WithdrawalCeilingRatio   float64 `json:"withdrawal_ceiling_ratio"`
-	WithdrawalTaxRate        float64 `json:"withdrawal_tax_rate"`
-	TaxableWithdrawalRatio   float64 `json:"taxable_withdrawal_ratio"`
-	RebalanceFrequency       string  `json:"rebalance_frequency"`
-	RebalanceThreshold       float64 `json:"rebalance_threshold"`
-	TransactionCostRate      float64 `json:"transaction_cost_rate"`
-	SimulationRuns           int     `json:"simulation_runs"`
-	StudentTDf               int     `json:"student_t_df"`
-	Seed                     string  `json:"seed"`
+	CurrentAge                       int     `json:"current_age"`
+	RetirementAge                    int     `json:"retirement_age"`
+	EndAge                           int     `json:"end_age"`
+	TotalAssetsMinor                 int64   `json:"total_assets_minor"`
+	AnnualSavingsMinor               int64   `json:"annual_savings_minor"`
+	AnnualSavingsGrowthRate          float64 `json:"annual_savings_growth_rate"`
+	AnnualSpendingMinor              int64   `json:"annual_spending_minor"`
+	AnnualRetirementIncomeMinor      int64   `json:"annual_retirement_income_minor"`
+	AnnualRetirementIncomeGrowthRate float64 `json:"annual_retirement_income_growth_rate"`
+	TerminalWealthFloorMinor         int64   `json:"terminal_wealth_floor_minor"`
+	InflationMode                    string  `json:"inflation_mode"`
+	FixedInflationRate               float64 `json:"fixed_inflation_rate"`
+	InflationMu                      float64 `json:"inflation_mu"`
+	InflationPhi                     float64 `json:"inflation_phi"`
+	InflationSigma                   float64 `json:"inflation_sigma"`
+	WithdrawalType                   string  `json:"withdrawal_type"`
+	WithdrawalRate                   float64 `json:"withdrawal_rate"`
+	WithdrawalFloorRatio             float64 `json:"withdrawal_floor_ratio"`
+	WithdrawalCeilingRatio           float64 `json:"withdrawal_ceiling_ratio"`
+	WithdrawalTaxRate                float64 `json:"withdrawal_tax_rate"`
+	TaxableWithdrawalRatio           float64 `json:"taxable_withdrawal_ratio"`
+	RebalanceFrequency               string  `json:"rebalance_frequency"`
+	RebalanceThreshold               float64 `json:"rebalance_threshold"`
+	TransactionCostRate              float64 `json:"transaction_cost_rate"`
+	SimulationRuns                   int     `json:"simulation_runs"`
+	StudentTDf                       int     `json:"student_t_df"`
+	Seed                             string  `json:"seed"`
 }
 
 // InputSnapshot is the immutable input captured for a simulation job.
