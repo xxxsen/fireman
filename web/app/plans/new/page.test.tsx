@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { StrictMode } from "react";
 import { vi } from "vitest";
 import NewPlanWizardPage from "./page";
 import { QUICK_FIRE_TRANSFER_KEY } from "@/lib/quick-fire-draft";
@@ -119,13 +120,14 @@ const defaultAssets = [
   makeDirectoryAsset("B1", "测试债券基金"),
 ];
 
-function renderWizard() {
+function renderWizard({ strict = false }: { strict?: boolean } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const page = (
     <QueryClientProvider client={qc}>
       <NewPlanWizardPage />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  return render(strict ? <StrictMode>{page}</StrictMode> : page);
 }
 
 function getScenarioSelect() {
@@ -407,7 +409,7 @@ describe("NewPlanWizardPage", () => {
     expect(screen.queryByText("1. 计划基础")).not.toBeInTheDocument();
   });
 
-  it("consumes a quick-fire transfer once and never imports its manual return", () => {
+  it("imports every quick-fire field once under StrictMode and submits the mapped payload", async () => {
     window.history.replaceState({}, "", "/plans/new?source=quick-fire");
     window.sessionStorage.setItem(QUICK_FIRE_TRANSFER_KEY, JSON.stringify({
       version: 1,
@@ -425,16 +427,46 @@ describe("NewPlanWizardPage", () => {
         annual_retirement_income_growth_rate: 0.01,
         inflation_rate: 0.025,
         terminal_wealth_floor_minor: 10_000_00,
+        annual_return_rate: 0.071,
       },
     }));
 
-    const first = renderWizard();
-    expect(screen.getByRole("status")).toHaveTextContent("已从 FIRE 快算带入现金流参数");
+    const first = renderWizard({ strict: true });
+    expect(await screen.findByRole("status")).toHaveTextContent("已从 FIRE 快算带入现金流参数");
     expect(screen.getByLabelText("当前年龄")).toHaveValue(41);
     expect(screen.getByLabelText("退休年龄")).toHaveValue(49);
     expect(screen.getByLabelText("预计 FIRE 时长（年）")).toHaveValue(42);
-    expect(screen.getAllByTestId("money-input")[0]).toHaveValue("543210");
+    const importedMoney = screen.getAllByTestId("money-input");
+    expect(importedMoney[0]).toHaveValue("543210");
+    expect(importedMoney[1]).toHaveValue("87600");
+    expect(importedMoney[2]).toHaveValue("123400");
+    expect(importedMoney[3]).toHaveValue("24000");
+    fireEvent.click(screen.getByText(/高级 FIRE 参数/));
+    expect(screen.getByLabelText(/固定通胀率/)).toHaveValue("2.5");
+    expect(screen.getByLabelText(/储蓄增长率/)).toHaveValue("3");
+    expect(screen.getByLabelText(/稳定收入年增长率/)).toHaveValue("1");
+    expect(screen.getAllByTestId("money-input")[4]).toHaveValue("10,000.00");
     expect(window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY)).toBeNull();
+
+    await goToConfirmStep();
+    fireEvent.click(screen.getByRole("button", { name: "创建计划" }));
+    await waitFor(() => expect(createPlanWizard).toHaveBeenCalledTimes(1));
+    const payload = createPlanWizard.mock.calls[0]![0];
+    expect(payload.parameters).toEqual(expect.objectContaining({
+      current_age: 41,
+      retirement_age: 49,
+      end_age: 91,
+      total_assets_minor: 543_210_00,
+      annual_savings_minor: 123_400_00,
+      annual_savings_growth_rate: 0.03,
+      annual_spending_minor: 87_600_00,
+      annual_retirement_income_minor: 24_000_00,
+      annual_retirement_income_growth_rate: 0.01,
+      inflation_mode: "fixed_real",
+      fixed_inflation_rate: 0.025,
+      terminal_wealth_floor_minor: 10_000_00,
+    }));
+    expect(JSON.stringify(payload)).not.toContain("0.071");
     first.unmount();
 
     renderWizard();
@@ -442,12 +474,12 @@ describe("NewPlanWizardPage", () => {
     expect(screen.getByLabelText("当前年龄")).toHaveValue(35);
   });
 
-  it("warns and uses defaults when the quick-fire transfer is malformed", () => {
+  it("warns and uses defaults when the quick-fire transfer is malformed", async () => {
     window.history.replaceState({}, "", "/plans/new?source=quick-fire");
     window.sessionStorage.setItem(QUICK_FIRE_TRANSFER_KEY, "not-json");
     renderWizard();
 
-    expect(screen.getByRole("alert")).toHaveTextContent("FIRE 快算参数未能读取");
+    expect(await screen.findByRole("alert")).toHaveTextContent("FIRE 快算参数未能读取");
     expect(window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();

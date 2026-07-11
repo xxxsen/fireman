@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { decimalToPercentString, percentToDecimal } from "@/lib/percent";
 
 interface PercentInputProps {
@@ -17,6 +18,20 @@ export function PercentInput({
   disabled,
   className,
 }: PercentInputProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const lastEmitted = useRef(value);
+
+  useEffect(() => {
+    lastEmitted.current = value;
+  }, [value]);
+
+  const emitIfChanged = (next: number | null) => {
+    if (next === null || Object.is(next, value) || Object.is(next, lastEmitted.current)) return;
+    lastEmitted.current = next;
+    onChange(next);
+  };
+
   return (
     <label className={`block ${className ?? ""}`}>
       {label && <span className="mb-1 block text-sm text-ink">{label}</span>}
@@ -27,10 +42,20 @@ export function PercentInput({
           disabled={disabled}
           data-testid="percent-input"
           className="input-base min-w-0 font-mono-numeric"
-          value={decimalToPercentString(value)}
+          value={editing ? draft : decimalToPercentString(value)}
+          onFocus={() => {
+            setEditing(true);
+            setDraft(decimalToPercentString(value));
+            lastEmitted.current = value;
+          }}
+          onBlur={() => {
+            emitIfChanged(percentToDecimal(draft));
+            setEditing(false);
+          }}
           onChange={(e) => {
-            const d = percentToDecimal(e.target.value);
-            if (d !== null) onChange(d);
+            const next = e.target.value;
+            setDraft(next);
+            emitIfChanged(percentToDecimal(next));
           }}
         />
         <span className="shrink-0 text-sm text-ink-muted">%</span>

@@ -116,6 +116,10 @@ func TestQuickFIREAPIBoundariesAndRangeError(t *testing.T) {
 	} {
 		for _, value := range tc.values {
 			body := quickFireBody()
+			// Keep the valid-boundary fixture numerically representable even at
+			// -99% return; projection overflow has its own assertion below.
+			body["end_age"] = 41
+			body["annual_retirement_income_minor"] = 12000
 			body[tc.field] = value
 			status, raw := post(t, body)
 			if status != http.StatusOK {

@@ -517,7 +517,7 @@ describe("ParametersPage strategy enums", () => {
     expect(screen.getByText("有未保存的修改")).toBeInTheDocument();
   });
 
-  it("does not show save bar when only focusing fields without edits", async () => {
+  it("does not show save bar when focusing text, money, or percent fields without edits", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
@@ -526,8 +526,17 @@ describe("ParametersPage strategy enums", () => {
     );
 
     const nameInput = await screen.findByTestId("plan-name-input");
-    fireEvent.focus(nameInput);
-    fireEvent.blur(nameInput);
+    await screen.findByText("资金与现金流");
+    const fields = [
+      nameInput,
+      screen.getAllByTestId("money-input")[0]!,
+      screen.getAllByTestId("percent-input")[0]!,
+    ];
+    for (const field of fields) {
+      fireEvent.focus(field);
+      fireEvent.blur(field);
+    }
     expect(screen.queryByText("有未保存的修改")).not.toBeInTheDocument();
+    expect(updatePlanSettings).not.toHaveBeenCalled();
   });
 });

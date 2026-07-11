@@ -1,11 +1,12 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 import type { QuickFireYear } from "@/lib/api/quick-fire";
 import { formatMoney } from "@/lib/format";
 
-export function QuickFireChart({ years }: { years: QuickFireYear[] }) {
-  const option = {
+export const QuickFireChart = memo(function QuickFireChart({ years }: { years: QuickFireYear[] }) {
+  const option = useMemo(() => ({
     animation: false,
     grid: { left: 14, right: 20, top: 38, bottom: 28, containLabel: true },
     tooltip: {
@@ -41,6 +42,6 @@ export function QuickFireChart({ years }: { years: QuickFireYear[] }) {
         lineStyle: { color: "#c77700", width: 1.5, type: "dashed" },
       },
     ],
-  };
+  }), [years]);
   return <ReactECharts option={option} style={{ height: 340 }} notMerge />;
-}
+});

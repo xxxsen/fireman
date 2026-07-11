@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   formatMoneyInput,
   formatMoneyPlain,
@@ -39,6 +39,17 @@ export function MoneyInput({
 }: MoneyInputProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const lastEmitted = useRef(valueMinor);
+
+  useEffect(() => {
+    lastEmitted.current = valueMinor;
+  }, [valueMinor]);
+
+  const emitIfChanged = (next: number | null) => {
+    if (next === null || next === valueMinor || next === lastEmitted.current) return;
+    lastEmitted.current = next;
+    onChange(next);
+  };
 
   const displayValue = plain
     ? editing
@@ -67,22 +78,17 @@ export function MoneyInput({
           onFocus={() => {
             setEditing(true);
             setDraft(draftFromMinor(valueMinor, plain));
+            lastEmitted.current = valueMinor;
           }}
           onBlur={() => {
-            setEditing(false);
             const trimmed = draft.trim();
-            if (trimmed === "") {
-              onChange(0);
-              return;
-            }
-            const minor = parseMoneyInput(trimmed);
-            if (minor !== null) onChange(minor);
+            emitIfChanged(trimmed === "" ? 0 : parseMoneyInput(trimmed));
+            setEditing(false);
           }}
           onChange={(e) => {
             const next = e.target.value;
             setDraft(next);
-            const minor = parseMoneyInput(next);
-            if (minor !== null) onChange(minor);
+            emitIfChanged(parseMoneyInput(next));
           }}
         />
         <span

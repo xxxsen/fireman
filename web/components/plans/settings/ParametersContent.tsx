@@ -190,7 +190,7 @@ export function ParametersContent({
   });
 
   const update = <K extends keyof PlanParameters>(key: K, value: PlanParameters[K]) => {
-    if (!params) return;
+    if (!params || Object.is(params[key], value)) return;
     setLocalParams({ ...params, [key]: value });
   };
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { QuickFireResult } from "@/lib/api/quick-fire";
 import { formatMoney, formatPercent } from "@/lib/format";
 
@@ -23,7 +24,7 @@ export function quickFireOutcomeLabel(result: QuickFireResult): string {
   }
 }
 
-export function QuickFireSummary({ result, compact = false }: { result: QuickFireResult; compact?: boolean }) {
+export const QuickFireSummary = memo(function QuickFireSummary({ result, compact = false }: { result: QuickFireResult; compact?: boolean }) {
   const earliest =
     result.earliest_fire_age_years == null
       ? "目标年龄前未达到"
@@ -58,7 +59,7 @@ export function QuickFireSummary({ result, compact = false }: { result: QuickFir
       </p>
     </section>
   );
-}
+});
 
 function Metric({ label, value, tone }: { label: string; value: string; tone?: "positive" | "danger" }) {
   return (

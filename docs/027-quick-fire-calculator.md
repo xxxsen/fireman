@@ -97,3 +97,6 @@ go test ./internal/quickfire ./internal/simulation ./internal/service ./internal
 ```
 
 人工浏览器验收使用 375x812、768x1024、1440x900 三种 viewport：首屏可编辑且显示结论；图表三条序列与年度表一致；无页面级横向滚动；键盘可完成输入、展开高级项、重置及创建完整计划；页面不将确定性结论表述为成功率。
+
+输入编辑中间态、结果区稳定更新和新建计划 transfer 的实现约定见
+[028-quick-fire-input-render-and-transfer.md](./028-quick-fire-input-render-and-transfer.md)。

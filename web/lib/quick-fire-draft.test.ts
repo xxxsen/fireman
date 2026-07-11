@@ -3,8 +3,10 @@ import {
   QUICK_FIRE_DEFAULTS,
   QUICK_FIRE_DRAFT_KEY,
   QUICK_FIRE_TRANSFER_KEY,
-  consumeQuickFireTransfer,
+  clearQuickFireTransfer,
   loadQuickFireDraft,
+  quickFireTransferToWizardPatch,
+  readQuickFireTransfer,
   saveQuickFireDraft,
   saveQuickFireTransfer,
 } from "./quick-fire-draft";
@@ -27,14 +29,55 @@ describe("quick-fire draft storage", () => {
     }
   });
 
-  it("transfers only allowed fields and consumes the payload once", () => {
+  it("reads transfer without deleting it and clears only on acknowledgement", () => {
     saveQuickFireTransfer(window.sessionStorage, QUICK_FIRE_DEFAULTS);
     const raw = window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY);
     expect(raw).not.toContain("annual_return_rate");
-    expect(consumeQuickFireTransfer(window.sessionStorage)).toEqual(expect.objectContaining({
+    expect(readQuickFireTransfer(window.sessionStorage)).toEqual(expect.objectContaining({
       current_age: QUICK_FIRE_DEFAULTS.current_age,
       annual_retirement_income_minor: QUICK_FIRE_DEFAULTS.annual_retirement_income_minor,
     }));
-    expect(consumeQuickFireTransfer(window.sessionStorage)).toBeNull();
+    expect(readQuickFireTransfer(window.sessionStorage)).not.toBeNull();
+    expect(window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY)).toBe(raw);
+    clearQuickFireTransfer(window.sessionStorage);
+    expect(readQuickFireTransfer(window.sessionStorage)).toBeNull();
+  });
+
+  it("maps every documented wizard field and excludes manual return", () => {
+    const input = {
+      ...QUICK_FIRE_DEFAULTS,
+      current_age: 41,
+      planned_fire_age: 49,
+      end_age: 91,
+      current_assets_minor: 543_210_00,
+      annual_savings_minor: 123_400_00,
+      annual_savings_growth_rate: 0.03,
+      annual_spending_minor: 87_600_00,
+      annual_retirement_income_minor: 24_000_00,
+      annual_retirement_income_growth_rate: 0.01,
+      inflation_rate: 0.025,
+      terminal_wealth_floor_minor: 10_000_00,
+    };
+    saveQuickFireTransfer(window.sessionStorage, input);
+    const transfer = readQuickFireTransfer(window.sessionStorage);
+    expect(transfer).not.toBeNull();
+    const patch = quickFireTransferToWizardPatch(transfer!);
+    expect(patch).toEqual({
+      currentAge: 41,
+      retirementAge: 49,
+      fireDurationYears: 42,
+      totalAssets: 543_210_00,
+      annualSavings: 123_400_00,
+      annualSpending: 87_600_00,
+      annualRetirementIncome: 24_000_00,
+      advanced: {
+        annual_savings_growth_rate: 0.03,
+        annual_retirement_income_growth_rate: 0.01,
+        terminal_wealth_floor_minor: 10_000_00,
+        inflation_mode: "fixed_real",
+        fixed_inflation_rate: 0.025,
+      },
+    });
+    expect(JSON.stringify(patch)).not.toContain("annual_return_rate");
   });
 });

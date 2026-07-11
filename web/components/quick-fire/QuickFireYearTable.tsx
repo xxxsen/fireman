@@ -1,11 +1,12 @@
 "use client";
 
+import { memo } from "react";
 import type { QuickFireYear } from "@/lib/api/quick-fire";
 import { formatMoney } from "@/lib/format";
 
-export function QuickFireYearTable({ years }: { years: QuickFireYear[] }) {
+export const QuickFireYearTable = memo(function QuickFireYearTable({ years }: { years: QuickFireYear[] }) {
   return (
-    <section aria-labelledby="quick-fire-year-title">
+    <section aria-labelledby="quick-fire-year-title" className="min-w-0">
       <h2 id="quick-fire-year-title" className="text-lg font-medium text-ink">逐年现金流</h2>
       <div className="mt-3 hidden overflow-x-auto md:block">
         <table className="w-full border-collapse text-sm">
@@ -26,7 +27,7 @@ export function QuickFireYearTable({ years }: { years: QuickFireYear[] }) {
       </div>
     </section>
   );
-}
+});
 
 function YearRow({ row, table = false }: { row: QuickFireYear; table?: boolean }) {
   const values = [

@@ -3,11 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { ErrorState } from "@/components/ui/ErrorState";
-import { QuickFireChart } from "@/components/quick-fire/QuickFireChart";
 import { QuickFireForm, validateQuickFireInput } from "@/components/quick-fire/QuickFireForm";
+import { QuickFireResults } from "@/components/quick-fire/QuickFireResults";
 import { QuickFireSummary } from "@/components/quick-fire/QuickFireSummary";
-import { QuickFireYearTable } from "@/components/quick-fire/QuickFireYearTable";
 import { ApiError } from "@/lib/api/client";
 import { calculateQuickFire, type QuickFireInput, type QuickFireResult } from "@/lib/api/quick-fire";
 import {
@@ -21,55 +19,64 @@ import {
 export default function QuickFirePage() {
   const router = useRouter();
   const [input, setInput] = useState<QuickFireInput>(() => loadQuickFireDraft(typeof window === "undefined" ? null : window.localStorage));
-  const [result, setResult] = useState<QuickFireResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [calculation, setCalculation] = useState<{ inputKey: string; result: QuickFireResult } | null>(null);
+  const [requestError, setRequestError] = useState<{ inputKey: string; message: string } | null>(null);
+  const [loadingInputKey, setLoadingInputKey] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   const requestSequence = useRef(0);
   const localErrors = useMemo(() => validateQuickFireInput(input), [input]);
   const valid = Object.keys(localErrors).length === 0;
+  const currentInputKey = useMemo(() => JSON.stringify(input), [input]);
+  const resultIsCurrent = calculation?.inputKey === currentInputKey;
+  const errorIsCurrent = requestError?.inputKey === currentInputKey;
+  const loadingCurrent = loadingInputKey === currentInputKey;
 
   useEffect(() => {
     saveQuickFireDraft(typeof window === "undefined" ? null : window.localStorage, input);
   }, [input]);
 
   useEffect(() => {
-    if (!valid) {
-      return;
-    }
-    const controller = new AbortController();
     const sequence = ++requestSequence.current;
+    if (!valid) return;
+    const controller = new AbortController();
+    const requestInput = input;
+    const requestInputKey = currentInputKey;
     const timer = window.setTimeout(() => {
-      setLoading(true);
-      void calculateQuickFire(input, { signal: controller.signal })
+      setLoadingInputKey(requestInputKey);
+      void calculateQuickFire(requestInput, { signal: controller.signal })
         .then((next) => {
-          if (sequence === requestSequence.current) setResult(next);
+          if (sequence === requestSequence.current) {
+            setCalculation({ inputKey: requestInputKey, result: next });
+            setRequestError(null);
+          }
         })
         .catch((err: unknown) => {
           if (controller.signal.aborted || (err instanceof ApiError && err.code === "request_aborted")) return;
           if (sequence === requestSequence.current) {
-            setResult(null);
-            setError(err instanceof ApiError ? err.message : "计算失败，请重试。");
+            setRequestError({
+              inputKey: requestInputKey,
+              message: err instanceof ApiError ? err.message : "计算失败，请重试。",
+            });
           }
         })
         .finally(() => {
-          if (sequence === requestSequence.current) setLoading(false);
+          if (sequence === requestSequence.current) setLoadingInputKey(null);
         });
     }, 300);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [input, valid]);
+  }, [currentInputKey, input, retryToken, valid]);
 
   const update = <K extends keyof QuickFireInput>(key: K, value: QuickFireInput[K]) => {
-    setResult(null);
-    setError(null);
+    if (Object.is(input[key], value)) return;
+    setLoadingInputKey(null);
     setInput((previous) => ({ ...previous, [key]: value }));
   };
   const reset = () => {
     clearQuickFireDraft(window.localStorage);
-    setResult(null);
-    setError(null);
+    setLoadingInputKey(null);
     setInput(QUICK_FIRE_DEFAULTS);
   };
   const createPlan = () => {
@@ -77,27 +84,47 @@ export default function QuickFirePage() {
     router.push("/plans/new?source=quick-fire");
   };
 
+  const status = !valid
+    ? "invalid"
+    : errorIsCurrent
+      ? "error"
+      : resultIsCurrent
+        ? "current"
+        : loadingCurrent
+          ? "loading"
+          : "debounce";
+  const result = calculation?.result ?? null;
+
   return (
     <div className="content-enter">
-      {valid && result && <div className="mb-4 md:hidden"><QuickFireSummary result={result} compact /></div>}
-      <div className="grid gap-8 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.7fr)]">
-        <div className="space-y-5">
+      {valid && result && (
+        <div className="mb-4 min-h-6 md:hidden">
+          <QuickFireSummary result={result} compact />
+          {!resultIsCurrent && <p className="mt-1 text-xs text-ink-muted">参数更新中，以上为上次计算结果。</p>}
+        </div>
+      )}
+      <div className="grid min-w-0 gap-8 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.7fr)]">
+        <div className="min-w-0 space-y-5">
           <QuickFireForm input={input} errors={localErrors} onChange={update} />
           <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={reset}>重置</Button><Button onClick={createPlan} disabled={!valid}>创建完整计划</Button></div>
         </div>
-        <div className="space-y-8">
-          {valid && loading && <p role="status" className="text-sm text-ink-muted">正在计算…</p>}
-          {!valid && <p role="status" className="text-sm text-danger">请先修正输入参数。</p>}
-          {valid && error && <ErrorState message={error} onRetry={() => { setError(null); setInput((previous) => ({ ...previous })); }} />}
-          {valid && result && !loading && !error && <>
-            <QuickFireSummary result={result} />
-            <section aria-labelledby="quick-fire-chart-title"><h2 id="quick-fire-chart-title" className="text-lg font-medium text-ink">资产与所需资本</h2><div className="mt-3 border-y border-line py-3"><QuickFireChart years={result.years} /></div></section>
-            <QuickFireYearTable years={result.years} />
-            <details className="border-t border-line pt-4">
-              <summary className="cursor-pointer text-sm font-medium text-ink">了解完整模拟差异</summary>
-              <p className="mt-2 text-sm leading-6 text-ink-muted">完整计划会根据持仓、收益波动、资产相关性和通胀路径运行 Monte Carlo，用概率结果评估收益顺序风险。</p>
-            </details>
-          </>}
+        <div className="min-w-0 space-y-8">
+          <div className="flex min-h-10 items-center text-sm" data-testid="quick-fire-request-status">
+            {status === "invalid" && <p role="status" className="text-danger">请先修正输入参数，结果将在参数合法后更新。</p>}
+            {status === "debounce" && <p role="status" className="text-ink-muted">参数已更新，等待计算…</p>}
+            {status === "loading" && <p role="status" className="text-ink-muted">正在计算{result ? "，暂显示上次结果" : ""}…</p>}
+            {status === "error" && (
+              <div role="alert" className="flex flex-wrap items-center gap-2 text-danger">
+                <span>{requestError?.message}{result ? "，当前显示上次计算结果。" : ""}</span>
+                <Button variant="secondary" onClick={() => { setRequestError(null); setRetryToken((value) => value + 1); }}>重试</Button>
+              </div>
+            )}
+          </div>
+          {result ? (
+            <QuickFireResults result={result} concealed={!valid} busy={!resultIsCurrent && valid} />
+          ) : (
+            <div className="min-h-[620px] border-y border-line" aria-hidden="true" data-testid="quick-fire-result-placeholder" />
+          )}
         </div>
       </div>
     </div>

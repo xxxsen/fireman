@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MoneyInput } from "./MoneyInput";
 
 function Harness({
@@ -53,5 +53,49 @@ describe("MoneyInput", () => {
     render(<Harness initialMinor={4_000_000_00} />);
     expect(screen.queryByTestId("money-unit-hint")).not.toBeInTheDocument();
     expect(screen.getByTestId("money-input")).toHaveValue("4,000,000.00");
+  });
+
+  it("does not emit for unchanged focus and blur", () => {
+    const onChange = vi.fn();
+    render(<MoneyInput valueMinor={123_45} onChange={onChange} />);
+    const input = screen.getByTestId("money-input");
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("emits a changed amount once and does not duplicate it on blur", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<MoneyInput valueMinor={100_00} onChange={onChange} />);
+    const input = screen.getByTestId("money-input");
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "123.45" } });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(123_45);
+    rerender(<MoneyInput valueMinor={123_45} onChange={onChange} />);
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-emit zero when an already empty amount blurs", () => {
+    const onChange = vi.fn();
+    render(<MoneyInput valueMinor={0} onChange={onChange} />);
+    const input = screen.getByTestId("money-input");
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("restores an incomplete amount without emitting", () => {
+    const onChange = vi.fn();
+    render(<MoneyInput valueMinor={123_45} onChange={onChange} />);
+    const input = screen.getByTestId("money-input");
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "." } });
+    expect(input).toHaveValue(".");
+    fireEvent.blur(input);
+    expect(input).toHaveValue("123.45");
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

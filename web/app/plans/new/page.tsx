@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
 import { Button } from "@/components/ui/Button";
 import { MetricHelp } from "@/components/ui/MetricHelp";
@@ -37,7 +37,12 @@ import {
 } from "@/lib/wizard-allocation";
 import type { PlanParameters } from "@/types/api";
 import { ApiError } from "@/lib/api/client";
-import { consumeQuickFireTransfer, QUICK_FIRE_TRANSFER_KEY } from "@/lib/quick-fire-draft";
+import {
+  clearQuickFireTransfer,
+  quickFireTransferToWizardPatch,
+  readQuickFireTransfer,
+  QUICK_FIRE_TRANSFER_KEY,
+} from "@/lib/quick-fire-draft";
 
 const STEPS = ["计划目标", "建立持仓", "确认组合"] as const;
 const GOAL_STEP = 0;
@@ -186,47 +191,65 @@ function buildParameters(
 
 export default function NewPlanWizardPage() {
   const router = useRouter();
-	const [quickFireImport] = useState(() => {
-		if (typeof window === "undefined" || new URLSearchParams(window.location.search).get("source") !== "quick-fire") {
-			return { input: null, invalid: false };
-		}
-		const hasRawTransfer = window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY) !== null;
-		const input = consumeQuickFireTransfer(window.sessionStorage);
-		return { input, invalid: hasRawTransfer && input === null };
-	});
-	const quickFireTransfer = quickFireImport.input;
-	const [showQuickFireImportError, setShowQuickFireImportError] = useState(quickFireImport.invalid);
+  const quickFireTransferHandled = useRef(false);
+  const [quickFireImportStatus, setQuickFireImportStatus] = useState<"idle" | "imported" | "invalid" | "dismissed">("idle");
   const fieldIdPrefix = useId();
   const currentAgeId = `${fieldIdPrefix}-current-age`;
   const retirementAgeId = `${fieldIdPrefix}-retirement-age`;
   const [step, setStep] = useState(0);
   const [name, setName] = useState(defaultPlanName);
   const [valuationDate] = useState(new Date().toISOString().slice(0, 10));
-  const [currentAge, setCurrentAge] = useState(quickFireTransfer?.current_age ?? 35);
-  const [retirementAge, setRetirementAge] = useState(quickFireTransfer?.planned_fire_age ?? 35);
-  const [fireDurationYears, setFireDurationYears] = useState(
-    quickFireTransfer ? quickFireTransfer.end_age - quickFireTransfer.planned_fire_age : 30,
-  );
-  const [totalAssets, setTotalAssets] = useState(quickFireTransfer?.current_assets_minor ?? 4_000_000_00);
-  const [annualSpending, setAnnualSpending] = useState(quickFireTransfer?.annual_spending_minor ?? 120_000_00);
-  const [annualSavings, setAnnualSavings] = useState(quickFireTransfer?.annual_savings_minor ?? 100_000_00);
-	const [annualRetirementIncome, setAnnualRetirementIncome] = useState(quickFireTransfer?.annual_retirement_income_minor ?? 0);
+  const [currentAge, setCurrentAge] = useState(35);
+  const [retirementAge, setRetirementAge] = useState(35);
+  const [fireDurationYears, setFireDurationYears] = useState(30);
+  const [totalAssets, setTotalAssets] = useState(4_000_000_00);
+  const [annualSpending, setAnnualSpending] = useState(120_000_00);
+  const [annualSavings, setAnnualSavings] = useState(100_000_00);
+  const [annualRetirementIncome, setAnnualRetirementIncome] = useState(0);
   const [scenarioId, setScenarioId] = useState("");
   const [regionTargets, setRegionTargets] = useState<WizardRegionTargets>(defaultWizardRegionTargets);
-  const [advanced, setAdvanced] = useState<AdvancedFireParams>(() => ({
-		...DEFAULT_ADVANCED,
-		annual_savings_growth_rate: quickFireTransfer?.annual_savings_growth_rate ?? 0,
-		annual_retirement_income_growth_rate: quickFireTransfer?.annual_retirement_income_growth_rate ?? 0,
-		terminal_wealth_floor_minor: quickFireTransfer?.terminal_wealth_floor_minor ?? 0,
-		inflation_mode: quickFireTransfer ? "fixed_real" : DEFAULT_ADVANCED.inflation_mode,
-		fixed_inflation_rate: quickFireTransfer?.inflation_rate ?? DEFAULT_ADVANCED.fixed_inflation_rate,
-	}));
+  const [advanced, setAdvanced] = useState<AdvancedFireParams>(DEFAULT_ADVANCED);
   const [highInflationConfirmed, setHighInflationConfirmed] = useState(false);
   const [selectedInstruments, setSelectedInstruments] = useState<WizardHoldingSelection[]>([]);
   const [removedByTargets, setRemovedByTargets] = useState<string[]>([]);
   const [runSimulation, setRunSimulation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [holdingTab, setHoldingTab] = useState<string>("equity");
+
+  useEffect(() => {
+    if (quickFireTransferHandled.current) return;
+    const timer = window.setTimeout(() => {
+      if (quickFireTransferHandled.current) return;
+      quickFireTransferHandled.current = true;
+      const search = new URLSearchParams(window.location.search);
+      if (search.get("source") !== "quick-fire") return;
+      const hasRawTransfer = window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY) !== null;
+      const transfer = readQuickFireTransfer(window.sessionStorage);
+      if (transfer) {
+        const patch = quickFireTransferToWizardPatch(transfer);
+        setCurrentAge(patch.currentAge);
+        setRetirementAge(patch.retirementAge);
+        setFireDurationYears(patch.fireDurationYears);
+        setTotalAssets(patch.totalAssets);
+        setAnnualSpending(patch.annualSpending);
+        setAnnualSavings(patch.annualSavings);
+        setAnnualRetirementIncome(patch.annualRetirementIncome);
+        setAdvanced((previous) => ({ ...previous, ...patch.advanced }));
+        setQuickFireImportStatus("imported");
+      } else if (hasRawTransfer) {
+        clearQuickFireTransfer(window.sessionStorage);
+        setQuickFireImportStatus("invalid");
+      }
+      search.delete("source");
+      const query = search.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (quickFireImportStatus === "imported") clearQuickFireTransfer(window.sessionStorage);
+  }, [quickFireImportStatus]);
 
   const scenariosQ = useQuery({ queryKey: ["scenarios"], queryFn: listScenarios });
 
@@ -466,17 +489,17 @@ export default function NewPlanWizardPage() {
       >
         {step === GOAL_STEP && (
           <div className="space-y-8">
-			{quickFireTransfer && (
-			  <p className="rounded-md border border-brand/30 bg-brand/5 p-3 text-sm text-ink" role="status">
-				已从 FIRE 快算带入现金流参数；完整模拟的收益率将根据后续选择的资产和模拟假设生成。
-			  </p>
-			)}
-			{showQuickFireImportError && (
-			  <div className="flex items-start justify-between gap-3 rounded-md border border-danger/30 bg-danger/5 p-3 text-sm text-ink" role="alert">
-				<span>FIRE 快算参数未能读取，已使用新计划默认值。</span>
-				<button type="button" className="text-sm text-ink-muted underline" onClick={() => setShowQuickFireImportError(false)}>关闭</button>
-			  </div>
-			)}
+            {quickFireImportStatus === "imported" && (
+              <p className="rounded-md border border-brand/30 bg-brand/5 p-3 text-sm text-ink" role="status">
+                已从 FIRE 快算带入现金流参数；完整模拟的收益率将根据后续选择的资产和模拟假设生成。
+              </p>
+            )}
+            {quickFireImportStatus === "invalid" && (
+              <div className="flex items-start justify-between gap-3 rounded-md border border-danger/30 bg-danger/5 p-3 text-sm text-ink" role="alert">
+                <span>FIRE 快算参数未能读取，已使用新计划默认值。</span>
+                <button type="button" className="text-sm text-ink-muted underline" onClick={() => setQuickFireImportStatus("dismissed")}>关闭</button>
+              </div>
+            )}
             <section className="space-y-5">
               <h2 className="text-sm font-semibold text-ink">基本资料</h2>
               <label className="block text-sm">
