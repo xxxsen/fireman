@@ -300,13 +300,12 @@ export function formatAnnualPeriod(start?: string, end?: string): string {
   return `${start} ~ ${end}`;
 }
 
-export function failureReasonLabel(reason: string): string {
+export function failureStatusLabel(reason: string): string {
   const map: Record<string, string> = {
-    early_sequence_risk: "早期序列风险（前期回撤/支出冲击导致资产耗尽）",
-    high_inflation: "高通胀（实际购买力不足）",
-    spending_shock: "支出冲击（突发大额支出）",
-    longevity_risk: "长寿风险（超出预期寿命）",
-    other: "其他原因",
+    insufficient_funds: "当月资金不足",
+    wealth_depleted: "资产已耗尽",
+    terminal_floor_not_met: "期末资产未达到最低目标",
+    other: "其他失败状态",
   };
   return map[reason] ?? reason;
 }

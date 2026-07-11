@@ -7,11 +7,14 @@ import (
 
 // Failure reason identifiers.
 const (
-	FailureEarlySequence = "early_sequence_risk"
-	FailureHighInflation = "high_inflation"
-	FailureSpendingShock = "spending_shock"
-	FailureLongevity     = "longevity_risk"
-	FailureOther         = "other"
+	FailureEarlySequence     = "early_sequence_risk"
+	FailureHighInflation     = "high_inflation"
+	FailureSpendingShock     = "spending_shock"
+	FailureLongevity         = "longevity_risk"
+	FailureInsufficientFunds = "insufficient_funds"
+	FailureWealthDepleted    = "wealth_depleted"
+	FailureTerminalFloor     = "terminal_floor_not_met"
+	FailureOther             = "other"
 )
 
 // PathRunOpts controls optional outputs from RunPath.
@@ -153,7 +156,10 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 	summary := PathSummary{PathNo: pathNo, PathSeed: pathSeed}
 	state := pathSimState{summary: summary, detail: detail, peak: int64(math.Round(total))}
 	state = runPathMonths(in, slots, cashIdx, horizon, retire, &infl, &withdraw, rng, opts, state)
-	finalizePathSummary(&state.summary, slots, state, p.TerminalWealthFloorMinor)
+	finalizePathSummary(
+		&state.summary, slots, state, p.TerminalWealthFloorMinor,
+		UsesFactBasedFailureStates(in.EngineVersion),
+	)
 	summary = state.summary
 	detail = state.detail
 
@@ -241,46 +247,71 @@ func totalWealth(slots []assetSlot) int64 {
 	return int64(math.Round(sum))
 }
 
-func addCash(slots []assetSlot, cashIdx int, amount float64) {
+func addCash(slots []assetSlot, amount float64) {
+	var cash []int
+	targetTotal, balanceTotal := 0.0, 0.0
+	for i := range slots {
+		if slots[i].isCash {
+			cash = append(cash, i)
+			targetTotal += slots[i].targetWeight
+			balanceTotal += slots[i].balance
+		}
+	}
+	if len(cash) > 0 {
+		for _, idx := range cash {
+			share := 0.0
+			switch {
+			case targetTotal > 0:
+				share = slots[idx].targetWeight / targetTotal
+			case balanceTotal > 0:
+				share = slots[idx].balance / balanceTotal
+			case idx == cash[0]:
+				share = 1
+			}
+			slots[idx].balance += amount * share
+		}
+		return
+	}
+	// Without explicit cash, distribute savings across the whole portfolio.
+	distributeSavingsWithoutCash(slots, amount)
+}
+
+func addLegacyCash(slots []assetSlot, cashIdx int, amount float64) {
 	if cashIdx >= 0 {
 		slots[cashIdx].balance += amount
 		return
 	}
-	// No explicit cash: distribute by weights.
-	total := 0.0
-	for _, s := range slots {
-		total += s.balance
-	}
+	distributeSavingsWithoutCash(slots, amount)
+}
+
+func distributeSavingsWithoutCash(slots []assetSlot, amount float64) {
+	total := sumBalances(slots)
 	for i := range slots {
-		w := slots[i].targetWeight
+		weight := slots[i].targetWeight
 		if total > 0 {
-			w = slots[i].balance / total
+			weight = slots[i].balance / total
 		}
-		slots[i].balance += amount * w
+		slots[i].balance += amount * weight
 	}
 }
 
-func withdrawAmount(slots []assetSlot, cashIdx int, amount float64, txRate float64) (bool, int64) {
+func withdrawLegacyAmount(
+	slots []assetSlot, cashIdx int, amount float64, txRate float64,
+) (bool, int64) {
 	remaining := amount
-
 	if cashIdx >= 0 && slots[cashIdx].balance >= remaining {
 		slots[cashIdx].balance -= remaining
 		return true, 0
 	}
-
 	if cashIdx >= 0 {
 		remaining -= slots[cashIdx].balance
 		slots[cashIdx].balance = 0
 	}
-
-	total := 0.0
-	for _, s := range slots {
-		total += s.balance
-	}
+	total := sumBalances(slots)
 	if remaining <= 0 {
 		return true, 0
 	}
-	if txRate >= 1 {
+	if txRate < 0 || txRate >= 1 {
 		return false, 0
 	}
 	grossNeeded := remaining / (1 - txRate)
@@ -288,14 +319,89 @@ func withdrawAmount(slots []assetSlot, cashIdx int, amount float64, txRate float
 		return false, 0
 	}
 	for i := range slots {
-		if slots[i].balance <= 0 {
+		if slots[i].balance > 0 {
+			slots[i].balance -= grossNeeded * slots[i].balance / total
+		}
+	}
+	return true, int64(math.Round(grossNeeded * txRate))
+}
+
+func legacyFailureReason(month, retire, horizon int, cumulativeInflation float64) string {
+	if month < retire+60 {
+		return FailureEarlySequence
+	}
+	if cumulativeInflation > 2 {
+		return FailureHighInflation
+	}
+	if month > horizon-120 {
+		return FailureLongevity
+	}
+	return FailureSpendingShock
+}
+
+func withdrawAmount(slots []assetSlot, amount float64, txRate float64) (bool, int64) {
+	if amount <= 0 {
+		return true, 0
+	}
+	if txRate < 0 || txRate >= 1 {
+		return false, 0
+	}
+	remaining := consumeCashLiquidity(slots, amount)
+	if remaining <= 0 {
+		return true, 0
+	}
+	riskTotal := positiveRiskBalance(slots)
+	grossNeeded := remaining / (1 - txRate)
+	if riskTotal+1e-9 < grossNeeded {
+		clearBalances(slots)
+		return false, int64(math.Round(riskTotal * txRate))
+	}
+	liquidateRiskProRata(slots, grossNeeded, riskTotal)
+	return true, int64(math.Round(grossNeeded * txRate))
+}
+
+func consumeCashLiquidity(slots []assetSlot, amount float64) float64 {
+	cashTotal := 0.0
+	for _, slot := range slots {
+		if slot.isCash && slot.balance > 0 {
+			cashTotal += slot.balance
+		}
+	}
+	if cashTotal <= 0 {
+		return amount
+	}
+	used := math.Min(amount, cashTotal)
+	for i := range slots {
+		if slots[i].isCash && slots[i].balance > 0 {
+			slots[i].balance -= used * slots[i].balance / cashTotal
+		}
+	}
+	return amount - used
+}
+
+func positiveRiskBalance(slots []assetSlot) float64 {
+	total := 0.0
+	for _, slot := range slots {
+		if !slot.isCash && slot.balance > 0 {
+			total += slot.balance
+		}
+	}
+	return total
+}
+
+func clearBalances(slots []assetSlot) {
+	for i := range slots {
+		slots[i].balance = 0
+	}
+}
+
+func liquidateRiskProRata(slots []assetSlot, grossAmount, riskTotal float64) {
+	for i := range slots {
+		if slots[i].isCash || slots[i].balance <= 0 {
 			continue
 		}
-		share := grossNeeded * (slots[i].balance / total)
-		slots[i].balance -= share
+		slots[i].balance -= grossAmount * slots[i].balance / riskTotal
 	}
-	cost := int64(math.Round(grossNeeded * txRate))
-	return true, cost
 }
 
 func shouldRebalance(month int, freq string) bool {
@@ -358,19 +464,6 @@ func sumBalances(slots []assetSlot) float64 {
 		sum += s.balance
 	}
 	return sum
-}
-
-func classifyFailure(month, retire, horizon int, inflCumulative float64) string {
-	if month < retire+60 {
-		return FailureEarlySequence
-	}
-	if inflCumulative > 2.0 {
-		return FailureHighInflation
-	}
-	if month > horizon-120 {
-		return FailureLongevity
-	}
-	return FailureSpendingShock
 }
 
 type yearAccumulator struct {

@@ -10,10 +10,27 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/testutil"
 )
+
+func TestFailErrMapsResearchApplyConflicts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, code := range []string{"research_collection_changed", "research_optimization_result_stale"} {
+		t.Run(code, func(t *testing.T) {
+			writer := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(writer)
+			FailErr(ctx, &service.AppError{Code: code, Message: "conflict"})
+			if writer.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want %d", writer.Code, http.StatusConflict)
+			}
+			assertErrorCode(t, writer.Body.Bytes(), code)
+		})
+	}
+}
 
 func testRouter(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -189,6 +206,28 @@ func TestHoldingsReadOnlyFields(t *testing.T) {
 		t.Fatalf("expected 400, got %d %s", w.Code, w.Body.String())
 	}
 	assertErrorCode(t, w.Body.Bytes(), "holding_fields_read_only")
+}
+
+func TestHoldingsRejectForeignCash(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	plan := createTestPlan(t, db)
+	r := NewRouter(context.Background(), Deps{DB: db})
+	body, _ := json.Marshal(map[string]any{
+		"config_version": plan.ConfigVersion,
+		"holdings": []map[string]any{{
+			"asset_key": "SYS|cash||USD", "enabled": true,
+			"asset_class": "cash", "region": "domestic",
+			"weight_within_group": 1.0, "current_amount_minor": 10000000, "sort_order": 1,
+		}},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/plans/"+plan.ID+"/holdings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d %s", w.Code, w.Body.String())
+	}
+	assertErrorCode(t, w.Body.Bytes(), "foreign_cash_not_supported")
 }
 
 func TestPlanVersionConflictOnStalePUT(t *testing.T) {

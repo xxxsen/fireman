@@ -1,6 +1,6 @@
 # Fireman 已实现功能总览
 
-- 梳理日期：2026-06-11
+- 梳理日期：2026-07-11
 - 状态：**功能主体已实现**；人工浏览器验收记录仍有待补签字项
 
 本文按实施阶段与后续功能收敛归纳**当前代码已具备的能力**，便于 onboarding 与发布前核对。
@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0025） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0026） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -101,13 +101,14 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | Seed 复现 | 根 seed + 路径号派生；非负 int64 契约 |
 | 结果同事务 | 汇总、路径索引、分位序列同一 SQLite 事务提交 |
 | 路径详情 | 按 seed 重算单条路径；列表与详情 seed 一致 |
-| 交易成本 | 现金支出不计费；卖出补现金与调仓双边计费 |
+| 交易成本与现金池 | 3.2.0 将全部同币种现金聚合为流动性池；现金支出不计费，仅非现金卖出补提款与调仓双边计费；费率范围 `[0,1)` |
+| 失败状态 | 路径记录资金不足、资产耗尽、期末目标未达等可由账本证明的状态，不推断伪因果标签 |
 | Job + Worker | 异步 `simulation` job，进度与 SSE/轮询 |
 | 参数过期 | 计划参数变更后旧模拟 run 标记 stale |
 | 版本化模拟假设 | CNY 基准的 CMA v3 profile、历史 profile 回放、canonical/evidence hash provenance、固定 seed P50 回归 |
 | 前瞻收益校准 | 历史收益向长期先验收缩，支持资产级 override、FX 因子和真实购买力序列 |
 
-详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md) 与 [019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md)。
+详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md)、[019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md) 与 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md)。
 
 ---
 
@@ -137,7 +138,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 
 调仓执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
-组合研究模块详见 [024-portfolio-research.md](./024-portfolio-research.md)。
+组合研究模块详见 [024-portfolio-research.md](./024-portfolio-research.md)、[025-research-portfolio-auto-optimization.md](./025-research-portfolio-auto-optimization.md) 与 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md)。
 
 ---
 

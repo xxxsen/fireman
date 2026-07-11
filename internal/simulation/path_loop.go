@@ -44,20 +44,24 @@ func runPathMonths(
 			state.yearAcc.startCumInfl = infl.Cumulative
 		}
 
-		income := pathMonthIncome(p, month, retire, slots, cashIdx)
+		income := pathMonthIncome(in, p, month, retire, slots, cashIdx)
 		netSpend, tax, grossWithdrawal := pathMonthSpending(
 			p, month, retire, monthStart, infl, withdraw, monthShock, hasShock, &state.summary,
 		)
 
 		txCost := int64(0)
 		if grossWithdrawal > 0 {
-			ok, cost := withdrawAmount(slots, cashIdx, float64(grossWithdrawal), p.TransactionCostRate)
+			ok, cost := withdrawPathAmount(
+				in, slots, cashIdx, float64(grossWithdrawal), p.TransactionCostRate,
+			)
 			txCost = cost
 			state.summary.TransactionCostMinor += cost
 			if !ok {
 				state.failed = true
 				state.failMonth = month
-				state.failReason = classifyFailure(month, retire, horizon, infl.Cumulative)
+				state.failReason = pathFailureReason(
+					in, FailureInsufficientFunds, month, retire, horizon, infl.Cumulative,
+				)
 				break
 			}
 		}
@@ -82,7 +86,9 @@ func runPathMonths(
 		if endWealth <= 0 {
 			state.failed = true
 			state.failMonth = month
-			state.failReason = classifyFailure(month, retire, horizon, infl.Cumulative)
+			state.failReason = pathFailureReason(
+				in, FailureWealthDepleted, month, retire, horizon, infl.Cumulative,
+			)
 			break
 		}
 	}
@@ -90,6 +96,7 @@ func runPathMonths(
 }
 
 func pathMonthIncome(
+	in *InputSnapshot,
 	p SnapshotParameters,
 	month, retire int,
 	slots []assetSlot,
@@ -102,9 +109,37 @@ func pathMonthIncome(
 		income += int64(math.Round(saving))
 	}
 	if income > 0 {
-		addCash(slots, cashIdx, float64(income))
+		if in.AggregateCashLiquidity {
+			addCash(slots, float64(income))
+		} else {
+			addLegacyCash(slots, cashIdx, float64(income))
+		}
 	}
 	return income
+}
+
+func withdrawPathAmount(
+	in *InputSnapshot,
+	slots []assetSlot,
+	cashIdx int,
+	amount, txRate float64,
+) (bool, int64) {
+	if in.AggregateCashLiquidity {
+		return withdrawAmount(slots, amount, txRate)
+	}
+	return withdrawLegacyAmount(slots, cashIdx, amount, txRate)
+}
+
+func pathFailureReason(
+	in *InputSnapshot,
+	factReason string,
+	month, retire, horizon int,
+	cumulativeInflation float64,
+) string {
+	if UsesFactBasedFailureStates(in.EngineVersion) {
+		return factReason
+	}
+	return legacyFailureReason(month, retire, horizon, cumulativeInflation)
 }
 
 func pathMonthSpending(
@@ -378,7 +413,13 @@ func appendPathDetail(
 	return state
 }
 
-func finalizePathSummary(summary *PathSummary, slots []assetSlot, state pathSimState, floor int64) {
+func finalizePathSummary(
+	summary *PathSummary,
+	slots []assetSlot,
+	state pathSimState,
+	floor int64,
+	factBasedFailures bool,
+) {
 	summary.TerminalWealthMinor = totalWealth(slots)
 	summary.MaxDrawdown = state.maxDD
 	summary.TruncationCount = state.truncCount
@@ -390,9 +431,19 @@ func finalizePathSummary(summary *PathSummary, slots []assetSlot, state pathSimS
 	}
 	summary.Succeeded = summary.TerminalWealthMinor > 0 && summary.TerminalWealthMinor >= floor
 	if !summary.Succeeded {
-		summary.FailureReason = FailureLongevity
-		if summary.TerminalWealthMinor <= 0 {
-			summary.FailureReason = FailureOther
-		}
+		summary.FailureReason = terminalFailureReason(summary.TerminalWealthMinor, factBasedFailures)
 	}
+}
+
+func terminalFailureReason(terminalWealth int64, factBased bool) string {
+	if factBased {
+		if terminalWealth <= 0 {
+			return FailureWealthDepleted
+		}
+		return FailureTerminalFloor
+	}
+	if terminalWealth <= 0 {
+		return FailureOther
+	}
+	return FailureLongevity
 }

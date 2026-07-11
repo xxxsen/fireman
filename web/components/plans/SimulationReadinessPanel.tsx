@@ -21,6 +21,7 @@ const REASON_LABELS: Record<string, string> = {
   simulation_insufficient_history: "历史已同步，但完整年度不足，暂不可模拟",
   provider_data_anomaly: "历史已同步，但数据质量异常，暂不可模拟",
   asset_identity_conflict: "资产身份可能选错，当前历史不可用于模拟",
+  foreign_cash_not_supported: "外币现金暂不支持 FIRE 模拟",
 };
 
 /**
@@ -138,6 +139,31 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
       setSyncMessage(e instanceof Error ? `同步任务创建失败：${e.message}` : "同步任务创建失败");
     },
   });
+
+  if (readinessQ.isLoading || readinessQ.isFetching) {
+    return (
+      <p className="mt-2 text-sm text-ink-muted" role="status">
+        正在检查模拟就绪状态…
+      </p>
+    );
+  }
+
+  if (readinessQ.isError) {
+    return (
+      <Alert variant="danger" className="mt-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span>模拟就绪状态检查失败，请重试。</span>
+          <Button
+            variant="secondary"
+            className="min-h-8 px-3 py-1 text-sm"
+            onClick={() => void readinessQ.refetch()}
+          >
+            重试就绪检查
+          </Button>
+        </div>
+      </Alert>
+    );
+  }
 
   if (!data || data.ready) return null;
 

@@ -229,6 +229,10 @@ export function ParametersContent({
 
   const gapBlocking = Math.abs(gap) > 100 && gap < 0;
   const gapNeedsCash = gap > 100 && gapAction !== "cash";
+  const transactionCostInvalid =
+    !Number.isFinite(params.transaction_cost_rate) ||
+    params.transaction_cost_rate < 0 ||
+    params.transaction_cost_rate >= 1;
   const acCheck = validatePercentSum(
     assetTargets.map((t) => ({ label: assetClassLabel(t.asset_class), value: t.weight })),
   );
@@ -544,13 +548,23 @@ export function ParametersContent({
               调仓阈值
               <MetricHelp termKey="rebalance_threshold" />
             </div>
-            <PercentInput value={params.rebalance_threshold} onChange={(v) => update("rebalance_threshold", v)} />
+            <PercentInput
+              value={params.rebalance_threshold}
+              onChange={(v) => update("rebalance_threshold", v)}
+            />
           </div>
-          <PercentInput
-            label="交易成本率"
-            value={params.transaction_cost_rate}
-            onChange={(v) => update("transaction_cost_rate", v)}
-          />
+          <div>
+            <PercentInput
+              label="交易成本率"
+              value={params.transaction_cost_rate}
+              onChange={(v) => update("transaction_cost_rate", v)}
+            />
+            {transactionCostInvalid && (
+              <p className="mt-1 text-xs text-danger">
+                交易成本率必须大于等于 0% 且小于 100%。
+              </p>
+            )}
+          </div>
         </div>
       </section>
 
@@ -849,6 +863,10 @@ export function ParametersContent({
           }
           if (params.withdrawal_floor_ratio >= params.withdrawal_ceiling_ratio) {
             setSaveError("护栏下限比例需小于上限比例。");
+            return;
+          }
+          if (transactionCostInvalid) {
+            setSaveError("交易成本率必须大于等于 0% 且小于 100%。");
             return;
           }
           saveMut.mutate();

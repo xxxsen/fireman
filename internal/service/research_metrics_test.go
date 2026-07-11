@@ -98,7 +98,7 @@ func TestComputeResearchAssetMetricsDrawdownAndSharpe(t *testing.T) {
 
 func TestComputeResearchAssetMetricsShortSeries(t *testing.T) {
 	// A single observation: coverage facts only, all metrics nil.
-	points := genMarketPoints(t, "2024-01-01", 1, func(i int) float64 { return 100 })
+	points := genMarketPoints(t, "2024-01-01", 1, func(_ int) float64 { return 100 })
 	m := ComputeResearchAssetMetrics("K", "none", "price", points, 1)
 	if m.PointCount != 1 || m.StartDate != "2024-01-01" || m.EndDate != "2024-01-01" {
 		t.Fatalf("coverage facts wrong: %+v", m)

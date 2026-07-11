@@ -139,7 +139,11 @@ export function MarketAssetSearchPicker({
       orderCandidates(
         (listQuery.data?.pages ?? [])
           .flatMap((page) => page.assets)
-          .filter((asset) => !excludeAssetKeys.has(asset.asset_key)),
+          .filter(
+            (asset) =>
+              !excludeAssetKeys.has(asset.asset_key) &&
+              (asset.instrument_type !== "cash" || asset.currency === "CNY"),
+          ),
         symbolQ ?? "",
       ),
     [listQuery.data, excludeAssetKeys, symbolQ],

@@ -173,9 +173,13 @@ func TestShouldRebalanceCalendarBoundaries(t *testing.T) {
 	}
 
 	// Threshold policy.
-	drifted := []float64{0.56, 0.44}
+	drifted := []float64{0.55, 0.45}
 	if !shouldRebalance(ResearchRebalanceThreshold, 0.05, day("2020-01-15"), last, drifted, tg) {
 		t.Fatal("threshold 5% exceeded should rebalance")
+	}
+	exactThreshold := math.Abs(drifted[0] - tg[0])
+	if !shouldRebalance(ResearchRebalanceThreshold, exactThreshold, day("2020-01-15"), last, drifted, tg) {
+		t.Fatal("drift exactly equal to the threshold should rebalance")
 	}
 	if shouldRebalance(ResearchRebalanceThreshold, 0.10, day("2020-01-15"), last, drifted, tg) {
 		t.Fatal("threshold 10% not exceeded should not rebalance")
@@ -219,7 +223,7 @@ func TestRunBacktestNoAssets(t *testing.T) {
 }
 
 func TestRunBacktestFXMissing(t *testing.T) {
-	points := genDailySeries(t, "2020-01-01", 400, func(i int) float64 { return 100 })
+	points := genDailySeries(t, "2020-01-01", 400, func(_ int) float64 { return 100 })
 	in := singleAssetInput(t, points)
 	in.Assets[0].Currency = "USD"
 	if _, err := RunResearchBacktest(in); !errors.Is(err, ErrResearchFXMissing) {
@@ -228,8 +232,8 @@ func TestRunBacktestFXMissing(t *testing.T) {
 }
 
 func TestRunBacktestNoCommonWindow(t *testing.T) {
-	a := genDailySeries(t, "2010-01-01", 400, func(i int) float64 { return 100 })
-	b := genDailySeries(t, "2020-01-01", 400, func(i int) float64 { return 100 })
+	a := genDailySeries(t, "2010-01-01", 400, func(_ int) float64 { return 100 })
+	b := genDailySeries(t, "2020-01-01", 400, func(_ int) float64 { return 100 })
 	in := BacktestInput{
 		BaseCurrency:    "CNY",
 		RebalancePolicy: ResearchRebalanceMonthly,
@@ -283,8 +287,8 @@ func TestCommonWindowIntersection(t *testing.T) {
 }
 
 func TestCommonWindowNarrowedByFX(t *testing.T) {
-	asset := genDailySeries(t, "2019-01-01", 1000, func(i int) float64 { return 100 })
-	fx := genDailySeries(t, "2019-07-01", 600, func(i int) float64 { return 7 })
+	asset := genDailySeries(t, "2019-01-01", 1000, func(_ int) float64 { return 100 })
+	fx := genDailySeries(t, "2019-07-01", 600, func(_ int) float64 { return 7 })
 	in := BacktestInput{
 		BaseCurrency:    "CNY",
 		RebalancePolicy: ResearchRebalanceMonthly,
@@ -355,7 +359,7 @@ func TestRunBacktestFXConversionCompoundsReturns(t *testing.T) {
 	}
 }
 
-// --- rebalance behaviour ---
+// --- rebalance behavior ---
 
 func TestRunBacktestRebalanceModes(t *testing.T) {
 	days := 400
@@ -363,7 +367,7 @@ func TestRunBacktestRebalanceModes(t *testing.T) {
 	a := genDailySeries(t, "2020-01-01", days, func(i int) float64 {
 		return 100 * math.Pow(1.002, float64(i))
 	})
-	b := genDailySeries(t, "2020-01-01", days, func(i int) float64 { return 100 })
+	b := genDailySeries(t, "2020-01-01", days, func(_ int) float64 { return 100 })
 	baseInput := func(policy string) BacktestInput {
 		return BacktestInput{
 			BaseCurrency:    "CNY",
@@ -416,11 +420,6 @@ func TestRunBacktestRebalanceModes(t *testing.T) {
 	}
 
 	// Monthly: weights reset to target on each month's last calendar day.
-	for _, p := range monthly.Points[:len(monthly.Points)-1] {
-		if p.Date[8:] == "31" || (p.Date[5:7] == "02" && p.Date[8:] == "29") {
-			// Not every month has 31 days; check explicit month ends below.
-		}
-	}
 	var monthEnd BacktestPoint
 	for _, p := range monthly.Points {
 		if p.Date == "2020-01-31" {
@@ -437,7 +436,7 @@ func TestRunBacktestThresholdRebalance(t *testing.T) {
 	a := genDailySeries(t, "2020-01-01", days, func(i int) float64 {
 		return 100 * math.Pow(1.003, float64(i))
 	})
-	b := genDailySeries(t, "2020-01-01", days, func(i int) float64 { return 100 })
+	b := genDailySeries(t, "2020-01-01", days, func(_ int) float64 { return 100 })
 	in := BacktestInput{
 		BaseCurrency:       "CNY",
 		RebalancePolicy:    ResearchRebalanceThreshold,
@@ -514,7 +513,7 @@ func TestRunBacktestFlatSeriesMetricsUnavailable(t *testing.T) {
 	// A perfectly flat nav: volatility is exactly 0, so Sharpe is
 	// unavailable; drawdown is 0, so Calmar is unavailable.
 	days := 400
-	points := genDailySeries(t, "2020-01-01", days, func(i int) float64 { return 100 })
+	points := genDailySeries(t, "2020-01-01", days, func(_ int) float64 { return 100 })
 	in := singleAssetInput(t, points)
 	in.RiskFreeRate = 0.02
 	res, err := RunResearchBacktest(in)
@@ -530,6 +529,11 @@ func TestRunBacktestFlatSeriesMetricsUnavailable(t *testing.T) {
 	}
 	if s.MaxDrawdown != 0 || s.Calmar != nil {
 		t.Fatalf("flat series must have no drawdown and no Calmar, got %v/%v", s.MaxDrawdown, s.Calmar)
+	}
+	for _, contribution := range res.Summary.Contributions {
+		if contribution.RiskContribution != nil {
+			t.Fatalf("flat series risk contribution must be unavailable, got %v", *contribution.RiskContribution)
+		}
 	}
 }
 
@@ -677,12 +681,14 @@ func TestRunBacktestMonthlyReturns(t *testing.T) {
 func TestVolatilityIgnoresForwardFilledDays(t *testing.T) {
 	// Observations only every 7th day; in-between days are forward filled.
 	start, _ := time.Parse("2006-01-02", "2020-01-01")
-	var points []ResearchSeriesPoint
-	values := []float64{100, 103, 99, 105, 102, 108, 104, 111, 107, 115, 110, 118,
+	values := []float64{
+		100, 103, 99, 105, 102, 108, 104, 111, 107, 115, 110, 118,
 		114, 122, 117, 126, 121, 130, 125, 134, 129, 139, 133, 143, 137, 148, 142,
 		153, 146, 158, 151, 163, 156, 168, 161, 174, 166, 180, 171, 186, 176, 192,
 		181, 198, 187, 204, 192, 211, 198, 217, 203, 224, 209, 231, 215, 238, 221,
-		246, 227, 253}
+		246, 227, 253,
+	}
+	points := make([]ResearchSeriesPoint, 0, len(values))
 	for i, v := range values {
 		points = append(points, ResearchSeriesPoint{
 			Date:  start.AddDate(0, 0, i*7).Format("2006-01-02"),
@@ -752,7 +758,7 @@ func TestRunBacktestCashAsset(t *testing.T) {
 
 func TestRunBacktestForeignCashNeedsFX(t *testing.T) {
 	days := 400
-	equity := genDailySeries(t, "2020-01-01", days, func(i int) float64 { return 100 })
+	equity := genDailySeries(t, "2020-01-01", days, func(_ int) float64 { return 100 })
 	in := BacktestInput{
 		BaseCurrency:    "CNY",
 		RebalancePolicy: ResearchRebalanceMonthly,
@@ -786,7 +792,7 @@ func TestRunBacktestContributions(t *testing.T) {
 	// A oscillates (non-degenerate variance), B stays flat.
 	aValue := func(i int) float64 { return 100 * (1 + 0.1*math.Sin(float64(i)/5)) }
 	a := genDailySeries(t, "2020-01-01", days, aValue)
-	b := genDailySeries(t, "2020-01-01", days, func(i int) float64 { return 100 })
+	b := genDailySeries(t, "2020-01-01", days, func(_ int) float64 { return 100 })
 	in := BacktestInput{
 		BaseCurrency:    "CNY",
 		RebalancePolicy: ResearchRebalanceFixed,
@@ -815,13 +821,17 @@ func TestRunBacktestContributions(t *testing.T) {
 	if contribB.CumulativeContribution != 0 {
 		t.Fatalf("flat asset contribution expected 0, got %v", contribB.CumulativeContribution)
 	}
-	// Fixed mix: contribution of A = 0.6 * sum of A's daily returns.
-	wantA := 0.0
-	for i := 1; i < days; i++ {
-		wantA += 0.6 * (aValue(i)/aValue(i-1) - 1)
+	// Currency contributions are additive: their sum exactly reconstructs the
+	// portfolio cumulative return, including compounding.
+	cumulativeSum := contribA.CumulativeContribution + contribB.CumulativeContribution
+	if !almostEqual(cumulativeSum, res.Summary.CumulativeReturn, 1e-12) {
+		t.Fatalf("cumulative contributions %v do not reconstruct return %v", cumulativeSum, res.Summary.CumulativeReturn)
 	}
-	if !almostEqual(contribA.CumulativeContribution, wantA, 1e-9) {
-		t.Fatalf("contribution A expected %v, got %v", wantA, contribA.CumulativeContribution)
+	// Drawdown contributions reconstruct the maximum drawdown over the same
+	// peak-to-trough interval.
+	drawdownSum := contribA.DrawdownContribution + contribB.DrawdownContribution
+	if !almostEqual(drawdownSum, res.Summary.MaxDrawdown, 1e-12) {
+		t.Fatalf("drawdown contributions %v do not reconstruct max drawdown %v", drawdownSum, res.Summary.MaxDrawdown)
 	}
 	// End weights under fixed policy equal targets.
 	if !almostEqual(contribA.EndWeight, 0.6, 1e-12) || !almostEqual(contribB.EndWeight, 0.4, 1e-12) {
@@ -835,6 +845,9 @@ func TestRunBacktestContributions(t *testing.T) {
 	}
 	if contribA.RiskContribution == nil || !almostEqual(*contribA.RiskContribution, 1, 1e-9) {
 		t.Fatalf("risky asset risk contribution expected 1, got %v", contribA.RiskContribution)
+	}
+	if !almostEqual(*contribA.RiskContribution+*contribB.RiskContribution, 1, 1e-12) {
+		t.Fatalf("risk contributions must sum to 1, got %v and %v", *contribA.RiskContribution, *contribB.RiskContribution)
 	}
 }
 
@@ -910,6 +923,57 @@ func TestRunBacktestBenchmarkOverlay(t *testing.T) {
 	}
 	if res.DataQuality.Benchmark == nil {
 		t.Fatal("benchmark data quality missing")
+	}
+}
+
+func TestRunBacktestBenchmarkMustCoverPortfolioWindow(t *testing.T) {
+	asset := genDailySeries(t, "2020-01-01", 400, func(i int) float64 { return 100 + float64(i) })
+	tests := []struct {
+		name  string
+		bench []ResearchSeriesPoint
+	}{
+		{name: "starts late", bench: genDailySeries(t, "2020-01-02", 399, func(i int) float64 { return 100 + float64(i) })},
+		{name: "ends early", bench: genDailySeries(t, "2020-01-01", 399, func(i int) float64 { return 100 + float64(i) })},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := singleAssetInput(t, asset)
+			in.Benchmark = &BacktestBenchmarkInput{AssetKey: "BENCH", Currency: "CNY", Points: tt.bench}
+			if _, err := RunResearchBacktest(in); !errors.Is(err, ErrResearchNoCommonWindow) {
+				t.Fatalf("expected uncovered benchmark to fail, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRunBacktestCashBenchmark(t *testing.T) {
+	asset := genDailySeries(t, "2020-01-01", 400, func(i int) float64 { return 100 + float64(i) })
+	in := singleAssetInput(t, asset)
+	in.Benchmark = &BacktestBenchmarkInput{
+		AssetKey: "SYS|cash||CNY", Name: "人民币现金", Currency: "CNY", IsCash: true,
+	}
+	res, err := RunResearchBacktest(in)
+	if err != nil {
+		t.Fatalf("RunResearchBacktest: %v", err)
+	}
+	if res.Summary.Benchmark == nil || res.Summary.Benchmark.CumulativeReturn != 0 {
+		t.Fatalf("cash benchmark should have zero return, got %+v", res.Summary.Benchmark)
+	}
+	if res.DataQuality.Benchmark == nil || !res.DataQuality.Benchmark.IsCash {
+		t.Fatalf("cash benchmark quality facts missing: %+v", res.DataQuality.Benchmark)
+	}
+}
+
+func TestRunBacktestBenchmarkGapExceeded(t *testing.T) {
+	asset := genDailySeries(t, "2020-01-01", 400, func(i int) float64 { return 100 + float64(i) })
+	benchmark := genDailySeries(t, "2020-01-01", 400, func(i int) float64 { return 100 + float64(i) })
+	benchmark = append(benchmark[:200], benchmark[221:]...)
+	in := singleAssetInput(t, asset)
+	in.Benchmark = &BacktestBenchmarkInput{
+		AssetKey: "BENCH", Currency: "CNY", MaxFillGapDays: 7, Points: benchmark,
+	}
+	if _, err := RunResearchBacktest(in); !errors.Is(err, ErrResearchNoCommonWindow) {
+		t.Fatalf("expected excessive benchmark gap to fail, got %v", err)
 	}
 }
 

@@ -284,7 +284,7 @@ describe("PathDetailPage", () => {
       path_seed: "1",
       succeeded: false,
       failure_month: 12,
-      failure_reason: "early_sequence_risk",
+      failure_reason: "insufficient_funds",
       monthly: [],
       yearly: [],
     });
@@ -295,7 +295,8 @@ describe("PathDetailPage", () => {
         <PathDetailPage />
       </QueryClientProvider>,
     );
-    expect(await screen.findByText(/早期序列风险/)).toBeInTheDocument();
+    expect(await screen.findByText(/当月资金不足/)).toBeInTheDocument();
+		expect(screen.getByText("失败状态")).toBeInTheDocument();
     expect(screen.getByText("暂无月度路径数据")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /年度 \(0\)/ }));
     expect(screen.getByText("暂无年度路径数据")).toBeInTheDocument();

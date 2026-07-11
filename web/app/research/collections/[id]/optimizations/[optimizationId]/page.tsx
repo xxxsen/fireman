@@ -4,10 +4,9 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import {
+  applyOptimization,
   getCollection,
   getOptimization,
-  updateCollection,
-  updateCollectionItem,
   type ResearchCollectionDetail,
   type ResearchOptimizationResultItem,
   type ResearchOptimizationRun,
@@ -25,16 +24,6 @@ import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsF
 import type { ResearchRebalancePolicy } from "@/lib/api/research";
 
 type TabKey = "cagr" | "drawdown" | "calmar";
-type LegacyOptimizationWeightEntry = ResearchOptimizationResultItem["weights"][number] & {
-  ItemID?: string;
-  itemId?: string;
-  AssetKey?: string;
-  assetKey?: string;
-  Name?: string;
-  Weight?: number;
-  Locked?: boolean;
-};
-
 const TABS: { key: TabKey; label: string }[] = [
   { key: "cagr", label: "最高收益" },
   { key: "drawdown", label: "最低回撤" },
@@ -45,46 +34,6 @@ function scoreFmt(tab: TabKey, score: number): string {
   if (tab === "drawdown") return formatPercent(score);
   if (tab === "calmar") return score.toFixed(3);
   return formatPercent(score);
-}
-
-function weightValue(w: LegacyOptimizationWeightEntry): number {
-  return w.weight ?? w.Weight ?? 0;
-}
-
-function firstNonBlank(...values: Array<string | undefined>): string | null {
-  for (const value of values) {
-    if (value && value.trim().length > 0) return value;
-  }
-  return null;
-}
-
-function weightName(w: LegacyOptimizationWeightEntry): string {
-  return firstNonBlank(w.name, w.Name, w.asset_key, w.AssetKey, w.assetKey) ?? "未命名资产";
-}
-
-function weightKey(w: LegacyOptimizationWeightEntry): string {
-  return firstNonBlank(
-    w.item_id,
-    w.ItemID,
-    w.itemId,
-    w.asset_key,
-    w.AssetKey,
-    w.assetKey,
-    w.name,
-    w.Name,
-  ) ?? "weight";
-}
-
-function weightItemID(w: LegacyOptimizationWeightEntry): string | null {
-  return firstNonBlank(w.item_id, w.ItemID, w.itemId);
-}
-
-function weightAssetKey(w: LegacyOptimizationWeightEntry): string | null {
-  return firstNonBlank(w.asset_key, w.AssetKey, w.assetKey);
-}
-
-function weightLocked(w: LegacyOptimizationWeightEntry): boolean {
-  return w.locked ?? w.Locked ?? false;
 }
 
 function ResultTable({
@@ -199,12 +148,11 @@ function WeightBar({
   weights: ResearchOptimizationResultItem["weights"];
 }) {
   const normalized = weights.map((w, index) => {
-    const entry = w as LegacyOptimizationWeightEntry;
     return {
-      key: `${weightKey(entry)}-${index}`,
-      name: weightName(entry),
-      weight: weightValue(entry),
-      locked: weightLocked(entry),
+      key: `${w.item_id}-${index}`,
+      name: w.name || w.asset_key || "未命名资产",
+      weight: w.weight,
+      locked: w.locked,
     };
   });
   const active = normalized.filter((w) => w.weight > 0);
@@ -301,23 +249,12 @@ export default function OptimizationDetailPage() {
     mutationFn: async (result: ResearchOptimizationResultItem) => {
       if (!detail) throw new Error("集合尚未加载完成");
       if (!opt) throw new Error("调优结果尚未加载完成");
-      const patches = buildApplyPatches(detail, result);
-      let latest: ResearchCollectionDetail | null = null;
-      for (const patch of patches) {
-        latest = await updateCollectionItem(collectionId, patch.itemId, patch.patch);
-      }
-      if (
-        detail.start_policy !== "custom_range" ||
-        detail.window_start !== opt.window_start ||
-        detail.window_end !== opt.window_end
-      ) {
-        latest = await updateCollection(collectionId, {
-          start_policy: "custom_range",
-          window_start: opt.window_start,
-          window_end: opt.window_end,
-        });
-      }
-      return latest;
+      buildPositiveWeights(detail, result);
+      return applyOptimization(optimizationId, {
+        objective: result.objective,
+        rank: result.rank,
+        expected_collection_updated_at: detail.updated_at,
+      });
     },
     onSuccess: () => {
       setApplyError(null);
@@ -518,48 +455,23 @@ function buildPositiveWeights(
 ): Map<string, number> {
   const positive = new Map<string, number>();
   const detailByID = new Map(detail.items.map((item) => [item.id, item]));
-  const itemIDsByAssetKey = new Map<string, string[]>();
-  for (const item of detail.items) {
-    const ids = itemIDsByAssetKey.get(item.asset_key) ?? [];
-    ids.push(item.id);
-    itemIDsByAssetKey.set(item.asset_key, ids);
-  }
 
   for (const raw of result.weights) {
-    const entry = raw as LegacyOptimizationWeightEntry;
-    let itemId = weightItemID(entry);
-    const weight = weightValue(entry);
-    if (weight <= 0) continue;
-
-    if (itemId) {
-      if (!detailByID.has(itemId)) {
-        throw new Error("调优结果与当前组合资产不一致，请重新运行调优。");
-      }
-    } else {
-      const assetKey = weightAssetKey(entry);
-      const ids = assetKey ? itemIDsByAssetKey.get(assetKey) ?? [] : [];
-      if (ids.length !== 1) {
-        throw new Error("调优结果与当前组合资产不一致，请重新运行调优。");
-      }
-      itemId = ids[0]!;
+    const itemId = raw.item_id;
+    const weight = raw.weight;
+    const detailItem = detailByID.get(itemId);
+    if (!detailItem || detailItem.asset_key !== raw.asset_key) {
+      throw new Error("调优结果与当前组合资产不一致，请重新运行调优。");
     }
-
-    positive.set(itemId, weight);
-  }
-
-  for (const itemId of positive.keys()) {
-    if (!Number.isFinite(positive.get(itemId)!)) {
+    if (!Number.isFinite(weight) || weight < 0) {
       throw new Error("调优结果权重异常，请重新运行调优。");
     }
+    if (weight > 0) positive.set(itemId, weight);
   }
 
   const sum = Array.from(positive.values()).reduce((s, v) => s + v, 0);
-  if (Math.abs(sum - 1) > 1e-4) {
+  if (Math.abs(sum - 1) > 1e-12) {
     throw new Error("调优结果权重合计异常，请重新运行调优。");
-  }
-  if (positive.size > 0 && Math.abs(sum - 1) > 1e-9) {
-    const last = Array.from(positive.keys()).at(-1)!;
-    positive.set(last, positive.get(last)! + (1 - sum));
   }
   return positive;
 }
@@ -574,28 +486,4 @@ function buildApplyPreview(
     disabledCount: detail.items.length - positive.size,
     weightSum: Array.from(positive.values()).reduce((s, v) => s + v, 0),
   };
-}
-
-function buildApplyPatches(
-  detail: ResearchCollectionDetail,
-  result: ResearchOptimizationResultItem,
-): { itemId: string; patch: { enabled: boolean; weight: number; weight_locked: boolean } }[] {
-  const positive = buildPositiveWeights(detail, result);
-  const patches: { itemId: string; patch: { enabled: boolean; weight: number; weight_locked: boolean } }[] = [];
-  for (const item of detail.items) {
-    const weight = positive.get(item.id) ?? 0;
-    const patch = {
-      enabled: weight > 0,
-      weight,
-      weight_locked: weight > 0,
-    };
-    if (
-      item.enabled !== patch.enabled ||
-      Math.abs(item.weight - patch.weight) > 1e-9 ||
-      item.weight_locked !== patch.weight_locked
-    ) {
-      patches.push({ itemId: item.id, patch });
-    }
-  }
-  return patches;
 }

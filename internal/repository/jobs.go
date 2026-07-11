@@ -10,16 +10,16 @@ import (
 )
 
 const (
-	JobTypeSimulation       = "simulation"
-	JobTypeStress           = "stress"
-	JobTypeSensitivity      = "sensitivity"
-	JobTypeResearchBacktest      = "research_backtest"
-	JobTypeResearchOptimization  = "research_optimization_backtest"
-	JobStatusQueued         = "queued"
-	JobStatusRunning        = "running"
-	JobStatusSucceeded      = "succeeded"
-	JobStatusFailed         = "failed"
-	JobStatusCanceled       = "canceled"
+	JobTypeSimulation           = "simulation"
+	JobTypeStress               = "stress"
+	JobTypeSensitivity          = "sensitivity"
+	JobTypeResearchBacktest     = "research_backtest"
+	JobTypeResearchOptimization = "research_optimization_backtest"
+	JobStatusQueued             = "queued"
+	JobStatusRunning            = "running"
+	JobStatusSucceeded          = "succeeded"
+	JobStatusFailed             = "failed"
+	JobStatusCanceled           = "canceled"
 )
 
 // JobErrSupersededByNewerAnalysis marks an attached-analysis job canceled because

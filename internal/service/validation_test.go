@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/fireman/fireman/internal/repository"
@@ -16,6 +17,29 @@ func validParametersFixture() repository.PlanParameters {
 		WithdrawalType: "fixed_real", WithdrawalRate: 0.04,
 		WithdrawalFloorRatio: 0.70, WithdrawalCeilingRatio: 1.30,
 		WithdrawalTaxRate: 0, TaxableWithdrawalRatio: 0,
+		RebalanceFrequency: "annual",
+	}
+}
+
+func TestValidateTransactionCostAndRebalanceFrequency(t *testing.T) {
+	for _, rate := range []float64{-0.01, 1, 1.2} {
+		p := validParametersFixture()
+		p.TransactionCostRate = rate
+		if err := validateParameters(p); !errors.Is(err, errTransactionCostRateRange) {
+			t.Fatalf("rate %v expected transaction cost range error, got %v", rate, err)
+		}
+	}
+	for _, rate := range []float64{0, 0.999999} {
+		p := validParametersFixture()
+		p.TransactionCostRate = rate
+		if err := validateParameters(p); err != nil {
+			t.Fatalf("rate %v should be valid: %v", rate, err)
+		}
+	}
+	p := validParametersFixture()
+	p.RebalanceFrequency = "weekly"
+	if err := validateParameters(p); !errors.Is(err, errRebalanceFrequencyInvalid) {
+		t.Fatalf("expected rebalance frequency error, got %v", err)
 	}
 }
 

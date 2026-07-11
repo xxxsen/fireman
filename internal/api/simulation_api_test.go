@@ -243,6 +243,34 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 	t.Fatalf("model_warnings missing one-year asset warning: %v", rawWarnings)
 }
 
+func TestCreateSimulationRejectsPersistedInvalidTransactionCost(t *testing.T) {
+	for _, rate := range []float64{-0.01, 1.0} {
+		t.Run(strconv.FormatFloat(rate, 'g', -1, 64), func(t *testing.T) {
+			db := testutil.OpenTestDB(t)
+			planID := seedSimulationReadyPlan(t, db)
+			if _, err := db.Exec(`UPDATE plan_parameters SET transaction_cost_rate=? WHERE plan_id=?`, rate, planID); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)}))
+			defer srv.Close()
+			body, _ := json.Marshal(map[string]any{"runs": 1000, "seed": "11"})
+			resp, err := http.Post(
+				srv.URL+"/api/v1/plans/"+planID+"/simulations",
+				"application/json",
+				bytes.NewReader(body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := mustRead(t, resp)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+			}
+			assertErrorCode(t, raw, "parameters_invalid")
+		})
+	}
+}
+
 // TestScenarioComparisonEndpoint verifies that the comparison
 // runs the same frozen plan input under conservative/baseline/optimistic with one
 // shared seed, so the forward return and headline P50 must increase strictly from
@@ -250,6 +278,11 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 func TestScenarioComparisonEndpoint(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
+	// Keep all three scenario medians solvent so the endpoint test can verify
+	// strict return ordering instead of comparing several legitimate ruin zeros.
+	if _, err := db.Exec(`UPDATE plan_parameters SET annual_spending_minor=? WHERE plan_id=?`, 50_000_00, planID); err != nil {
+		t.Fatal(err)
+	}
 
 	services := buildServices(db)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))

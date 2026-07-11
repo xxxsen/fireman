@@ -31,7 +31,7 @@
 两个入口始终独立展示，按钮宽度一致，并按各自准入条件决定是否可用：
 
 - `运行回测` 要求普通回测 readiness 通过，包括启用资产权重合计为 100%。
-- `寻找最优组合` 要求自动调优 readiness 通过，且启用并可被调优的资产数不少于 2。
+- `寻找最优组合` 只要求自动调优 readiness 通过。一个可调资产会取得全部剩余权重；全部锁定且合计 100% 时允许生成一个固定候选并展示提示。
 - 权重合计不为 100% 时，数据状态区不再展示为数据阻断；`运行回测` 禁用，`寻找最优组合` 可在满足调优 readiness 时继续执行。
 - 禁用按钮通过 hover 展示当前不可用原因。
 
@@ -64,13 +64,15 @@
 
 结果页每条调优结果提供 `应用` 操作。点击后会弹出确认窗口，展示目标组合、启用并锁定资产数量、取消启用资产数量、权重合计和该次调优的回测区间。
 
-确认应用后：
+确认应用后，页面只发送一次 `POST /api/v1/research/optimizations/{optimizationId}/apply`：
 
 - 调优结果中权重大于 0 的资产会自动启用、写入调优权重，并锁定权重。
 - 调优结果中权重为 0 或未出现在结果中的资产会取消启用、取消锁定，并将权重重置为 0。
 - 如果调优结果引用的资产已不在当前组合中，应用会被阻止，并提示重新运行调优。
 - 组合回测区间会同步为该次调优任务的 `window_start ~ window_end`，`start_policy` 写为 `custom_range`。
 - 应用成功后跳转回组合页，并展示一次性成功提示。
+- 请求携带预览时的 `expected_collection_updated_at`。集合被并发修改时返回 `409 research_collection_changed`；结果身份与当前条目不匹配时返回 `409 research_optimization_result_stale`。
+- 所有 item、锁定状态、权重、回测区间和集合版本在同一数据库事务中提交；任一步失败全部回滚，不会留下半应用状态。
 
 同步回测区间是必要行为。调优结果的收益、回撤、夏普比率和卡玛比率都基于该次调优任务冻结的窗口；应用后同步区间可以保证用户回到组合页直接运行普通回测时，结果与调优页展示的数据口径一致。
 
@@ -97,9 +99,9 @@
 1. 将启用资产拆成锁定资产和可调资产。
 2. 锁定资产保持原权重。
 3. 计算剩余权重：`remaining = 1 - lockedSum`。
-4. 从可调资产中枚举所有非空子集。
-5. 对每个子集，按权重步长拆分剩余权重。
-6. 子集内每个被选中的资产至少获得一个步长单位权重。
+4. 计算 `full_parts=floor(remaining/weight_step)` 和不足一步长的 `residual`。
+5. residual 为 0 时，对每个非空子集枚举正整数 composition；residual 大于 0 时，依次选择 residual 接收资产，并把完整步长按非负整数分配，非接收资产至少取得一个完整步长。
+6. `full_parts=0` 时每个可调资产分别形成一个独占 residual 的候选；`remaining` 在 `1e-12` 内为 0 时只形成一个可调权重全 0 的固定候选。
 7. 未选中的可调资产权重为 0。
 8. 每个候选总权重精确归一到 100%。
 
@@ -132,6 +134,7 @@ GET /api/v1/research/collections/{id}/optimization-readiness?weight_step=0.05
 - 启用资产超过 10。
 - 锁定权重合计超过 100%。
 - 候选数量超过本次 `max_candidate_count`。
+- 候选数量为 0（`candidate_count_zero`）。
 - 存在缺历史资产。
 - 存在历史同步中或同步失败且无可用旧数据。
 - 存在 FX 缺失、同步中或缺口超限。
@@ -179,6 +182,7 @@ GET  /api/v1/research/collections/{id}/optimization-readiness
 POST /api/v1/research/collections/{id}/optimizations
 GET  /api/v1/research/collections/{id}/optimizations/latest
 GET  /api/v1/research/optimizations/{optimizationId}
+POST /api/v1/research/optimizations/{optimizationId}/apply
 ```
 
 创建请求示例：
@@ -210,6 +214,8 @@ research_optimization_backtest
 7. 对每个候选调用现有 `RunResearchBacktest`。
 8. 维护三组 Top K 结果。
 9. 完成后写入 `result_json`。
+
+优化器版本为 `research_optimizer_v2`。快照逐资产冻结 `item_id`、`asset_key`、权重和锁定标记；候选回测携带与普通回测相同的基准。Top K 使用目标分数降序、CAGR 降序、绝对回撤升序、12 位 canonical 权重向量升序的确定排序，并按 canonical 权重去重。
 
 管理后台 job 过滤支持：
 

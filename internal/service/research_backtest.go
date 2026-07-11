@@ -18,7 +18,7 @@ import (
 
 // ResearchEngineVersion participates in input_hash so engine changes never
 // silently reuse old runs.
-const ResearchEngineVersion = "research_backtest_v1"
+const ResearchEngineVersion = "research_backtest_v2"
 
 // Rebalance policies (td/099 §3.6).
 const (
@@ -97,10 +97,12 @@ type BacktestAssetInput struct {
 
 // BacktestBenchmarkInput is the optional comparison series.
 type BacktestBenchmarkInput struct {
-	AssetKey string
-	Name     string
-	Currency string
-	Points   []ResearchSeriesPoint
+	AssetKey       string
+	Name           string
+	Currency       string
+	IsCash         bool
+	MaxFillGapDays int
+	Points         []ResearchSeriesPoint
 }
 
 // BacktestInput is the full engine input.
@@ -166,8 +168,8 @@ type MonthExtreme struct {
 	Return float64 `json:"return"`
 }
 
-// BacktestAssetContribution explains one asset's role in the portfolio
-// outcome (single-period contributions accumulated arithmetically).
+// BacktestAssetContribution explains one asset's linked contribution to the
+// portfolio's cumulative return, risk, and maximum drawdown.
 type BacktestAssetContribution struct {
 	AssetKey               string   `json:"asset_key"`
 	Name                   string   `json:"name"`
@@ -244,7 +246,7 @@ type BacktestSeriesQuality struct {
 	LimitsCommonEnd   bool `json:"limits_common_end,omitempty"`
 }
 
-// BacktestDataQuality explains the window derivation and fill behaviour.
+// BacktestDataQuality explains the window derivation and fill behavior.
 type BacktestDataQuality struct {
 	CommonStartPolicy  string                  `json:"common_start_policy"`
 	CommonEndPolicy    string                  `json:"common_end_policy"`
@@ -348,8 +350,8 @@ func (s preparedSeries) hasObservation(day int) bool {
 
 // fillStats computes forward-fill facts over [start, end]: filled day count
 // and the longest consecutive filled run.
-func (s preparedSeries) fillStats(start, end int) (fillCount, maxRun int) {
-	run := 0
+func (s preparedSeries) fillStats(start, end int) (int, int) {
+	fillCount, maxRun, run := 0, 0, 0
 	for d := start; d <= end; d++ {
 		if s.hasObservation(d) {
 			run = 0
@@ -442,7 +444,7 @@ func (c fxConverter) rateAt(day int) (float64, bool) {
 		return c.numer.valueAt(day)
 	}
 	num := 1.0
-	ok := true
+	var ok bool
 	if c.route.numer != "CNYCNY" {
 		num, ok = c.numer.valueAt(day)
 		if !ok {
@@ -559,37 +561,12 @@ func prepareAssets(in BacktestInput, fxSeries map[string]preparedSeries) ([]prep
 	out := make([]preparedAsset, 0, len(in.Assets))
 	for _, a := range in.Assets {
 		pa := preparedAsset{input: a}
-		route, need := researchFXRouteFor(a.Currency, in.BaseCurrency)
-		conv := fxConverter{route: route, need: need}
-		if need {
-			if route.isCross {
-				if route.numer != "CNYCNY" {
-					s, ok := fxSeries[route.numer]
-					if !ok || s.empty() {
-						return nil, fmt.Errorf("%w: %s needs %s", ErrResearchFXMissing, a.AssetKey, route.numer)
-					}
-					conv.numer = s
-				}
-				s, ok := fxSeries[route.denom]
-				if !ok || s.empty() {
-					return nil, fmt.Errorf("%w: %s needs %s", ErrResearchFXMissing, a.AssetKey, route.denom)
-				}
-				conv.denom = s
-				if route.numer != "CNYCNY" {
-					pa.fxLabel = route.numer + "/" + route.denom
-				} else {
-					pa.fxLabel = "1/" + route.denom
-				}
-			} else {
-				s, ok := fxSeries[route.direct]
-				if !ok || s.empty() {
-					return nil, fmt.Errorf("%w: %s needs %s", ErrResearchFXMissing, a.AssetKey, route.direct)
-				}
-				conv.numer = s
-				pa.fxLabel = route.direct
-			}
+		conv, label, err := prepareFXConverter(a.AssetKey, a.Currency, in.BaseCurrency, fxSeries)
+		if err != nil {
+			return nil, err
 		}
 		pa.fx = conv
+		pa.fxLabel = label
 
 		if a.IsCash {
 			pa.unbounded = true
@@ -621,6 +598,47 @@ func prepareAssets(in BacktestInput, fxSeries map[string]preparedSeries) ([]prep
 		out = append(out, pa)
 	}
 	return out, nil
+}
+
+func prepareFXConverter(
+	assetKey, currency, baseCurrency string,
+	fxSeries map[string]preparedSeries,
+) (fxConverter, string, error) {
+	route, need := researchFXRouteFor(currency, baseCurrency)
+	conv := fxConverter{route: route, need: need}
+	if !need {
+		return conv, "", nil
+	}
+	if !route.isCross {
+		series, err := requireFXSeries(fxSeries, assetKey, route.direct)
+		conv.numer = series
+		return conv, route.direct, err
+	}
+	label := "1/" + route.denom
+	if route.numer != "CNYCNY" {
+		series, err := requireFXSeries(fxSeries, assetKey, route.numer)
+		if err != nil {
+			return conv, "", err
+		}
+		conv.numer = series
+		label = route.numer + "/" + route.denom
+	}
+	series, err := requireFXSeries(fxSeries, assetKey, route.denom)
+	if err != nil {
+		return conv, "", err
+	}
+	conv.denom = series
+	return conv, label, nil
+}
+
+func requireFXSeries(
+	fxSeries map[string]preparedSeries, assetKey, pair string,
+) (preparedSeries, error) {
+	series, ok := fxSeries[pair]
+	if !ok || series.empty() {
+		return preparedSeries{}, fmt.Errorf("%w: %s needs %s", ErrResearchFXMissing, assetKey, pair)
+	}
+	return series, nil
 }
 
 // commonWindow computes max(first usable) .. min(last usable) over bounded
@@ -702,140 +720,20 @@ func simulatePortfolio(
 	fxTolerance int,
 	lo, hi int,
 ) (*BacktestResult, error) {
-	n := hi - lo + 1
-	numAssets := len(assets)
-
-	// Base-currency value grid + effective-day flags.
-	values := make([][]float64, numAssets)
-	for i := range values {
-		values[i] = make([]float64, n)
+	values, effective, err := buildResearchValueGrid(assets, fxSeries, lo, hi)
+	if err != nil {
+		return nil, err
 	}
-	effective := make([]bool, n)
-	usedPairs := usedFXPairs(assets)
-	for t := 0; t < n; t++ {
-		day := lo + t
-		for i, a := range assets {
-			v, ok := assetValueAt(a, day)
-			if !ok {
-				return nil, fmt.Errorf("%w: asset %s at %s",
-					ErrResearchNoCommonWindow, a.input.AssetKey, researchDayToDate(day))
-			}
-			values[i][t] = v
-			if !a.input.IsCash && a.series.hasObservation(day) {
-				effective[t] = true
-			}
-		}
-		for _, pair := range usedPairs {
-			if s, ok := fxSeries[pair]; ok && s.hasObservation(day) {
-				effective[t] = true
-			}
-		}
-	}
-
-	// Normalize weights exactly to 1 (input already validated).
-	targets := make([]float64, numAssets)
-	sum := 0.0
-	for i, a := range assets {
-		targets[i] = a.input.Weight
-		sum += a.input.Weight
-	}
-	if sum > 0 {
-		for i := range targets {
-			targets[i] /= sum
-		}
-	}
-
-	// Portfolio walk.
-	navs := make([]float64, n)
-	periodReturns := make([]float64, n)
-	weightRows := make([][]float64, n)
-	contribRows := make([][]float64, n)
-	assetReturns := make([][]float64, numAssets)
-	for i := range assetReturns {
-		assetReturns[i] = make([]float64, n)
-	}
-
-	weights := append([]float64(nil), targets...)
-	navs[0] = 1
-	weightRows[0] = append([]float64(nil), weights...)
-	contribRows[0] = make([]float64, numAssets)
-
-	for t := 1; t < n; t++ {
-		rp := 0.0
-		contribs := make([]float64, numAssets)
-		for i := range assets {
-			ri := values[i][t]/values[i][t-1] - 1
-			assetReturns[i][t] = ri
-			contribs[i] = weights[i] * ri
-			rp += contribs[i]
-		}
-		navs[t] = navs[t-1] * (1 + rp)
-		periodReturns[t] = rp
-		contribRows[t] = contribs
-
-		// Drift, then rebalance at period boundaries.
-		if 1+rp > 0 {
-			for i := range weights {
-				weights[i] = weights[i] * (1 + assetReturns[i][t]) / (1 + rp)
-			}
-		}
-		if shouldRebalance(in.RebalancePolicy, in.RebalanceThreshold, lo+t, hi, weights, targets) {
-			copy(weights, targets)
-		}
-		weightRows[t] = append([]float64(nil), weights...)
-	}
-
-	// Effective-day return samples (skip t=0; day 0 has no return).
-	var effReturns []float64
-	effAssetReturns := make([][]float64, numAssets)
-	for t := 1; t < n; t++ {
-		if !effective[t] {
-			continue
-		}
-		effReturns = append(effReturns, periodReturns[t])
-		for i := range assets {
-			effAssetReturns[i] = append(effAssetReturns[i], assetReturns[i][t])
-		}
-	}
+	targets := normalizedResearchTargets(assets)
+	walk := walkResearchPortfolio(in, values, targets, lo, hi)
+	effReturns, effAssetReturns, effContribReturns := collectEffectiveResearchReturns(
+		effective, walk.periodReturns, walk.assetReturns, walk.contribRows,
+	)
 	if len(effReturns) < 2 {
 		return nil, ErrResearchNoEffectiveDays
 	}
-
-	// Drawdowns.
-	drawdowns := make([]float64, n)
-	peak := navs[0]
-	for t := 0; t < n; t++ {
-		if navs[t] > peak {
-			peak = navs[t]
-		}
-		drawdowns[t] = navs[t]/peak - 1
-	}
-
-	keys := make([]string, numAssets)
-	names := make([]string, numAssets)
-	for i, a := range assets {
-		keys[i] = a.input.AssetKey
-		names[i] = a.input.Name
-	}
-
-	// Points.
-	points := make([]BacktestPoint, n)
-	for t := 0; t < n; t++ {
-		p := BacktestPoint{
-			Date:             researchDayToDate(lo + t),
-			NAV:              navs[t],
-			CumulativeReturn: navs[t]/navs[0] - 1,
-			PeriodReturn:     periodReturns[t],
-			Drawdown:         drawdowns[t],
-			Weights:          make(map[string]float64, numAssets),
-			Contributions:    make(map[string]float64, numAssets),
-		}
-		for i := range assets {
-			p.Weights[keys[i]] = weightRows[t][i]
-			p.Contributions[keys[i]] = contribRows[t][i]
-		}
-		points[t] = p
-	}
+	drawdowns := researchDrawdowns(walk.navs)
+	points := buildResearchPoints(assets, walk, drawdowns, lo)
 
 	// Benchmark overlay.
 	var benchSummary *BacktestBenchmarkSummary
@@ -851,12 +749,12 @@ func simulatePortfolio(
 	years := buildYears(points, effective, lo)
 	months := buildMonths(points)
 	summary := buildSummary(
-		in, points, years, months, effReturns, effAssetReturns,
-		assets, targets, weightRows, contribRows, drawdowns, navs, lo, hi,
+		in, points, years, months, effReturns, effAssetReturns, effContribReturns,
+		assets, targets, walk.weightRows, walk.contribRows, drawdowns, walk.navs, lo, hi,
 	)
 	summary.Benchmark = benchSummary
 
-	dq := buildDataQuality(in, assets, fxSeries, fxTolerance, lo, hi)
+	dq := buildDataQuality(assets, fxSeries, fxTolerance, lo, hi)
 	dq.Benchmark = benchQuality
 
 	return &BacktestResult{
@@ -868,6 +766,161 @@ func simulatePortfolio(
 		Summary:     summary,
 		DataQuality: dq,
 	}, nil
+}
+
+type researchPortfolioWalk struct {
+	navs          []float64
+	periodReturns []float64
+	weightRows    [][]float64
+	contribRows   [][]float64
+	assetReturns  [][]float64
+}
+
+func buildResearchValueGrid(
+	assets []preparedAsset, fxSeries map[string]preparedSeries, lo, hi int,
+) ([][]float64, []bool, error) {
+	n := hi - lo + 1
+	values := make([][]float64, len(assets))
+	for i := range values {
+		values[i] = make([]float64, n)
+	}
+	effective := make([]bool, n)
+	usedPairs := usedFXPairs(assets)
+	for t := 0; t < n; t++ {
+		day := lo + t
+		for i, asset := range assets {
+			value, ok := assetValueAt(asset, day)
+			if !ok {
+				return nil, nil, fmt.Errorf("%w: asset %s at %s",
+					ErrResearchNoCommonWindow, asset.input.AssetKey, researchDayToDate(day))
+			}
+			values[i][t] = value
+			effective[t] = effective[t] || (!asset.input.IsCash && asset.series.hasObservation(day))
+		}
+		for _, pair := range usedPairs {
+			series, ok := fxSeries[pair]
+			effective[t] = effective[t] || (ok && series.hasObservation(day))
+		}
+	}
+	return values, effective, nil
+}
+
+func normalizedResearchTargets(assets []preparedAsset) []float64 {
+	targets := make([]float64, len(assets))
+	sum := 0.0
+	for i, asset := range assets {
+		targets[i] = asset.input.Weight
+		sum += asset.input.Weight
+	}
+	if sum <= 0 {
+		return targets
+	}
+	for i := range targets {
+		targets[i] /= sum
+	}
+	return targets
+}
+
+func walkResearchPortfolio(
+	in BacktestInput, values [][]float64, targets []float64, lo, hi int,
+) researchPortfolioWalk {
+	n, numAssets := hi-lo+1, len(values)
+	walk := researchPortfolioWalk{
+		navs: make([]float64, n), periodReturns: make([]float64, n),
+		weightRows: make([][]float64, n), contribRows: make([][]float64, n),
+		assetReturns: make([][]float64, numAssets),
+	}
+	for i := range walk.assetReturns {
+		walk.assetReturns[i] = make([]float64, n)
+	}
+	weights := append([]float64(nil), targets...)
+	walk.navs[0] = 1
+	walk.weightRows[0] = append([]float64(nil), weights...)
+	walk.contribRows[0] = make([]float64, numAssets)
+	for t := 1; t < n; t++ {
+		portfolioReturn := researchPeriodReturn(values, weights, walk.assetReturns, t)
+		contributions := make([]float64, numAssets)
+		for i := range weights {
+			contributions[i] = weights[i] * walk.assetReturns[i][t]
+		}
+		walk.navs[t] = walk.navs[t-1] * (1 + portfolioReturn)
+		walk.periodReturns[t] = portfolioReturn
+		walk.contribRows[t] = contributions
+		driftResearchWeights(weights, walk.assetReturns, portfolioReturn, t)
+		if shouldRebalance(in.RebalancePolicy, in.RebalanceThreshold, lo+t, hi, weights, targets) {
+			copy(weights, targets)
+		}
+		walk.weightRows[t] = append([]float64(nil), weights...)
+	}
+	return walk
+}
+
+func researchPeriodReturn(values [][]float64, weights []float64, returns [][]float64, t int) float64 {
+	portfolioReturn := 0.0
+	for i := range weights {
+		returns[i][t] = values[i][t]/values[i][t-1] - 1
+		portfolioReturn += weights[i] * returns[i][t]
+	}
+	return portfolioReturn
+}
+
+func driftResearchWeights(weights []float64, returns [][]float64, portfolioReturn float64, t int) {
+	if 1+portfolioReturn <= 0 {
+		return
+	}
+	for i := range weights {
+		weights[i] = weights[i] * (1 + returns[i][t]) / (1 + portfolioReturn)
+	}
+}
+
+func collectEffectiveResearchReturns(
+	effective []bool, periodReturns []float64, assetReturns, contribRows [][]float64,
+) ([]float64, [][]float64, [][]float64) {
+	effReturns := make([]float64, 0)
+	effAssetReturns := make([][]float64, len(assetReturns))
+	effContribReturns := make([][]float64, len(assetReturns))
+	for t := 1; t < len(effective); t++ {
+		if !effective[t] {
+			continue
+		}
+		effReturns = append(effReturns, periodReturns[t])
+		for i := range assetReturns {
+			effAssetReturns[i] = append(effAssetReturns[i], assetReturns[i][t])
+			effContribReturns[i] = append(effContribReturns[i], contribRows[t][i])
+		}
+	}
+	return effReturns, effAssetReturns, effContribReturns
+}
+
+func researchDrawdowns(navs []float64) []float64 {
+	drawdowns := make([]float64, len(navs))
+	peak := navs[0]
+	for i, nav := range navs {
+		peak = math.Max(peak, nav)
+		drawdowns[i] = nav/peak - 1
+	}
+	return drawdowns
+}
+
+func buildResearchPoints(
+	assets []preparedAsset, walk researchPortfolioWalk, drawdowns []float64, lo int,
+) []BacktestPoint {
+	points := make([]BacktestPoint, len(walk.navs))
+	for t := range points {
+		point := BacktestPoint{
+			Date: researchDayToDate(lo + t), NAV: walk.navs[t],
+			CumulativeReturn: walk.navs[t]/walk.navs[0] - 1,
+			PeriodReturn:     walk.periodReturns[t], Drawdown: drawdowns[t],
+			Weights:       make(map[string]float64, len(assets)),
+			Contributions: make(map[string]float64, len(assets)),
+		}
+		for i, asset := range assets {
+			point.Weights[asset.input.AssetKey] = walk.weightRows[t][i]
+			point.Contributions[asset.input.AssetKey] = walk.contribRows[t][i]
+		}
+		points[t] = point
+	}
+	return points
 }
 
 func usedFXPairs(assets []preparedAsset) []string {
@@ -907,7 +960,7 @@ func shouldRebalance(policy string, threshold float64, day, lastDay int, weights
 			return false
 		}
 		for i := range weights {
-			if math.Abs(weights[i]-targets[i]) > threshold {
+			if math.Abs(weights[i]-targets[i]) >= threshold {
 				return true
 			}
 		}
@@ -940,97 +993,38 @@ func overlayBenchmark(
 	lo, hi int,
 ) (*BacktestBenchmarkSummary, *BacktestSeriesQuality, error) {
 	b := in.Benchmark
-	series, err := prepareSeries(b.Points)
+	series, err := prepareBenchmarkSeries(b)
 	if err != nil {
-		return nil, nil, fmt.Errorf("benchmark %s: %w", b.AssetKey, err)
+		return nil, nil, err
 	}
-	if series.empty() {
-		return nil, nil, fmt.Errorf("%w: benchmark %s has no history", ErrResearchNoCommonWindow, b.AssetKey)
+	conv, _, err := prepareFXConverter("benchmark", b.Currency, in.BaseCurrency, fxSeries)
+	if err != nil {
+		return nil, nil, err
 	}
-	route, need := researchFXRouteFor(b.Currency, in.BaseCurrency)
-	conv := fxConverter{route: route, need: need}
-	if need {
-		if route.isCross {
-			if route.numer != "CNYCNY" {
-				s, ok := fxSeries[route.numer]
-				if !ok || s.empty() {
-					return nil, nil, fmt.Errorf("%w: benchmark needs %s", ErrResearchFXMissing, route.numer)
-				}
-				conv.numer = s
-			}
-			s, ok := fxSeries[route.denom]
-			if !ok || s.empty() {
-				return nil, nil, fmt.Errorf("%w: benchmark needs %s", ErrResearchFXMissing, route.denom)
-			}
-			conv.denom = s
-		} else {
-			s, ok := fxSeries[route.direct]
-			if !ok || s.empty() {
-				return nil, nil, fmt.Errorf("%w: benchmark needs %s", ErrResearchFXMissing, route.direct)
-			}
-			conv.numer = s
-		}
+	if !b.IsCash && (series.firstDay() > lo || series.lastDay() < hi) {
+		return nil, nil, fmt.Errorf("%w: benchmark %s does not cover %s..%s",
+			ErrResearchNoCommonWindow, b.AssetKey, researchDayToDate(lo), researchDayToDate(hi))
+	}
+	if fxLo, fxHi, bounded := conv.bounds(); bounded && (fxLo > lo || fxHi < hi) {
+		return nil, nil, fmt.Errorf("%w: benchmark FX does not cover %s..%s",
+			ErrResearchNoCommonWindow, researchDayToDate(lo), researchDayToDate(hi))
 	}
 
-	baseVal := func(day int) (float64, bool) {
-		rate, ok := conv.rateAt(day)
-		if !ok {
-			return 0, false
-		}
-		v, ok := series.valueAt(day)
-		if !ok {
-			return 0, false
-		}
-		return v * rate, true
-	}
-
-	start, ok := baseVal(lo)
+	start, ok := benchmarkValueAt(b, series, conv, lo)
 	if !ok || start <= 0 {
 		return nil, nil, fmt.Errorf("%w: benchmark %s not usable at window start",
 			ErrResearchNoCommonWindow, b.AssetKey)
 	}
-	prev := start
-	peak := 1.0
-	maxDD := 0.0
-	for t := range points {
-		day := lo + t
-		v, ok := baseVal(day)
-		if !ok {
-			v = prev
-		}
-		nav := v / start
-		ret := 0.0
-		if t > 0 && prev > 0 {
-			ret = v/prev - 1
-		}
-		navCopy, retCopy := nav, ret
-		points[t].BenchmarkNAV = &navCopy
-		points[t].BenchmarkReturn = &retCopy
-		if nav > peak {
-			peak = nav
-		}
-		if dd := nav/peak - 1; dd < maxDD {
-			maxDD = dd
-		}
-		prev = v
-	}
+	maxDD := overlayBenchmarkPoints(b, series, conv, points, lo, start)
 	endNav := *points[len(points)-1].BenchmarkNAV
 	days := hi - lo
 	cagr := 0.0
 	if days > 0 && endNav > 0 {
 		cagr = math.Pow(endNav, 365.25/float64(days)) - 1
 	}
-	fillCount, maxRun := series.fillStats(maxInt(lo, series.firstDay()), minInt(hi, series.lastDay()))
-	quality := &BacktestSeriesQuality{
-		AssetKey:       b.AssetKey,
-		Name:           b.Name,
-		Currency:       b.Currency,
-		RawStart:       researchDayToDate(series.firstDay()),
-		RawEnd:         researchDayToDate(series.lastDay()),
-		RawPointCount:  len(series.days),
-		FillCount:      fillCount,
-		MaxFillGapDays: maxRun,
-		FillTolerance:  researchFillGapDefaultDays,
+	quality, err := buildBenchmarkQuality(b, series, lo, hi)
+	if err != nil {
+		return nil, nil, err
 	}
 	return &BacktestBenchmarkSummary{
 		AssetKey:         b.AssetKey,
@@ -1039,6 +1033,94 @@ func overlayBenchmark(
 		CAGR:             cagr,
 		MaxDrawdown:      maxDD,
 	}, quality, nil
+}
+
+func prepareBenchmarkSeries(benchmark *BacktestBenchmarkInput) (preparedSeries, error) {
+	if benchmark.IsCash {
+		return preparedSeries{}, nil
+	}
+	series, err := prepareSeries(benchmark.Points)
+	if err != nil {
+		return preparedSeries{}, fmt.Errorf("benchmark %s: %w", benchmark.AssetKey, err)
+	}
+	if series.empty() {
+		return preparedSeries{}, fmt.Errorf(
+			"%w: benchmark %s has no history", ErrResearchNoCommonWindow, benchmark.AssetKey,
+		)
+	}
+	return series, nil
+}
+
+func benchmarkValueAt(
+	benchmark *BacktestBenchmarkInput, series preparedSeries, conv fxConverter, day int,
+) (float64, bool) {
+	rate, ok := conv.rateAt(day)
+	if !ok {
+		return 0, false
+	}
+	if benchmark.IsCash {
+		return rate, true
+	}
+	value, ok := series.valueAt(day)
+	if !ok || day > series.lastDay() {
+		return 0, false
+	}
+	return value * rate, true
+}
+
+func overlayBenchmarkPoints(
+	benchmark *BacktestBenchmarkInput,
+	series preparedSeries,
+	conv fxConverter,
+	points []BacktestPoint,
+	lo int,
+	start float64,
+) float64 {
+	prev, peak, maxDrawdown := start, 1.0, 0.0
+	for i := range points {
+		value, ok := benchmarkValueAt(benchmark, series, conv, lo+i)
+		if !ok {
+			value = prev
+		}
+		nav, periodReturn := value/start, 0.0
+		if i > 0 && prev > 0 {
+			periodReturn = value/prev - 1
+		}
+		navCopy, returnCopy := nav, periodReturn
+		points[i].BenchmarkNAV = &navCopy
+		points[i].BenchmarkReturn = &returnCopy
+		peak = math.Max(peak, nav)
+		maxDrawdown = math.Min(maxDrawdown, nav/peak-1)
+		prev = value
+	}
+	return maxDrawdown
+}
+
+func buildBenchmarkQuality(
+	benchmark *BacktestBenchmarkInput, series preparedSeries, lo, hi int,
+) (*BacktestSeriesQuality, error) {
+	tolerance := benchmark.MaxFillGapDays
+	if tolerance <= 0 {
+		tolerance = researchFillGapDefaultDays
+	}
+	quality := &BacktestSeriesQuality{
+		AssetKey: benchmark.AssetKey, Name: benchmark.Name, Currency: benchmark.Currency,
+		IsCash: benchmark.IsCash, FillTolerance: tolerance,
+	}
+	if benchmark.IsCash {
+		return quality, nil
+	}
+	quality.RawStart = researchDayToDate(series.firstDay())
+	quality.RawEnd = researchDayToDate(series.lastDay())
+	quality.RawPointCount = len(series.days)
+	quality.FillCount, quality.MaxFillGapDays = series.fillStats(
+		maxInt(lo, series.firstDay()), minInt(hi, series.lastDay()))
+	quality.FillGapExceeded = quality.MaxFillGapDays > tolerance
+	if quality.FillGapExceeded {
+		return nil, fmt.Errorf("%w: benchmark %s fill gap %d exceeds tolerance %d",
+			ErrResearchNoCommonWindow, benchmark.AssetKey, quality.MaxFillGapDays, tolerance)
+	}
+	return quality, nil
 }
 
 // --- derived tables ---
@@ -1068,52 +1150,43 @@ func buildYears(points []BacktestPoint, effective []bool, lo int) []BacktestYear
 		if len(yearPoints) == 0 {
 			continue
 		}
-		startNAV := prevEndNAV
-		endNAV := yearPoints[len(yearPoints)-1].NAV
-
-		// Intra-year drawdown from the year's running peak (entry included).
-		peak := startNAV
-		maxDD := 0.0
-		var rets []float64
-		prevNAV := startNAV
-		for i, p := range yearPoints {
-			if p.NAV > peak {
-				peak = p.NAV
-			}
-			if dd := p.NAV/peak - 1; dd < maxDD {
-				maxDD = dd
-			}
-			if yearEff[i] && prevNAV > 0 {
-				rets = append(rets, p.NAV/prevNAV-1)
-			}
-			prevNAV = p.NAV
-		}
-		vol := 0.0
-		if len(rets) >= 2 {
-			vol = sampleStd(rets) * math.Sqrt(252)
-		}
-		firstDate := yearPoints[0].Date
-		lastDate := yearPoints[len(yearPoints)-1].Date
-		isPartial := firstDate != fmt.Sprintf("%04d-01-01", year) ||
-			lastDate != fmt.Sprintf("%04d-12-31", year)
-		annual := 0.0
-		if startNAV > 0 {
-			annual = endNAV/startNAV - 1
-		}
-		years = append(years, BacktestYear{
-			Year:         year,
-			AnnualReturn: annual,
-			Volatility:   vol,
-			MaxDrawdown:  maxDD,
-			StartNAV:     startNAV,
-			EndNAV:       endNAV,
-			IsPartial:    isPartial,
-		})
-		prevEndNAV = endNAV
+		yearResult := buildResearchYear(year, prevEndNAV, yearPoints, yearEff)
+		years = append(years, yearResult)
+		prevEndNAV = yearResult.EndNAV
 	}
 	// Display order: newest first (td/099 §6.2).
 	sort.Slice(years, func(i, j int) bool { return years[i].Year > years[j].Year })
 	return years
+}
+
+func buildResearchYear(
+	year int, startNAV float64, points []BacktestPoint, effective []bool,
+) BacktestYear {
+	peak, maxDrawdown, prevNAV := startNAV, 0.0, startNAV
+	returns := make([]float64, 0, len(points))
+	for i, point := range points {
+		peak = math.Max(peak, point.NAV)
+		maxDrawdown = math.Min(maxDrawdown, point.NAV/peak-1)
+		if effective[i] && prevNAV > 0 {
+			returns = append(returns, point.NAV/prevNAV-1)
+		}
+		prevNAV = point.NAV
+	}
+	volatility := 0.0
+	if len(returns) >= 2 {
+		volatility = sampleStd(returns) * math.Sqrt(252)
+	}
+	endNAV := points[len(points)-1].NAV
+	annualReturn := 0.0
+	if startNAV > 0 {
+		annualReturn = endNAV/startNAV - 1
+	}
+	return BacktestYear{
+		Year: year, AnnualReturn: annualReturn, Volatility: volatility,
+		MaxDrawdown: maxDrawdown, StartNAV: startNAV, EndNAV: endNAV,
+		IsPartial: points[0].Date != fmt.Sprintf("%04d-01-01", year) ||
+			points[len(points)-1].Date != fmt.Sprintf("%04d-12-31", year),
+	}
 }
 
 func buildMonths(points []BacktestPoint) []BacktestMonth {
@@ -1153,6 +1226,7 @@ func buildSummary(
 	months []BacktestMonth,
 	effReturns []float64,
 	effAssetReturns [][]float64,
+	effContribReturns [][]float64,
 	assets []preparedAsset,
 	targets []float64,
 	weightRows, contribRows [][]float64,
@@ -1165,75 +1239,85 @@ func buildSummary(
 		EffectiveReturnDays: len(effReturns),
 		RiskFreeRate:        in.RiskFreeRate,
 	}
-	days := hi - lo
-	if days > 0 && navs[0] > 0 && navs[n-1] > 0 {
-		summary.CAGR = math.Pow(navs[n-1]/navs[0], 365.25/float64(days)) - 1
-	}
-	if len(effReturns) >= 2 {
-		vol := sampleStd(effReturns) * math.Sqrt(252)
-		summary.AnnualVolatility = &vol
-		if vol > 0 {
-			sharpe := (summary.CAGR - in.RiskFreeRate) / vol
-			summary.Sharpe = &sharpe
-		}
-	}
-	minDD := 0.0
-	troughIdx := 0
-	for t, dd := range drawdowns {
-		if dd < minDD {
-			minDD = dd
-			troughIdx = t
-		}
-	}
-	summary.MaxDrawdown = minDD
-	if minDD != 0 {
-		calmar := summary.CAGR / math.Abs(minDD)
-		summary.Calmar = &calmar
-	}
-
-	// Max drawdown window: preceding peak and recovery around the trough.
-	if minDD < 0 {
-		peakIdx := 0
-		peakVal := navs[0]
-		for t := 0; t <= troughIdx; t++ {
-			if navs[t] > peakVal {
-				peakVal = navs[t]
-				peakIdx = t
-			}
-		}
-		summary.MaxDrawdownStart = points[peakIdx].Date
-		summary.MaxDrawdownTrough = points[troughIdx].Date
-		for t := troughIdx + 1; t < n; t++ {
-			if navs[t] >= peakVal {
-				summary.MaxDrawdownRecovery = points[t].Date
-				break
-			}
-		}
-	}
-
-	// Drawdown durations (peak -> new high).
+	populateResearchRiskSummary(&summary, in.RiskFreeRate, effReturns, navs, hi-lo)
+	populateResearchDrawdownWindow(&summary, points, navs, drawdowns)
 	summary.MaxDrawdownDurationDays, summary.CurrentDrawdownDays = drawdownDurations(navs)
+	populateResearchExtremes(&summary, years, months)
+	summary.Contributions = buildContributions(
+		assets, targets, weightRows, contribRows, effReturns, effContribReturns, navs, drawdowns,
+	)
+	summary.Correlations = buildCorrelations(assets, effAssetReturns)
+	return summary
+}
 
-	// Year / month extremes.
-	for _, y := range years {
-		yc := y
-		if summary.BestYear == nil || yc.AnnualReturn > summary.BestYear.Return {
-			summary.BestYear = &YearExtreme{Year: yc.Year, Return: yc.AnnualReturn}
+func populateResearchRiskSummary(
+	summary *BacktestSummary, riskFreeRate float64, returns, navs []float64, days int,
+) {
+	if days > 0 && navs[0] > 0 && navs[len(navs)-1] > 0 {
+		summary.CAGR = math.Pow(navs[len(navs)-1]/navs[0], 365.25/float64(days)) - 1
+	}
+	if len(returns) < 2 {
+		return
+	}
+	volatility := sampleStd(returns) * math.Sqrt(252)
+	summary.AnnualVolatility = &volatility
+	if volatility > 0 {
+		sharpe := (summary.CAGR - riskFreeRate) / volatility
+		summary.Sharpe = &sharpe
+	}
+}
+
+func populateResearchDrawdownWindow(
+	summary *BacktestSummary, points []BacktestPoint, navs, drawdowns []float64,
+) {
+	troughIdx := 0
+	for i, drawdown := range drawdowns {
+		if drawdown < summary.MaxDrawdown {
+			summary.MaxDrawdown = drawdown
+			troughIdx = i
 		}
-		if summary.WorstYear == nil || yc.AnnualReturn < summary.WorstYear.Return {
-			summary.WorstYear = &YearExtreme{Year: yc.Year, Return: yc.AnnualReturn}
+	}
+	if summary.MaxDrawdown == 0 {
+		return
+	}
+	calmar := summary.CAGR / math.Abs(summary.MaxDrawdown)
+	summary.Calmar = &calmar
+	peakIdx, peakValue := 0, navs[0]
+	for i := 0; i <= troughIdx; i++ {
+		if navs[i] > peakValue {
+			peakIdx, peakValue = i, navs[i]
+		}
+	}
+	summary.MaxDrawdownStart = points[peakIdx].Date
+	summary.MaxDrawdownTrough = points[troughIdx].Date
+	for i := troughIdx + 1; i < len(navs); i++ {
+		if navs[i] >= peakValue {
+			summary.MaxDrawdownRecovery = points[i].Date
+			return
+		}
+	}
+}
+
+func populateResearchExtremes(
+	summary *BacktestSummary, years []BacktestYear, months []BacktestMonth,
+) {
+	for _, year := range years {
+		if summary.BestYear == nil || year.AnnualReturn > summary.BestYear.Return {
+			summary.BestYear = &YearExtreme{Year: year.Year, Return: year.AnnualReturn}
+		}
+		if summary.WorstYear == nil || year.AnnualReturn < summary.WorstYear.Return {
+			summary.WorstYear = &YearExtreme{Year: year.Year, Return: year.AnnualReturn}
 		}
 	}
 	positive := 0
-	for _, m := range months {
-		mc := m
-		if summary.BestMonth == nil || mc.MonthlyReturn > summary.BestMonth.Return {
-			summary.BestMonth = &MonthExtreme{Year: mc.Year, Month: mc.Month, Return: mc.MonthlyReturn}
+	for _, month := range months {
+		if summary.BestMonth == nil || month.MonthlyReturn > summary.BestMonth.Return {
+			summary.BestMonth = &MonthExtreme{Year: month.Year, Month: month.Month, Return: month.MonthlyReturn}
 		}
-		if summary.WorstMonth == nil || mc.MonthlyReturn < summary.WorstMonth.Return {
-			summary.WorstMonth = &MonthExtreme{Year: mc.Year, Month: mc.Month, Return: mc.MonthlyReturn}
+		if summary.WorstMonth == nil || month.MonthlyReturn < summary.WorstMonth.Return {
+			summary.WorstMonth = &MonthExtreme{Year: month.Year, Month: month.Month, Return: month.MonthlyReturn}
 		}
-		if mc.MonthlyReturn > 0 {
+		if month.MonthlyReturn > 0 {
 			positive++
 		}
 	}
@@ -1241,17 +1325,12 @@ func buildSummary(
 		ratio := float64(positive) / float64(len(months))
 		summary.PositiveMonthRatio = &ratio
 	}
-
-	summary.Contributions = buildContributions(
-		assets, targets, weightRows, contribRows, effReturns, effAssetReturns, navs, drawdowns,
-	)
-	summary.Correlations = buildCorrelations(assets, effAssetReturns)
-	return summary
 }
 
 // drawdownDurations returns the longest historical drawdown episode length
 // (calendar days, ongoing episodes included) and the current episode length.
-func drawdownDurations(navs []float64) (maxDur, current int) {
+func drawdownDurations(navs []float64) (int, int) {
+	maxDur, current := 0, 0
 	peakIdx := 0
 	peakVal := navs[0]
 	for t := 1; t < len(navs); t++ {
@@ -1278,7 +1357,7 @@ func buildContributions(
 	targets []float64,
 	weightRows, contribRows [][]float64,
 	effReturns []float64,
-	effAssetReturns [][]float64,
+	effContribReturns [][]float64,
 	navs, drawdowns []float64,
 ) []BacktestAssetContribution {
 	n := len(weightRows)
@@ -1314,21 +1393,16 @@ func buildContributions(
 			EndWeight:    weightRows[n-1][i],
 		}
 		for t := 1; t < n; t++ {
-			c.CumulativeContribution += contribRows[t][i]
+			c.CumulativeContribution += (navs[t-1] / navs[0]) * contribRows[t][i]
 		}
 		if minDD < 0 {
 			for t := peakIdx + 1; t <= troughIdx; t++ {
-				c.DrawdownContribution += contribRows[t][i]
+				c.DrawdownContribution += (navs[t-1] / navs[peakIdx]) * contribRows[t][i]
 			}
 		}
 		if portVar > 0 {
-			avgW := 0.0
-			for t := 0; t < n; t++ {
-				avgW += weightRows[t][i]
-			}
-			avgW /= float64(n)
-			cov := sampleCovariance(effAssetReturns[i], effReturns)
-			rc := avgW * cov / portVar
+			cov := sampleCovariance(effContribReturns[i], effReturns)
+			rc := cov / portVar
 			c.RiskContribution = &rc
 		}
 		out = append(out, c)
@@ -1369,7 +1443,6 @@ func buildCorrelations(assets []preparedAsset, effAssetReturns [][]float64) *Bac
 }
 
 func buildDataQuality(
-	in BacktestInput,
 	assets []preparedAsset,
 	fxSeries map[string]preparedSeries,
 	fxTolerance int,

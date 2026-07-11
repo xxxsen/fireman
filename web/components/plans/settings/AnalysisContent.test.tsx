@@ -11,6 +11,7 @@ const getParametersMock = vi.hoisted(() => vi.fn());
 const listSimulationsMock = vi.hoisted(() => vi.fn());
 const listStressTestsMock = vi.hoisted(() => vi.fn());
 const listSensitivityTestsMock = vi.hoisted(() => vi.fn());
+const getSimulationReadinessMock = vi.hoisted(() => vi.fn());
 
 let jobStatusCallbacks: {
   onComplete?: () => void;
@@ -99,6 +100,7 @@ const defaultSimulations = {
 };
 
 vi.mock("@/lib/api/simulations", () => ({
+	getSimulationReadiness: (...args: unknown[]) => getSimulationReadinessMock(...args),
   listSimulations: (...args: unknown[]) => listSimulationsMock(...args),
   getJob: () =>
     Promise.resolve({
@@ -188,6 +190,8 @@ describe("AnalysisPage zero success", () => {
     listStressTestsMock.mockResolvedValue({ stress_tests: [] });
     listSensitivityTestsMock.mockReset();
     listSensitivityTestsMock.mockResolvedValue({ sensitivity_tests: [] });
+		getSimulationReadinessMock.mockReset();
+		getSimulationReadinessMock.mockResolvedValue({ ready: true, blocking_assets: [], active_tasks: [] });
     useJobStatusMock.mockImplementation((jobId) => {
       if (!jobId) {
         return { job: null, progress: 0, error: null };
@@ -248,7 +252,32 @@ describe("AnalysisPage zero success", () => {
   it("initializes simulation runs from plan parameters", async () => {
     renderAnalysis();
     const input = await screen.findByLabelText("模拟次数");
-    await waitFor(() => expect(input).toHaveValue(20000));
+    await waitFor(() => expect(input).toHaveValue("20000"));
+  });
+
+  it("requires readiness success and a valid integer run count", async () => {
+    getSimulationReadinessMock.mockReset();
+    getSimulationReadinessMock.mockImplementation(() => new Promise(() => {}));
+    const first = renderAnalysis();
+    expect(await screen.findByRole("button", { name: "运行模拟" })).toBeDisabled();
+    first.view.unmount();
+
+    getSimulationReadinessMock.mockReset();
+    getSimulationReadinessMock.mockResolvedValue({ ready: true, blocking_assets: [], active_tasks: [] });
+    renderAnalysis();
+    const input = await screen.findByLabelText("模拟次数");
+    const button = screen.getByRole("button", { name: "运行模拟" });
+    for (const invalid of ["", "1000.5", "999", "100001"]) {
+      fireEvent.change(input, { target: { value: invalid } });
+      expect(button).toBeDisabled();
+    }
+    fireEvent.change(input, { target: { value: "1000" } });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: "100000" } });
+    expect(button).not.toBeDisabled();
+    fireEvent.change(input, { target: { value: "1000" } });
+    fireEvent.click(button);
+    await waitFor(() => expect(createSimulation).toHaveBeenCalledWith("plan_1", { runs: 1000 }));
   });
 
   it("disables stress and sensitivity while simulation job is busy", async () => {

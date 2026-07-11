@@ -249,34 +249,39 @@ func (s *ResearchService) buildAssetView(
 		}
 	}
 	view.BacktestReady = view.IsCash || (view.HasHistory && view.FXAvailable)
-
-	switch {
-	case view.IsCash:
-		view.QualityBadges = append(view.QualityBadges, "normal")
-	default:
-		if !view.HasHistory {
-			view.QualityBadges = append(view.QualityBadges, "missing_history")
-		}
-		if view.HasHistory && row.Metrics != nil && row.Metrics.HistoryYears < 3 {
-			view.QualityBadges = append(view.QualityBadges, "short_history")
-		}
-		if view.Stale {
-			view.QualityBadges = append(view.QualityBadges, "stale")
-		}
-		if !view.FXAvailable {
-			view.QualityBadges = append(view.QualityBadges, "fx_missing")
-		}
-		if row.Metrics != nil && row.Metrics.AnnualVolatility != nil && *row.Metrics.AnnualVolatility > 1 {
-			view.QualityBadges = append(view.QualityBadges, "abnormal_volatility")
-		}
-		if row.SyncStatus == repository.WorkerTaskStatusFailed {
-			view.QualityBadges = append(view.QualityBadges, "sync_failed")
-		}
-		if len(view.QualityBadges) == 0 {
-			view.QualityBadges = append(view.QualityBadges, "normal")
-		}
-	}
+	view.QualityBadges = researchAssetQualityBadges(view, row)
 	return view
+}
+
+func researchAssetQualityBadges(
+	view ResearchAssetView, row repository.ResearchAssetRow,
+) []string {
+	if view.IsCash {
+		return []string{"normal"}
+	}
+	badges := make([]string, 0)
+	if !view.HasHistory {
+		badges = append(badges, "missing_history")
+	}
+	if view.HasHistory && row.Metrics != nil && row.Metrics.HistoryYears < 3 {
+		badges = append(badges, "short_history")
+	}
+	if view.Stale {
+		badges = append(badges, "stale")
+	}
+	if !view.FXAvailable {
+		badges = append(badges, "fx_missing")
+	}
+	if row.Metrics != nil && row.Metrics.AnnualVolatility != nil && *row.Metrics.AnnualVolatility > 1 {
+		badges = append(badges, "abnormal_volatility")
+	}
+	if row.SyncStatus == repository.WorkerTaskStatusFailed {
+		badges = append(badges, "sync_failed")
+	}
+	if len(badges) == 0 {
+		return []string{"normal"}
+	}
+	return badges
 }
 
 // --- collections ---
@@ -394,9 +399,37 @@ func (s *ResearchService) CreateCollection(
 	ctx context.Context, in ResearchCollectionInput,
 ) (ResearchCollectionDetail, error) {
 	var zero ResearchCollectionDetail
+	name, err := normalizeResearchCollectionInput(&in)
+	if err != nil {
+		return zero, err
+	}
+	itemInputs, err := s.resolveResearchCollectionItems(ctx, &in)
+	if err != nil {
+		return zero, err
+	}
+	now := s.now().UnixMilli()
+	collection, err := buildResearchCollectionRecord(in, name, now)
+	if err != nil {
+		return zero, err
+	}
+	if err := s.validateResearchBenchmarkAsset(ctx, in.BenchmarkAssetKey); err != nil {
+		return zero, err
+	}
+	items, err := s.buildItems(ctx, collection.ID, itemInputs, now)
+	if err != nil {
+		return zero, err
+	}
+
+	if err := s.persistResearchCollection(ctx, collection, items); err != nil {
+		return zero, err
+	}
+	return s.GetCollection(ctx, collection.ID)
+}
+
+func normalizeResearchCollectionInput(in *ResearchCollectionInput) (string, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return zero, newErr("invalid_request", "name is required", nil)
+		return "", newErr("invalid_request", "name is required", nil)
 	}
 	if in.BaseCurrency == "" {
 		in.BaseCurrency = "CNY"
@@ -408,36 +441,41 @@ func (s *ResearchService) CreateCollection(
 		in.StartPolicy = ResearchStartPolicyCommon
 	}
 	if err := validateCollectionEnums(in.BaseCurrency, in.RebalancePolicy, in.StartPolicy); err != nil {
-		return zero, err
+		return "", err
 	}
 	if err := validateWindowDates(in.StartPolicy, in.WindowStart, in.WindowEnd); err != nil {
-		return zero, err
+		return "", err
 	}
 	if in.RebalancePolicy == ResearchRebalanceThreshold && in.RebalanceThreshold <= 0 {
-		return zero, newErr("invalid_request",
-			"rebalance_threshold must be positive for the threshold policy", nil)
+		return "", newErr(
+			"invalid_request", "rebalance_threshold must be positive for the threshold policy", nil,
+		)
 	}
+	return name, nil
+}
 
-	itemInputs := in.Items
-	switch {
-	case in.FromPlanID != "":
-		planItems, planCurrency, err := s.itemsFromPlan(ctx, in.FromPlanID)
+func (s *ResearchService) resolveResearchCollectionItems(
+	ctx context.Context, in *ResearchCollectionInput,
+) ([]ResearchCollectionItemInput, error) {
+	if in.FromPlanID != "" {
+		items, currency, err := s.itemsFromPlan(ctx, in.FromPlanID)
 		if err != nil {
-			return zero, err
+			return nil, err
 		}
-		itemInputs = planItems
-		if in.BaseCurrency == "CNY" && planCurrency != "" {
-			in.BaseCurrency = planCurrency
+		if in.BaseCurrency == "CNY" && currency != "" {
+			in.BaseCurrency = currency
 		}
-	case in.FromCollectionID != "":
-		copied, err := s.itemsFromCollection(ctx, in.FromCollectionID)
-		if err != nil {
-			return zero, err
-		}
-		itemInputs = copied
+		return items, nil
 	}
+	if in.FromCollectionID != "" {
+		return s.itemsFromCollection(ctx, in.FromCollectionID)
+	}
+	return in.Items, nil
+}
 
-	now := s.now().UnixMilli()
+func buildResearchCollectionRecord(
+	in ResearchCollectionInput, name string, now int64,
+) (repository.ResearchCollection, error) {
 	initialAmount := int64(100000000)
 	if in.InitialAmountMinor != nil && *in.InitialAmountMinor > 0 {
 		initialAmount = *in.InitialAmountMinor
@@ -448,58 +486,52 @@ func (s *ResearchService) CreateCollection(
 	}
 	tagsJSON, err := json.Marshal(tags)
 	if err != nil {
-		return zero, fmt.Errorf("marshal tags: %w", err)
+		return repository.ResearchCollection{}, fmt.Errorf("marshal tags: %w", err)
 	}
+	return repository.ResearchCollection{
+		ID: "rc_" + uuid.New().String(), Name: name, Description: strings.TrimSpace(in.Description),
+		BaseCurrency: in.BaseCurrency, InitialAmountMinor: initialAmount,
+		RebalancePolicy: in.RebalancePolicy, RebalanceThreshold: in.RebalanceThreshold,
+		StartPolicy: in.StartPolicy, WindowStart: in.WindowStart, WindowEnd: in.WindowEnd,
+		BenchmarkAssetKey: in.BenchmarkAssetKey, RiskFreeRate: in.RiskFreeRate,
+		TransactionCostRate: in.TransactionCostRate, Status: repository.ResearchCollectionStatusActive,
+		TagsJSON: string(tagsJSON), CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
 
-	if in.BenchmarkAssetKey != "" {
-		if _, err := s.assets.GetByKey(ctx, in.BenchmarkAssetKey); err != nil {
-			if errors.Is(err, repository.ErrMarketAssetNotFound) {
-				return zero, newErr("market_asset_not_found", "benchmark asset not found", nil)
-			}
-			return zero, wrapRepo("load benchmark asset", err)
+func (s *ResearchService) validateResearchBenchmarkAsset(ctx context.Context, assetKey string) error {
+	if assetKey == "" {
+		return nil
+	}
+	if _, err := s.assets.GetByKey(ctx, assetKey); err != nil {
+		if errors.Is(err, repository.ErrMarketAssetNotFound) {
+			return newErr("market_asset_not_found", "benchmark asset not found", nil)
 		}
+		return wrapRepo("load benchmark asset", err)
 	}
+	return nil
+}
 
-	collection := repository.ResearchCollection{
-		ID:                  "rc_" + uuid.New().String(),
-		Name:                name,
-		Description:         strings.TrimSpace(in.Description),
-		BaseCurrency:        in.BaseCurrency,
-		InitialAmountMinor:  initialAmount,
-		RebalancePolicy:     in.RebalancePolicy,
-		RebalanceThreshold:  in.RebalanceThreshold,
-		StartPolicy:         in.StartPolicy,
-		WindowStart:         in.WindowStart,
-		WindowEnd:           in.WindowEnd,
-		BenchmarkAssetKey:   in.BenchmarkAssetKey,
-		RiskFreeRate:        in.RiskFreeRate,
-		TransactionCostRate: in.TransactionCostRate,
-		Status:              repository.ResearchCollectionStatusActive,
-		TagsJSON:            string(tagsJSON),
-		CreatedAt:           now,
-		UpdatedAt:           now,
-	}
-
-	items, err := s.buildItems(ctx, collection.ID, itemInputs, now)
-	if err != nil {
-		return zero, err
-	}
-
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+func (s *ResearchService) persistResearchCollection(
+	ctx context.Context,
+	collection repository.ResearchCollection,
+	items []repository.ResearchCollectionItem,
+) error {
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		if err := s.research.CreateCollectionTx(ctx, tx, collection); err != nil {
-			return err
+			return fmt.Errorf("create research collection: %w", err)
 		}
 		for _, item := range items {
 			if err := s.research.CreateItemTx(ctx, tx, item); err != nil {
-				return err
+				return fmt.Errorf("create research collection item: %w", err)
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return zero, wrapRepo("create research collection", err)
+		return wrapRepo("create research collection", err)
 	}
-	return s.GetCollection(ctx, collection.ID)
+	return nil
 }
 
 // buildItems validates and materializes item inputs. Weights default to an
@@ -516,65 +548,75 @@ func (s *ResearchService) buildItems(
 	}
 	seen := map[string]bool{}
 	for i, in := range inputs {
-		assetKey := strings.TrimSpace(in.AssetKey)
-		if assetKey == "" {
-			return nil, newErr("invalid_request", "items require asset_key", nil)
-		}
-		asset, err := s.assets.GetByKey(ctx, assetKey)
+		item, dimKey, err := s.buildResearchItem(ctx, collectionID, in, i, len(inputs), allOmitted, now)
 		if err != nil {
-			if errors.Is(err, repository.ErrMarketAssetNotFound) {
-				return nil, newErr("market_asset_not_found",
-					"market asset not found: "+assetKey, nil)
-			}
-			return nil, wrapRepo("load market asset", err)
+			return nil, err
 		}
-		adjustPolicy := strings.TrimSpace(in.AdjustPolicy)
-		if adjustPolicy == "" {
-			adjustPolicy = "none"
-		}
-		pointType := strings.TrimSpace(in.PointType)
-		if pointType == "" {
-			pointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
-		}
-		dimKey := assetKey + "|" + adjustPolicy + "|" + pointType
 		if seen[dimKey] {
 			return nil, newErr("invalid_request",
 				"duplicate item dimension "+dimKey, nil)
 		}
 		seen[dimKey] = true
-
-		weight := 0.0
-		if in.Weight != nil {
-			weight = *in.Weight
-		} else if allOmitted && len(inputs) > 0 {
-			weight = 1.0 / float64(len(inputs))
-		}
-		if weight < 0 || weight > 1+ResearchWeightTolerance {
-			return nil, newErr("invalid_request",
-				fmt.Sprintf("weight for %s must be within [0, 1]", assetKey), nil)
-		}
-		enabled := true
-		if in.Enabled != nil {
-			enabled = *in.Enabled
-		}
-		items = append(items, repository.ResearchCollectionItem{
-			ID:           "rci_" + uuid.New().String(),
-			CollectionID: collectionID,
-			AssetKey:     assetKey,
-			Enabled:      enabled,
-			Weight:       weight,
-			WeightLocked: in.WeightLocked,
-			AdjustPolicy: adjustPolicy,
-			PointType:    pointType,
-			AssetClass:   strings.TrimSpace(in.AssetClass),
-			Region:       strings.TrimSpace(in.Region),
-			Note:         strings.TrimSpace(in.Note),
-			SortOrder:    i,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		})
+		items = append(items, item)
 	}
 	return items, nil
+}
+
+func (s *ResearchService) buildResearchItem(
+	ctx context.Context,
+	collectionID string,
+	in ResearchCollectionItemInput,
+	index, total int,
+	allWeightsOmitted bool,
+	now int64,
+) (repository.ResearchCollectionItem, string, error) {
+	var zero repository.ResearchCollectionItem
+	assetKey := strings.TrimSpace(in.AssetKey)
+	if assetKey == "" {
+		return zero, "", newErr("invalid_request", "items require asset_key", nil)
+	}
+	asset, err := s.assets.GetByKey(ctx, assetKey)
+	if err != nil {
+		if errors.Is(err, repository.ErrMarketAssetNotFound) {
+			return zero, "", newErr("market_asset_not_found", "market asset not found: "+assetKey, nil)
+		}
+		return zero, "", wrapRepo("load market asset", err)
+	}
+	adjustPolicy := strings.TrimSpace(in.AdjustPolicy)
+	if adjustPolicy == "" {
+		adjustPolicy = "none"
+	}
+	pointType := strings.TrimSpace(in.PointType)
+	if pointType == "" {
+		pointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+	}
+	weight := researchInputWeight(in.Weight, allWeightsOmitted, total)
+	if weight < 0 || weight > 1+ResearchWeightTolerance {
+		return zero, "", newErr("invalid_request",
+			fmt.Sprintf("weight for %s must be within [0, 1]", assetKey), nil)
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	item := repository.ResearchCollectionItem{
+		ID: "rci_" + uuid.New().String(), CollectionID: collectionID, AssetKey: assetKey,
+		Enabled: enabled, Weight: weight, WeightLocked: in.WeightLocked,
+		AdjustPolicy: adjustPolicy, PointType: pointType,
+		AssetClass: strings.TrimSpace(in.AssetClass), Region: strings.TrimSpace(in.Region),
+		Note: strings.TrimSpace(in.Note), SortOrder: index, CreatedAt: now, UpdatedAt: now,
+	}
+	return item, assetKey + "|" + adjustPolicy + "|" + pointType, nil
+}
+
+func researchInputWeight(weight *float64, allOmitted bool, total int) float64 {
+	if weight != nil {
+		return *weight
+	}
+	if allOmitted && total > 0 {
+		return 1 / float64(total)
+	}
+	return 0
 }
 
 // itemsFromPlan converts plan holdings into item inputs: current amounts
@@ -793,10 +835,40 @@ func (s *ResearchService) UpdateCollection(
 		}
 		return zero, wrapRepo("load research collection", err)
 	}
+	currentCollectionUpdatedAt := collection.UpdatedAt
+	if err := applyResearchCollectionUpdate(&collection, in); err != nil {
+		return zero, err
+	}
+	if err := s.applyResearchBenchmarkUpdate(ctx, &collection, in.BenchmarkAssetKey); err != nil {
+		return zero, err
+	}
+	if err := validateUpdatedResearchCollection(collection); err != nil {
+		return zero, err
+	}
+	collection.UpdatedAt = maxInt64(s.now().UnixMilli(), currentCollectionUpdatedAt+1)
+	if err := s.research.UpdateCollectionTx(ctx, nil, collection); err != nil {
+		return zero, wrapRepo("update research collection", err)
+	}
+	return s.GetCollection(ctx, id)
+}
+
+func applyResearchCollectionUpdate(
+	collection *repository.ResearchCollection, in ResearchCollectionUpdate,
+) error {
+	if err := applyResearchCollectionIdentity(collection, in); err != nil {
+		return err
+	}
+	applyResearchCollectionWindow(collection, in)
+	return applyResearchCollectionMetadata(collection, in)
+}
+
+func applyResearchCollectionIdentity(
+	collection *repository.ResearchCollection, in ResearchCollectionUpdate,
+) error {
 	if in.Name != nil {
 		name := strings.TrimSpace(*in.Name)
 		if name == "" {
-			return zero, newErr("invalid_request", "name cannot be empty", nil)
+			return newErr("invalid_request", "name cannot be empty", nil)
 		}
 		collection.Name = name
 	}
@@ -808,10 +880,16 @@ func (s *ResearchService) UpdateCollection(
 	}
 	if in.InitialAmountMinor != nil {
 		if *in.InitialAmountMinor <= 0 {
-			return zero, newErr("invalid_request", "initial_amount_minor must be positive", nil)
+			return newErr("invalid_request", "initial_amount_minor must be positive", nil)
 		}
 		collection.InitialAmountMinor = *in.InitialAmountMinor
 	}
+	return nil
+}
+
+func applyResearchCollectionWindow(
+	collection *repository.ResearchCollection, in ResearchCollectionUpdate,
+) {
 	if in.RebalancePolicy != nil {
 		collection.RebalancePolicy = *in.RebalancePolicy
 	}
@@ -827,18 +905,11 @@ func (s *ResearchService) UpdateCollection(
 	if in.WindowEnd != nil {
 		collection.WindowEnd = *in.WindowEnd
 	}
-	if in.BenchmarkAssetKey != nil {
-		key := strings.TrimSpace(*in.BenchmarkAssetKey)
-		if key != "" {
-			if _, err := s.assets.GetByKey(ctx, key); err != nil {
-				if errors.Is(err, repository.ErrMarketAssetNotFound) {
-					return zero, newErr("market_asset_not_found", "benchmark asset not found", nil)
-				}
-				return zero, wrapRepo("load benchmark asset", err)
-			}
-		}
-		collection.BenchmarkAssetKey = key
-	}
+}
+
+func applyResearchCollectionMetadata(
+	collection *repository.ResearchCollection, in ResearchCollectionUpdate,
+) error {
 	if in.RiskFreeRate != nil {
 		collection.RiskFreeRate = *in.RiskFreeRate
 	}
@@ -848,34 +919,50 @@ func (s *ResearchService) UpdateCollection(
 	if in.Status != nil {
 		if *in.Status != repository.ResearchCollectionStatusActive &&
 			*in.Status != repository.ResearchCollectionStatusArchived {
-			return zero, newErr("invalid_request", "status must be active or archived", nil)
+			return newErr("invalid_request", "status must be active or archived", nil)
 		}
 		collection.Status = *in.Status
 	}
 	if in.Tags != nil {
 		tagsJSON, err := json.Marshal(in.Tags)
 		if err != nil {
-			return zero, fmt.Errorf("marshal tags: %w", err)
+			return fmt.Errorf("marshal tags: %w", err)
 		}
 		collection.TagsJSON = string(tagsJSON)
 	}
+	return nil
+}
+
+func (s *ResearchService) applyResearchBenchmarkUpdate(
+	ctx context.Context,
+	collection *repository.ResearchCollection,
+	benchmarkAssetKey *string,
+) error {
+	if benchmarkAssetKey == nil {
+		return nil
+	}
+	key := strings.TrimSpace(*benchmarkAssetKey)
+	if err := s.validateResearchBenchmarkAsset(ctx, key); err != nil {
+		return err
+	}
+	collection.BenchmarkAssetKey = key
+	return nil
+}
+
+func validateUpdatedResearchCollection(collection repository.ResearchCollection) error {
 	if err := validateCollectionEnums(
 		collection.BaseCurrency, collection.RebalancePolicy, collection.StartPolicy); err != nil {
-		return zero, err
+		return err
 	}
 	if err := validateWindowDates(
 		collection.StartPolicy, collection.WindowStart, collection.WindowEnd); err != nil {
-		return zero, err
+		return err
 	}
 	if collection.RebalancePolicy == ResearchRebalanceThreshold && collection.RebalanceThreshold <= 0 {
-		return zero, newErr("invalid_request",
+		return newErr("invalid_request",
 			"rebalance_threshold must be positive for the threshold policy", nil)
 	}
-	collection.UpdatedAt = s.now().UnixMilli()
-	if err := s.research.UpdateCollectionTx(ctx, nil, collection); err != nil {
-		return zero, wrapRepo("update research collection", err)
-	}
-	return s.GetCollection(ctx, id)
+	return nil
 }
 
 // DeleteCollection archives by default; hard=true removes the collection and
@@ -930,9 +1017,12 @@ func (s *ResearchService) AddItem(
 				return newErr("research_item_duplicate",
 					"该资产维度已在集合中", map[string]any{"asset_key": item.AssetKey})
 			}
-			return err
+			return fmt.Errorf("create research item: %w", err)
 		}
-		return s.research.TouchCollectionTx(ctx, tx, collection.ID, now)
+		if err := s.research.TouchCollectionTx(ctx, tx, collection.ID, now); err != nil {
+			return fmt.Errorf("touch research collection: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return zero, wrapRepo("add research item", err)
@@ -964,12 +1054,37 @@ func (s *ResearchService) UpdateItem(
 		}
 		return zero, wrapRepo("load research item", err)
 	}
+	if err := applyResearchItemUpdate(&item, in); err != nil {
+		return zero, err
+	}
+	now := s.now().UnixMilli()
+	item.UpdatedAt = now
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.research.UpdateItemTx(ctx, tx, item); err != nil {
+			if isUniqueConstraintErr(err) {
+				return newErr("research_item_duplicate",
+					"该资产维度已在集合中", map[string]any{"asset_key": item.AssetKey})
+			}
+			return fmt.Errorf("update research item: %w", err)
+		}
+		if err := s.research.TouchCollectionTx(ctx, tx, collectionID, now); err != nil {
+			return fmt.Errorf("touch research collection: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return zero, wrapRepo("update research item", err)
+	}
+	return s.GetCollection(ctx, collectionID)
+}
+
+func applyResearchItemUpdate(item *repository.ResearchCollectionItem, in ResearchItemUpdate) error {
 	if in.Enabled != nil {
 		item.Enabled = *in.Enabled
 	}
 	if in.Weight != nil {
 		if *in.Weight < 0 || *in.Weight > 1+ResearchWeightTolerance {
-			return zero, newErr("invalid_request", "weight must be within [0, 1]", nil)
+			return newErr("invalid_request", "weight must be within [0, 1]", nil)
 		}
 		item.Weight = *in.Weight
 	}
@@ -994,22 +1109,7 @@ func (s *ResearchService) UpdateItem(
 	if in.SortOrder != nil {
 		item.SortOrder = *in.SortOrder
 	}
-	now := s.now().UnixMilli()
-	item.UpdatedAt = now
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.research.UpdateItemTx(ctx, tx, item); err != nil {
-			if isUniqueConstraintErr(err) {
-				return newErr("research_item_duplicate",
-					"该资产维度已在集合中", map[string]any{"asset_key": item.AssetKey})
-			}
-			return err
-		}
-		return s.research.TouchCollectionTx(ctx, tx, collectionID, now)
-	})
-	if err != nil {
-		return zero, wrapRepo("update research item", err)
-	}
-	return s.GetCollection(ctx, collectionID)
+	return nil
 }
 
 func (s *ResearchService) DeleteItem(
@@ -1019,9 +1119,12 @@ func (s *ResearchService) DeleteItem(
 	now := s.now().UnixMilli()
 	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		if err := s.research.DeleteItemTx(ctx, tx, collectionID, itemID); err != nil {
-			return err
+			return fmt.Errorf("delete research item: %w", err)
 		}
-		return s.research.TouchCollectionTx(ctx, tx, collectionID, now)
+		if err := s.research.TouchCollectionTx(ctx, tx, collectionID, now); err != nil {
+			return fmt.Errorf("touch research collection: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrResearchItemNotFound) {
@@ -1050,60 +1153,66 @@ func (s *ResearchService) NormalizeWeights(
 		return zero, wrapRepo("list research items", err)
 	}
 
-	lockedSum := 0.0
-	var unlocked []int
-	unlockedSum := 0.0
-	for i, item := range items {
-		if !item.Enabled {
-			continue
-		}
-		if item.WeightLocked {
-			lockedSum += item.Weight
-			continue
-		}
-		unlocked = append(unlocked, i)
-		unlockedSum += item.Weight
+	unlocked, err := normalizeResearchItemWeights(items)
+	if err != nil {
+		return zero, err
 	}
-	if len(unlocked) == 0 {
-		return zero, newErr("research_normalize_impossible",
-			"没有可归一化的未锁定资产", nil)
-	}
-	remainder := 1 - lockedSum
-	if remainder < -ResearchWeightTolerance {
-		return zero, newErr("research_normalize_impossible",
-			"锁定权重合计已超过 100%", map[string]any{"locked_sum": lockedSum})
-	}
-	if remainder < 0 {
-		remainder = 0
-	}
-	for _, idx := range unlocked {
-		if unlockedSum > 0 {
-			items[idx].Weight = items[idx].Weight / unlockedSum * remainder
-		} else {
-			items[idx].Weight = remainder / float64(len(unlocked))
-		}
-	}
-	// Absorb float residue into the last unlocked item so the sum is exact.
-	sum := lockedSum
-	for _, idx := range unlocked {
-		sum += items[idx].Weight
-	}
-	items[unlocked[len(unlocked)-1]].Weight += 1 - sum
 
 	now := s.now().UnixMilli()
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		for _, idx := range unlocked {
 			items[idx].UpdatedAt = now
 			if err := s.research.UpdateItemTx(ctx, tx, items[idx]); err != nil {
-				return err
+				return fmt.Errorf("normalize research item weight: %w", err)
 			}
 		}
-		return s.research.TouchCollectionTx(ctx, tx, collectionID, now)
+		if err := s.research.TouchCollectionTx(ctx, tx, collectionID, now); err != nil {
+			return fmt.Errorf("touch research collection: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return zero, wrapRepo("normalize research weights", err)
 	}
 	return s.GetCollection(ctx, collectionID)
+}
+
+func normalizeResearchItemWeights(items []repository.ResearchCollectionItem) ([]int, error) {
+	lockedSum, unlockedSum := 0.0, 0.0
+	unlocked := make([]int, 0, len(items))
+	for i, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		if item.WeightLocked {
+			lockedSum += item.Weight
+		} else {
+			unlocked = append(unlocked, i)
+			unlockedSum += item.Weight
+		}
+	}
+	if len(unlocked) == 0 {
+		return nil, newErr("research_normalize_impossible", "没有可归一化的未锁定资产", nil)
+	}
+	remainder := 1 - lockedSum
+	if remainder < -ResearchWeightTolerance {
+		return nil, newErr("research_normalize_impossible",
+			"锁定权重合计已超过 100%", map[string]any{"locked_sum": lockedSum})
+	}
+	remainder = math.Max(0, remainder)
+	for _, index := range unlocked {
+		if unlockedSum > 0 {
+			items[index].Weight = items[index].Weight / unlockedSum * remainder
+		} else {
+			items[index].Weight = remainder / float64(len(unlocked))
+		}
+	}
+	sum := lockedSum
+	for _, index := range unlocked {
+		sum += items[index].Weight
+	}
+	items[unlocked[len(unlocked)-1]].Weight += 1 - sum
+	return unlocked, nil
 }
 
 // --- readiness ---
@@ -1193,103 +1302,130 @@ func (s *ResearchService) SyncCollectionHistory(
 		only[key] = true
 	}
 	nowDay := int(s.now().Unix() / 86400)
-
-	needsFX := len(ds.FXPairs) > 0
-	for _, a := range ds.Enabled {
-		if len(only) > 0 && !only[a.Item.AssetKey] {
-			continue
-		}
-		if a.IsCash {
-			continue
-		}
-		if a.Task != nil && repository.IsActiveWorkerTaskStatus(a.Task.Status) {
-			view := taskToView(*a.Task)
-			out.Assets = append(out.Assets, ResearchSyncAssetResult{
-				AssetKey: a.Item.AssetKey, Status: "existed", Task: &view,
-			})
-			continue
-		}
-		need, reason := researchAssetNeedsSync(a, nowDay)
-		if req.Force || len(only) > 0 {
-			need = true
-			if reason == "" {
-				reason = "forced"
-			}
-		}
-		if !need {
-			out.Assets = append(out.Assets, ResearchSyncAssetResult{
-				AssetKey: a.Item.AssetKey, Status: "skipped", Reason: "up_to_date",
-			})
-			continue
-		}
-		res, err := s.marketSvc.SyncHistory(ctx, HistorySyncRequest{
-			AssetKey:     a.Item.AssetKey,
-			AdjustPolicy: a.Item.AdjustPolicy,
-			PointType:    a.Item.PointType,
-			Mode:         historyModeDefaultRefresh,
-		})
-		if err != nil {
-			var ae *AppError
-			if errors.As(err, &ae) {
-				out.Blocked = append(out.Blocked, ResearchSyncBlocked{
-					AssetKey: a.Item.AssetKey, Code: ae.Code, Message: ae.Message,
-				})
-				continue
-			}
-			return out, err
-		}
-		status := "created"
-		if res.Existed {
-			status = "existed"
-		}
-		task := res.Task
-		out.Assets = append(out.Assets, ResearchSyncAssetResult{
-			AssetKey: a.Item.AssetKey, Status: status, Reason: reason, Task: &task,
-		})
+	if err := s.syncResearchAssets(ctx, ds, req, only, nowDay, &out); err != nil {
+		return out, err
 	}
-
-	if needsFX {
-		fxNeedsSync := ds.FXSyncActive
-		if !fxNeedsSync {
-			for _, pair := range ds.FXPairs {
-				fx := ds.FX[pair]
-				if fx == nil || !fx.Found {
-					fxNeedsSync = true
-					break
-				}
-				last := fx.Points[len(fx.Points)-1].TradeDate
-				if d, err := parseResearchDate(last); err == nil &&
-					nowDay-d > ResearchStaleToleranceDays("") {
-					fxNeedsSync = true
-					break
-				}
-			}
-		}
-		if req.Force {
-			fxNeedsSync = true
-		}
-		if fxNeedsSync {
-			res, err := s.marketSvc.SyncFXRates(ctx)
-			if err != nil {
-				return out, err
-			}
-			status := "created"
-			if res.Existed {
-				status = "existed"
-			}
-			task := res.Task
-			for _, pair := range ds.FXPairs {
-				out.FX = append(out.FX, ResearchSyncFXResult{
-					Pair: pair, Status: status, Task: &task,
-				})
-			}
-		} else {
-			for _, pair := range ds.FXPairs {
-				out.FX = append(out.FX, ResearchSyncFXResult{Pair: pair, Status: "skipped"})
-			}
-		}
+	if err := s.syncResearchFX(ctx, ds, req.Force, nowDay, &out); err != nil {
+		return out, err
 	}
 	return out, nil
+}
+
+func (s *ResearchService) syncResearchAssets(
+	ctx context.Context,
+	ds *researchDataset,
+	req ResearchSyncRequest,
+	only map[string]bool,
+	nowDay int,
+	out *ResearchSyncResult,
+) error {
+	for _, asset := range ds.Enabled {
+		if asset.IsCash || (len(only) > 0 && !only[asset.Item.AssetKey]) {
+			continue
+		}
+		result, blocked, err := s.syncResearchAsset(ctx, asset, req.Force || len(only) > 0, nowDay)
+		if err != nil {
+			return err
+		}
+		if blocked != nil {
+			out.Blocked = append(out.Blocked, *blocked)
+		} else {
+			out.Assets = append(out.Assets, result)
+		}
+	}
+	return nil
+}
+
+func (s *ResearchService) syncResearchAsset(
+	ctx context.Context, asset researchAssetData, force bool, nowDay int,
+) (ResearchSyncAssetResult, *ResearchSyncBlocked, error) {
+	if asset.Task != nil && repository.IsActiveWorkerTaskStatus(asset.Task.Status) {
+		view := taskToView(*asset.Task)
+		return ResearchSyncAssetResult{
+			AssetKey: asset.Item.AssetKey, Status: "existed", Task: &view,
+		}, nil, nil
+	}
+	need, reason := researchAssetNeedsSync(asset, nowDay)
+	if force {
+		need = true
+		if reason == "" {
+			reason = "forced"
+		}
+	}
+	if !need {
+		return ResearchSyncAssetResult{
+			AssetKey: asset.Item.AssetKey, Status: "skipped", Reason: "up_to_date",
+		}, nil, nil
+	}
+	result, err := s.marketSvc.SyncHistory(ctx, HistorySyncRequest{
+		AssetKey: asset.Item.AssetKey, AdjustPolicy: asset.Item.AdjustPolicy,
+		PointType: asset.Item.PointType, Mode: historyModeDefaultRefresh,
+	})
+	if err != nil {
+		var appErr *AppError
+		if errors.As(err, &appErr) {
+			return ResearchSyncAssetResult{}, &ResearchSyncBlocked{
+				AssetKey: asset.Item.AssetKey, Code: appErr.Code, Message: appErr.Message,
+			}, nil
+		}
+		return ResearchSyncAssetResult{}, nil, err
+	}
+	status := "created"
+	if result.Existed {
+		status = "existed"
+	}
+	task := result.Task
+	return ResearchSyncAssetResult{
+		AssetKey: asset.Item.AssetKey, Status: status, Reason: reason, Task: &task,
+	}, nil, nil
+}
+
+func (s *ResearchService) syncResearchFX(
+	ctx context.Context,
+	ds *researchDataset,
+	force bool,
+	nowDay int,
+	out *ResearchSyncResult,
+) error {
+	if len(ds.FXPairs) == 0 {
+		return nil
+	}
+	if !force && !researchFXNeedsSync(ds, nowDay) {
+		for _, pair := range ds.FXPairs {
+			out.FX = append(out.FX, ResearchSyncFXResult{Pair: pair, Status: "skipped"})
+		}
+		return nil
+	}
+	result, err := s.marketSvc.SyncFXRates(ctx)
+	if err != nil {
+		return err
+	}
+	status := "created"
+	if result.Existed {
+		status = "existed"
+	}
+	task := result.Task
+	for _, pair := range ds.FXPairs {
+		out.FX = append(out.FX, ResearchSyncFXResult{Pair: pair, Status: status, Task: &task})
+	}
+	return nil
+}
+
+func researchFXNeedsSync(ds *researchDataset, nowDay int) bool {
+	if ds.FXSyncActive {
+		return true
+	}
+	for _, pair := range ds.FXPairs {
+		fx := ds.FX[pair]
+		if fx == nil || !fx.Found {
+			return true
+		}
+		last := fx.Points[len(fx.Points)-1].TradeDate
+		if day, err := parseResearchDate(last); err == nil && nowDay-day > ResearchStaleToleranceDays("") {
+			return true
+		}
+	}
+	return false
 }
 
 // researchAssetNeedsSync decides whether one asset needs a history refresh:
@@ -1358,10 +1494,12 @@ type researchSnapshotParams struct {
 }
 
 type researchSnapshotAsset struct {
+	ItemID       string  `json:"item_id"`
 	AssetKey     string  `json:"asset_key"`
 	Name         string  `json:"name"`
 	Currency     string  `json:"currency"`
 	Weight       float64 `json:"weight"`
+	WeightLocked bool    `json:"weight_locked"`
 	IsCash       bool    `json:"is_cash"`
 	AdjustPolicy string  `json:"adjust_policy"`
 	PointType    string  `json:"point_type"`
@@ -1417,17 +1555,10 @@ func (s *ResearchService) CreateBacktest(
 		return zero, fmt.Errorf("marshal input snapshot: %w", err)
 	}
 
-	// Idempotency: an identical succeeded run is returned as-is; an identical
-	// queued/running run is returned for polling.
-	if run, err := s.research.FindSucceededRunByInputHash(ctx, collectionID, inputHash); err == nil {
-		return ResearchBacktestResult{Run: buildRunView(run), Reused: true}, nil
-	} else if !errors.Is(err, repository.ErrResearchRunNotFound) {
-		return zero, wrapRepo("find succeeded run", err)
-	}
-	if run, err := s.research.FindActiveRunByInputHash(ctx, collectionID, inputHash); err == nil {
-		return ResearchBacktestResult{Run: buildRunView(run), Reused: true}, nil
-	} else if !errors.Is(err, repository.ErrResearchRunNotFound) {
-		return zero, wrapRepo("find active run", err)
+	if reused, found, err := s.findReusableResearchRun(ctx, collectionID, inputHash); err != nil {
+		return zero, err
+	} else if found {
+		return reused, nil
 	}
 
 	now := s.now().UnixMilli()
@@ -1456,23 +1587,67 @@ func (s *ResearchService) CreateBacktest(
 		DataQualityJSON:   "{}",
 		CreatedAt:         now,
 	}
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.jobs.Create(ctx, tx, repository.Job{
-			ID:          jobID,
-			Type:        repository.JobTypeResearchBacktest,
-			Status:      repository.JobStatusQueued,
-			InputHash:   inputHash,
-			PayloadJSON: string(payloadJSON),
-			CreatedAt:   now,
-		}); err != nil {
-			return err
-		}
-		return s.research.CreateRunTx(ctx, tx, run)
-	})
-	if err != nil {
-		return zero, wrapRepo("create research backtest", err)
+	if err := s.persistQueuedResearchRun(ctx, run, inputHash, string(payloadJSON), now); err != nil {
+		return zero, err
 	}
 	return ResearchBacktestResult{Run: buildRunView(run)}, nil
+}
+
+func (s *ResearchService) findReusableResearchRun(
+	ctx context.Context, collectionID, inputHash string,
+) (ResearchBacktestResult, bool, error) {
+	run, err := s.research.FindSucceededRunByInputHash(ctx, collectionID, inputHash)
+	if err == nil {
+		return ResearchBacktestResult{Run: buildRunView(run), Reused: true}, true, nil
+	}
+	if !errors.Is(err, repository.ErrResearchRunNotFound) {
+		return ResearchBacktestResult{}, false, wrapRepo("find succeeded run", err)
+	}
+	run, err = s.research.FindActiveRunByInputHash(ctx, collectionID, inputHash)
+	if errors.Is(err, repository.ErrResearchRunNotFound) {
+		return ResearchBacktestResult{}, false, nil
+	}
+	if err != nil {
+		return ResearchBacktestResult{}, false, wrapRepo("find active run", err)
+	}
+	return ResearchBacktestResult{Run: buildRunView(run), Reused: true}, true, nil
+}
+
+func (s *ResearchService) persistQueuedResearchRun(
+	ctx context.Context,
+	run repository.ResearchBacktestRun,
+	inputHash, payloadJSON string,
+	now int64,
+) error {
+	job := repository.Job{
+		ID: run.JobID, Type: repository.JobTypeResearchBacktest,
+		Status: repository.JobStatusQueued, InputHash: inputHash,
+		PayloadJSON: payloadJSON, CreatedAt: now,
+	}
+	return s.persistQueuedResearchJob(ctx, job, "create research backtest", func(tx *sql.Tx) error {
+		if err := s.research.CreateRunTx(ctx, tx, run); err != nil {
+			return fmt.Errorf("create research backtest run: %w", err)
+		}
+		return nil
+	})
+}
+
+func (s *ResearchService) persistQueuedResearchJob(
+	ctx context.Context,
+	job repository.Job,
+	operation string,
+	createRun func(*sql.Tx) error,
+) error {
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.jobs.Create(ctx, tx, job); err != nil {
+			return fmt.Errorf("create research job: %w", err)
+		}
+		return createRun(tx)
+	})
+	if err != nil {
+		return wrapRepo(operation, err)
+	}
+	return nil
 }
 
 // buildResearchSnapshot freezes the dataset into the auditable input
@@ -1502,10 +1677,12 @@ func buildResearchSnapshot(ds *researchDataset, readiness ResearchReadiness) res
 	assets := make([]researchSnapshotAsset, 0, len(ds.Enabled))
 	for _, a := range ds.Enabled {
 		entry := researchSnapshotAsset{
+			ItemID:       a.Item.ID,
 			AssetKey:     a.Item.AssetKey,
 			Name:         a.Asset.Name,
 			Currency:     a.Asset.Currency,
 			Weight:       a.Item.Weight,
+			WeightLocked: a.Item.WeightLocked,
 			IsCash:       a.IsCash,
 			AdjustPolicy: a.Item.AdjustPolicy,
 			PointType:    a.Item.PointType,
@@ -1571,23 +1748,11 @@ type researchSeriesObs struct {
 // observation that forward-fill anchors on. Changing that anchor point must
 // change the source hash.
 func summarizeResearchSeries(obs []researchSeriesObs, winLo, winHi string) researchSnapshotSeries {
-	out := researchSnapshotSeries{}
+	anchor := researchSeriesAnchor(obs, winLo)
+	out := researchSnapshotSeries{AnchorDate: anchor}
 	includeFrom := winLo
-	if winLo != "" {
-		hasOnStart := false
-		anchor := ""
-		for _, p := range obs {
-			if p.date == winLo {
-				hasOnStart = true
-			}
-			if p.date < winLo && p.date > anchor {
-				anchor = p.date
-			}
-		}
-		if !hasOnStart && anchor != "" {
-			out.AnchorDate = anchor
-			includeFrom = anchor
-		}
+	if anchor != "" {
+		includeFrom = anchor
 	}
 
 	h := sha256.New()
@@ -1615,6 +1780,22 @@ func summarizeResearchSeries(obs []researchSeriesObs, winLo, winHi string) resea
 	}
 	out.PointsHash = hex.EncodeToString(h.Sum(nil))
 	return out
+}
+
+func researchSeriesAnchor(obs []researchSeriesObs, windowStart string) string {
+	if windowStart == "" {
+		return ""
+	}
+	anchor := ""
+	for _, point := range obs {
+		if point.date == windowStart {
+			return ""
+		}
+		if point.date < windowStart && point.date > anchor {
+			anchor = point.date
+		}
+	}
+	return anchor
 }
 
 // summarizeAssetSeries hashes the usable slice of one asset series
@@ -2025,35 +2206,9 @@ func (s *ResearchService) CopyToPlan(
 		return zero, wrapRepo("list research items", err)
 	}
 
-	var incomplete []map[string]any
-	var enabled []repository.ResearchCollectionItem
-	for _, item := range items {
-		if !item.Enabled {
-			continue
-		}
-		enabled = append(enabled, item)
-		var missing []string
-		if strings.TrimSpace(item.AssetClass) == "" {
-			missing = append(missing, "asset_class")
-		}
-		if strings.TrimSpace(item.Region) == "" {
-			missing = append(missing, "region")
-		}
-		if len(missing) > 0 {
-			incomplete = append(incomplete, map[string]any{
-				"item_id":        item.ID,
-				"asset_key":      item.AssetKey,
-				"missing_fields": missing,
-			})
-		}
-	}
-	if len(enabled) == 0 {
-		return zero, newErr("research_collection_empty", "集合没有启用的资产", nil)
-	}
-	if len(incomplete) > 0 {
-		return zero, newErr("research_items_incomplete",
-			"部分资产缺少 FIRE 资产大类或区域，复制到计划前必须补齐",
-			map[string]any{"items": incomplete})
+	enabled, err := enabledResearchItemsForPlan(items)
+	if err != nil {
+		return zero, err
 	}
 
 	result := ResearchCopyToPlanResult{
@@ -2078,4 +2233,39 @@ func (s *ResearchService) CopyToPlan(
 		result.Holdings = append(result.Holdings, holding)
 	}
 	return result, nil
+}
+
+func enabledResearchItemsForPlan(
+	items []repository.ResearchCollectionItem,
+) ([]repository.ResearchCollectionItem, error) {
+	enabled := make([]repository.ResearchCollectionItem, 0, len(items))
+	incomplete := make([]map[string]any, 0)
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		enabled = append(enabled, item)
+		missing := make([]string, 0, 2)
+		if strings.TrimSpace(item.AssetClass) == "" {
+			missing = append(missing, "asset_class")
+		}
+		if strings.TrimSpace(item.Region) == "" {
+			missing = append(missing, "region")
+		}
+		if len(missing) > 0 {
+			incomplete = append(incomplete, map[string]any{
+				"item_id": item.ID, "asset_key": item.AssetKey, "missing_fields": missing,
+			})
+		}
+	}
+	if len(enabled) == 0 {
+		return nil, newErr("research_collection_empty", "集合没有启用的资产", nil)
+	}
+	if len(incomplete) > 0 {
+		return nil, newErr(
+			"research_items_incomplete", "部分资产缺少 FIRE 资产大类或区域，复制到计划前必须补齐",
+			map[string]any{"items": incomplete},
+		)
+	}
+	return enabled, nil
 }

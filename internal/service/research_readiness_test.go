@@ -349,6 +349,58 @@ func TestReadinessBenchmarkChecks(t *testing.T) {
 	if !hasBlock(r, ResearchReasonBenchmarkNoHistory) {
 		t.Fatalf("expected benchmark_history_missing, got %+v", r.BlockingReasons)
 	}
+
+	bench = rdAsset(t, "BENCH", 0, "2020-01-01", 1642)
+	bench.NonPositiveCount = 1
+	bench.SourceNames = []string{"source_a", "source_b"}
+	ds.Benchmark = &bench
+	r = evaluateResearchReadiness(ds, rdNow(t))
+	if !hasBlock(r, ResearchReasonNonPositivePoints) || !hasBlock(r, ResearchReasonMixedSources) {
+		t.Fatalf("base-currency benchmark quality checks missing: %+v", r.BlockingReasons)
+	}
+}
+
+func TestReadinessBenchmarkMustCoverFinalWindow(t *testing.T) {
+	portfolio := rdAsset(t, "A", 1, "2020-01-01", 1642)
+	for _, tt := range []struct {
+		name  string
+		start string
+		days  int
+	}{
+		{name: "starts late", start: "2020-01-02", days: 1641},
+		{name: "ends early", start: "2020-01-01", days: 1641},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ds := rdDataset(portfolio)
+			bench := rdAsset(t, "BENCH", 0, tt.start, tt.days)
+			ds.Collection.BenchmarkAssetKey = bench.Item.AssetKey
+			ds.Benchmark = &bench
+			r := evaluateResearchReadiness(ds, rdNow(t))
+			if !hasBlock(r, ResearchReasonBenchmarkWindow) {
+				t.Fatalf("expected benchmark_window_not_covered, got %+v", r.BlockingReasons)
+			}
+		})
+	}
+}
+
+func TestReadinessBenchmarkGapBlocks(t *testing.T) {
+	portfolio := rdAsset(t, "A", 1, "2020-01-01", 1642)
+	bench := rdAsset(t, "BENCH", 0, "2020-01-01", 1642)
+	points := make([]repository.MarketAssetPoint, 0, len(bench.Points))
+	for i, point := range bench.Points {
+		if i > 800 && i <= 820 {
+			continue
+		}
+		points = append(points, point)
+	}
+	bench.Points = points
+	ds := rdDataset(portfolio)
+	ds.Collection.BenchmarkAssetKey = bench.Item.AssetKey
+	ds.Benchmark = &bench
+	r := evaluateResearchReadiness(ds, rdNow(t))
+	if !hasBlock(r, ResearchReasonBenchmarkGap) {
+		t.Fatalf("expected benchmark_gap_exceeded, got %+v", r.BlockingReasons)
+	}
 }
 
 func TestReadinessCashRules(t *testing.T) {

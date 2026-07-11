@@ -71,9 +71,6 @@ export function optimizationDisabledReason(
   ) {
     return "集合没有启用的资产";
   }
-  if (optReadiness.tunable_count < 2) {
-    return "至少需要 2 个启用且未锁定的资产才能寻找最优组合";
-  }
   if (optReadiness.ready) return null;
   for (const b of optReadiness.blocking_reasons) {
     if (b.reason === "no_enabled_assets") return "集合没有启用的资产";
@@ -83,6 +80,7 @@ export function optimizationDisabledReason(
       return `锁定权重合计 ${formatPercent(optReadiness.locked_weight_sum)} 超过 100%`;
     if (b.reason === "candidate_count_exceeds_limit")
       return b.message || `候选组合 ${optReadiness.candidate_count} 超过上限，请增大步长或减少资产`;
+    if (b.reason === "candidate_count_zero") return b.message || "当前设置无法生成候选组合";
     if (b.reason === "history_missing" || b.reason === "history_sync_failed")
       return "存在缺历史资产，请先同步数据";
     if (b.reason === "history_syncing" || b.reason === "fx_syncing")

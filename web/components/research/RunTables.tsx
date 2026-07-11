@@ -155,9 +155,24 @@ export function RunContributions({ summary }: { summary: ResearchRunSummary }) {
             <th className="px-3 py-2 font-medium">资产</th>
             <th className="px-3 py-2 text-right font-medium">目标权重</th>
             <th className="px-3 py-2 text-right font-medium">期末权重</th>
-            <th className="px-3 py-2 text-right font-medium">累计收益贡献</th>
-            <th className="px-3 py-2 text-right font-medium">风险贡献</th>
-            <th className="px-3 py-2 text-right font-medium">回撤期贡献</th>
+            <th
+              className="px-3 py-2 text-right font-medium"
+              title="各资产链接贡献之和等于组合累计收益"
+            >
+              累计收益贡献
+            </th>
+            <th
+              className="px-3 py-2 text-right font-medium"
+              title="组合方差非零时，各资产风险贡献之和等于 100%"
+            >
+              风险贡献
+            </th>
+            <th
+              className="px-3 py-2 text-right font-medium"
+              title="各资产峰值到谷底的链接贡献之和等于最大回撤"
+            >
+              回撤期贡献
+            </th>
           </tr>
         </thead>
         <tbody>

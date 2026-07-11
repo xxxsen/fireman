@@ -20,6 +20,7 @@ const (
 	ReadinessReasonSimulationInsufficientHistory = "simulation_insufficient_history"
 	ReadinessReasonProviderDataAnomaly           = "provider_data_anomaly"
 	ReadinessReasonAssetIdentityConflict         = "asset_identity_conflict"
+	ReadinessReasonForeignCashUnsupported        = "foreign_cash_not_supported"
 )
 
 // BlockingAsset is one plan holding whose market asset blocks simulation.
@@ -133,7 +134,19 @@ func (s *SimulationReadinessService) Check(
 	checkedAssets := make(map[string]assetProbe)
 	seenTask := make(map[string]struct{})
 	for _, h := range holds {
-		if !h.Enabled || h.SimulationSnapshotID != "" {
+		if !h.Enabled {
+			continue
+		}
+		foreignCashBlock, foreignCash, err := s.foreignCashBlock(ctx, plan, h)
+		if err != nil {
+			return SimulationReadinessView{}, err
+		}
+		if foreignCash {
+			view.Ready = false
+			view.BlockingAssets = append(view.BlockingAssets, foreignCashBlock)
+			continue
+		}
+		if h.SimulationSnapshotID != "" {
 			continue
 		}
 		probe, ok := checkedAssets[h.AssetKey]
@@ -162,6 +175,25 @@ func (s *SimulationReadinessService) Check(
 		}
 	}
 	return view, nil
+}
+
+func (s *SimulationReadinessService) foreignCashBlock(
+	ctx context.Context, plan repository.Plan, holding repository.PlanHolding,
+) (BlockingAsset, bool, error) {
+	asset, err := s.assetRepo.GetByKey(ctx, holding.AssetKey)
+	if err != nil {
+		return BlockingAsset{}, false, wrapRepo("load holding market asset", err)
+	}
+	if asset.InstrumentType != "cash" || asset.Currency == plan.BaseCurrency {
+		return BlockingAsset{}, false, nil
+	}
+	return BlockingAsset{
+		HoldingID: holding.ID, AssetKey: holding.AssetKey,
+		Symbol: holding.InstrumentCode, Name: holding.InstrumentName,
+		Reason: ReadinessReasonForeignCashUnsupported,
+		Message: fmt.Sprintf("%s 现金与计划基准币种 %s 不一致，请移除或替换为同币种现金",
+			asset.Currency, plan.BaseCurrency),
+	}, true, nil
 }
 
 // probeAsset builds (without persisting) the snapshot for one asset and maps

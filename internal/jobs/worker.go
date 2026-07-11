@@ -372,21 +372,7 @@ func (w *Worker) executeResearch(ctx context.Context, job repository.Job) {
 		w.fail(ctx, job.ID, "runner_missing", "research runner not configured")
 		return
 	}
-	cancelCheck := w.cancelCheck(ctx, job.ID)
-	progress := w.jobProgress(ctx, job.ID)
-	err := w.research.ExecuteBacktestJob(ctx, job.ID, cancelCheck, progress)
-	if err != nil {
-		if ctx.Err() != nil && !cancelCheck() {
-			return
-		}
-		if cancelCheck() || errors.Is(err, context.Canceled) {
-			w.finish(ctx, job.ID, repository.JobStatusCanceled, "canceled by user", "")
-			return
-		}
-		w.fail(ctx, job.ID, "research_backtest_failed", err.Error())
-		return
-	}
-	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")
+	w.executeResearchJob(ctx, job, "research_backtest_failed", w.research.ExecuteBacktestJob)
 }
 
 // executeResearchOptimization delegates one research_optimization_backtest
@@ -396,9 +382,18 @@ func (w *Worker) executeResearchOptimization(ctx context.Context, job repository
 		w.fail(ctx, job.ID, "runner_missing", "research runner not configured")
 		return
 	}
+	w.executeResearchJob(ctx, job, "research_optimization_failed", w.research.ExecuteOptimizationJob)
+}
+
+func (w *Worker) executeResearchJob(
+	ctx context.Context,
+	job repository.Job,
+	failureCode string,
+	run func(context.Context, string, func() bool, func(int, int, string)) error,
+) {
 	cancelCheck := w.cancelCheck(ctx, job.ID)
 	progress := w.jobProgress(ctx, job.ID)
-	err := w.research.ExecuteOptimizationJob(ctx, job.ID, cancelCheck, progress)
+	err := run(ctx, job.ID, cancelCheck, progress)
 	if err != nil {
 		if ctx.Err() != nil && !cancelCheck() {
 			return
@@ -407,7 +402,7 @@ func (w *Worker) executeResearchOptimization(ctx context.Context, job repository
 			w.finish(ctx, job.ID, repository.JobStatusCanceled, "canceled by user", "")
 			return
 		}
-		w.fail(ctx, job.ID, "research_optimization_failed", err.Error())
+		w.fail(ctx, job.ID, failureCode, err.Error())
 		return
 	}
 	w.finish(ctx, job.ID, repository.JobStatusSucceeded, "", "")

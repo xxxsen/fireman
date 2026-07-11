@@ -640,7 +640,7 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		return nil, "", err
 	}
 	if err := validateSimulationReady(params); err != nil {
-		return nil, "", newErr("simulation_input_invalid", err.Error(), nil)
+		return nil, "", newErr("parameters_invalid", err.Error(), nil)
 	}
 
 	assets, resolved, err := s.resolveAndBuildAssets(ctx, plan, params, scenarioOverride)

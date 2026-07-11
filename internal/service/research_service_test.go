@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func newResearchTestService(t *testing.T) (*ResearchService, *sql.DB) {
 // insertResearchFixtureAsset creates a directory row and, when days > 0,
 // daily points from start plus the matching history state.
 func insertResearchFixtureAsset(
-	t *testing.T, db *sql.DB, key, name, currency string, start string, days int,
+	t *testing.T, db *sql.DB, key, name, _ string, start string, days int,
 	value func(i int) float64,
 ) {
 	t.Helper()
@@ -56,7 +57,7 @@ func insertResearchFixtureAsset(
 	asset := repository.MarketAsset{
 		AssetKey: key, Market: "CN", InstrumentType: "cn_exchange_fund",
 		RegionCode: "sh", Exchange: "SSE",
-		Symbol: key, Name: name, Currency: currency, Active: true, ListingStatus: "active",
+		Symbol: key, Name: name, Currency: "CNY", Active: true, ListingStatus: "active",
 		SourceName: "test_source",
 	}
 	if err := assets.UpsertAssetTx(ctx, tx, asset, now); err != nil {
@@ -248,7 +249,7 @@ func TestResearchBacktestEndToEnd(t *testing.T) {
 	// Execute the job like the worker would.
 	var phases []string
 	err = svc.ExecuteBacktestJob(ctx, created.Run.JobID, func() bool { return false },
-		func(done, total int, phase string) { phases = append(phases, phase) })
+		func(_, _ int, phase string) { phases = append(phases, phase) })
 	if err != nil {
 		t.Fatalf("execute backtest job: %v", err)
 	}
@@ -663,12 +664,12 @@ func TestResearchCopyFromAndToPlan(t *testing.T) {
 }
 
 func errorsAsAppError(err error, target **AppError) bool {
-	ae, ok := err.(*AppError)
-	if ok {
-		*target = ae
-		return true
+	var appErr *AppError
+	if !errors.As(err, &appErr) {
+		return false
 	}
-	return false
+	*target = appErr
+	return true
 }
 
 func TestResearchScreenerFiltersAndMetrics(t *testing.T) {

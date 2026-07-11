@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/fireman/fireman/internal/repository"
@@ -133,6 +134,26 @@ func TestPlanSettingsUpdate_InvalidParametersRollsBackEverything(t *testing.T) {
 	afterJSON, _ := json.Marshal(allocAfter["asset_class_targets"])
 	if !bytes.Equal(beforeJSON, afterJSON) {
 		t.Fatalf("allocation changed on failed save: %s -> %s", beforeJSON, afterJSON)
+	}
+}
+
+func TestPlanSettingsUpdate_RejectsTransactionCostBoundaries(t *testing.T) {
+	for _, rate := range []float64{-0.01, 1.0} {
+		t.Run(strconv.FormatFloat(rate, 'g', -1, 64), func(t *testing.T) {
+			db := testutil.OpenTestDB(t)
+			plan := createTestPlan(t, db)
+			router := NewRouter(context.Background(), Deps{DB: db, Services: buildServices(db)})
+			_, params, _ := getSettingsFixtureState(t, router, plan.ID)
+			params["transaction_cost_rate"] = rate
+			writer := putSettings(t, router, plan.ID, map[string]any{
+				"config_version": plan.ConfigVersion,
+				"parameters":     params,
+			})
+			if writer.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+			}
+			assertErrorCode(t, writer.Body.Bytes(), "parameters_invalid")
+		})
 	}
 }
 

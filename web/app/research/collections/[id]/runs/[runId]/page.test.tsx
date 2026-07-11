@@ -181,6 +181,18 @@ describe("ResearchRunDetailPage", () => {
     expect(screen.getByText("月度收益热力图")).toBeInTheDocument();
     expect(screen.getByText("滚动指标")).toBeInTheDocument();
     expect(screen.getByText("资产贡献")).toBeInTheDocument();
+    expect(screen.getByText("累计收益贡献")).toHaveAttribute(
+      "title",
+      "各资产链接贡献之和等于组合累计收益",
+    );
+    expect(screen.getByText("风险贡献")).toHaveAttribute(
+      "title",
+      "组合方差非零时，各资产风险贡献之和等于 100%",
+    );
+    expect(screen.getByText("回撤期贡献")).toHaveAttribute(
+      "title",
+      "各资产峰值到谷底的链接贡献之和等于最大回撤",
+    );
     expect(screen.getByText("相关性矩阵")).toBeInTheDocument();
     expect(screen.getByText("数据质量")).toBeInTheDocument();
 

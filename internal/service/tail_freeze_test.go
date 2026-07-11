@@ -36,6 +36,9 @@ func TestForwardSnapshotFreezesProfileTailParams(t *testing.T) {
 	if in.EngineVersion != simulation.EngineVersion {
 		t.Fatalf("forward run must use current EngineVersion %s, got %s", simulation.EngineVersion, in.EngineVersion)
 	}
+	if !in.AggregateCashLiquidity {
+		t.Fatal("new snapshot must aggregate every cash slot")
+	}
 	if in.TailStudentTDf != 11 {
 		t.Fatalf("frozen df = %d, want 11 (profile)", in.TailStudentTDf)
 	}
@@ -87,10 +90,10 @@ func TestSnapshotRecordsAssumptionProvenance(t *testing.T) {
 	}
 }
 
-// TestLegacySnapshotKeepsConstantsAndPlanDf verifies that a historical_cagr
-// snapshot stays on the legacy engine and does not freeze profile tail params, so
-// it falls back to the plan df and the engine constants for byte-for-byte replay.
-func TestLegacySnapshotKeepsConstantsAndPlanDf(t *testing.T) {
+// TestHistoricalModeSnapshotKeepsConstantsAndPlanDf verifies that historical_cagr
+// still uses the plan df and engine truncation constants while every newly
+// created snapshot carries the current engine version.
+func TestHistoricalModeSnapshotKeepsConstantsAndPlanDf(t *testing.T) {
 	resolved := resolvedAssumption{
 		Profile: assumptions.SystemDefaultProfile(),
 		Mode:    assumptions.SourceHistoricalCAGR,
@@ -104,11 +107,14 @@ func TestLegacySnapshotKeepsConstantsAndPlanDf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
-	if in.EngineVersion != simulation.LegacyEngineVersion {
-		t.Fatalf("historical run must stay 2.0.0, got %s", in.EngineVersion)
+	if in.EngineVersion != simulation.EngineVersion {
+		t.Fatalf("new historical-mode run must use %s, got %s", simulation.EngineVersion, in.EngineVersion)
+	}
+	if !in.AggregateCashLiquidity {
+		t.Fatal("new historical-mode snapshot must aggregate every cash slot")
 	}
 	if in.TailStudentTDf != 0 || in.TailReturnFloor != nil || in.TailReturnCeil != nil {
-		t.Fatalf("legacy snapshot must not freeze profile tail params")
+		t.Fatalf("historical-mode snapshot must not freeze profile tail params")
 	}
 	if in.EffectiveDf() != 9 {
 		t.Fatalf("legacy effective df = %d, want plan df 9", in.EffectiveDf())

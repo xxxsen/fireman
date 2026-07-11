@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,9 @@ func TestSameSeedBitwiseReproducible(t *testing.T) {
 	in.Parameters.SimulationRuns = 50
 	r1 := Run(in, RunOptions{Runs: 50})
 	r2 := Run(in, RunOptions{Runs: 50})
+	if !reflect.DeepEqual(r1, r2) {
+		t.Fatal("same 3.2 snapshot and seed must reproduce the complete result")
+	}
 	if r1.SuccessCount != r2.SuccessCount {
 		t.Fatalf("success count mismatch: %d vs %d", r1.SuccessCount, r2.SuccessCount)
 	}

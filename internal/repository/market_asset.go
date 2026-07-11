@@ -598,19 +598,13 @@ func (r *MarketAssetRepo) ListHistoryStatesByAssetKeys(
 	if len(assetKeys) == 0 {
 		return nil, nil
 	}
-	ph := make([]string, len(assetKeys))
-	args := make([]any, len(assetKeys))
-	for i, k := range assetKeys {
-		ph[i] = "?"
-		args[i] = k
-	}
-	return queryCollect(
-		ctx, r.db, `
+	query, args := stringInQuery(`
 		SELECT `+historyStateColumns+`
 		FROM market_asset_history_state
-		WHERE asset_key IN (`+strings.Join(ph, ",")+`)
-		ORDER BY asset_key, adjust_policy, point_type`,
-		args,
+		WHERE asset_key IN (`, assetKeys, `)
+		ORDER BY asset_key, adjust_policy, point_type`)
+	return queryCollect(
+		ctx, r.db, query, args,
 		func(rows *sql.Rows) (MarketAssetHistoryState, error) {
 			st, err := scanHistoryState(rows)
 			if err != nil {
