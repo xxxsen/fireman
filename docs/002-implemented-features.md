@@ -12,7 +12,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0027） |
+| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0028） |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -56,6 +56,7 @@
 | 系统标的 | 系统现金、USDCNY/HKDCNY 汇率（migration 0003） |
 | 数据过期提示 | 距最近交易日 >7 自然日返回 stale 警告 |
 | Refresh | 手工刷新立即执行；源切换时全量替换 |
+| 自动更新管理 | 可配置的定时扫描器，为目录单元和资产历史维度创建刷新任务；复用既有 worker/sidecar 链路，乐观锁并发控制和 active-dedupe 保证幂等，见 [029-market-data-auto-update-scheduler.md](./029-market-data-auto-update-scheduler.md) |
 
 TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 
@@ -127,6 +128,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | `/assets` | 全市场资产目录（同步状态面板、筛选、分页）|
 | `/assets/market/{assetKey}` | 市场资产详情、历史同步、年度收益 |
 | `/research` | 组合研究首页：研究集合、最近回测运行、JSON 导入导出 |
+| `/admin/auto-updates` | 自动更新管理：目录单元全量清单、资产历史规则列表、启停与周期编辑 |
 | `/research/screener` | 资产筛选器、候选池与候选比较 |
 | `/research/collections/{id}` | 研究集合编辑、readiness、批量数据更新、回测入口 |
 | `/research/collections/{id}/runs/{runId}` | 确定性历史回测结果（图表/年度表/热力图/贡献/相关性/数据质量） |
@@ -177,6 +179,7 @@ FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](
 - 公募基金名称缓存与目录同步刷新
 - 组合优先 UI、结构偏差与规模偏差分拆
 - 调仓工作台 / 持仓校正 / 全局配置模板收拢
+- 市场数据自动更新管理与定时扫描器
 
 ---
 

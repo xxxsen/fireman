@@ -629,6 +629,32 @@ func (s *MarketAssetService) SyncDirectory(
 	return out, nil
 }
 
+// SyncDirectoryWithTaskHook is the scheduler-only variant used when the rule
+// state and the worker task must commit atomically.
+func (s *MarketAssetService) SyncDirectoryWithTaskHook(
+	ctx context.Context,
+	syncKey string,
+	hook func(context.Context, *sql.Tx, string) error,
+) (TaskCreateResult, error) {
+	unit, ok := DirectoryUnitBySyncKey(strings.ToLower(strings.TrimSpace(syncKey)))
+	if !ok {
+		return TaskCreateResult{}, newErr("invalid_request", "unknown sync_key "+syncKey, nil)
+	}
+	var item DirectorySyncTaskItem
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		var err error
+		item, err = s.createDirectoryUnitTaskTx(ctx, tx, unit, false)
+		if err != nil {
+			return err
+		}
+		return hook(ctx, tx, item.Task.ID)
+	})
+	if err != nil {
+		return TaskCreateResult{}, wrapRepo("create directory auto update task", err)
+	}
+	return TaskCreateResult{Task: item.Task, Existed: item.Existed}, nil
+}
+
 // createDirectoryUnitTaskTx creates (or returns the existing active) task for
 // one directory sync unit inside the caller's transaction.
 func (s *MarketAssetService) createDirectoryUnitTaskTx(
@@ -689,18 +715,13 @@ func (s *MarketAssetService) createDirectoryUnitTaskTx(
 
 // createTask creates a worker task with dedupe semantics: when an active task
 // with the same (type, dedupe_key) exists, it is returned unchanged and no new
-// task is created. onCreated runs in the same transaction as the insert.
+// task is created. onBound runs in the same transaction for both a new task
+// and an existing active task.
 func (s *MarketAssetService) createTask(
 	ctx context.Context,
 	taskType, dedupeKey, payloadJSON string,
-	onCreated func(ctx context.Context, tx *sql.Tx, taskID string) error,
+	onBound func(ctx context.Context, tx *sql.Tx, taskID string) error,
 ) (TaskCreateResult, error) {
-	if existing, err := s.tasks.FindActiveByDedupe(ctx, taskType, dedupeKey); err == nil {
-		return TaskCreateResult{Task: taskToView(existing), Existed: true}, nil
-	} else if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
-		return TaskCreateResult{}, wrapRepo("find active task", err)
-	}
-
 	task := repository.WorkerTask{
 		ID:          "wt_" + uuid.New().String(),
 		Type:        taskType,
@@ -709,23 +730,17 @@ func (s *MarketAssetService) createTask(
 		PayloadJSON: payloadJSON,
 		CreatedAt:   time.Now().UnixMilli(),
 	}
-	var duplicate repository.WorkerTask
+	var bound repository.WorkerTask
+	var existed bool
 	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.tasks.CreateTx(ctx, tx, &task); err != nil {
-			if repository.IsWorkerTaskUniqueConstraint(err) {
-				// Lost the race: another request created the active task first.
-				existing, findErr := s.tasks.FindActiveByDedupeTx(ctx, tx, taskType, dedupeKey)
-				if findErr != nil {
-					return fmt.Errorf("find duplicate active task: %w", findErr)
-				}
-				duplicate = existing
-				return nil
-			}
-			return fmt.Errorf("create worker task: %w", err)
+		var bindErr error
+		bound, existed, bindErr = s.createOrReuseTaskTx(ctx, tx, task)
+		if bindErr != nil {
+			return bindErr
 		}
-		if onCreated != nil {
-			if err := onCreated(ctx, tx, task.ID); err != nil {
-				return fmt.Errorf("run worker task creation hook: %w", err)
+		if onBound != nil {
+			if err := onBound(ctx, tx, bound.ID); err != nil {
+				return fmt.Errorf("run worker task binding hook: %w", err)
 			}
 		}
 		return nil
@@ -733,14 +748,35 @@ func (s *MarketAssetService) createTask(
 	if err != nil {
 		return TaskCreateResult{}, wrapRepo("create worker task", err)
 	}
-	if duplicate.ID != "" {
-		return TaskCreateResult{Task: taskToView(duplicate), Existed: true}, nil
+	return TaskCreateResult{Task: taskToView(bound), Existed: existed}, nil
+}
+
+func (s *MarketAssetService) createOrReuseTaskTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	task repository.WorkerTask,
+) (repository.WorkerTask, bool, error) {
+	existing, err := s.tasks.FindActiveByDedupeTx(
+		ctx, tx, task.Type, task.DedupeKey,
+	)
+	if err == nil {
+		return existing, true, nil
 	}
-	created, err := s.tasks.GetByID(ctx, task.ID)
+	if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return repository.WorkerTask{}, false, fmt.Errorf("find active task: %w", err)
+	}
+	if err := s.tasks.CreateTx(ctx, tx, &task); err == nil {
+		return task, false, nil
+	} else if !repository.IsWorkerTaskUniqueConstraint(err) {
+		return repository.WorkerTask{}, false, fmt.Errorf("create worker task: %w", err)
+	}
+	duplicate, err := s.tasks.FindActiveByDedupeTx(
+		ctx, tx, task.Type, task.DedupeKey,
+	)
 	if err != nil {
-		return TaskCreateResult{}, wrapRepo("load created task", err)
+		return repository.WorkerTask{}, false, fmt.Errorf("find duplicate active task: %w", err)
 	}
-	return TaskCreateResult{Task: taskToView(created)}, nil
+	return duplicate, true, nil
 }
 
 // --- asset detail ---
@@ -757,7 +793,8 @@ type MarketAssetHistoryView struct {
 	Task              *WorkerTaskView `json:"task,omitempty"`
 	// CanSwitchSource reports that the latest same-source incremental refresh
 	// failed with source_unavailable, enabling the switch-source-full action.
-	CanSwitchSource bool `json:"can_switch_source"`
+	CanSwitchSource bool                                 `json:"can_switch_source"`
+	AutoUpdate      *repository.MarketDataAutoUpdateRule `json:"auto_update"`
 }
 
 // MarketAssetPointView is one (date, value) observation for charts.
@@ -971,6 +1008,22 @@ func historyDedupeKey(p AssetHistorySyncPayload) string {
 func (s *MarketAssetService) SyncHistory(
 	ctx context.Context, req HistorySyncRequest,
 ) (TaskCreateResult, error) {
+	return s.syncHistory(ctx, req, nil)
+}
+
+// SyncHistoryWithTaskHook uses the same payload and dedupe logic as manual
+// refresh while allowing scheduler state to be written in the task transaction.
+func (s *MarketAssetService) SyncHistoryWithTaskHook(
+	ctx context.Context,
+	req HistorySyncRequest,
+	hook func(context.Context, *sql.Tx, string) error,
+) (TaskCreateResult, error) {
+	return s.syncHistory(ctx, req, hook)
+}
+
+func (s *MarketAssetService) syncHistory(
+	ctx context.Context, req HistorySyncRequest, hook func(context.Context, *sql.Tx, string) error,
+) (TaskCreateResult, error) {
 	req.AssetKey = strings.TrimSpace(req.AssetKey)
 	req.AdjustPolicy = strings.TrimSpace(req.AdjustPolicy)
 	req.PointType = strings.TrimSpace(req.PointType)
@@ -1009,8 +1062,15 @@ func (s *MarketAssetService) SyncHistory(
 	return s.createTask(ctx, repository.WorkerTaskTypeAssetHistorySync,
 		historyDedupeKey(payload), string(payloadJSON),
 		func(ctx context.Context, tx *sql.Tx, taskID string) error {
-			return s.assets.SetHistoryLastTaskTx(ctx, tx,
-				req.AssetKey, req.AdjustPolicy, req.PointType, taskID)
+			if err := s.assets.SetHistoryLastTaskTx(
+				ctx, tx, req.AssetKey, req.AdjustPolicy, req.PointType, taskID,
+			); err != nil {
+				return fmt.Errorf("set history last task: %w", err)
+			}
+			if hook != nil {
+				return hook(ctx, tx, taskID)
+			}
+			return nil
 		})
 }
 

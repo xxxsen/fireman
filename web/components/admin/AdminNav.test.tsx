@@ -53,10 +53,10 @@ describe("AdminNav", () => {
     mockPathname.mockReturnValue("/admin");
   });
 
-  it("renders all five tabs with the overview active on /admin", () => {
+  it("renders all admin tabs with the overview active on /admin", () => {
     renderNav();
     const nav = screen.getByTestId("admin-nav");
-    for (const label of ["概览", "市场数据任务", "计算作业", "回调记录", "数据版本"]) {
+    for (const label of ["概览", "市场数据任务", "计算作业", "回调记录", "数据版本", "自动更新管理"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: "概览" })).toHaveAttribute(

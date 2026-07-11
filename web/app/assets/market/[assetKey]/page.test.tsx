@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MarketAssetDetail } from "@/lib/api/market-assets";
 import MarketAssetDetailPage from "./page";
 
 const getMarketAssetDetailMock = vi.hoisted(() => vi.fn());
+const setMarketAssetHistoryAutoUpdateMock = vi.hoisted(() => vi.fn());
 const useWorkerTaskPollingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
@@ -15,6 +16,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
   getMarketAssetDetail: (...args: unknown[]) => getMarketAssetDetailMock(...args),
+  setMarketAssetHistoryAutoUpdate: (...args: unknown[]) => setMarketAssetHistoryAutoUpdateMock(...args),
 }));
 
 vi.mock("@/hooks/useWorkerTaskPolling", () => ({
@@ -125,6 +127,7 @@ function makeDetailWithHistory(): MarketAssetDetail {
 describe("MarketAssetDetailPage history range shortcuts", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
+    setMarketAssetHistoryAutoUpdateMock.mockReset();
     useWorkerTaskPollingMock.mockReset();
     useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
     getMarketAssetDetailMock.mockResolvedValue(makeDetailWithHistory());
@@ -197,6 +200,7 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
 describe("MarketAssetDetailPage failed-task error display", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
+    setMarketAssetHistoryAutoUpdateMock.mockReset();
     useWorkerTaskPollingMock.mockReset();
     useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
     getMarketAssetDetailMock.mockResolvedValue(makeDetail());
@@ -230,5 +234,76 @@ describe("MarketAssetDetailPage failed-task error display", () => {
     const tooltip = await screen.findAllByTestId("task-error-tooltip");
     expect(tooltip[0].textContent).toContain("unsupported fund classification");
     expect(tooltip[0].textContent).toContain("market_provider_unavailable");
+  });
+});
+
+describe("MarketAssetDetailPage automatic update", () => {
+  beforeEach(() => {
+    getMarketAssetDetailMock.mockReset();
+    setMarketAssetHistoryAutoUpdateMock.mockReset();
+    useWorkerTaskPollingMock.mockReset();
+    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+  });
+
+  it("enables the current history dimension and renders the returned interval", async () => {
+    const initial = makeDetailWithHistory();
+    const updatedRule = {
+      id: "aur_history",
+      target_type: "asset_history" as const,
+      sync_key: "",
+      asset_key: initial.asset.asset_key,
+      adjust_policy: initial.history.adjust_policy,
+      point_type: initial.history.point_type,
+      enabled: true,
+      interval_hours: 24,
+      next_run_at: Date.now(),
+      last_task_id: "",
+      last_error_code: "",
+      last_error_message: "",
+      version: 1,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+    getMarketAssetDetailMock
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue({ ...initial, history: { ...initial.history, auto_update: updatedRule } });
+    setMarketAssetHistoryAutoUpdateMock.mockResolvedValue(updatedRule);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "启用每日自动更新" }));
+    await waitFor(() => expect(setMarketAssetHistoryAutoUpdateMock).toHaveBeenCalledWith({
+      asset_key: initial.asset.asset_key,
+      adjust_policy: initial.history.adjust_policy,
+      point_type: initial.history.point_type,
+      enabled: true,
+    }));
+    expect(await screen.findByRole("button", { name: "自动更新：每 24 小时" })).toBeInTheDocument();
+  });
+
+  it("pauses an enabled rule without changing its history dimension", async () => {
+    const initial = makeDetailWithHistory();
+    const enabledRule = {
+      id: "aur_history", target_type: "asset_history" as const, sync_key: "",
+      asset_key: initial.asset.asset_key, adjust_policy: initial.history.adjust_policy,
+      point_type: initial.history.point_type, enabled: true, interval_hours: 6,
+      next_run_at: Date.now(), last_task_id: "", last_error_code: "",
+      last_error_message: "", version: 2, created_at: Date.now(), updated_at: Date.now(),
+    };
+    const disabledRule = { ...enabledRule, enabled: false, next_run_at: null, version: 3 };
+    const enabledDetail = { ...initial, history: { ...initial.history, auto_update: enabledRule } };
+    getMarketAssetDetailMock
+      .mockResolvedValueOnce(enabledDetail)
+      .mockResolvedValue({ ...initial, history: { ...initial.history, auto_update: disabledRule } });
+    setMarketAssetHistoryAutoUpdateMock.mockResolvedValue(disabledRule);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "自动更新：每 6 小时" }));
+    await waitFor(() => expect(setMarketAssetHistoryAutoUpdateMock).toHaveBeenCalledWith({
+      asset_key: initial.asset.asset_key,
+      adjust_policy: initial.history.adjust_policy,
+      point_type: initial.history.point_type,
+      enabled: false,
+    }));
+    expect(await screen.findByRole("button", { name: "启用每日自动更新" })).toBeInTheDocument();
   });
 });

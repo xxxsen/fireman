@@ -36,6 +36,7 @@ type Services struct {
 	Dashboard           *service.DashboardService
 	System              *service.SystemService
 	Admin               *service.AdminService
+	AutoUpdates         *service.AutoUpdateService
 	EventHub            *jobs.EventHub
 	Maintenance         *service.MaintenanceGate
 }
@@ -92,6 +93,9 @@ func NewServices(
 		workerTaskRepo, jobRepo, repository.NewPostProcessRecordRepo(db),
 		marketAssetRepo, marketAssetSvc, resources, dbPath,
 	)
+	autoUpdates := service.NewAutoUpdateService(
+		repository.NewMarketDataAutoUpdateRepo(db), marketAssetRepo, marketAssetSvc,
+	)
 	return Services{
 		Plans:               planSvc,
 		Allocation:          service.NewAllocationService(db, plans, params, alloc, scenario),
@@ -114,6 +118,7 @@ func NewServices(
 		Dashboard:           dashboardSvc,
 		System:              service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
 		Admin:               adminSvc,
+		AutoUpdates:         autoUpdates,
 		EventHub:            eventHub,
 		Maintenance:         maintenance,
 	}

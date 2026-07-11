@@ -18,6 +18,64 @@ func (s Services) registerAdminRoutes(rg *gin.RouterGroup) {
 	admin.GET("/jobs", s.adminListJobs)
 	admin.GET("/post-process-records", s.adminListPostProcessRecords)
 	admin.GET("/data-versions", s.adminListDataVersions)
+	admin.GET("/auto-updates", s.adminListAutoUpdates)
+	admin.GET("/auto-updates/directories", s.adminListAutoUpdateDirectories)
+	admin.POST("/auto-updates/directories", s.adminCreateDirectoryAutoUpdate)
+	admin.PUT("/auto-updates/:id", s.adminUpdateAutoUpdate)
+}
+
+func (s Services) adminListAutoUpdateDirectories(c *gin.Context) {
+	OK(c, s.AutoUpdates.DirectoryUnits())
+}
+
+func (s Services) adminListAutoUpdates(c *gin.Context) {
+	out, err := s.AutoUpdates.List(c.Request.Context(), service.AutoUpdateListParams{
+		TargetType: c.Query("target_type"),
+		Enabled:    c.Query("enabled"),
+		Query:      c.Query("q"),
+		Limit:      atoiDefault(c.Query("limit"), 50),
+		Offset:     atoiDefault(c.Query("offset"), 0),
+	})
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) adminCreateDirectoryAutoUpdate(c *gin.Context) {
+	var req struct {
+		SyncKey       string `json:"sync_key"`
+		IntervalHours int    `json:"interval_hours"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, 400, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.AutoUpdates.CreateDirectory(c.Request.Context(), req.SyncKey, req.IntervalHours)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) adminUpdateAutoUpdate(c *gin.Context) {
+	var req struct {
+		Enabled       bool  `json:"enabled"`
+		IntervalHours int   `json:"interval_hours"`
+		Version       int64 `json:"version"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, 400, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.AutoUpdates.Update(c.Request.Context(), c.Param("id"), req.Version, req.Enabled, req.IntervalHours)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 func (s Services) adminOverview(c *gin.Context) {

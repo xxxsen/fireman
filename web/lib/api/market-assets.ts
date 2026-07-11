@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "./client";
+import { apiGet, apiPost, apiPut } from "./client";
 
 /** Worker task status enum for market data sync tasks. */
 export type WorkerTaskStatus =
@@ -165,6 +165,28 @@ export interface MarketAssetHistoryView {
   last_success_task_id: string;
   task?: WorkerTask | null;
   can_switch_source: boolean;
+  auto_update?: AutoUpdateRule | null;
+}
+
+export interface AutoUpdateRule {
+  id: string;
+  target_type: "directory_unit" | "asset_history";
+  sync_key: string;
+  asset_key: string;
+  adjust_policy: string;
+  point_type: string;
+  enabled: boolean;
+  interval_hours: number;
+  next_run_at?: number | null;
+  last_enqueued_at?: number | null;
+  last_task_id: string;
+  last_success_at?: number | null;
+  last_failed_at?: number | null;
+  last_error_code: string;
+  last_error_message: string;
+  version: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface MarketAssetPoint {
@@ -228,6 +250,15 @@ export function syncMarketAssetHistory(body: {
   mode: HistorySyncMode;
 }): Promise<TaskCreateResult> {
   return apiPost("/api/v1/market-assets/history-sync", body);
+}
+
+export function setMarketAssetHistoryAutoUpdate(body: {
+  asset_key: string;
+  adjust_policy: string;
+  point_type: string;
+  enabled: boolean;
+}): Promise<AutoUpdateRule> {
+  return apiPut("/api/v1/market-assets/history-auto-update", body);
 }
 
 export function syncFXRates(): Promise<TaskCreateResult> {

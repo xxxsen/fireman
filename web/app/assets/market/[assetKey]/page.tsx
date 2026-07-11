@@ -1,12 +1,15 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getMarketAssetDetail,
   isTaskActive,
   syncMarketAssetHistory,
+  setMarketAssetHistoryAutoUpdate,
+  type MarketAssetDetail,
   type WorkerTask,
 } from "@/lib/api/market-assets";
 import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
@@ -52,6 +55,7 @@ export default function MarketAssetDetailPage() {
   const qc = useQueryClient();
   const [createError, setCreateError] = useState<string | null>(null);
   const [manualTaskId, setManualTaskId] = useState<string | null>(null);
+  const [autoUpdatePending, setAutoUpdatePending] = useState(false);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["market-asset-detail", assetKey],
@@ -142,6 +146,27 @@ export default function MarketAssetDetailPage() {
   };
   const handleTask = (t: WorkerTask) => setManualTaskId(t.id);
 
+  const toggleAutoUpdate = async () => {
+    setAutoUpdatePending(true);
+    setCreateError(null);
+    try {
+      const updated = await setMarketAssetHistoryAutoUpdate({
+        asset_key: assetKey,
+        adjust_policy: history.adjust_policy,
+        point_type: history.point_type,
+        enabled: !history.auto_update?.enabled,
+      });
+      qc.setQueryData<MarketAssetDetail>(["market-asset-detail", assetKey], (current) => current
+        ? { ...current, history: { ...current.history, auto_update: updated } }
+        : current);
+      await qc.invalidateQueries({ queryKey: ["market-asset-detail", assetKey] });
+    } catch (err) {
+      setCreateError(queryErrorMessage(err));
+    } finally {
+      setAutoUpdatePending(false);
+    }
+  };
+
   const refreshControls = (
     <div className="flex flex-col items-end gap-2">
       <div className="flex flex-wrap items-center justify-end gap-2">
@@ -158,6 +183,27 @@ export default function MarketAssetDetailPage() {
         >
           刷新历史数据
         </RefreshTaskButton>
+        <button
+          type="button"
+          title={history.auto_update?.enabled ? "暂停自动更新" : "启用每日自动更新"}
+          disabled={autoUpdatePending}
+          onClick={() => void toggleAutoUpdate()}
+          className="rounded-md border border-line px-3 py-2 text-sm text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {autoUpdatePending
+            ? "更新中…"
+            : history.auto_update?.enabled
+              ? `自动更新：每 ${history.auto_update.interval_hours} 小时`
+              : "启用每日自动更新"}
+        </button>
+        {history.auto_update?.enabled && (
+          <Link
+            href={`/admin/auto-updates?q=${encodeURIComponent(assetKey)}`}
+            className="text-sm text-brand hover:text-brand-strong"
+          >
+            管理自动更新
+          </Link>
+        )}
         {history.can_switch_source && (
           <RefreshTaskButton
             variant="secondary"

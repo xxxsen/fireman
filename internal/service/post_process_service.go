@@ -67,15 +67,22 @@ const postProcessRecordRetention = 30 * 24 * time.Hour
 // tables. Every handler is re-entrant: the market_data_versions table gates
 // writes so repeated notifications (or lost success responses) are safe.
 type PostProcessService struct {
-	sql        *sql.DB
-	tasks      *repository.WorkerTaskRepo
-	assets     *repository.MarketAssetRepo
-	instRepo   *repository.InstrumentRepo
-	marketRepo *repository.MarketDataRepo
-	research   *repository.ResearchRepo
-	resources  *resourcedb.DB
-	records    postProcessRecordStore
-	now        func() time.Time
+	sql         *sql.DB
+	tasks       *repository.WorkerTaskRepo
+	assets      *repository.MarketAssetRepo
+	instRepo    *repository.InstrumentRepo
+	marketRepo  *repository.MarketDataRepo
+	research    *repository.ResearchRepo
+	resources   *resourcedb.DB
+	records     postProcessRecordStore
+	autoUpdates *repository.MarketDataAutoUpdateRepo
+	now         func() time.Time
+}
+
+// SetAutoUpdateRepo adds best-effort automatic-update observability. It is
+// deliberately optional so post-process correctness never depends on it.
+func (s *PostProcessService) SetAutoUpdateRepo(repo *repository.MarketDataAutoUpdateRepo) {
+	s.autoUpdates = repo
 }
 
 func NewPostProcessService(
@@ -105,6 +112,11 @@ func NewPostProcessService(
 func (s *PostProcessService) Process(ctx context.Context, taskID string) PostProcessResult {
 	start := s.now()
 	res := s.classify(ctx, taskID)
+	if res.Result == PostProcessSuccess && s.autoUpdates != nil {
+		if err := s.autoUpdates.MarkTaskSuccess(ctx, taskID, s.now().UnixMilli()); err != nil {
+			slog.WarnContext(ctx, "mark automatic update success failed", "task_id", taskID, "error", err)
+		}
+	}
 	s.recordCallback(ctx, taskID, res, s.now().Sub(start))
 	return res
 }

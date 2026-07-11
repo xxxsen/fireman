@@ -15,8 +15,28 @@ func (s Services) registerMarketAssetRoutes(rg *gin.RouterGroup) {
 	rg.GET("/market-assets/by-key", s.getMarketAssetByKey)
 	rg.POST("/market-assets/sync", s.syncMarketAssets)
 	rg.POST("/market-assets/history-sync", s.syncMarketAssetHistory)
+	rg.PUT("/market-assets/history-auto-update", s.setMarketAssetHistoryAutoUpdate)
 	rg.POST("/market-assets/fx-sync", s.syncFXRates)
 	rg.GET("/tasks/:task_id", s.getWorkerTask)
+}
+
+func (s Services) setMarketAssetHistoryAutoUpdate(c *gin.Context) {
+	var req struct {
+		AssetKey     string `json:"asset_key"`
+		AdjustPolicy string `json:"adjust_policy"`
+		PointType    string `json:"point_type"`
+		Enabled      bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.AutoUpdates.SetHistory(c.Request.Context(), req.AssetKey, req.AdjustPolicy, req.PointType, req.Enabled)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 func (s Services) listMarketAssets(c *gin.Context) {
@@ -53,6 +73,19 @@ func (s Services) getMarketAssetByKey(c *gin.Context) {
 	if err != nil {
 		FailErr(c, err)
 		return
+	}
+	rule, exists, ruleErr := s.AutoUpdates.HistoryRule(
+		c.Request.Context(),
+		out.Asset.AssetKey,
+		out.History.AdjustPolicy,
+		out.History.PointType,
+	)
+	if ruleErr != nil {
+		FailErr(c, ruleErr)
+		return
+	}
+	if exists {
+		out.History.AutoUpdate = &rule.MarketDataAutoUpdateRule
 	}
 	OK(c, out)
 }

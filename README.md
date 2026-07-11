@@ -56,6 +56,12 @@ make market-provider-install
 make dev    # backend :8080 / web :3000 / market-provider :18081
 ```
 
+后端从 `config.json` 读取运行配置。市场数据自动更新扫描器在服务启动后立即扫描一次，
+随后默认每 60 分钟扫描；没有启用任何规则时不会创建刷新任务。扫描间隔可通过
+`auto_update_scan_interval_minutes` 或环境变量
+`AUTO_UPDATE_SCAN_INTERVAL_MINUTES` 覆盖，有效范围为 5 至 1440 分钟。业务时间展示
+使用配置中的 `timezone`，持久化时间仍为 Unix milliseconds。
+
 ## 容器编排
 
 ```bash

@@ -79,6 +79,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		pool, jobRepo, simRepo, runner, analysisRunner, services.Research,
 		services.EventHub, logger, maintenance.Active,
 	)
+	autoScheduler := service.NewAutoUpdateScheduler(
+		services.AutoUpdates,
+		time.Duration(cfg.AutoUpdateScanIntervalMinutes)*time.Minute,
+	)
+	autoScheduler.Start(ctx)
 
 	resourcedb.StartCleanup(ctx, resources, resourceCleanupInterval, logger.Warn)
 
@@ -108,11 +113,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	return runServer(ctx, server, internalServer, pool, resources, logger, workerCancel, workerDone)
+	return runServer(ctx, server, internalServer, pool, resources, logger, workerCancel, workerDone, autoScheduler)
 }
 
 func newPostProcessService(pool *sql.DB, resources *resourcedb.DB) *service.PostProcessService {
-	return service.NewPostProcessService(
+	svc := service.NewPostProcessService(
 		pool,
 		repository.NewWorkerTaskRepo(pool),
 		repository.NewMarketAssetRepo(pool),
@@ -121,6 +126,8 @@ func newPostProcessService(pool *sql.DB, resources *resourcedb.DB) *service.Post
 		resources,
 		repository.NewPostProcessRecordRepo(pool),
 	)
+	svc.SetAutoUpdateRepo(repository.NewMarketDataAutoUpdateRepo(pool))
+	return svc
 }
 
 func runServer(
@@ -132,6 +139,7 @@ func runServer(
 	logger *slog.Logger,
 	workerCancel context.CancelFunc,
 	workerDone <-chan struct{},
+	autoScheduler *service.AutoUpdateScheduler,
 ) error {
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -165,7 +173,7 @@ func runServer(
 	}
 
 	shutdownApp(ctx, logger, []*http.Server{server, internalServer}, pool, resources,
-		workerCancel, workerDone, shutdownHTTP)
+		workerCancel, workerDone, autoScheduler, shutdownHTTP)
 	return firstErr
 }
 
@@ -178,6 +186,7 @@ func shutdownApp(
 	resources *resourcedb.DB,
 	workerCancel context.CancelFunc,
 	workerDone <-chan struct{},
+	autoScheduler *service.AutoUpdateScheduler,
 	shutdownHTTP bool,
 ) {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
@@ -193,6 +202,8 @@ func shutdownApp(
 			logger.Error("http server shutdown error", "addr", srv.Addr, "error", err)
 		}
 	}
+	logger.Info("stopping auto update scheduler")
+	autoScheduler.Stop()
 
 	logger.Info("stopping worker")
 	workerCancel()

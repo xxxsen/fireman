@@ -12,6 +12,7 @@ const TABS = [
   { href: "/admin/jobs", label: "计算作业" },
   { href: "/admin/callbacks", label: "回调记录" },
   { href: "/admin/data-versions", label: "数据版本" },
+  { href: "/admin/auto-updates", label: "自动更新管理" },
 ] as const;
 
 export const ADMIN_OVERVIEW_QUERY_KEY = ["admin", "overview"] as const;

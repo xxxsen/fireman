@@ -81,6 +81,34 @@ func TestPostProcess_RecordsSuccessCallback(t *testing.T) {
 	}
 }
 
+func TestPostProcess_SuccessUpdatesLinkedAutoUpdateRule(t *testing.T) {
+	db, resources := newPostProcessDBs(t)
+	svc := newPostProcessService(db, resources, repository.NewPostProcessRecordRepo(db))
+	autoRepo := repository.NewMarketDataAutoUpdateRepo(db)
+	svc.SetAutoUpdateRepo(autoRepo)
+	seedTaskRow(t, db, "wt_auto_ok", repository.WorkerTaskTypeAssetDirectorySync,
+		repository.WorkerTaskStatusComplete, "", 1)
+	now := time.Now().UnixMilli()
+	rule, err := autoRepo.UpsertDirectory(context.Background(), "cn_exchange_stock", 24, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := autoRepo.BindTask(context.Background(), rule.ID, rule.Version, "wt_auto_ok", now, now+int64(24*time.Hour/time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+
+	if result := svc.Process(context.Background(), "wt_auto_ok"); result.Result != PostProcessSuccess {
+		t.Fatalf("result=%+v", result)
+	}
+	updated, err := autoRepo.Get(context.Background(), rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastSuccessAt == nil {
+		t.Fatal("last_success_at was not recorded")
+	}
+}
+
 func TestPostProcess_RecordsPermanentCallbackForMissingTask(t *testing.T) {
 	db, resources := newPostProcessDBs(t)
 	records := repository.NewPostProcessRecordRepo(db)

@@ -1,5 +1,54 @@
-import { apiGet } from "./client";
-import type { WorkerTaskStatus } from "./market-assets";
+import { apiGet, apiPost, apiPut } from "./client";
+import type { AutoUpdateRule, WorkerTask, WorkerTaskStatus } from "./market-assets";
+
+export interface AdminAutoUpdateRule extends AutoUpdateRule {
+  target_label: string;
+  task?: WorkerTask | null;
+}
+
+export interface AdminAutoUpdateDirectoryUnit {
+  sync_key: string;
+  scope: string;
+  label: string;
+}
+
+export interface AdminAutoUpdateListParams {
+  targetType?: string;
+  enabled?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function listAdminAutoUpdates(
+  params?: AdminAutoUpdateListParams,
+): Promise<AdminPage<AdminAutoUpdateRule>> {
+  const query = new URLSearchParams();
+  if (params?.targetType) query.set("target_type", params.targetType);
+  if (params?.enabled) query.set("enabled", params.enabled);
+  if (params?.q) query.set("q", params.q);
+  if (params?.limit) query.set("limit", String(params.limit));
+  if (params?.offset) query.set("offset", String(params.offset));
+  return apiGet(`/api/v1/admin/auto-updates${query.size ? `?${query}` : ""}`);
+}
+
+export function createAdminDirectoryAutoUpdate(body: {
+  sync_key: string;
+  interval_hours: number;
+}): Promise<AdminAutoUpdateRule> {
+  return apiPost("/api/v1/admin/auto-updates/directories", body);
+}
+
+export function listAdminAutoUpdateDirectoryUnits(): Promise<AdminAutoUpdateDirectoryUnit[]> {
+  return apiGet("/api/v1/admin/auto-updates/directories");
+}
+
+export function updateAdminAutoUpdate(
+  id: string,
+  body: { enabled: boolean; interval_hours: number; version: number },
+): Promise<AdminAutoUpdateRule> {
+  return apiPut(`/api/v1/admin/auto-updates/${encodeURIComponent(id)}`, body);
+}
 
 /** Shared pagination envelope for every /api/v1/admin/* listing. */
 export interface AdminPage<T> {
