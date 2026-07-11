@@ -21,6 +21,8 @@ var (
 	errSimulationRunsRange          = errors.New("simulation_runs must be in [1000, 100000]")
 	errStudentTDfRange              = errors.New("student_t_df must be in [5, 30]")
 	errRebalanceThresholdRange      = errors.New("rebalance_threshold must be in [0, 0.5]")
+	errTransactionCostRateRange     = errors.New("transaction_cost_rate must be in [0, 1)")
+	errRebalanceFrequencyInvalid    = errors.New("rebalance_frequency must be monthly, quarterly, or annual")
 	errAnnualSavingsGrowthRateRange = errors.New("annual_savings_growth_rate must be in [-0.5, 0.5]")
 	errWithdrawalTypeInvalid        = errors.New("withdrawal_type must be fixed_real, fixed_portfolio, or guardrail")
 	errInflationModeInvalid         = errors.New("inflation_mode must be fixed_real or random_ar1")
@@ -246,6 +248,9 @@ func validateParameterRanges(p repository.PlanParameters) error {
 	if p.RebalanceThreshold < 0 || p.RebalanceThreshold > 0.5 {
 		return errRebalanceThresholdRange
 	}
+	if p.TransactionCostRate < 0 || p.TransactionCostRate >= 1 {
+		return errTransactionCostRateRange
+	}
 	if p.AnnualSavingsGrowthRate < -0.5 || p.AnnualSavingsGrowthRate > 0.5 {
 		return errAnnualSavingsGrowthRateRange
 	}
@@ -262,6 +267,11 @@ func validateParameterModes(p repository.PlanParameters) error {
 	case "fixed_real", "random_ar1":
 	default:
 		return errInflationModeInvalid
+	}
+	switch p.RebalanceFrequency {
+	case "monthly", "quarterly", "annual":
+	default:
+		return errRebalanceFrequencyInvalid
 	}
 	return nil
 }

@@ -9,9 +9,9 @@ import (
 
 func TestWithdrawCashOnlyNoTransactionCost(t *testing.T) {
 	slots := []assetSlot{
-		{balance: 1000, targetWeight: 1.0},
+		{isCash: true, balance: 1000, targetWeight: 1.0},
 	}
-	ok, cost := withdrawAmount(slots, 0, 100, 0.01)
+	ok, cost := withdrawAmount(slots, 100, 0.01)
 	if !ok || cost != 0 {
 		t.Fatalf("expected no cost, ok=%v cost=%d", ok, cost)
 	}
@@ -24,7 +24,7 @@ func TestWithdrawSellAssetsIncludesTransactionCost(t *testing.T) {
 	slots := []assetSlot{
 		{balance: 1000, targetWeight: 1.0},
 	}
-	ok, cost := withdrawAmount(slots, -1, 99, 0.01)
+	ok, cost := withdrawAmount(slots, 99, 0.01)
 	if !ok {
 		t.Fatal("expected success")
 	}
@@ -34,6 +34,51 @@ func TestWithdrawSellAssetsIncludesTransactionCost(t *testing.T) {
 	total := slots[0].balance
 	if math.Abs(total-900) > 0.02 {
 		t.Fatalf("expected ~900 remaining, got %v", total)
+	}
+}
+
+func TestWithdrawUsesAllCashSlotsProportionallyWithoutCost(t *testing.T) {
+	slots := []assetSlot{
+		{isCash: true, balance: 600},
+		{isCash: true, balance: 400},
+		{balance: 1000},
+	}
+	ok, cost := withdrawAmount(slots, 100, 0.01)
+	if !ok || cost != 0 {
+		t.Fatalf("cash-pool withdrawal expected no cost, ok=%v cost=%d", ok, cost)
+	}
+	if math.Abs(slots[0].balance-540) > 1e-9 || math.Abs(slots[1].balance-360) > 1e-9 || slots[2].balance != 1000 {
+		t.Fatalf("cash pool was not consumed proportionally: %+v", slots)
+	}
+}
+
+func TestWithdrawCashShortfallChargesOnlyRiskAssetSale(t *testing.T) {
+	slots := []assetSlot{
+		{isCash: true, balance: 30},
+		{isCash: true, balance: 10},
+		{balance: 960},
+	}
+	ok, cost := withdrawAmount(slots, 99, 0.01)
+	if !ok || cost != 1 {
+		t.Fatalf("expected successful risk sale with one unit cost, ok=%v cost=%d", ok, cost)
+	}
+	if math.Abs(slots[0].balance) > 1e-9 || math.Abs(slots[1].balance) > 1e-9 || math.Abs(slots[2].balance-900.404040404) > 1e-6 {
+		t.Fatalf("unexpected balances after mixed withdrawal: %+v", slots)
+	}
+	if diff := math.Abs(sumBalances(slots) - (1000 - 99 - float64(cost))); diff > 0.5 {
+		t.Fatalf("accounting identity failed by %v", diff)
+	}
+}
+
+func TestSavingsAllocateAcrossCashTargets(t *testing.T) {
+	slots := []assetSlot{
+		{isCash: true, targetWeight: 0.3},
+		{isCash: true, targetWeight: 0.1},
+		{targetWeight: 0.6, balance: 1000},
+	}
+	addCash(slots, 400)
+	if math.Abs(slots[0].balance-300) > 1e-9 || math.Abs(slots[1].balance-100) > 1e-9 || slots[2].balance != 1000 {
+		t.Fatalf("savings not allocated 75/25 across cash targets: %+v", slots)
 	}
 }
 
@@ -85,7 +130,7 @@ func minimalTxCostInput() *InputSnapshot {
 		Parameters: SnapshotParameters{
 			CurrentAge: 55, RetirementAge: 55, EndAge: 60,
 			TotalAssetsMinor: 1_000_000_00, AnnualSavingsMinor: 0,
-			AnnualSpendingMinor: 400_000_00, TerminalWealthFloorMinor: 0,
+			AnnualSpendingMinor: 100_000_00, TerminalWealthFloorMinor: 0,
 			InflationMode: "fixed_real", FixedInflationRate: 0.03,
 			WithdrawalType: "fixed_real", WithdrawalRate: 0.04,
 			RebalanceFrequency: "annual", RebalanceThreshold: 0.03,

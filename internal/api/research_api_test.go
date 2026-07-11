@@ -19,7 +19,7 @@ import (
 
 // seedResearchAsset inserts a directory row plus optional daily history
 // ending today, so readiness staleness checks pass against the real clock.
-func seedResearchAsset(t *testing.T, db *sql.DB, key, name, currency string, days int, base float64) {
+func seedResearchAsset(t *testing.T, db *sql.DB, key, name string, days int, base float64) {
 	t.Helper()
 	ctx := context.Background()
 	assets := repository.NewMarketAssetRepo(db)
@@ -32,7 +32,7 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name, currency string, day
 	if err := assets.UpsertAssetTx(ctx, tx, repository.MarketAsset{
 		AssetKey: key, Market: "CN", InstrumentType: "cn_exchange_fund",
 		RegionCode: "sh", Exchange: "SSE", Symbol: key, Name: name,
-		Currency: currency, Active: true, ListingStatus: "active", SourceName: "test_source",
+		Currency: "CNY", Active: true, ListingStatus: "active", SourceName: "test_source",
 	}, now); err != nil {
 		t.Fatalf("upsert asset: %v", err)
 	}
@@ -65,7 +65,12 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name, currency string, day
 	}
 }
 
-func researchPost(t *testing.T, srv *httptest.Server, path string, payload any) (*http.Response, []byte) {
+type researchHTTPResponse struct {
+	StatusCode int
+	Header     http.Header
+}
+
+func researchPost(t *testing.T, srv *httptest.Server, path string, payload any) (researchHTTPResponse, []byte) {
 	t.Helper()
 	var body []byte
 	if payload != nil {
@@ -84,10 +89,12 @@ func researchPost(t *testing.T, srv *httptest.Server, path string, payload any) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, mustRead(t, resp)
+	responseBody := mustRead(t, resp)
+	resp.Body = http.NoBody
+	return researchHTTPResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, responseBody
 }
 
-func researchPatch(t *testing.T, srv *httptest.Server, path string, payload any) (*http.Response, []byte) {
+func researchPatch(t *testing.T, srv *httptest.Server, path string, payload any) (researchHTTPResponse, []byte) {
 	t.Helper()
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -102,16 +109,20 @@ func researchPatch(t *testing.T, srv *httptest.Server, path string, payload any)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, mustRead(t, resp)
+	responseBody := mustRead(t, resp)
+	resp.Body = http.NoBody
+	return researchHTTPResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, responseBody
 }
 
-func researchGet(t *testing.T, srv *httptest.Server, path string) (*http.Response, []byte) {
+func researchGet(t *testing.T, srv *httptest.Server, path string) (researchHTTPResponse, []byte) {
 	t.Helper()
 	resp, err := http.Get(srv.URL + path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp, mustRead(t, resp)
+	body := mustRead(t, resp)
+	resp.Body = http.NoBody
+	return researchHTTPResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, body
 }
 
 func envData(t *testing.T, body []byte) map[string]any {
@@ -126,8 +137,8 @@ func envData(t *testing.T, body []byte) map[string]any {
 
 func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	seedResearchAsset(t, db, "RA1", "股票基金", "CNY", 1500, 100)
-	seedResearchAsset(t, db, "RA2", "债券基金", "CNY", 1500, 50)
+	seedResearchAsset(t, db, "RA1", "股票基金", 1500, 100)
+	seedResearchAsset(t, db, "RA2", "债券基金", 1500, 50)
 
 	services := buildServices(db)
 	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
@@ -337,23 +348,23 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	// Archive then hard-delete.
 	req, _ := http.NewRequest(http.MethodDelete,
 		srv.URL+"/api/v1/research/collections/"+collectionID, nil)
-	resp, err := http.DefaultClient.Do(req)
+	rawResp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body = mustRead(t, resp)
-	if resp.StatusCode != http.StatusOK || envData(t, body)["archived"] != true {
-		t.Fatalf("archive failed: %d %s", resp.StatusCode, body)
+	body = mustRead(t, rawResp)
+	if rawResp.StatusCode != http.StatusOK || envData(t, body)["archived"] != true {
+		t.Fatalf("archive failed: %d %s", rawResp.StatusCode, body)
 	}
 	req, _ = http.NewRequest(http.MethodDelete,
 		srv.URL+"/api/v1/research/collections/"+collectionID+"?hard=true", nil)
-	resp, err = http.DefaultClient.Do(req)
+	rawResp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body = mustRead(t, resp)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("hard delete failed: %d %s", resp.StatusCode, body)
+	body = mustRead(t, rawResp)
+	if rawResp.StatusCode != http.StatusOK {
+		t.Fatalf("hard delete failed: %d %s", rawResp.StatusCode, body)
 	}
 	resp, _ = researchGet(t, srv, "/api/v1/research/collections/"+collectionID)
 	if resp.StatusCode != http.StatusNotFound {
@@ -363,8 +374,8 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 
 func TestResearchAPISyncHistory(t *testing.T) {
 	srv, db, _ := testRouterWithDB(t)
-	seedResearchAsset(t, db, "RB1", "有历史", "CNY", 1200, 100)
-	seedResearchAsset(t, db, "RB2", "无历史", "CNY", 0, 0)
+	seedResearchAsset(t, db, "RB1", "有历史", 1200, 100)
+	seedResearchAsset(t, db, "RB2", "无历史", 0, 0)
 
 	// sync-history creates a task for the asset without history and reuses it
 	// on the second call.
@@ -432,7 +443,7 @@ func TestResearchAPISyncHistory(t *testing.T) {
 
 func TestResearchAPICopyToPlanValidation(t *testing.T) {
 	srv, db, _ := testRouterWithDB(t)
-	seedResearchAsset(t, db, "RC1", "股票", "CNY", 1200, 100)
+	seedResearchAsset(t, db, "RC1", "股票", 1200, 100)
 
 	plan := createTestPlan(t, db)
 

@@ -225,14 +225,23 @@ describe("optimizationDisabledReason", () => {
     ).toBeNull();
   });
 
-  it("requires at least two tunable assets", () => {
+  it("allows a single tunable asset", () => {
     expect(
       optimizationDisabledReason(
         readiness(),
         optReadiness({ ready: true, enabled_count: 2, tunable_count: 1 }),
       ),
-    ).toBe("至少需要 2 个启用且未锁定的资产才能寻找最优组合");
+    ).toBeNull();
   });
+
+  it("allows an all-locked 100% fixed candidate", () => {
+		expect(
+			optimizationDisabledReason(
+				readiness(),
+				optReadiness({ ready: true, enabled_count: 2, tunable_count: 0, candidate_count: 1 }),
+			),
+		).toBeNull();
+	});
 
   it("prioritizes no enabled assets over the tunable count", () => {
     expect(

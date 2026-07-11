@@ -62,11 +62,15 @@ func FailErr(c *gin.Context, err error) {
 			"task_not_found", "market_asset_not_found":
 			status = http.StatusNotFound
 		case "research_collection_not_found", "research_item_not_found",
-			"research_run_not_found", "saved_filter_not_found":
+			"research_run_not_found", "research_optimization_not_found", "saved_filter_not_found":
 			status = http.StatusNotFound
+		case "research_collection_changed", "research_optimization_result_stale":
+			status = http.StatusConflict
 		case "market_asset_history_empty":
 			status = http.StatusBadRequest
 		case "simulation_input_invalid", "plan_weights_invalid", "invalid_backup", "invalid_request":
+			status = http.StatusBadRequest
+		case "parameters_invalid", "foreign_cash_not_supported":
 			status = http.StatusBadRequest
 		case "builtin_scenario_immutable", "scenario_in_use":
 			status = http.StatusBadRequest

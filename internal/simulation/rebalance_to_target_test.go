@@ -151,10 +151,9 @@ func TestRebalanceToTargetProperties(t *testing.T) {
 	}
 }
 
-// Golden regression: these summaries were captured by running RunPath with the
-// legacy 50-iteration rebalanceToTarget at the current EngineVersion. The
-// closed form must reproduce them exactly; any drift means the cleanup changed
-// behavior and must not ship without an EngineVersion bump.
+// Golden regression for the current engine semantics. The closed-form
+// rebalance must reproduce these fixed-seed paths exactly; semantic changes
+// require an EngineVersion bump and an intentional baseline update.
 func TestRebalanceToTargetGoldenPaths(t *testing.T) {
 	type golden struct {
 		seed          int
@@ -168,8 +167,8 @@ func TestRebalanceToTargetGoldenPaths(t *testing.T) {
 	}
 	cases := []golden{
 		{seed: 0, terminal: 152448677, txCost: 15013928, succeeded: true, failureMonth: -1, maxDD: 0.7479120211, totalSpending: 438466818, realTerminal: 82229382},
-		{seed: 1, terminal: 1067712, txCost: 9490061, succeeded: false, failureMonth: 284, maxDD: 0.9948108756, totalSpending: 404271567, realTerminal: 595190},
-		{seed: 7, terminal: 1224315, txCost: 11233887, succeeded: false, failureMonth: 297, maxDD: 0.9956547928, totalSpending: 433846240, realTerminal: 664473},
+		{seed: 1, terminal: 0, txCost: 9498603, succeeded: false, failureMonth: 284, maxDD: 0.9948108756, totalSpending: 404271567, realTerminal: 0},
+		{seed: 7, terminal: 0, txCost: 11243682, succeeded: false, failureMonth: 297, maxDD: 0.9956547928, totalSpending: 433846240, realTerminal: 0},
 		{seed: 42, terminal: 391436927, txCost: 15976634, succeeded: true, failureMonth: -1, maxDD: 0.2745939521, totalSpending: 438466818, realTerminal: 211137395},
 	}
 	for _, g := range cases {
@@ -195,8 +194,9 @@ func TestRebalanceToTargetGoldenPaths(t *testing.T) {
 
 func goldenRebalanceInput() *InputSnapshot {
 	return &InputSnapshot{
-		EngineVersion: EngineVersion,
-		BaseCurrency:  "CNY",
+		EngineVersion:          EngineVersion,
+		BaseCurrency:           "CNY",
+		AggregateCashLiquidity: true,
 		Parameters: SnapshotParameters{
 			CurrentAge: 50, RetirementAge: 55, EndAge: 75,
 			TotalAssetsMinor: 2_000_000_00, AnnualSavingsMinor: 100_000_00,

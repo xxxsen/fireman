@@ -134,16 +134,21 @@ func TestBuildFrozenFactorModelUsesFrozenHistoryForCrossType(t *testing.T) {
 	}
 }
 
-func TestBuildFrozenFactorModelSameTypeIsPerfectlyCorrelated(t *testing.T) {
+func TestBuildFrozenFactorModelSameTypeUsesHistoryShrunkToOne(t *testing.T) {
 	profile := assumptions.SystemDefaultProfile()
+	x, y := map[string]float64{}, map[string]float64{}
+	for i := 0; i < 36; i++ {
+		x[monthKey(2020+i/12, i%12+1)] = []float64{-0.01, 0.01}[i%2]
+		y[monthKey(2020+i/12, i%12+1)] = []float64{-0.01, -0.01, 0.01, 0.01}[i%4]
+	}
 	assets := []simulation.SnapshotAsset{
 		{
-			HoldingID: "h1", AssetClass: "equity", Region: "domestic", Currency: "CNY",
-			ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18,
+			HoldingID: "h1", AssetKey: "A", AssetClass: "equity", Region: "domestic", Currency: "CNY",
+			ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18, Months: x,
 		},
 		{
-			HoldingID: "h2", AssetClass: "equity", Region: "domestic", Currency: "CNY",
-			ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18,
+			HoldingID: "h2", AssetKey: "B", AssetClass: "equity", Region: "domestic", Currency: "CNY",
+			ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18, Months: y,
 		},
 	}
 	fm, _, err := buildFrozenFactorModel(assets, "CNY", profile)
@@ -153,7 +158,26 @@ func TestBuildFrozenFactorModelSameTypeIsPerfectlyCorrelated(t *testing.T) {
 	if fm == nil {
 		t.Fatal("expected a factor model")
 	}
-	if got := fm.Audit.RRaw[0][1]; math.Abs(got-1.0) > 1e-9 {
-		t.Fatalf("same-type holdings must be ρ=1, got %v", got)
+	pk := simulation.PairKey(fm.Factors[0], fm.Factors[1])
+	if got := fm.Audit.Lambda[pk]; math.Abs(got-0.5) > 1e-9 {
+		t.Fatalf("lambda = %v, want 0.5", got)
+	}
+	if got := fm.Audit.RRaw[0][1]; math.Abs(got-0.5) > 1e-9 {
+		t.Fatalf("same-type distinct assets should shrink rho_hist=0 to 1, got %v", got)
+	}
+}
+
+func TestBuildFrozenFactorModelExactDuplicateIsPerfectlyCorrelated(t *testing.T) {
+	profile := assumptions.SystemDefaultProfile()
+	assets := []simulation.SnapshotAsset{
+		{HoldingID: "h1", AssetKey: "SAME", AssetClass: "equity", Region: "domestic", Currency: "CNY", ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18},
+		{HoldingID: "h2", AssetKey: "SAME", AssetClass: "equity", Region: "domestic", Currency: "CNY", ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18},
+	}
+	fm, _, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fm.Audit.RRaw[0][1]; got != 1 {
+		t.Fatalf("exact duplicate must have rho=1, got %v", got)
 	}
 }

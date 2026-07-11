@@ -67,6 +67,28 @@ describe("SimulationReadinessPanel", () => {
     expect(screen.queryByText(/还没有可用的历史数据/)).not.toBeInTheDocument();
   });
 
+  it("shows loading and retries a failed readiness request", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    getSimulationReadiness.mockImplementationOnce(
+      () => new Promise((_, reject) => (rejectFirst = reject)),
+    );
+    renderPanel();
+    expect(await screen.findByText("正在检查模拟就绪状态…")).toBeInTheDocument();
+    rejectFirst(new Error("backend unavailable"));
+    expect(await screen.findByText("模拟就绪状态检查失败，请重试。")).toBeInTheDocument();
+
+    getSimulationReadiness.mockResolvedValueOnce({
+      ready: true,
+      blocking_assets: [],
+      active_tasks: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试就绪检查" }));
+    await waitFor(() => expect(getSimulationReadiness).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText("模拟就绪状态检查失败，请重试。")).not.toBeInTheDocument(),
+    );
+  });
+
   it("labels history_missing without implying a broken sync", async () => {
     getSimulationReadiness.mockResolvedValue(makeReadiness());
     renderPanel();

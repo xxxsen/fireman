@@ -40,39 +40,9 @@ func (s *ResearchService) ExecuteBacktestJob(
 	if run.Status == repository.ResearchRunStatusSucceeded {
 		return nil
 	}
-	var snapshot researchInputSnapshot
-	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil {
-		s.markRunFailed(ctx, run.ID)
-		return fmt.Errorf("decode research input snapshot: %w", err)
-	}
-	if err := s.research.MarkRunRunning(ctx, run.ID); err != nil {
-		return err
-	}
-
-	if progress != nil {
-		progress(0, researchJobPhases, "loading")
-	}
-	ds, err := s.loadDatasetFromSnapshot(ctx, snapshot)
+	snapshot, ds, err := s.loadBacktestExecution(ctx, run, progress)
 	if err != nil {
-		if ctx.Err() != nil {
-			return err // shutdown: leave the run for the requeue reconciler
-		}
-		s.markRunFailed(ctx, run.ID)
 		return err
-	}
-
-	if progress != nil {
-		progress(1, researchJobPhases, "verifying")
-	}
-	rebuilt := buildResearchSnapshot(ds, ResearchReadiness{
-		CommonStart: snapshot.CommonStart,
-		CommonEnd:   snapshot.CommonEnd,
-		WindowStart: snapshot.WindowStart,
-		WindowEnd:   snapshot.WindowEnd,
-	})
-	if rebuilt.SourceHash != snapshot.SourceHash {
-		s.markRunFailed(ctx, run.ID)
-		return fmt.Errorf("%w (run %s)", ErrResearchSourceChanged, run.ID)
 	}
 	if cancelCheck != nil && cancelCheck() {
 		s.markRunCanceled(ctx, run.ID)
@@ -107,6 +77,43 @@ func (s *ResearchService) ExecuteBacktestJob(
 		progress(researchJobPhases, researchJobPhases, "done")
 	}
 	return nil
+}
+
+func (s *ResearchService) loadBacktestExecution(
+	ctx context.Context,
+	run repository.ResearchBacktestRun,
+	progress func(int, int, string),
+) (researchInputSnapshot, *researchDataset, error) {
+	var snapshot researchInputSnapshot
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil {
+		s.markRunFailed(ctx, run.ID)
+		return snapshot, nil, fmt.Errorf("decode research input snapshot: %w", err)
+	}
+	if err := s.research.MarkRunRunning(ctx, run.ID); err != nil {
+		return snapshot, nil, fmt.Errorf("mark research run running: %w", err)
+	}
+	if progress != nil {
+		progress(0, researchJobPhases, "loading")
+	}
+	ds, err := s.loadDatasetFromSnapshot(ctx, snapshot)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.markRunFailed(ctx, run.ID)
+		}
+		return snapshot, nil, fmt.Errorf("load research snapshot dataset: %w", err)
+	}
+	if progress != nil {
+		progress(1, researchJobPhases, "verifying")
+	}
+	rebuilt := buildResearchSnapshot(ds, ResearchReadiness{
+		CommonStart: snapshot.CommonStart, CommonEnd: snapshot.CommonEnd,
+		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
+	})
+	if rebuilt.SourceHash != snapshot.SourceHash {
+		s.markRunFailed(ctx, run.ID)
+		return snapshot, nil, fmt.Errorf("%w (run %s)", ErrResearchSourceChanged, run.ID)
+	}
+	return snapshot, ds, nil
 }
 
 func (s *ResearchService) markRunFailed(ctx context.Context, runID string) {
@@ -145,9 +152,11 @@ func (s *ResearchService) loadDatasetFromSnapshot(
 	fxNeeded := map[string]bool{}
 	for _, a := range snapshot.Assets {
 		item := repository.ResearchCollectionItem{
+			ID:           a.ItemID,
 			AssetKey:     a.AssetKey,
 			Enabled:      true,
 			Weight:       a.Weight,
+			WeightLocked: a.WeightLocked,
 			AdjustPolicy: a.AdjustPolicy,
 			PointType:    a.PointType,
 		}
@@ -225,10 +234,12 @@ func backtestInputFromDataset(
 	}
 	if b := ds.Benchmark; b != nil {
 		input.Benchmark = &BacktestBenchmarkInput{
-			AssetKey: b.Item.AssetKey,
-			Name:     b.Asset.Name,
-			Currency: b.Asset.Currency,
-			Points:   assetSeriesPoints(b.Points),
+			AssetKey:       b.Item.AssetKey,
+			Name:           b.Asset.Name,
+			Currency:       b.Asset.Currency,
+			IsCash:         b.IsCash,
+			MaxFillGapDays: ResearchFillGapToleranceDays(b.Asset.InstrumentType),
+			Points:         assetSeriesPoints(b.Points),
 		}
 	}
 	return input
@@ -295,16 +306,25 @@ func (s *ResearchService) persistBacktestResult(
 	}
 
 	completedAt := s.now().UnixMilli()
-	return fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		if err := s.research.ReplacePointsTx(ctx, tx, runID, points); err != nil {
-			return err
+			return fmt.Errorf("replace research run points: %w", err)
 		}
 		if err := s.research.ReplaceYearsTx(ctx, tx, runID, years); err != nil {
-			return err
+			return fmt.Errorf("replace research run years: %w", err)
 		}
 		if err := s.research.ReplaceMonthsTx(ctx, tx, runID, months); err != nil {
-			return err
+			return fmt.Errorf("replace research run months: %w", err)
 		}
-		return s.research.CompleteRunTx(ctx, tx, runID, string(summaryJSON), string(dqJSON), completedAt)
+		if err := s.research.CompleteRunTx(
+			ctx, tx, runID, string(summaryJSON), string(dqJSON), completedAt,
+		); err != nil {
+			return fmt.Errorf("complete research run: %w", err)
+		}
+		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("persist research run result: %w", err)
+	}
+	return nil
 }

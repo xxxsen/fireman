@@ -179,13 +179,6 @@ func (r *ResearchRepo) exec(tx *sql.Tx) dbExec {
 	return r.db
 }
 
-func (r *ResearchRepo) querier(tx *sql.Tx) rowQuerier {
-	if tx != nil {
-		return tx
-	}
-	return r.db
-}
-
 // --- collections ---
 
 const researchCollectionColumns = `
@@ -266,9 +259,18 @@ func (r *ResearchRepo) UpdateCollectionTx(ctx context.Context, tx *sql.Tx, c Res
 
 // TouchCollectionTx bumps updated_at (item mutations affect the collection).
 func (r *ResearchRepo) TouchCollectionTx(ctx context.Context, tx *sql.Tx, id string, now int64) error {
-	_, err := r.exec(tx).ExecContext(ctx,
-		`UPDATE research_collections SET updated_at=? WHERE id=?`, now, id)
-	return wrapSQL("touch research collection", err)
+	res, err := r.exec(tx).ExecContext(ctx, `
+		UPDATE research_collections
+		SET updated_at=CASE WHEN updated_at>=? THEN updated_at+1 ELSE ? END
+		WHERE id=?`, now, now, id)
+	if err != nil {
+		return wrapSQL("touch research collection", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrResearchCollectionNotFound
+	}
+	return nil
 }
 
 func (r *ResearchRepo) GetCollection(ctx context.Context, id string) (ResearchCollection, error) {
@@ -411,11 +413,15 @@ func (r *ResearchRepo) ListItems(ctx context.Context, collectionID string) ([]Re
 }
 
 // ListItemsTx reads collection items inside a transaction.
-func (r *ResearchRepo) ListItemsTx(ctx context.Context, tx *sql.Tx, collectionID string) ([]ResearchCollectionItem, error) {
+func (r *ResearchRepo) ListItemsTx(
+	ctx context.Context, tx *sql.Tx, collectionID string,
+) ([]ResearchCollectionItem, error) {
 	return r.listItems(ctx, tx, collectionID)
 }
 
-func (r *ResearchRepo) listItems(ctx context.Context, q rowQuerier, collectionID string) ([]ResearchCollectionItem, error) {
+func (r *ResearchRepo) listItems(
+	ctx context.Context, q rowQuerier, collectionID string,
+) ([]ResearchCollectionItem, error) {
 	return queryCollect(ctx, q,
 		`SELECT `+researchItemColumns+` FROM research_collection_items
 		 WHERE collection_id=? ORDER BY sort_order, created_at, id`, []any{collectionID},
@@ -432,19 +438,14 @@ func (r *ResearchRepo) CountItemsByCollections(
 	if len(collectionIDs) == 0 {
 		return out, nil
 	}
-	ph := make([]string, len(collectionIDs))
-	args := make([]any, len(collectionIDs))
-	for i, id := range collectionIDs {
-		ph[i] = "?"
-		args[i] = id
-	}
-	rows, err := r.db.QueryContext(ctx, `
+	query, args := stringInQuery(`
 		SELECT collection_id,
 			COALESCE(SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END), 0),
 			COUNT(*)
 		FROM research_collection_items
-		WHERE collection_id IN (`+strings.Join(ph, ",")+`)
-		GROUP BY collection_id`, args...)
+		WHERE collection_id IN (`, collectionIDs, `)
+		GROUP BY collection_id`)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, wrapSQL("count research items", err)
 	}
@@ -468,17 +469,12 @@ func (r *ResearchRepo) SumEnabledWeightsByCollections(
 	if len(collectionIDs) == 0 {
 		return out, nil
 	}
-	ph := make([]string, len(collectionIDs))
-	args := make([]any, len(collectionIDs))
-	for i, id := range collectionIDs {
-		ph[i] = "?"
-		args[i] = id
-	}
-	rows, err := r.db.QueryContext(ctx, `
+	query, args := stringInQuery(`
 		SELECT collection_id, COALESCE(SUM(weight), 0)
 		FROM research_collection_items
-		WHERE enabled=1 AND collection_id IN (`+strings.Join(ph, ",")+`)
-		GROUP BY collection_id`, args...)
+		WHERE enabled=1 AND collection_id IN (`, collectionIDs, `)
+		GROUP BY collection_id`)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, wrapSQL("sum research item weights", err)
 	}
@@ -588,16 +584,11 @@ func (r *ResearchRepo) LatestRunsByCollections(
 	if len(collectionIDs) == 0 {
 		return out, nil
 	}
-	ph := make([]string, len(collectionIDs))
-	args := make([]any, len(collectionIDs))
-	for i, id := range collectionIDs {
-		ph[i] = "?"
-		args[i] = id
-	}
-	rows, err := r.db.QueryContext(ctx, `
+	query, args := stringInQuery(`
 		SELECT `+researchRunListColumns+` FROM research_backtest_runs
-		WHERE collection_id IN (`+strings.Join(ph, ",")+`)
-		ORDER BY created_at DESC, id DESC`, args...)
+		WHERE collection_id IN (`, collectionIDs, `)
+		ORDER BY created_at DESC, id DESC`)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, wrapSQL("query latest research runs", err)
 	}
@@ -843,7 +834,7 @@ func scanResearchMetrics(row rowScanner) (ResearchAssetMetrics, error) {
 		&m.Sharpe, &m.Calmar, &m.Return1Y, &m.Return3Y, &m.Return5Y, &m.ComputedAt,
 	)
 	if err != nil {
-		return ResearchAssetMetrics{}, err
+		return ResearchAssetMetrics{}, wrapSQL("scan research asset metrics", err)
 	}
 	return m, nil
 }
@@ -884,16 +875,13 @@ func (r *ResearchRepo) ListMetricsByAssetKeys(
 	if len(assetKeys) == 0 {
 		return nil, nil
 	}
-	ph := make([]string, len(assetKeys))
-	args := make([]any, len(assetKeys))
-	for i, k := range assetKeys {
-		ph[i] = "?"
-		args[i] = k
-	}
+	query, args := stringInQuery(
+		`SELECT `+researchMetricsColumns+` FROM research_asset_metrics WHERE asset_key IN (`,
+		assetKeys,
+		`) ORDER BY asset_key, adjust_policy, point_type`,
+	)
 	return queryCollect(ctx, r.db,
-		`SELECT `+researchMetricsColumns+` FROM research_asset_metrics
-		 WHERE asset_key IN (`+strings.Join(ph, ",")+`)
-		 ORDER BY asset_key, adjust_policy, point_type`, args,
+		query, args,
 		func(rows *sql.Rows) (ResearchAssetMetrics, error) {
 			m, err := scanResearchMetrics(rows)
 			if err != nil {
@@ -997,6 +985,135 @@ const researchStaleExpr = `(h.asset_key IS NOT NULL AND h.data_as_of <> ''
 	AND julianday(?) - julianday(h.data_as_of) >
 		(CASE WHEN a.instrument_type = 'cn_mutual_fund' THEN 10 ELSE 7 END))`
 
+func buildResearchSearchWhere(f ResearchAssetSearchFilter, nowDate string) (string, []any) {
+	conditions := make([]string, 0)
+	args := make([]any, 0)
+	if f.Market != "" {
+		conditions, args = append(conditions, "a.market = ?"), append(args, strings.ToUpper(f.Market))
+	}
+	conditions, args = appendResearchStringIn(
+		conditions, args, "a.instrument_type", f.InstrumentTypes, false,
+	)
+	if f.Query != "" {
+		query := "%" + f.Query + "%"
+		conditions = append(conditions,
+			"(a.symbol LIKE ? OR a.name LIKE ? OR a.asset_key LIKE ? OR a.exchange LIKE ?)")
+		args = append(args, query, query, query, query)
+	}
+	conditions, args = appendResearchStringIn(conditions, args, "a.currency", f.Currencies, true)
+	if !f.IncludeInactive {
+		conditions = append(conditions, "a.active = 1")
+	}
+	conditions, args = appendResearchHistoryFilters(conditions, args, f, nowDate)
+	conditions, args = appendResearchMetricFilters(conditions, args, f)
+	if f.BacktestReady {
+		conditions = append(conditions, researchBacktestReadyExpr)
+	}
+	if len(conditions) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
+}
+
+func appendResearchStringIn(
+	conditions []string,
+	args []any,
+	column string,
+	values []string,
+	uppercase bool,
+) ([]string, []any) {
+	if len(values) == 0 {
+		return conditions, args
+	}
+	placeholders := make([]string, len(values))
+	for i, value := range values {
+		placeholders[i] = "?"
+		if uppercase {
+			value = strings.ToUpper(value)
+		}
+		args = append(args, value)
+	}
+	return append(conditions, column+" IN ("+strings.Join(placeholders, ",")+")"), args
+}
+
+func appendResearchHistoryFilters(
+	conditions []string,
+	args []any,
+	f ResearchAssetSearchFilter,
+	nowDate string,
+) ([]string, []any) {
+	switch f.HistoryStatus {
+	case "synced":
+		conditions = append(conditions, "h.asset_key IS NOT NULL")
+	case "missing":
+		conditions = append(conditions, "h.asset_key IS NULL AND a.instrument_type <> 'cash'")
+	case "stale":
+		conditions, args = append(conditions, researchStaleExpr), append(args, nowDate)
+	case "syncing":
+		conditions = append(conditions, "t.status IN ('pending','running','pre_complete')")
+	case "failed":
+		conditions = append(conditions, "t.status = 'failed'")
+	}
+	if f.DataAsOfMin != "" {
+		conditions, args = append(conditions, "h.data_as_of >= ?"), append(args, f.DataAsOfMin)
+	}
+	if f.MinHistoryYears > 0 {
+		conditions, args = append(conditions, "m.history_years >= ?"), append(args, f.MinHistoryYears)
+	}
+	return conditions, args
+}
+
+func appendResearchMetricFilters(
+	conditions []string, args []any, f ResearchAssetSearchFilter,
+) ([]string, []any) {
+	filters := []struct {
+		value *float64
+		expr  string
+	}{
+		{f.MinCAGR, "m.cagr >= ?"},
+		{f.MinReturn1Y, "m.return_1y >= ?"},
+		{f.MinReturn3Y, "m.return_3y >= ?"},
+		{f.MinReturn5Y, "m.return_5y >= ?"},
+		{f.MaxVolatility, "m.annual_volatility <= ?"},
+		{f.MinMaxDrawdown, "COALESCE(m.max_drawdown, 0) >= ?"},
+		{f.MinSharpe, "m.sharpe >= ?"},
+		{f.MinCalmar, "m.calmar >= ?"},
+		{f.MaxDownsideVolatility, "m.downside_volatility <= ?"},
+		{f.MinReturnDrawdownRatio, researchReturnDrawdownExpr + " >= ?"},
+	}
+	for _, filter := range filters {
+		if filter.value != nil {
+			conditions, args = append(conditions, filter.expr), append(args, *filter.value)
+		}
+	}
+	return conditions, args
+}
+
+const researchBacktestReadyExpr = `(
+	a.instrument_type = 'cash'
+	OR (h.asset_key IS NOT NULL AND (
+		a.currency = 'CNY'
+		OR EXISTS (
+			SELECT 1 FROM instruments fi
+			JOIN market_data_points fp ON fp.instrument_id = fi.id
+			WHERE fi.market = 'SYSTEM' AND fi.instrument_type = 'fx_rate'
+				AND fi.code = a.currency || 'CNY'
+		)
+	))
+)`
+
+func researchSearchOrder(sortBy string, descending bool) string {
+	expression, ok := researchSortColumns[sortBy]
+	if !ok {
+		return "a.market, a.instrument_type, a.symbol"
+	}
+	direction := "ASC"
+	if descending {
+		direction = "DESC"
+	}
+	return expression + " " + direction + " NULLS LAST, a.asset_key ASC"
+}
+
 // SearchResearchAssets runs the screener query: directory rows joined with
 // the best history dimension (max point_count), its metrics projection and
 // the latest history sync task, filtered/sorted/paged in SQL.
@@ -1031,98 +1148,7 @@ func (r *ResearchRepo) SearchResearchAssets(
 		JOIN worker_tasks wt ON wt.id = hs.last_task_id
 	) t ON t.asset_key = a.asset_key AND t.rn = 1`
 
-	var conds []string
-	var args []any
-	if f.Market != "" {
-		conds = append(conds, "a.market = ?")
-		args = append(args, strings.ToUpper(f.Market))
-	}
-	if len(f.InstrumentTypes) > 0 {
-		ph := make([]string, len(f.InstrumentTypes))
-		for i, it := range f.InstrumentTypes {
-			ph[i] = "?"
-			args = append(args, it)
-		}
-		conds = append(conds, "a.instrument_type IN ("+strings.Join(ph, ",")+")")
-	}
-	if f.Query != "" {
-		q := "%" + f.Query + "%"
-		conds = append(conds,
-			"(a.symbol LIKE ? OR a.name LIKE ? OR a.asset_key LIKE ? OR a.exchange LIKE ?)")
-		args = append(args, q, q, q, q)
-	}
-	if len(f.Currencies) > 0 {
-		ph := make([]string, len(f.Currencies))
-		for i, c := range f.Currencies {
-			ph[i] = "?"
-			args = append(args, strings.ToUpper(c))
-		}
-		conds = append(conds, "a.currency IN ("+strings.Join(ph, ",")+")")
-	}
-	if !f.IncludeInactive {
-		conds = append(conds, "a.active = 1")
-	}
-	switch f.HistoryStatus {
-	case "synced":
-		conds = append(conds, "h.asset_key IS NOT NULL")
-	case "missing":
-		conds = append(conds, "h.asset_key IS NULL AND a.instrument_type <> 'cash'")
-	case "stale":
-		conds = append(conds, researchStaleExpr)
-		args = append(args, nowDate)
-	case "syncing":
-		conds = append(conds, "t.status IN ('pending','running','pre_complete')")
-	case "failed":
-		conds = append(conds, "t.status = 'failed'")
-	}
-	if f.DataAsOfMin != "" {
-		conds = append(conds, "h.data_as_of >= ?")
-		args = append(args, f.DataAsOfMin)
-	}
-	if f.MinHistoryYears > 0 {
-		conds = append(conds, "m.history_years >= ?")
-		args = append(args, f.MinHistoryYears)
-	}
-	metricConds := []struct {
-		val  *float64
-		expr string
-	}{
-		{f.MinCAGR, "m.cagr >= ?"},
-		{f.MinReturn1Y, "m.return_1y >= ?"},
-		{f.MinReturn3Y, "m.return_3y >= ?"},
-		{f.MinReturn5Y, "m.return_5y >= ?"},
-		{f.MaxVolatility, "m.annual_volatility <= ?"},
-		{f.MinMaxDrawdown, "COALESCE(m.max_drawdown, 0) >= ?"},
-		{f.MinSharpe, "m.sharpe >= ?"},
-		{f.MinCalmar, "m.calmar >= ?"},
-		{f.MaxDownsideVolatility, "m.downside_volatility <= ?"},
-		{f.MinReturnDrawdownRatio, researchReturnDrawdownExpr + " >= ?"},
-	}
-	for _, mc := range metricConds {
-		if mc.val != nil {
-			conds = append(conds, mc.expr)
-			args = append(args, *mc.val)
-		}
-	}
-	if f.BacktestReady {
-		conds = append(conds, `(
-			a.instrument_type = 'cash'
-			OR (h.asset_key IS NOT NULL AND (
-				a.currency = 'CNY'
-				OR EXISTS (
-					SELECT 1 FROM instruments fi
-					JOIN market_data_points fp ON fp.instrument_id = fi.id
-					WHERE fi.market = 'SYSTEM' AND fi.instrument_type = 'fx_rate'
-						AND fi.code = a.currency || 'CNY'
-				)
-			))
-		)`)
-	}
-
-	where := ""
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
-	}
+	where, args := buildResearchSearchWhere(f, nowDate)
 
 	var total int
 	countArgs := append([]any{}, args...)
@@ -1131,34 +1157,13 @@ func (r *ResearchRepo) SearchResearchAssets(
 		return nil, 0, wrapSQL("count research assets", err)
 	}
 
-	orderExpr, ok := researchSortColumns[f.SortBy]
-	if !ok {
-		orderExpr = "a.market, a.instrument_type, a.symbol"
-	} else {
-		dir := "ASC"
-		if f.SortDesc {
-			dir = "DESC"
-		}
-		orderExpr = orderExpr + " " + dir + " NULLS LAST, a.asset_key ASC"
-	}
+	orderExpr := researchSearchOrder(f.SortBy, f.SortDesc)
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
 	}
 
-	selectSQL := `
-	SELECT a.asset_key, a.market, a.instrument_type, a.region_code, a.symbol, a.name,
-		a.exchange, a.instrument_kind, a.currency, a.active, a.listing_status,
-		a.last_seen_at, a.source_name, a.source_as_of, a.refreshed_at, a.created_at, a.updated_at,
-		h.adjust_policy, h.point_type, h.data_as_of, h.point_count, h.source_name,
-		(CASE WHEN ` + researchStaleExpr + ` THEN 1 ELSE 0 END) AS stale,
-		COALESCE(t.status, ''), COALESCE(t.error_code, ''), COALESCE(t.error_message, ''),
-		m.asset_key, m.start_date, m.end_date, m.point_count, m.history_years,
-		m.cagr, m.annual_volatility, m.max_drawdown, m.downside_volatility,
-		m.sharpe, m.calmar, m.return_1y, m.return_3y, m.return_5y, m.computed_at
-	` + base + " " + where + `
-	ORDER BY ` + orderExpr + `
-	LIMIT ? OFFSET ?`
+	selectSQL := buildResearchAssetSelectSQL(base, where, orderExpr)
 	selectArgs := append([]any{nowDate}, args...)
 	selectArgs = append(selectArgs, limit, f.Offset)
 
@@ -1170,73 +1175,9 @@ func (r *ResearchRepo) SearchResearchAssets(
 
 	var out []ResearchAssetRow
 	for rows.Next() {
-		var row ResearchAssetRow
-		var active int
-		var hAdjust, hPoint, hAsOf, hSource sql.NullString
-		var hCount sql.NullInt64
-		var stale int
-		var mKey, mStart, mEnd sql.NullString
-		var mCount sql.NullInt64
-		var mYears sql.NullFloat64
-		var mComputed sql.NullInt64
-		var cagr, vol, dd, downside, sharpe, calmar, r1, r3, r5 sql.NullFloat64
-		var errCode, errMsg string
-		if err := rows.Scan(
-			&row.Asset.AssetKey, &row.Asset.Market, &row.Asset.InstrumentType,
-			&row.Asset.RegionCode, &row.Asset.Symbol, &row.Asset.Name,
-			&row.Asset.Exchange, &row.Asset.InstrumentKind, &row.Asset.Currency,
-			&active, &row.Asset.ListingStatus,
-			&row.Asset.LastSeenAt, &row.Asset.SourceName, &row.Asset.SourceAsOf,
-			&row.Asset.RefreshedAt, &row.Asset.CreatedAt, &row.Asset.UpdatedAt,
-			&hAdjust, &hPoint, &hAsOf, &hCount, &hSource,
-			&stale,
-			&row.SyncStatus, &errCode, &errMsg,
-			&mKey, &mStart, &mEnd, &mCount, &mYears,
-			&cagr, &vol, &dd, &downside, &sharpe, &calmar, &r1, &r3, &r5, &mComputed,
-		); err != nil {
+		row, err := scanResearchAssetRow(rows)
+		if err != nil {
 			return nil, 0, wrapSQL("scan research asset row", err)
-		}
-		row.SyncError = errMsg
-		if row.SyncError == "" {
-			row.SyncError = errCode
-		}
-		row.Asset.Active = active == 1
-		if hAdjust.Valid {
-			row.HasHistory = true
-			row.AdjustPolicy = hAdjust.String
-			row.PointType = hPoint.String
-			row.DataAsOf = hAsOf.String
-			row.PointCount = int(hCount.Int64)
-			row.SourceName = hSource.String
-		}
-		row.Stale = stale == 1
-		if mKey.Valid {
-			m := &ResearchAssetMetrics{
-				AssetKey:     mKey.String,
-				AdjustPolicy: row.AdjustPolicy,
-				PointType:    row.PointType,
-				StartDate:    mStart.String,
-				EndDate:      mEnd.String,
-				PointCount:   int(mCount.Int64),
-				HistoryYears: mYears.Float64,
-				ComputedAt:   mComputed.Int64,
-			}
-			assign := func(dst **float64, v sql.NullFloat64) {
-				if v.Valid {
-					val := v.Float64
-					*dst = &val
-				}
-			}
-			assign(&m.CAGR, cagr)
-			assign(&m.AnnualVolatility, vol)
-			assign(&m.MaxDrawdown, dd)
-			assign(&m.DownsideVolatility, downside)
-			assign(&m.Sharpe, sharpe)
-			assign(&m.Calmar, calmar)
-			assign(&m.Return1Y, r1)
-			assign(&m.Return3Y, r3)
-			assign(&m.Return5Y, r5)
-			row.Metrics = m
 		}
 		out = append(out, row)
 	}
@@ -1244,6 +1185,108 @@ func (r *ResearchRepo) SearchResearchAssets(
 		return nil, 0, wrapSQL("iterate research asset rows", err)
 	}
 	return out, total, nil
+}
+
+func buildResearchAssetSelectSQL(base, where, order string) string {
+	var query strings.Builder
+	query.WriteString(`
+	SELECT a.asset_key, a.market, a.instrument_type, a.region_code, a.symbol, a.name,
+		a.exchange, a.instrument_kind, a.currency, a.active, a.listing_status,
+		a.last_seen_at, a.source_name, a.source_as_of, a.refreshed_at, a.created_at, a.updated_at,
+		h.adjust_policy, h.point_type, h.data_as_of, h.point_count, h.source_name,
+		(CASE WHEN `)
+	query.WriteString(researchStaleExpr)
+	query.WriteString(` THEN 1 ELSE 0 END) AS stale,
+		COALESCE(t.status, ''), COALESCE(t.error_code, ''), COALESCE(t.error_message, ''),
+		m.asset_key, m.start_date, m.end_date, m.point_count, m.history_years,
+		m.cagr, m.annual_volatility, m.max_drawdown, m.downside_volatility,
+		m.sharpe, m.calmar, m.return_1y, m.return_3y, m.return_5y, m.computed_at
+	`)
+	query.WriteString(base)
+	query.WriteByte(' ')
+	query.WriteString(where)
+	query.WriteString("\nORDER BY ")
+	query.WriteString(order)
+	query.WriteString("\nLIMIT ? OFFSET ?")
+	return query.String()
+}
+
+type researchAssetScanFields struct {
+	active, stale                   int
+	hAdjust, hPoint, hAsOf, hSource sql.NullString
+	hCount                          sql.NullInt64
+	mKey, mStart, mEnd              sql.NullString
+	mCount, mComputed               sql.NullInt64
+	mYears                          sql.NullFloat64
+	cagr, vol, dd, downside         sql.NullFloat64
+	sharpe, calmar, r1, r3, r5      sql.NullFloat64
+	errCode, errMsg                 string
+}
+
+func scanResearchAssetRow(rows *sql.Rows) (ResearchAssetRow, error) {
+	var row ResearchAssetRow
+	var fields researchAssetScanFields
+	err := rows.Scan(
+		&row.Asset.AssetKey, &row.Asset.Market, &row.Asset.InstrumentType,
+		&row.Asset.RegionCode, &row.Asset.Symbol, &row.Asset.Name,
+		&row.Asset.Exchange, &row.Asset.InstrumentKind, &row.Asset.Currency,
+		&fields.active, &row.Asset.ListingStatus,
+		&row.Asset.LastSeenAt, &row.Asset.SourceName, &row.Asset.SourceAsOf,
+		&row.Asset.RefreshedAt, &row.Asset.CreatedAt, &row.Asset.UpdatedAt,
+		&fields.hAdjust, &fields.hPoint, &fields.hAsOf, &fields.hCount, &fields.hSource,
+		&fields.stale, &row.SyncStatus, &fields.errCode, &fields.errMsg,
+		&fields.mKey, &fields.mStart, &fields.mEnd, &fields.mCount, &fields.mYears,
+		&fields.cagr, &fields.vol, &fields.dd, &fields.downside,
+		&fields.sharpe, &fields.calmar, &fields.r1, &fields.r3, &fields.r5, &fields.mComputed,
+	)
+	if err != nil {
+		return ResearchAssetRow{}, wrapSQL("scan research asset row fields", err)
+	}
+	populateResearchAssetScanFields(&row, fields)
+	return row, nil
+}
+
+func populateResearchAssetScanFields(row *ResearchAssetRow, fields researchAssetScanFields) {
+	row.SyncError = fields.errMsg
+	if row.SyncError == "" {
+		row.SyncError = fields.errCode
+	}
+	row.Asset.Active = fields.active == 1
+	if fields.hAdjust.Valid {
+		row.HasHistory = true
+		row.AdjustPolicy, row.PointType = fields.hAdjust.String, fields.hPoint.String
+		row.DataAsOf, row.PointCount, row.SourceName = fields.hAsOf.String, int(fields.hCount.Int64), fields.hSource.String
+	}
+	row.Stale = fields.stale == 1
+	if !fields.mKey.Valid {
+		return
+	}
+	metrics := &ResearchAssetMetrics{
+		AssetKey: fields.mKey.String, AdjustPolicy: row.AdjustPolicy, PointType: row.PointType,
+		StartDate: fields.mStart.String, EndDate: fields.mEnd.String,
+		PointCount: int(fields.mCount.Int64), HistoryYears: fields.mYears.Float64,
+		ComputedAt: fields.mComputed.Int64,
+	}
+	assignResearchMetricPointers(metrics, fields)
+	row.Metrics = metrics
+}
+
+func assignResearchMetricPointers(metrics *ResearchAssetMetrics, fields researchAssetScanFields) {
+	assign := func(target **float64, value sql.NullFloat64) {
+		if value.Valid {
+			metricValue := value.Float64
+			*target = &metricValue
+		}
+	}
+	assign(&metrics.CAGR, fields.cagr)
+	assign(&metrics.AnnualVolatility, fields.vol)
+	assign(&metrics.MaxDrawdown, fields.dd)
+	assign(&metrics.DownsideVolatility, fields.downside)
+	assign(&metrics.Sharpe, fields.sharpe)
+	assign(&metrics.Calmar, fields.calmar)
+	assign(&metrics.Return1Y, fields.r1)
+	assign(&metrics.Return3Y, fields.r3)
+	assign(&metrics.Return5Y, fields.r5)
 }
 
 // StaleMetricsDimension identifies one history dimension whose metrics

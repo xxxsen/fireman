@@ -18,6 +18,12 @@ import (
 // required before volatility-family metrics are considered defined.
 const researchMetricsMinReturnSamples = 2
 
+type researchMetricObservation struct {
+	date  string
+	day   int
+	value float64
+}
+
 // ComputeResearchAssetMetrics derives screener metrics from one stored
 // history series (actual observations, no forward fill needed because the
 // series itself is the observation set).
@@ -32,123 +38,128 @@ func ComputeResearchAssetMetrics(
 		PointType:    pointType,
 		ComputedAt:   computedAt,
 	}
-	type obs struct {
-		date  string
-		day   int
-		value float64
-	}
-	series := make([]obs, 0, len(points))
-	for _, p := range points {
-		if p.Value <= 0 || math.IsNaN(p.Value) || math.IsInf(p.Value, 0) {
-			continue
-		}
-		day, err := parseResearchDate(p.TradeDate)
-		if err != nil {
-			continue
-		}
-		series = append(series, obs{date: p.TradeDate, day: day, value: p.Value})
-	}
-	sort.Slice(series, func(i, j int) bool { return series[i].day < series[j].day })
-
-	// Coverage facts mirror the raw stored series (not the filtered one) so
-	// the staleness check against market_asset_history_state stays stable.
-	m.PointCount = len(points)
-	if len(points) > 0 {
-		rawDates := make([]string, len(points))
-		for i, p := range points {
-			rawDates[i] = p.TradeDate
-		}
-		sort.Strings(rawDates)
-		m.StartDate = rawDates[0]
-		m.EndDate = rawDates[len(rawDates)-1]
-	}
+	series := researchMetricSeries(points)
+	populateResearchMetricCoverage(&m, points)
 	if len(series) == 0 {
 		return m
 	}
+	populateResearchMetricGrowth(&m, series)
+	populateResearchMetricVolatility(&m, researchMetricReturns(series))
+	populateResearchMetricDrawdown(&m, series)
+	m.Return1Y = researchTrailingReturn(series, 1)
+	m.Return3Y = researchTrailingReturn(series, 3)
+	m.Return5Y = researchTrailingReturn(series, 5)
+	return m
+}
 
+func researchMetricSeries(points []repository.MarketAssetPoint) []researchMetricObservation {
+	series := make([]researchMetricObservation, 0, len(points))
+	for _, point := range points {
+		if point.Value <= 0 || math.IsNaN(point.Value) || math.IsInf(point.Value, 0) {
+			continue
+		}
+		day, err := parseResearchDate(point.TradeDate)
+		if err == nil {
+			series = append(series, researchMetricObservation{
+				date: point.TradeDate, day: day, value: point.Value,
+			})
+		}
+	}
+	sort.Slice(series, func(i, j int) bool { return series[i].day < series[j].day })
+	return series
+}
+
+func populateResearchMetricCoverage(
+	metrics *repository.ResearchAssetMetrics, points []repository.MarketAssetPoint,
+) {
+	metrics.PointCount = len(points)
+	if len(points) == 0 {
+		return
+	}
+	rawDates := make([]string, len(points))
+	for i, point := range points {
+		rawDates[i] = point.TradeDate
+	}
+	sort.Strings(rawDates)
+	metrics.StartDate, metrics.EndDate = rawDates[0], rawDates[len(rawDates)-1]
+}
+
+func populateResearchMetricGrowth(
+	metrics *repository.ResearchAssetMetrics, series []researchMetricObservation,
+) {
 	first, last := series[0], series[len(series)-1]
 	spanDays := last.day - first.day
-	m.HistoryYears = float64(spanDays) / 365.25
-
-	if spanDays > 0 && first.value > 0 {
+	metrics.HistoryYears = float64(spanDays) / 365.25
+	if spanDays > 0 {
 		cagr := math.Pow(last.value/first.value, 365.25/float64(spanDays)) - 1
-		m.CAGR = &cagr
+		metrics.CAGR = &cagr
 	}
+}
 
-	// Observation-to-observation returns.
-	rets := make([]float64, 0, len(series)-1)
+func researchMetricReturns(series []researchMetricObservation) []float64 {
+	returns := make([]float64, 0, maxInt(0, len(series)-1))
 	for i := 1; i < len(series); i++ {
-		rets = append(rets, series[i].value/series[i-1].value-1)
+		returns = append(returns, series[i].value/series[i-1].value-1)
 	}
-	if len(rets) >= researchMetricsMinReturnSamples {
-		vol := sampleStd(rets) * math.Sqrt(252)
-		m.AnnualVolatility = &vol
+	return returns
+}
 
-		// Downside deviation vs 0 (annualized).
-		sumSq := 0.0
-		for _, r := range rets {
-			if r < 0 {
-				sumSq += r * r
-			}
+func populateResearchMetricVolatility(
+	metrics *repository.ResearchAssetMetrics, returns []float64,
+) {
+	if len(returns) < researchMetricsMinReturnSamples {
+		return
+	}
+	volatility := sampleStd(returns) * math.Sqrt(252)
+	metrics.AnnualVolatility = &volatility
+	sumSquaredDownside := 0.0
+	for _, value := range returns {
+		if value < 0 {
+			sumSquaredDownside += value * value
 		}
-		downside := math.Sqrt(sumSq/float64(len(rets))) * math.Sqrt(252)
-		m.DownsideVolatility = &downside
+	}
+	downside := math.Sqrt(sumSquaredDownside/float64(len(returns))) * math.Sqrt(252)
+	metrics.DownsideVolatility = &downside
+	if metrics.CAGR != nil && volatility > 0 {
+		sharpe := *metrics.CAGR / volatility
+		metrics.Sharpe = &sharpe
+	}
+}
 
-		if m.CAGR != nil && vol > 0 {
-			sharpe := *m.CAGR / vol
-			m.Sharpe = &sharpe
-		}
+func populateResearchMetricDrawdown(
+	metrics *repository.ResearchAssetMetrics, series []researchMetricObservation,
+) {
+	peak, maxDrawdown := series[0].value, 0.0
+	for _, observation := range series {
+		peak = math.Max(peak, observation.value)
+		maxDrawdown = math.Min(maxDrawdown, observation.value/peak-1)
 	}
+	if maxDrawdown >= 0 {
+		return
+	}
+	metrics.MaxDrawdown = &maxDrawdown
+	if metrics.CAGR != nil {
+		calmar := *metrics.CAGR / math.Abs(maxDrawdown)
+		metrics.Calmar = &calmar
+	}
+}
 
-	// Max drawdown over observations.
-	peak := series[0].value
-	minDD := 0.0
-	for _, o := range series {
-		if o.value > peak {
-			peak = o.value
-		}
-		if dd := o.value/peak - 1; dd < minDD {
-			minDD = dd
-		}
+func researchTrailingReturn(series []researchMetricObservation, years int) *float64 {
+	first, last := series[0], series[len(series)-1]
+	endDate, err := time.Parse("2006-01-02", last.date)
+	if err != nil {
+		return nil
 	}
-	if minDD < 0 {
-		dd := minDD
-		m.MaxDrawdown = &dd
-		if m.CAGR != nil {
-			calmar := *m.CAGR / math.Abs(minDD)
-			m.Calmar = &calmar
-		}
+	targetDay, err := parseResearchDate(endDate.AddDate(-years, 0, 0).Format("2006-01-02"))
+	if err != nil || first.day > targetDay {
+		return nil
 	}
-
-	// Trailing returns: end value vs the last observation at or before the
-	// target date; only defined when history reaches back far enough.
-	trailing := func(years int) *float64 {
-		endT, err := time.Parse("2006-01-02", last.date)
-		if err != nil {
-			return nil
-		}
-		targetDay, err := parseResearchDate(endT.AddDate(-years, 0, 0).Format("2006-01-02"))
-		if err != nil {
-			return nil
-		}
-		if first.day > targetDay {
-			return nil
-		}
-		idx := sort.Search(len(series), func(i int) bool { return series[i].day > targetDay })
-		if idx == 0 {
-			return nil
-		}
-		base := series[idx-1].value
-		if base <= 0 {
-			return nil
-		}
-		r := last.value/base - 1
-		return &r
+	index := sort.Search(len(series), func(i int) bool { return series[i].day > targetDay })
+	if index == 0 || series[index-1].value <= 0 {
+		return nil
 	}
-	m.Return1Y = trailing(1)
-	m.Return3Y = trailing(3)
-	m.Return5Y = trailing(5)
-	return m
+	value := last.value/series[index-1].value - 1
+	return &value
 }
 
 // BackfillResearchAssetMetrics lazily recomputes metrics for history

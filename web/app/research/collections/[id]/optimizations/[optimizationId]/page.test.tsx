@@ -10,8 +10,7 @@ import OptimizationDetailPage from "./page";
 
 const getOptimizationMock = vi.hoisted(() => vi.fn());
 const getCollectionMock = vi.hoisted(() => vi.fn());
-const updateCollectionItemMock = vi.hoisted(() => vi.fn());
-const updateCollectionMock = vi.hoisted(() => vi.fn());
+const applyOptimizationMock = vi.hoisted(() => vi.fn());
 const routerPushMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
@@ -23,8 +22,7 @@ vi.mock("@/lib/api/research", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/research")>()),
   getOptimization: (...args: unknown[]) => getOptimizationMock(...args),
   getCollection: (...args: unknown[]) => getCollectionMock(...args),
-  updateCollectionItem: (...args: unknown[]) => updateCollectionItemMock(...args),
-  updateCollection: (...args: unknown[]) => updateCollectionMock(...args),
+  applyOptimization: (...args: unknown[]) => applyOptimizationMock(...args),
 }));
 
 function item(
@@ -45,7 +43,7 @@ function item(
     note: "",
     sort_order: 0,
     created_at: 0,
-    updated_at: 0,
+    updated_at: 1234,
     name: `资产${id}`,
     symbol: id,
     market: "CN",
@@ -74,7 +72,7 @@ function collection(): ResearchCollectionDetail {
     transaction_cost_rate: 0,
     status: "active",
     created_at: 0,
-    updated_at: 0,
+    updated_at: 1234,
     tags: [],
     items: [
       item("a", { enabled: false, weight: 0 }),
@@ -97,7 +95,7 @@ function optimization(): ResearchOptimizationRun {
     rebalance_policy: "monthly",
     window_start: "2020-01-01",
     window_end: "2026-07-01",
-    engine_version: "research_optimizer_v1",
+    engine_version: "research_optimizer_v2",
     created_at: 1750000000000,
     result: {
       candidate_count: 10,
@@ -148,8 +146,7 @@ describe("OptimizationDetailPage", () => {
     vi.clearAllMocks();
     getOptimizationMock.mockResolvedValue(optimization());
     getCollectionMock.mockResolvedValue(collection());
-    updateCollectionItemMock.mockResolvedValue(collection());
-    updateCollectionMock.mockResolvedValue(collection());
+    applyOptimizationMock.mockResolvedValue(collection());
   });
 
   it("renders metric help in Chinese", async () => {
@@ -168,69 +165,15 @@ describe("OptimizationDetailPage", () => {
 
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
 
-    await waitFor(() => expect(updateCollectionItemMock).toHaveBeenCalledTimes(3));
-    expect(updateCollectionItemMock).toHaveBeenNthCalledWith(1, "rc_1", "a", {
-      enabled: true,
-      weight: 0.6,
-      weight_locked: true,
-    });
-    expect(updateCollectionItemMock).toHaveBeenNthCalledWith(2, "rc_1", "b", {
-      enabled: true,
-      weight: 0.4,
-      weight_locked: true,
-    });
-    expect(updateCollectionItemMock).toHaveBeenNthCalledWith(3, "rc_1", "c", {
-      enabled: false,
-      weight: 0,
-      weight_locked: false,
-    });
-    expect(updateCollectionMock).toHaveBeenCalledWith("rc_1", {
-      start_policy: "custom_range",
-      window_start: "2020-01-01",
-      window_end: "2026-07-01",
+    await waitFor(() => expect(applyOptimizationMock).toHaveBeenCalledTimes(1));
+    expect(applyOptimizationMock).toHaveBeenCalledWith("opt_1", {
+      objective: "max_cagr",
+      rank: 1,
+      expected_collection_updated_at: 1234,
     });
     await waitFor(() =>
       expect(routerPushMock).toHaveBeenCalledWith("/research/collections/rc_1?optimized_applied=1"),
     );
   });
 
-  it("applies legacy results that only contain asset keys", async () => {
-    const opt = optimization();
-    opt.result!.best_by_cagr[0]!.weights = [
-      { asset_key: "CN|fund|sh|a", name: "资产a", weight: 0.7, locked: false },
-      { asset_key: "CN|fund|sh|b", name: "资产b", weight: 0.3, locked: false },
-    ] as unknown as ResearchOptimizationRun["result"]["best_by_cagr"][number]["weights"];
-    getOptimizationMock.mockResolvedValue(opt);
-
-    renderPage();
-    fireEvent.click(await screen.findByTestId("apply-result-cagr-1"));
-    expect(await screen.findByText("目标组合：测试组合")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
-
-    await waitFor(() => expect(updateCollectionItemMock).toHaveBeenCalledTimes(3));
-    expect(updateCollectionItemMock).toHaveBeenNthCalledWith(1, "rc_1", "a", {
-      enabled: true,
-      weight: 0.7,
-      weight_locked: true,
-    });
-    expect(updateCollectionItemMock).toHaveBeenNthCalledWith(2, "rc_1", "b", {
-      enabled: true,
-      weight: 0.3,
-      weight_locked: true,
-    });
-    expect(updateCollectionItemMock).toHaveBeenNthCalledWith(3, "rc_1", "c", {
-      enabled: false,
-      weight: 0,
-      weight_locked: false,
-    });
-    expect(updateCollectionMock).toHaveBeenCalledWith("rc_1", {
-      start_policy: "custom_range",
-      window_start: "2020-01-01",
-      window_end: "2026-07-01",
-    });
-    await waitFor(() =>
-      expect(routerPushMock).toHaveBeenCalledWith("/research/collections/rc_1?optimized_applied=1"),
-    );
-  });
 });

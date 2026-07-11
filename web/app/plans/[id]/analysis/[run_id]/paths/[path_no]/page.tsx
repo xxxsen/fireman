@@ -11,7 +11,7 @@ import { MetricHelp } from "@/components/ui/MetricHelp";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { getPathDetail } from "@/lib/api/simulations";
 import {
-  failureReasonLabel,
+  failureStatusLabel,
   formatMoneyWan,
   formatNullablePercent,
   formatPercent,
@@ -292,8 +292,8 @@ export default function PathDetailPage() {
         )}
         {data.failure_reason && (
           <div className="sm:col-span-2">
-            <dt className="text-sm text-ink-muted">失败原因</dt>
-            <dd className="text-ink">{failureReasonLabel(data.failure_reason)}</dd>
+            <dt className="text-sm text-ink-muted">失败状态</dt>
+            <dd className="text-ink">{failureStatusLabel(data.failure_reason)}</dd>
           </div>
         )}
       </dl>

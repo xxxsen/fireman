@@ -3,7 +3,26 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
+
+// stringInQuery builds a parameterized IN clause. Only '?' tokens are
+// generated dynamically; every value remains a bound SQL argument.
+func stringInQuery(prefix string, values []string, suffix string) (string, []any) {
+	var query strings.Builder
+	query.Grow(len(prefix) + len(suffix) + len(values)*2)
+	query.WriteString(prefix)
+	args := make([]any, len(values))
+	for i, value := range values {
+		if i > 0 {
+			query.WriteByte(',')
+		}
+		query.WriteByte('?')
+		args[i] = value
+	}
+	query.WriteString(suffix)
+	return query.String(), args
+}
 
 // rowQuerier is satisfied by both *sql.DB and *sql.Tx so read helpers can run
 // inside or outside a transaction.

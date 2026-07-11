@@ -57,6 +57,11 @@ func (s *HoldingsService) buildOnePreparedHolding(
 			"market asset is inactive; set allow_inactive to keep it",
 			map[string]any{"asset_key": item.AssetKey})
 	}
+	if asset.InstrumentType == "cash" && asset.Currency != plan.BaseCurrency {
+		return repository.PlanHolding{}, nil, newErr("foreign_cash_not_supported",
+			"FIRE 计划目前只支持与计划基准币种相同的现金持仓",
+			map[string]any{"asset_key": item.AssetKey, "cash_currency": asset.Currency, "base_currency": plan.BaseCurrency})
+	}
 
 	snapID, ok := existingSnap[item.AssetKey]
 	var pending *pendingHoldingSnap

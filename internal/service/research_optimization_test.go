@@ -1,12 +1,90 @@
 package service
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/fireman/fireman/internal/repository"
 )
+
+func seedSucceededOptimization(
+	t *testing.T,
+	db *sql.DB,
+	detail ResearchCollectionDetail,
+	weights []OptimizationWeightEntry,
+) string {
+	t.Helper()
+	ctx := context.Background()
+	resultJSON, err := json.Marshal(OptimizationResult{
+		CandidateCount: 1, EvaluatedCount: 1,
+		BestByCAGR: []OptimizationResultItem{{
+			Rank: 1, Objective: ObjectiveMaxCAGR, Score: 0.1, Weights: weights,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := optimizationInputSnapshot{Assets: make([]researchSnapshotAsset, 0, len(detail.Items))}
+	for _, item := range detail.Items {
+		snapshot.Assets = append(snapshot.Assets, researchSnapshotAsset{
+			ItemID: item.ID, AssetKey: item.AssetKey,
+		})
+	}
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	optimizationID := "ror_apply_test_" + detail.ID
+	jobID := "job_apply_test_" + detail.ID
+	if err := repository.NewJobRepo(db).Create(ctx, tx, repository.Job{
+		ID: jobID, Type: repository.JobTypeResearchOptimization,
+		Status: repository.JobStatusSucceeded, InputHash: "apply-test", CreatedAt: detail.UpdatedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewResearchRepo(db).CreateOptimizationRunTx(ctx, tx, repository.ResearchOptimizationRun{
+		ID: optimizationID, CollectionID: detail.ID, JobID: jobID,
+		Status: repository.ResearchRunStatusSucceeded, InputHash: "apply-test",
+		SourceHash: "source", EngineVersion: OptimizationEngineVersion,
+		BaseCurrency: detail.BaseCurrency, RebalancePolicy: detail.RebalancePolicy,
+		WindowStart: "2021-01-01", WindowEnd: "2023-12-31",
+		ConfigJSON: "{}", InputSnapshotJSON: string(snapshotJSON), CandidateCount: 1, EvaluatedCount: 1,
+		ResultJSON: string(resultJSON), CreatedAt: detail.UpdatedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return optimizationID
+}
+
+func createOptimizationApplyFixture(t *testing.T) (*ResearchService, *sql.DB, ResearchCollectionDetail) {
+	t.Helper()
+	svc, db := newResearchTestService(t)
+	for i, key := range []string{"OPT_A", "OPT_B", "OPT_C"} {
+		insertResearchFixtureAsset(t, db, key, key, "CNY", "2020-01-01", 1643, growthValue(100+float64(i)))
+	}
+	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
+		Name: "调优应用测试",
+		Items: []ResearchCollectionItemInput{
+			{AssetKey: "OPT_A", Weight: fptr(0.4)},
+			{AssetKey: "OPT_B", Weight: fptr(0.4)},
+			{AssetKey: "OPT_C", Weight: fptr(0.2)},
+		},
+	})
+	return svc, db, detail
+}
 
 func TestOptimizationWeightEntryJSONUsesAPIFieldNames(t *testing.T) {
 	data, err := json.Marshal(OptimizationWeightEntry{
@@ -263,13 +341,24 @@ func TestCountCandidates_MatchesGenerate(t *testing.T) {
 	}
 }
 
+func TestCountCandidatesStopsAfterHardLimit(t *testing.T) {
+	assets := make([]OptimizationAsset, 10)
+	for i := range assets {
+		assets[i] = OptimizationAsset{ItemID: fmt.Sprintf("i%d", i), AssetKey: fmt.Sprintf("a%d", i)}
+	}
+	if got := CountCandidates(assets, 0.001); got != OptimizationHardMaxCandidate+1 {
+		t.Fatalf("over-limit candidate count = %d, want sentinel %d", got, OptimizationHardMaxCandidate+1)
+	}
+}
+
 // --- objective ranking ---
 
 func TestTopKTracker_CAGR(t *testing.T) {
 	tracker := NewTopKTracker(ObjectiveMaxCAGR, 3)
 	for i := 0; i < 10; i++ {
 		tracker.Push(OptimizationResultItem{
-			Score: float64(i) * 0.01,
+			Score:   float64(i) * 0.01,
+			Weights: []OptimizationWeightEntry{{ItemID: string(rune('a' + i)), AssetKey: string(rune('A' + i)), Weight: 1}},
 			Summary: BacktestSummary{
 				CAGR: float64(i) * 0.01,
 			},
@@ -289,9 +378,9 @@ func TestTopKTracker_CAGR(t *testing.T) {
 
 func TestTopKTracker_MinDrawdown(t *testing.T) {
 	tracker := NewTopKTracker(ObjectiveMinDrawdown, 2)
-	tracker.Push(OptimizationResultItem{Score: -0.20})
-	tracker.Push(OptimizationResultItem{Score: -0.05})
-	tracker.Push(OptimizationResultItem{Score: -0.15})
+	tracker.Push(OptimizationResultItem{Score: -0.20, Weights: []OptimizationWeightEntry{{ItemID: "a", Weight: 1}}})
+	tracker.Push(OptimizationResultItem{Score: -0.05, Weights: []OptimizationWeightEntry{{ItemID: "b", Weight: 1}}})
+	tracker.Push(OptimizationResultItem{Score: -0.15, Weights: []OptimizationWeightEntry{{ItemID: "c", Weight: 1}}})
 
 	results := tracker.Results()
 	if len(results) != 2 {
@@ -305,9 +394,9 @@ func TestTopKTracker_MinDrawdown(t *testing.T) {
 
 func TestTopKTracker_Calmar(t *testing.T) {
 	tracker := NewTopKTracker(ObjectiveMaxCalmar, 2)
-	tracker.Push(OptimizationResultItem{Score: 0.5})
-	tracker.Push(OptimizationResultItem{Score: 1.2})
-	tracker.Push(OptimizationResultItem{Score: 0.8})
+	tracker.Push(OptimizationResultItem{Score: 0.5, Weights: []OptimizationWeightEntry{{ItemID: "a", Weight: 1}}})
+	tracker.Push(OptimizationResultItem{Score: 1.2, Weights: []OptimizationWeightEntry{{ItemID: "b", Weight: 1}}})
+	tracker.Push(OptimizationResultItem{Score: 0.8, Weights: []OptimizationWeightEntry{{ItemID: "c", Weight: 1}}})
 
 	results := tracker.Results()
 	if results[0].Score != 1.2 {
@@ -356,6 +445,91 @@ func TestGenerateCandidates_NonDivisibleRemaining(t *testing.T) {
 		}
 		if math.Abs(sum-1) > ResearchWeightTolerance {
 			t.Errorf("candidate %d: weight sum %.10f != 1 (drift=%.10f)", i, sum, sum-1)
+		}
+	}
+}
+
+func TestGenerateCandidates_RemainingBelowStep(t *testing.T) {
+	assets := []OptimizationAsset{
+		{ItemID: "a", AssetKey: "A", Weight: 0.98, Locked: true},
+		{ItemID: "b", AssetKey: "B"},
+		{ItemID: "c", AssetKey: "C"},
+	}
+	candidates := GenerateCandidates(assets, 0.05)
+	if len(candidates) != 2 || CountCandidates(assets, 0.05) != len(candidates) {
+		t.Fatalf("remaining below one step should yield one residual candidate per tunable asset, got %d", len(candidates))
+	}
+	for _, candidate := range candidates {
+		positiveTunable := 0
+		for _, entry := range candidate.Weights {
+			if entry.ItemID == "a" && math.Abs(entry.Weight-0.98) > 1e-12 {
+				t.Fatalf("locked weight changed: %+v", entry)
+			}
+			if !entry.Locked && entry.Weight > 0 {
+				positiveTunable++
+				if math.Abs(entry.Weight-0.02) > 1e-12 {
+					t.Fatalf("residual weight expected 2%%, got %+v", entry)
+				}
+			}
+		}
+		if positiveTunable != 1 {
+			t.Fatalf("expected exactly one residual receiver: %+v", candidate.Weights)
+		}
+	}
+}
+
+func TestGenerateCandidates_Locked100WithTunableAssets(t *testing.T) {
+	assets := []OptimizationAsset{
+		{ItemID: "a", AssetKey: "A", Weight: 1, Locked: true},
+		{ItemID: "b", AssetKey: "B"},
+		{ItemID: "c", AssetKey: "C"},
+	}
+	candidates := GenerateCandidates(assets, 0.05)
+	if len(candidates) != 1 || CountCandidates(assets, 0.05) != 1 {
+		t.Fatalf("expected one fixed candidate, got %d", len(candidates))
+	}
+	for _, entry := range candidates[0].Weights {
+		if !entry.Locked && entry.Weight != 0 {
+			t.Fatalf("tunable entry must be zero: %+v", entry)
+		}
+	}
+}
+
+func TestGenerateCandidates_OneTunableReceivesRemaining(t *testing.T) {
+	assets := []OptimizationAsset{
+		{ItemID: "a", AssetKey: "A", Weight: 0.3, Locked: true},
+		{ItemID: "b", AssetKey: "B"},
+	}
+	candidates := GenerateCandidates(assets, 0.05)
+	if len(candidates) != 1 {
+		t.Fatalf("expected one candidate, got %d", len(candidates))
+	}
+	if got := candidates[0].Weights[1].Weight; math.Abs(got-0.7) > 1e-12 {
+		t.Fatalf("single tunable asset expected 70%%, got %v", got)
+	}
+}
+
+func TestTopKTrackerStableTiesAndDeduplicates(t *testing.T) {
+	inputs := []OptimizationResultItem{
+		{Score: 0.1, Summary: BacktestSummary{CAGR: 0.1, MaxDrawdown: -0.2}, Weights: []OptimizationWeightEntry{{ItemID: "b", AssetKey: "B", Weight: 1}}},
+		{Score: 0.1, Summary: BacktestSummary{CAGR: 0.1, MaxDrawdown: -0.2}, Weights: []OptimizationWeightEntry{{ItemID: "a", AssetKey: "A", Weight: 1}}},
+		{Score: 0.1, Summary: BacktestSummary{CAGR: 0.1, MaxDrawdown: -0.2}, Weights: []OptimizationWeightEntry{{ItemID: "c", AssetKey: "C", Weight: 1}}},
+	}
+	var expected string
+	for run := 0; run < 50; run++ {
+		tracker := NewTopKTracker(ObjectiveMaxCAGR, 3)
+		for i := len(inputs) - 1; i >= 0; i-- {
+			tracker.Push(inputs[(i+run)%len(inputs)])
+		}
+		tracker.Push(inputs[0])
+		got, err := json.Marshal(tracker.Results())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run == 0 {
+			expected = string(got)
+		} else if string(got) != expected {
+			t.Fatalf("tie order changed on run %d:\n%s\n%s", run, expected, got)
 		}
 	}
 }
@@ -554,5 +728,272 @@ func TestScoreForObjective_CalmarFallback(t *testing.T) {
 	expected := 0.10 / 0.20
 	if math.Abs(score-expected) > 1e-9 {
 		t.Errorf("fallback calmar: got %f, expected %f", score, expected)
+	}
+}
+
+func TestApplyOptimizationAtomically(t *testing.T) {
+	svc, db, detail := createOptimizationApplyFixture(t)
+	weights := []OptimizationWeightEntry{
+		{ItemID: detail.Items[0].ID, AssetKey: detail.Items[0].AssetKey, Weight: 0.7},
+		{ItemID: detail.Items[1].ID, AssetKey: detail.Items[1].AssetKey, Weight: 0.3},
+		{ItemID: detail.Items[2].ID, AssetKey: detail.Items[2].AssetKey, Weight: 0},
+	}
+	optimizationID := seedSucceededOptimization(t, db, detail, weights)
+	updated, err := svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	})
+	if err != nil {
+		t.Fatalf("ApplyOptimization: %v", err)
+	}
+	if updated.StartPolicy != ResearchStartPolicyCustom || updated.WindowStart != "2021-01-01" || updated.WindowEnd != "2023-12-31" {
+		t.Fatalf("optimization window not applied: %+v", updated.ResearchCollection)
+	}
+	if updated.UpdatedAt <= detail.UpdatedAt {
+		t.Fatalf("collection version did not advance: %d <= %d", updated.UpdatedAt, detail.UpdatedAt)
+	}
+	for i, item := range updated.Items {
+		want := weights[i].Weight
+		if math.Abs(item.Weight-want) > 1e-12 || item.Enabled != (want > 0) || item.WeightLocked != (want > 0) {
+			t.Fatalf("item %d not atomically applied: %+v", i, item.ResearchCollectionItem)
+		}
+	}
+}
+
+func TestApplyOptimizationRejectsResultMissingFrozenAsset(t *testing.T) {
+	svc, db, detail := createOptimizationApplyFixture(t)
+	optimizationID := seedSucceededOptimization(t, db, detail, []OptimizationWeightEntry{
+		{ItemID: detail.Items[0].ID, AssetKey: detail.Items[0].AssetKey, Weight: 1},
+	})
+	_, err := svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	})
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != "research_optimization_result_stale" {
+		t.Fatalf("expected stale result, got %v", err)
+	}
+	after, getErr := svc.GetCollection(context.Background(), detail.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	for i := range detail.Items {
+		if after.Items[i].Weight != detail.Items[i].Weight ||
+			after.Items[i].WeightLocked != detail.Items[i].WeightLocked {
+			t.Fatalf("stale result changed item %d", i)
+		}
+	}
+}
+
+func TestApplyOptimizationCASConflictDoesNotWrite(t *testing.T) {
+	svc, db, detail := createOptimizationApplyFixture(t)
+	weights := []OptimizationWeightEntry{
+		{ItemID: detail.Items[0].ID, AssetKey: detail.Items[0].AssetKey, Weight: 0.7},
+		{ItemID: detail.Items[1].ID, AssetKey: detail.Items[1].AssetKey, Weight: 0.3},
+		{ItemID: detail.Items[2].ID, AssetKey: detail.Items[2].AssetKey, Weight: 0},
+	}
+	optimizationID := seedSucceededOptimization(t, db, detail, weights)
+	description := "concurrent edit"
+	concurrent, err := svc.UpdateCollection(context.Background(), detail.ID, ResearchCollectionUpdate{Description: &description})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	})
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != "research_collection_changed" {
+		t.Fatalf("expected research_collection_changed, got %v", err)
+	}
+	after, err := svc.GetCollection(context.Background(), detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UpdatedAt != concurrent.UpdatedAt || after.StartPolicy != concurrent.StartPolicy {
+		t.Fatalf("CAS failure changed collection: before=%+v after=%+v", concurrent.ResearchCollection, after.ResearchCollection)
+	}
+	for i := range after.Items {
+		if after.Items[i].Weight != concurrent.Items[i].Weight || after.Items[i].WeightLocked != concurrent.Items[i].WeightLocked {
+			t.Fatalf("CAS failure changed item %d", i)
+		}
+	}
+}
+
+func TestApplyOptimizationRollsBackOnItemUpdateFailure(t *testing.T) {
+	svc, db, detail := createOptimizationApplyFixture(t)
+	weights := []OptimizationWeightEntry{
+		{ItemID: detail.Items[0].ID, AssetKey: detail.Items[0].AssetKey, Weight: 0.7},
+		{ItemID: detail.Items[1].ID, AssetKey: detail.Items[1].AssetKey, Weight: 0.3},
+		{ItemID: detail.Items[2].ID, AssetKey: detail.Items[2].AssetKey, Weight: 0},
+	}
+	optimizationID := seedSucceededOptimization(t, db, detail, weights)
+	if _, err := db.Exec(`CREATE TRIGGER fail_optimization_apply BEFORE UPDATE ON research_collection_items
+		WHEN OLD.sort_order = 1 BEGIN SELECT RAISE(ABORT, 'injected apply failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	}); err == nil {
+		t.Fatal("expected injected item update failure")
+	}
+	after, err := svc.GetCollection(context.Background(), detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UpdatedAt != detail.UpdatedAt || after.WindowStart != detail.WindowStart || after.WindowEnd != detail.WindowEnd {
+		t.Fatalf("failed transaction changed collection: before=%+v after=%+v", detail.ResearchCollection, after.ResearchCollection)
+	}
+	for i := range after.Items {
+		if after.Items[i].Weight != detail.Items[i].Weight || after.Items[i].Enabled != detail.Items[i].Enabled || after.Items[i].WeightLocked != detail.Items[i].WeightLocked {
+			t.Fatalf("failed transaction changed item %d: before=%+v after=%+v", i, detail.Items[i], after.Items[i])
+		}
+	}
+}
+
+func TestOptimizationSnapshotReloadPreservesItemIdentityAndLocks(t *testing.T) {
+	svc, db := newResearchTestService(t)
+	for i, key := range []string{"LOCK_A", "LOCK_B", "LOCK_C"} {
+		insertResearchFixtureAsset(t, db, key, key, "CNY", "2020-01-01", 1643, growthValue(100+float64(i)))
+	}
+	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
+		Name: "锁定快照测试",
+		Items: []ResearchCollectionItemInput{
+			{AssetKey: "LOCK_A", Weight: fptr(0.2), WeightLocked: true},
+			{AssetKey: "LOCK_B", Weight: fptr(0.4)},
+			{AssetKey: "LOCK_C", Weight: fptr(0.4)},
+		},
+	})
+	collection, err := svc.research.GetCollection(context.Background(), detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds, err := svc.loadResearchDataset(context.Background(), collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := evaluateResearchReadiness(ds, researchTestNow)
+	if !readiness.Ready {
+		t.Fatalf("fixture not ready: %+v", readiness.BlockingReasons)
+	}
+	snapshot := buildOptimizationSnapshot(ds, readiness, OptimizationConfig{WeightStep: 0.05, TopK: 20, MaxCandidateCount: 20000})
+	for _, asset := range snapshot.Assets {
+		if asset.ItemID == "" {
+			t.Fatalf("snapshot lost item id: %+v", asset)
+		}
+		if asset.AssetKey == "LOCK_A" && !asset.WeightLocked {
+			t.Fatalf("snapshot lost lock flag: %+v", asset)
+		}
+	}
+	reloaded, err := svc.loadDatasetFromSnapshot(context.Background(), researchInputSnapshot{
+		EngineVersion: snapshot.EngineVersion, SourceHash: snapshot.SourceHash,
+		CommonStart: snapshot.CommonStart, CommonEnd: snapshot.CommonEnd,
+		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
+		Collection: snapshot.Collection, Assets: snapshot.Assets, FX: snapshot.FX,
+		Benchmark: snapshot.Benchmark,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := buildOptimizationAssets(reloaded)
+	candidates := GenerateCandidates(assets, 0.05)
+	if len(candidates) == 0 {
+		t.Fatal("reloaded snapshot produced no candidates")
+	}
+	for _, candidate := range candidates {
+		for _, entry := range candidate.Weights {
+			if entry.ItemID == "" || entry.AssetKey == "" {
+				t.Fatalf("candidate lost identity: %+v", entry)
+			}
+			if entry.AssetKey == "LOCK_A" && (!entry.Locked || math.Abs(entry.Weight-0.2) > 1e-12) {
+				t.Fatalf("locked weight did not survive reload: %+v", entry)
+			}
+		}
+	}
+}
+
+func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
+	svc, db := newResearchTestService(t)
+	for i, key := range []string{"WORKER_A", "WORKER_B", "WORKER_C", "WORKER_BENCH"} {
+		insertResearchFixtureAsset(t, db, key, key, "CNY", "2020-01-01", 1643,
+			func(day int) float64 {
+				return (100 + float64(i)*10) * math.Pow(1.0001+float64(i)*0.00005, float64(day))
+			})
+	}
+	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
+		Name:              "调优 worker 端到端测试",
+		BenchmarkAssetKey: "WORKER_BENCH",
+		Items: []ResearchCollectionItemInput{
+			{AssetKey: "WORKER_A", Weight: fptr(0.2), WeightLocked: true},
+			{AssetKey: "WORKER_B", Weight: fptr(0.4)},
+			{AssetKey: "WORKER_C", Weight: fptr(0.4)},
+		},
+	})
+
+	created, err := svc.CreateOptimization(context.Background(), detail.ID, ResearchOptimizationRequest{
+		WeightStep: 0.05, MaxCandidateCount: 20000, TopK: 20,
+	})
+	if err != nil {
+		t.Fatalf("create optimization: %v", err)
+	}
+	if err := svc.ExecuteOptimizationJob(context.Background(), created.Optimization.JobID,
+		func() bool { return false }, nil); err != nil {
+		t.Fatalf("execute optimization worker: %v", err)
+	}
+	view, err := svc.GetOptimization(context.Background(), created.Optimization.ID)
+	if err != nil {
+		t.Fatalf("get optimization: %v", err)
+	}
+	if view.Status != repository.ResearchRunStatusSucceeded || view.EngineVersion != OptimizationEngineVersion {
+		t.Fatalf("unexpected completed optimization: %+v", view)
+	}
+	var result OptimizationResult
+	if err := json.Unmarshal(view.Result, &result); err != nil {
+		t.Fatalf("decode optimization result: %v", err)
+	}
+	if result.CandidateCount == 0 || result.EvaluatedCount != result.CandidateCount ||
+		view.CandidateCount != result.CandidateCount || view.EvaluatedCount != result.EvaluatedCount {
+		t.Fatalf("candidate count mismatch: view=%+v result=%+v", view, result)
+	}
+	if len(result.BestByCAGR) == 0 {
+		t.Fatal("worker returned no ranked results")
+	}
+	for _, ranked := range [][]OptimizationResultItem{
+		result.BestByCAGR, result.BestByDrawdown, result.BestByCalmar,
+	} {
+		for _, item := range ranked {
+			if item.Summary.Benchmark == nil {
+				t.Fatalf("candidate backtest lost benchmark summary: %+v", item)
+			}
+			foundLocked := false
+			for _, weight := range item.Weights {
+				if weight.ItemID == "" || weight.AssetKey == "" {
+					t.Fatalf("worker result lost item identity: %+v", weight)
+				}
+				if weight.AssetKey == "WORKER_A" {
+					foundLocked = weight.Locked && math.Abs(weight.Weight-0.2) <= 1e-12
+				}
+			}
+			if !foundLocked {
+				t.Fatalf("worker result lost the frozen 20%% lock: %+v", item.Weights)
+			}
+		}
+	}
+
+	applied, err := svc.ApplyOptimization(context.Background(), view.ID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	})
+	if err != nil {
+		t.Fatalf("apply ranked result: %v", err)
+	}
+	if applied.WindowStart != view.WindowStart || applied.WindowEnd != view.WindowEnd {
+		t.Fatalf("apply did not restore frozen window: optimization=%s..%s collection=%s..%s",
+			view.WindowStart, view.WindowEnd, applied.WindowStart, applied.WindowEnd)
+	}
+	weightSum := 0.0
+	for _, item := range applied.Items {
+		if item.Enabled {
+			weightSum += item.Weight
+		}
+	}
+	if math.Abs(weightSum-1) > 1e-12 {
+		t.Fatalf("applied weights must sum to 100%%, got %.16f", weightSum)
 	}
 }

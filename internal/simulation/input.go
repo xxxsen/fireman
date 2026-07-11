@@ -12,13 +12,12 @@ import (
 // forward-return calibration and the joint (correlated, shared fat-tail) factor
 // model. 3.1.0 fixes the guardrail withdrawal strategy so anniversary ±10%
 // adjustments compound on the previous year's spending instead of resetting to
-// the inflation baseline every year. 2.x snapshots continue to replay with the
-// independent per-asset sampler and their frozen ModeledAnnualReturn so old
-// runs reproduce exactly.
-const EngineVersion = "3.1.0"
+// the inflation baseline every year. 3.2.0 adds aggregate cash liquidity and
+// fact-based failure states.
+const EngineVersion = "3.2.0"
 
-// LegacyEngineVersion is the legacy independent-factor engine. Snapshots
-// frozen at this version must keep replaying with the independent sampler.
+// LegacyEngineVersion identifies snapshots created by the former independent
+// factor engine.
 const LegacyEngineVersion = "2.0.0"
 
 // GuardrailUsesLegacyAnnualReset reports whether a snapshot frozen at the
@@ -34,6 +33,16 @@ func GuardrailUsesLegacyAnnualReset(engineVersion string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// UsesFactBasedFailureStates centralizes the version gate for failure labels.
+func UsesFactBasedFailureStates(engineVersion string) bool {
+	switch engineVersion {
+	case "1.0.0", LegacyEngineVersion, "3.0.0", "3.1.0":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -167,20 +176,22 @@ type InputSnapshot struct {
 	ConfigHash         string             `json:"config_hash"`
 	MarketSnapshotHash string             `json:"market_snapshot_hash"`
 	// Joint risk model. Present only for multivariate (3.0.0) runs;
-	// nil for legacy independent (2.x) snapshots so old runs replay unchanged.
+	// nil for independent-factor snapshots.
 	FactorModel     *FactorModel `json:"factor_model,omitempty"`
 	AssetFactorRefs []FactorRef  `json:"asset_factor_refs,omitempty"`
 	// DeterministicCashReturn is set for forward (3.0.0) inputs so cash slots grow
 	// at their frozen, non-random monthly return instead of an implicit 0%.
-	// Legacy 2.x snapshots leave it false so cash stays at
-	// 0% and old runs replay byte-for-byte.
+	// When false, cash stays at 0%.
 	DeterministicCashReturn bool `json:"deterministic_cash_return,omitempty"`
+	// AggregateCashLiquidity records that every cash slot participates in one
+	// liquidity pool for savings and withdrawals.
+	AggregateCashLiquidity bool `json:"aggregate_cash_liquidity"`
 	// Frozen tail-risk parameters. For forward (3.0.0) runs these are
 	// taken from the active profile so the Student-t df and the per-month return
 	// truncation are versioned/auditable and a plan can no longer change them; the
 	// joint and independent samplers read these frozen values only. Legacy (2.x)
-	// snapshots leave them zero/nil and fall back to Parameters.StudentTDf and the
-	// ReturnFloor/ReturnCeil constants, so old runs replay byte-for-byte.
+	// Snapshots without them fall back to Parameters.StudentTDf and the
+	// ReturnFloor/ReturnCeil constants.
 	TailStudentTDf  int      `json:"tail_student_t_df,omitempty"`
 	TailReturnFloor *float64 `json:"tail_return_floor,omitempty"`
 	TailReturnCeil  *float64 `json:"tail_return_ceil,omitempty"`

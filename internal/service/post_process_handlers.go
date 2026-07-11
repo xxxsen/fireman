@@ -642,7 +642,7 @@ func (s *PostProcessService) finishHistoryCommit(
 	metrics := ComputeResearchAssetMetrics(
 		payload.AssetKey, payload.AdjustPolicy, payload.PointType, series, now.UnixMilli())
 	if err := s.research.UpsertMetricsTx(ctx, tx, metrics); err != nil {
-		return err
+		return wrapRepo("upsert research metrics", err)
 	}
 
 	successAt := now.UnixMilli()

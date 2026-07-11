@@ -11,6 +11,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -60,7 +61,12 @@ func (s *ResearchService) GetOptimizationReadiness(
 		return zero, err
 	}
 
-	out := evaluateOptimizationReadiness(ds, OptimizationConfig{WeightStep: weightStep})
+	config := OptimizationConfig{WeightStep: weightStep}
+	config.NormalizeDefaults()
+	if err := config.Validate(); err != nil {
+		return zero, newErr("invalid_request", err.Error(), nil)
+	}
+	out := evaluateOptimizationReadiness(ds, config)
 
 	// Merge data-dependency blocking reasons from standard readiness
 	// (excluding weight_sum_invalid) so the readiness endpoint is
@@ -95,95 +101,104 @@ func evaluateOptimizationReadiness(
 		BlockingReasons: []ResearchReadinessIssue{},
 		Warnings:        []ResearchReadinessIssue{},
 	}
-	block := func(issue ResearchReadinessIssue) {
-		out.BlockingReasons = append(out.BlockingReasons, issue)
-	}
-
 	out.EnabledCount = len(ds.Enabled)
 	if out.EnabledCount == 0 {
-		block(ResearchReadinessIssue{
+		out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
 			Reason: ResearchReasonNoEnabledAssets, Message: "集合没有启用的资产",
 		})
 	}
 	if out.EnabledCount > OptimizationMaxEnabledAssets {
-		block(ResearchReadinessIssue{
+		out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
 			Reason: "too_many_enabled_assets",
 			Message: fmt.Sprintf("启用资产数量 %d 超过上限 %d",
 				out.EnabledCount, OptimizationMaxEnabledAssets),
 		})
 	}
 
-	var assets []OptimizationAsset
-	for _, a := range ds.Enabled {
-		assets = append(assets, OptimizationAsset{
-			ItemID:   a.Item.ID,
-			AssetKey: a.Item.AssetKey,
-			Name:     a.Asset.Name,
-			Weight:   a.Item.Weight,
-			Locked:   a.Item.WeightLocked,
-		})
-		if a.Item.WeightLocked {
-			out.LockedCount++
-			out.LockedWeightSum += a.Item.Weight
-		} else {
-			out.TunableCount++
-		}
-	}
-
-	if out.LockedWeightSum > 1+ResearchWeightTolerance {
-		block(ResearchReadinessIssue{
+	assets := summarizeOptimizationAssets(ds, &out)
+	if out.LockedWeightSum > 1+1e-12 {
+		out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
 			Reason:  "locked_weight_exceeds_100",
 			Message: fmt.Sprintf("锁定权重合计 %.2f%% 超过 100%%", out.LockedWeightSum*100),
 		})
 	}
 
-	for _, a := range ds.Enabled {
-		if a.IsCash {
-			continue
-		}
-		if len(a.Points) == 0 {
-			block(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchReasonHistoryMissing,
-				Message: "缺少历史点位",
-			})
-		}
-		if a.Task != nil && repository.IsActiveWorkerTaskStatus(a.Task.Status) {
-			block(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchReasonHistorySyncing,
-				Message: "历史同步正在运行",
-			})
-		}
-		for _, pair := range a.FXPairs {
-			fx, ok := ds.FX[pair]
-			if !ok || !fx.Found {
-				block(ResearchReadinessIssue{
-					AssetKey: a.Item.AssetKey, Pair: pair, Reason: ResearchReasonFXMissing,
-					Message: fmt.Sprintf("%s 资产需要 %s 历史汇率", a.Asset.Currency, pair),
-				})
-			}
-		}
-	}
-
+	appendOptimizationDataIssues(ds, &out)
 	if out.EnabledCount > 0 && out.EnabledCount <= OptimizationMaxEnabledAssets {
-		out.CandidateCount = CountCandidates(assets, config.WeightStep)
-		if out.CandidateCount > config.MaxCandidateCount {
-			block(ResearchReadinessIssue{
-				Reason: "candidate_count_exceeds_limit",
-				Message: fmt.Sprintf("候选数量 %d 超过上限 %d，请增大步长或减少资产",
-					out.CandidateCount, config.MaxCandidateCount),
-			})
-		}
-		if out.CandidateCount == 0 && out.TunableCount == 0 &&
-			math.Abs(out.LockedWeightSum-1) <= ResearchWeightTolerance {
-			out.Warnings = append(out.Warnings, ResearchReadinessIssue{
-				Reason:  "all_locked",
-				Message: "所有资产权重已锁定，自动调优将退化为固定组合回测，建议使用普通回测",
-			})
-		}
+		appendOptimizationCandidateIssues(assets, config, &out)
 	}
 
 	out.Ready = len(out.BlockingReasons) == 0
 	return out
+}
+
+func summarizeOptimizationAssets(
+	ds *researchDataset, out *OptimizationReadiness,
+) []OptimizationAsset {
+	assets := make([]OptimizationAsset, 0, len(ds.Enabled))
+	for _, asset := range ds.Enabled {
+		assets = append(assets, OptimizationAsset{
+			ItemID: asset.Item.ID, AssetKey: asset.Item.AssetKey, Name: asset.Asset.Name,
+			Weight: asset.Item.Weight, Locked: asset.Item.WeightLocked,
+		})
+		if asset.Item.WeightLocked {
+			out.LockedCount++
+			out.LockedWeightSum += asset.Item.Weight
+		} else {
+			out.TunableCount++
+		}
+	}
+	return assets
+}
+
+func appendOptimizationDataIssues(ds *researchDataset, out *OptimizationReadiness) {
+	for _, asset := range ds.Enabled {
+		if asset.IsCash {
+			continue
+		}
+		if len(asset.Points) == 0 {
+			out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonHistoryMissing, Message: "缺少历史点位",
+			})
+		}
+		if asset.Task != nil && repository.IsActiveWorkerTaskStatus(asset.Task.Status) {
+			out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonHistorySyncing, Message: "历史同步正在运行",
+			})
+		}
+		for _, pair := range asset.FXPairs {
+			fx, ok := ds.FX[pair]
+			if !ok || !fx.Found {
+				out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
+					AssetKey: asset.Item.AssetKey, Pair: pair, Reason: ResearchReasonFXMissing,
+					Message: fmt.Sprintf("%s 资产需要 %s 历史汇率", asset.Asset.Currency, pair),
+				})
+			}
+		}
+	}
+}
+
+func appendOptimizationCandidateIssues(
+	assets []OptimizationAsset, config OptimizationConfig, out *OptimizationReadiness,
+) {
+	out.CandidateCount = CountCandidates(assets, config.WeightStep)
+	if out.CandidateCount > config.MaxCandidateCount {
+		out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
+			Reason: "candidate_count_exceeds_limit",
+			Message: fmt.Sprintf("候选数量 %d 超过上限 %d，请增大步长或减少资产",
+				out.CandidateCount, config.MaxCandidateCount),
+		})
+	}
+	if out.CandidateCount == 0 {
+		out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
+			Reason: "candidate_count_zero", Message: "当前锁定权重与步长无法生成有效候选组合",
+		})
+	}
+	if out.TunableCount == 0 && math.Abs(out.LockedWeightSum-1) <= 1e-12 {
+		out.Warnings = append(out.Warnings, ResearchReadinessIssue{
+			Reason: "all_locked", Message: "所有资产权重已锁定，自动调优将退化为固定组合回测，建议使用普通回测",
+		})
+	}
 }
 
 // --- create optimization ---
@@ -262,6 +277,7 @@ type optimizationInputSnapshot struct {
 	Collection     researchSnapshotParams   `json:"collection"`
 	Assets         []researchSnapshotAsset  `json:"assets"`
 	FX             []researchSnapshotSeries `json:"fx"`
+	Benchmark      *researchSnapshotAsset   `json:"benchmark,omitempty"`
 	LockedWeights  map[string]float64       `json:"locked_weights"`
 	TunableItemIDs []string                 `json:"tunable_item_ids"`
 	Config         OptimizationConfig       `json:"config"`
@@ -288,33 +304,14 @@ func (s *ResearchService) CreateOptimization(
 		return zero, err
 	}
 
-	config := OptimizationConfig{
-		WeightStep:        req.WeightStep,
-		MaxCandidateCount: req.MaxCandidateCount,
-		TopK:              req.TopK,
-	}
+	config := OptimizationConfig(req)
 	config.NormalizeDefaults()
-
-	optReadiness := evaluateOptimizationReadiness(ds, config)
-	if !optReadiness.Ready {
-		return zero, newErr("research_optimization_not_ready",
-			"集合未通过调优准入检查",
-			map[string]any{"readiness": optReadiness})
+	if err := config.Validate(); err != nil {
+		return zero, newErr("invalid_request", err.Error(), nil)
 	}
-
-	// Check data dependencies (standard readiness minus weight_sum_invalid)
-	stdReadiness := evaluateResearchReadiness(ds, s.now())
-	filteredBlocking := make([]ResearchReadinessIssue, 0)
-	for _, b := range stdReadiness.BlockingReasons {
-		if b.Reason == ResearchReasonWeightSumInvalid {
-			continue
-		}
-		filteredBlocking = append(filteredBlocking, b)
-	}
-	if len(filteredBlocking) > 0 {
-		return zero, newErr("research_optimization_not_ready",
-			"集合未通过数据准入检查",
-			map[string]any{"blocking_reasons": filteredBlocking})
+	stdReadiness, err := validateOptimizationCreationReadiness(ds, config, s.now())
+	if err != nil {
+		return zero, err
 	}
 
 	snapshot := buildOptimizationSnapshot(ds, stdReadiness, config)
@@ -328,25 +325,10 @@ func (s *ResearchService) CreateOptimization(
 		return zero, fmt.Errorf("marshal optimization config: %w", err)
 	}
 
-	// Idempotency: reuse succeeded or active optimization with same input hash
-	if run, err := s.research.FindSucceededOptimizationByInputHash(ctx, collectionID, inputHash); err == nil {
-		view := buildOptimizationView(run)
-		return ResearchOptimizationCreateResult{Optimization: view, Reused: true}, nil
-	} else if !errors.Is(err, repository.ErrResearchOptimizationRunNotFound) {
-		return zero, wrapRepo("find succeeded optimization", err)
-	}
-	if run, err := s.research.FindActiveOptimizationByInputHash(ctx, collectionID, inputHash); err == nil {
-		view := buildOptimizationView(run)
-		if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-			view.Job = &ResearchJobView{
-				Status: job.Status, Phase: job.Phase,
-				ProgressCurrent: job.ProgressCurrent, ProgressTotal: job.ProgressTotal,
-				ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage,
-			}
-		}
-		return ResearchOptimizationCreateResult{Optimization: view, Reused: true}, nil
-	} else if !errors.Is(err, repository.ErrResearchOptimizationRunNotFound) {
-		return zero, wrapRepo("find active optimization", err)
+	if reused, found, err := s.findReusableOptimization(ctx, collectionID, inputHash); err != nil {
+		return zero, err
+	} else if found {
+		return reused, nil
 	}
 
 	now := s.now().UnixMilli()
@@ -372,22 +354,87 @@ func (s *ResearchService) CreateOptimization(
 		CreatedAt: now,
 	}
 
-	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.jobs.Create(ctx, tx, repository.Job{
-			ID: jobID, Type: repository.JobTypeResearchOptimization,
-			Status: repository.JobStatusQueued, InputHash: inputHash,
-			PayloadJSON: string(payloadJSON), CreatedAt: now,
-		}); err != nil {
-			return err
-		}
-		return s.research.CreateOptimizationRunTx(ctx, tx, run)
-	})
-	if err != nil {
-		return zero, wrapRepo("create optimization run", err)
+	if err := s.persistQueuedOptimization(ctx, run, inputHash, string(payloadJSON), now); err != nil {
+		return zero, err
 	}
 
 	view := buildOptimizationView(run)
 	return ResearchOptimizationCreateResult{Optimization: view}, nil
+}
+
+func validateOptimizationCreationReadiness(
+	ds *researchDataset, config OptimizationConfig, now time.Time,
+) (ResearchReadiness, error) {
+	optimizationReadiness := evaluateOptimizationReadiness(ds, config)
+	if !optimizationReadiness.Ready {
+		return ResearchReadiness{}, newErr(
+			"research_optimization_not_ready", "集合未通过调优准入检查",
+			map[string]any{"readiness": optimizationReadiness},
+		)
+	}
+	readiness := evaluateResearchReadiness(ds, now)
+	blocking := make([]ResearchReadinessIssue, 0, len(readiness.BlockingReasons))
+	for _, issue := range readiness.BlockingReasons {
+		if issue.Reason != ResearchReasonWeightSumInvalid {
+			blocking = append(blocking, issue)
+		}
+	}
+	if len(blocking) > 0 {
+		return ResearchReadiness{}, newErr(
+			"research_optimization_not_ready", "集合未通过数据准入检查",
+			map[string]any{"blocking_reasons": blocking},
+		)
+	}
+	return readiness, nil
+}
+
+func (s *ResearchService) findReusableOptimization(
+	ctx context.Context, collectionID, inputHash string,
+) (ResearchOptimizationCreateResult, bool, error) {
+	run, err := s.research.FindSucceededOptimizationByInputHash(ctx, collectionID, inputHash)
+	if err == nil {
+		return ResearchOptimizationCreateResult{
+			Optimization: buildOptimizationView(run), Reused: true,
+		}, true, nil
+	}
+	if !errors.Is(err, repository.ErrResearchOptimizationRunNotFound) {
+		return ResearchOptimizationCreateResult{}, false, wrapRepo("find succeeded optimization", err)
+	}
+	run, err = s.research.FindActiveOptimizationByInputHash(ctx, collectionID, inputHash)
+	if errors.Is(err, repository.ErrResearchOptimizationRunNotFound) {
+		return ResearchOptimizationCreateResult{}, false, nil
+	}
+	if err != nil {
+		return ResearchOptimizationCreateResult{}, false, wrapRepo("find active optimization", err)
+	}
+	view := buildOptimizationView(run)
+	if job, jobErr := s.jobs.GetByID(ctx, run.JobID); jobErr == nil {
+		view.Job = &ResearchJobView{
+			Status: job.Status, Phase: job.Phase,
+			ProgressCurrent: job.ProgressCurrent, ProgressTotal: job.ProgressTotal,
+			ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage,
+		}
+	}
+	return ResearchOptimizationCreateResult{Optimization: view, Reused: true}, true, nil
+}
+
+func (s *ResearchService) persistQueuedOptimization(
+	ctx context.Context,
+	run repository.ResearchOptimizationRun,
+	inputHash, payloadJSON string,
+	now int64,
+) error {
+	job := repository.Job{
+		ID: run.JobID, Type: repository.JobTypeResearchOptimization,
+		Status: repository.JobStatusQueued, InputHash: inputHash,
+		PayloadJSON: payloadJSON, CreatedAt: now,
+	}
+	return s.persistQueuedResearchJob(ctx, job, "create optimization run", func(tx *sql.Tx) error {
+		if err := s.research.CreateOptimizationRunTx(ctx, tx, run); err != nil {
+			return fmt.Errorf("create optimization run: %w", err)
+		}
+		return nil
+	})
 }
 
 func buildOptimizationAssets(ds *researchDataset) []OptimizationAsset {
@@ -410,7 +457,8 @@ func buildOptimizationSnapshot(
 		CommonStart: readiness.CommonStart, CommonEnd: readiness.CommonEnd,
 		WindowStart: readiness.WindowStart, WindowEnd: readiness.WindowEnd,
 		Collection: baseSnapshot.Collection, Assets: baseSnapshot.Assets,
-		FX: baseSnapshot.FX, LockedWeights: map[string]float64{}, Config: config,
+		FX: baseSnapshot.FX, Benchmark: baseSnapshot.Benchmark,
+		LockedWeights: map[string]float64{}, Config: config,
 	}
 	for _, a := range ds.Enabled {
 		if a.Item.WeightLocked {
@@ -484,13 +532,13 @@ func (s *ResearchService) GetOptimization(
 // collection (any status), used for the collection detail page entry point.
 func (s *ResearchService) GetLatestOptimization(
 	ctx context.Context, collectionID string,
-) (*ResearchOptimizationView, error) {
+) (ResearchOptimizationView, bool, error) {
 	run, err := s.research.LatestOptimizationByCollection(ctx, collectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrResearchOptimizationRunNotFound) {
-			return nil, nil
+			return ResearchOptimizationView{}, false, nil
 		}
-		return nil, wrapRepo("load latest optimization", err)
+		return ResearchOptimizationView{}, false, wrapRepo("load latest optimization", err)
 	}
 	view := buildOptimizationView(run)
 	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
@@ -500,7 +548,226 @@ func (s *ResearchService) GetLatestOptimization(
 			ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage,
 		}
 	}
-	return &view, nil
+	return view, true, nil
+}
+
+// ResearchOptimizationApplyRequest selects one immutable ranked result and
+// guards the write with the collection version shown in the preview.
+type ResearchOptimizationApplyRequest struct {
+	Objective                   OptimizationObjective `json:"objective"`
+	Rank                        int                   `json:"rank"`
+	ExpectedCollectionUpdatedAt int64                 `json:"expected_collection_updated_at"`
+}
+
+// ApplyOptimization applies one ranked result atomically to its collection.
+func (s *ResearchService) ApplyOptimization(
+	ctx context.Context, optimizationID string, req ResearchOptimizationApplyRequest,
+) (ResearchCollectionDetail, error) {
+	var zero ResearchCollectionDetail
+	if !validOptimizationApplyRequest(req) {
+		return zero, newErr("invalid_request", "objective, rank and expected_collection_updated_at are required", nil)
+	}
+	run, selected, err := s.loadOptimizationApplySelection(ctx, optimizationID, req)
+	if err != nil {
+		return zero, err
+	}
+	err = s.applyOptimizationSelection(ctx, run, selected, req.ExpectedCollectionUpdatedAt)
+	if err != nil {
+		var appErr *AppError
+		if errors.As(err, &appErr) {
+			return zero, appErr
+		}
+		if errors.Is(err, repository.ErrResearchCollectionNotFound) {
+			return zero, newErr("research_collection_not_found", "research collection not found", nil)
+		}
+		return zero, wrapRepo("apply optimization result", err)
+	}
+	return s.GetCollection(ctx, run.CollectionID)
+}
+
+func validOptimizationApplyRequest(req ResearchOptimizationApplyRequest) bool {
+	validObjective := req.Objective == ObjectiveMaxCAGR ||
+		req.Objective == ObjectiveMinDrawdown || req.Objective == ObjectiveMaxCalmar
+	return req.Rank > 0 && req.ExpectedCollectionUpdatedAt > 0 && validObjective
+}
+
+func (s *ResearchService) loadOptimizationApplySelection(
+	ctx context.Context, optimizationID string, req ResearchOptimizationApplyRequest,
+) (repository.ResearchOptimizationRun, OptimizationResultItem, error) {
+	var zeroRun repository.ResearchOptimizationRun
+	var zeroItem OptimizationResultItem
+	run, err := s.research.GetOptimizationRun(ctx, optimizationID)
+	if err != nil {
+		if errors.Is(err, repository.ErrResearchOptimizationRunNotFound) {
+			return zeroRun, zeroItem, newErr("research_optimization_not_found", "optimization run not found", nil)
+		}
+		return zeroRun, zeroItem, wrapRepo("load optimization run", err)
+	}
+	if run.Status != repository.ResearchRunStatusSucceeded {
+		return zeroRun, zeroItem, newErr("invalid_request", "only a succeeded optimization can be applied", nil)
+	}
+	var result OptimizationResult
+	if err := json.Unmarshal([]byte(run.ResultJSON), &result); err != nil {
+		return zeroRun, zeroItem, newErr(
+			"research_optimization_result_stale", "optimization result is invalid", nil,
+		)
+	}
+	selected, ok := findOptimizationResult(result, req.Objective, req.Rank)
+	if !ok {
+		return zeroRun, zeroItem, newErr("invalid_request", "objective and rank do not identify a result", nil)
+	}
+	var snapshot optimizationInputSnapshot
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil ||
+		!optimizationResultMatchesSnapshot(selected.Weights, snapshot.Assets) {
+		return zeroRun, zeroItem, newErr(
+			"research_optimization_result_stale", "optimization result does not match its frozen input", nil,
+		)
+	}
+	return run, selected, nil
+}
+
+func optimizationResultMatchesSnapshot(
+	entries []OptimizationWeightEntry, assets []researchSnapshotAsset,
+) bool {
+	if len(entries) != len(assets) || len(assets) == 0 {
+		return false
+	}
+	identities := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		if asset.ItemID == "" || asset.AssetKey == "" {
+			return false
+		}
+		identities[asset.ItemID] = asset.AssetKey
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		assetKey, ok := identities[entry.ItemID]
+		if !ok || assetKey != entry.AssetKey {
+			return false
+		}
+		if _, duplicate := seen[entry.ItemID]; duplicate {
+			return false
+		}
+		seen[entry.ItemID] = struct{}{}
+	}
+	return len(seen) == len(assets)
+}
+
+func (s *ResearchService) applyOptimizationSelection(
+	ctx context.Context,
+	run repository.ResearchOptimizationRun,
+	selected OptimizationResultItem,
+	expectedUpdatedAt int64,
+) error {
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		collection, err := s.research.GetCollectionTx(ctx, tx, run.CollectionID)
+		if err != nil {
+			return fmt.Errorf("load collection in apply transaction: %w", err)
+		}
+		if collection.UpdatedAt != expectedUpdatedAt {
+			return newErr("research_collection_changed", "集合已发生变化，请刷新后重新预览", map[string]any{
+				"expected_updated_at": expectedUpdatedAt, "actual_updated_at": collection.UpdatedAt,
+			})
+		}
+		items, err := s.research.ListItemsTx(ctx, tx, collection.ID)
+		if err != nil {
+			return fmt.Errorf("list collection items in apply transaction: %w", err)
+		}
+		weights, err := validateOptimizationResultWeights(items, selected.Weights)
+		if err != nil {
+			return newErr("research_optimization_result_stale", err.Error(), nil)
+		}
+		now := maxInt64(s.now().UnixMilli(), collection.UpdatedAt+1)
+		if err := s.updateOptimizationAppliedItems(ctx, tx, items, weights, now); err != nil {
+			return err
+		}
+		collection.StartPolicy = ResearchStartPolicyCustom
+		collection.WindowStart, collection.WindowEnd = run.WindowStart, run.WindowEnd
+		collection.UpdatedAt = now
+		if err := s.research.UpdateCollectionTx(ctx, tx, collection); err != nil {
+			return fmt.Errorf("update collection in apply transaction: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("apply optimization transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *ResearchService) updateOptimizationAppliedItems(
+	ctx context.Context,
+	tx *sql.Tx,
+	items []repository.ResearchCollectionItem,
+	weights map[string]float64,
+	now int64,
+) error {
+	for _, item := range items {
+		weight := weights[item.ID]
+		item.Enabled, item.Weight, item.WeightLocked = weight > 0, weight, weight > 0
+		item.UpdatedAt = now
+		if err := s.research.UpdateItemTx(ctx, tx, item); err != nil {
+			return fmt.Errorf("update collection item in apply transaction: %w", err)
+		}
+	}
+	return nil
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func findOptimizationResult(
+	result OptimizationResult, objective OptimizationObjective, rank int,
+) (OptimizationResultItem, bool) {
+	var items []OptimizationResultItem
+	switch objective {
+	case ObjectiveMaxCAGR:
+		items = result.BestByCAGR
+	case ObjectiveMinDrawdown:
+		items = result.BestByDrawdown
+	case ObjectiveMaxCalmar:
+		items = result.BestByCalmar
+	}
+	for _, item := range items {
+		if item.Rank == rank && item.Objective == objective {
+			return item, true
+		}
+	}
+	return OptimizationResultItem{}, false
+}
+
+func validateOptimizationResultWeights(
+	items []repository.ResearchCollectionItem, entries []OptimizationWeightEntry,
+) (map[string]float64, error) {
+	const eps = 1e-12
+	byID := make(map[string]repository.ResearchCollectionItem, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	weights := make(map[string]float64, len(entries))
+	sum := 0.0
+	for _, entry := range entries {
+		if entry.ItemID == "" || entry.AssetKey == "" || !optimizationFinite(entry.Weight) || entry.Weight < 0 {
+			return nil, errOptimizationInvalidEntry
+		}
+		item, ok := byID[entry.ItemID]
+		if !ok || item.AssetKey != entry.AssetKey {
+			return nil, errOptimizationAssetMismatch
+		}
+		if _, duplicate := weights[entry.ItemID]; duplicate {
+			return nil, errOptimizationDuplicateAsset
+		}
+		weights[entry.ItemID] = entry.Weight
+		sum += entry.Weight
+	}
+	if math.Abs(sum-1) > eps {
+		return nil, errOptimizationWeightSum
+	}
+	return weights, nil
 }
 
 // --- optimization job executor ---
@@ -520,120 +787,23 @@ func (s *ResearchService) ExecuteOptimizationJob(
 	if run.Status == repository.ResearchRunStatusSucceeded {
 		return nil
 	}
-	var snapshot optimizationInputSnapshot
-	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil {
-		s.failOptimization(ctx, run.ID, "invalid_snapshot", "failed to decode snapshot")
-		return fmt.Errorf("decode optimization snapshot: %w", err)
-	}
-	if err := s.research.MarkOptimizationRunning(ctx, run.ID); err != nil {
-		return err
-	}
-
-	if progress != nil {
-		progress(0, run.CandidateCount, "loading")
-	}
-
-	ds, err := s.loadDatasetFromSnapshot(ctx, researchInputSnapshot{
-		EngineVersion: snapshot.EngineVersion, SourceHash: snapshot.SourceHash,
-		CommonStart: snapshot.CommonStart, CommonEnd: snapshot.CommonEnd,
-		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
-		Collection: snapshot.Collection, Assets: snapshot.Assets, FX: snapshot.FX,
-	})
+	snapshot, ds, err := s.loadOptimizationExecution(ctx, run, progress)
 	if err != nil {
-		if ctx.Err() != nil {
-			return err
-		}
-		s.failOptimization(ctx, run.ID, "data_load_failed", err.Error())
 		return err
-	}
-
-	rebuilt := buildResearchSnapshot(ds, ResearchReadiness{
-		CommonStart: snapshot.CommonStart, CommonEnd: snapshot.CommonEnd,
-		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
-	})
-	if rebuilt.SourceHash != snapshot.SourceHash {
-		s.failOptimization(ctx, run.ID, "source_changed", "source data changed since run was created")
-		return fmt.Errorf("%w (optimization %s)", ErrResearchSourceChanged, run.ID)
 	}
 	if cancelCheck != nil && cancelCheck() {
 		s.cancelOptimization(ctx, run.ID)
 		return context.Canceled
 	}
-
-	var optAssets []OptimizationAsset
-	for _, a := range ds.Enabled {
-		lockedWeight, locked := snapshot.LockedWeights[a.Item.ID]
-		weight := a.Item.Weight
-		if locked {
-			weight = lockedWeight
-		}
-		optAssets = append(optAssets, OptimizationAsset{
-			ItemID: a.Item.ID, AssetKey: a.Item.AssetKey,
-			Name: a.Asset.Name, Weight: weight, Locked: locked,
-		})
-	}
-
-	candidates := GenerateCandidates(optAssets, snapshot.Config.WeightStep)
+	candidates := GenerateCandidates(buildOptimizationExecutionAssets(snapshot, ds), snapshot.Config.WeightStep)
 	if progress != nil {
 		progress(0, len(candidates), "evaluating")
 	}
-
-	topK := snapshot.Config.TopK
-	cagrTracker := NewTopKTracker(ObjectiveMaxCAGR, topK)
-	ddTracker := NewTopKTracker(ObjectiveMinDrawdown, topK)
-	calmarTracker := NewTopKTracker(ObjectiveMaxCalmar, topK)
-
-	evaluated, skipped := 0, 0
-	progressInterval := maxInt(1, len(candidates)/100)
-
-	for i, candidate := range candidates {
-		if cancelCheck != nil && cancelCheck() {
-			s.cancelOptimization(ctx, run.ID)
-			return context.Canceled
-		}
-
-		input := buildBacktestInputForCandidate(snapshot, ds, candidate)
-		result, err := RunResearchBacktest(input)
-		if err != nil {
-			skipped++
-			continue
-		}
-		evaluated++
-
-		item := OptimizationResultItem{Weights: candidate.Weights, Summary: result.Summary}
-
-		if score, ok := ScoreForObjective(ObjectiveMaxCAGR, result.Summary); ok {
-			item.Score = score
-			cagrTracker.Push(item)
-		}
-		if score, ok := ScoreForObjective(ObjectiveMinDrawdown, result.Summary); ok {
-			ddItem := item
-			ddItem.Score = score
-			ddTracker.Push(ddItem)
-		}
-		if score, ok := ScoreForObjective(ObjectiveMaxCalmar, result.Summary); ok {
-			calmarItem := item
-			calmarItem.Score = score
-			calmarTracker.Push(calmarItem)
-		}
-
-		if (i+1)%progressInterval == 0 {
-			if progress != nil {
-				progress(evaluated+skipped, len(candidates), "evaluating")
-			}
-			_ = s.research.UpdateOptimizationProgress(ctx, run.ID, evaluated)
-		}
-	}
-
-	if evaluated == 0 {
-		s.failOptimization(ctx, run.ID, "all_candidates_failed", "所有候选组合回测失败")
-		return fmt.Errorf("all %d candidates failed", len(candidates))
-	}
-
-	optResult := OptimizationResult{
-		CandidateCount: len(candidates), EvaluatedCount: evaluated, SkippedCount: skipped,
-		BestByCAGR: cagrTracker.Results(), BestByDrawdown: ddTracker.Results(),
-		BestByCalmar: calmarTracker.Results(),
+	optResult, err := s.evaluateOptimizationCandidates(
+		ctx, run.ID, snapshot, ds, candidates, cancelCheck, progress,
+	)
+	if err != nil {
+		return err
 	}
 	resultJSON, err := json.Marshal(optResult)
 	if err != nil {
@@ -643,18 +813,161 @@ func (s *ResearchService) ExecuteOptimizationJob(
 
 	completedAt := s.now().UnixMilli()
 	if err := s.research.CompleteOptimizationRun(ctx, run.ID,
-		string(resultJSON), evaluated, completedAt); err != nil {
+		string(resultJSON), optResult.EvaluatedCount, completedAt); err != nil {
 		if ctx.Err() != nil {
-			return err
+			return fmt.Errorf("complete optimization after cancellation: %w", err)
 		}
 		s.failOptimization(ctx, run.ID, "persist_failed", err.Error())
-		return err
+		return fmt.Errorf("complete optimization run: %w", err)
 	}
 
 	if progress != nil {
 		progress(len(candidates), len(candidates), "done")
 	}
 	return nil
+}
+
+func (s *ResearchService) loadOptimizationExecution(
+	ctx context.Context,
+	run repository.ResearchOptimizationRun,
+	progress func(int, int, string),
+) (optimizationInputSnapshot, *researchDataset, error) {
+	var snapshot optimizationInputSnapshot
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil {
+		s.failOptimization(ctx, run.ID, "invalid_snapshot", "failed to decode snapshot")
+		return snapshot, nil, fmt.Errorf("decode optimization snapshot: %w", err)
+	}
+	if err := s.research.MarkOptimizationRunning(ctx, run.ID); err != nil {
+		return snapshot, nil, fmt.Errorf("mark optimization running: %w", err)
+	}
+	if progress != nil {
+		progress(0, run.CandidateCount, "loading")
+	}
+	ds, err := s.loadDatasetFromSnapshot(ctx, researchInputSnapshot{
+		EngineVersion: snapshot.EngineVersion, SourceHash: snapshot.SourceHash,
+		CommonStart: snapshot.CommonStart, CommonEnd: snapshot.CommonEnd,
+		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
+		Collection: snapshot.Collection, Assets: snapshot.Assets, FX: snapshot.FX,
+		Benchmark: snapshot.Benchmark,
+	})
+	if err != nil {
+		if ctx.Err() == nil {
+			s.failOptimization(ctx, run.ID, "data_load_failed", err.Error())
+		}
+		return snapshot, nil, fmt.Errorf("load optimization dataset: %w", err)
+	}
+	rebuilt := buildResearchSnapshot(ds, ResearchReadiness{
+		CommonStart: snapshot.CommonStart, CommonEnd: snapshot.CommonEnd,
+		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
+	})
+	if rebuilt.SourceHash != snapshot.SourceHash {
+		s.failOptimization(ctx, run.ID, "source_changed", "source data changed since run was created")
+		return snapshot, nil, fmt.Errorf("%w (optimization %s)", ErrResearchSourceChanged, run.ID)
+	}
+	return snapshot, ds, nil
+}
+
+func buildOptimizationExecutionAssets(
+	snapshot optimizationInputSnapshot, ds *researchDataset,
+) []OptimizationAsset {
+	assets := make([]OptimizationAsset, 0, len(ds.Enabled))
+	for _, asset := range ds.Enabled {
+		lockedWeight, locked := snapshot.LockedWeights[asset.Item.ID]
+		weight := asset.Item.Weight
+		if locked {
+			weight = lockedWeight
+		}
+		assets = append(assets, OptimizationAsset{
+			ItemID: asset.Item.ID, AssetKey: asset.Item.AssetKey,
+			Name: asset.Asset.Name, Weight: weight, Locked: locked,
+		})
+	}
+	return assets
+}
+
+type optimizationCandidateTrackers struct {
+	cagr, drawdown, calmar *TopKTracker
+}
+
+func newOptimizationCandidateTrackers(topK int) optimizationCandidateTrackers {
+	return optimizationCandidateTrackers{
+		cagr:     NewTopKTracker(ObjectiveMaxCAGR, topK),
+		drawdown: NewTopKTracker(ObjectiveMinDrawdown, topK),
+		calmar:   NewTopKTracker(ObjectiveMaxCalmar, topK),
+	}
+}
+
+func (s *ResearchService) evaluateOptimizationCandidates(
+	ctx context.Context,
+	runID string,
+	snapshot optimizationInputSnapshot,
+	ds *researchDataset,
+	candidates []OptimizationWeightVector,
+	cancelCheck func() bool,
+	progress func(int, int, string),
+) (OptimizationResult, error) {
+	trackers := newOptimizationCandidateTrackers(snapshot.Config.TopK)
+	evaluated, skipped := 0, 0
+	progressInterval := maxInt(1, len(candidates)/100)
+	for i, candidate := range candidates {
+		if cancelCheck != nil && cancelCheck() {
+			s.cancelOptimization(ctx, runID)
+			return OptimizationResult{}, context.Canceled
+		}
+		result, err := RunResearchBacktest(buildBacktestInputForCandidate(snapshot, ds, candidate))
+		if err != nil {
+			skipped++
+		} else {
+			evaluated++
+			trackOptimizationCandidate(trackers, candidate, result.Summary)
+		}
+		if (i+1)%progressInterval == 0 {
+			publishOptimizationProgress(ctx, s.research, runID, evaluated, skipped, len(candidates), progress)
+		}
+	}
+	if evaluated == 0 {
+		s.failOptimization(ctx, runID, "all_candidates_failed", "所有候选组合回测失败")
+		return OptimizationResult{}, fmt.Errorf(
+			"%w: candidate_count=%d", errOptimizationAllCandidates, len(candidates),
+		)
+	}
+	return OptimizationResult{
+		CandidateCount: len(candidates), EvaluatedCount: evaluated, SkippedCount: skipped,
+		BestByCAGR: trackers.cagr.Results(), BestByDrawdown: trackers.drawdown.Results(),
+		BestByCalmar: trackers.calmar.Results(),
+	}, nil
+}
+
+func trackOptimizationCandidate(
+	trackers optimizationCandidateTrackers,
+	candidate OptimizationWeightVector,
+	summary BacktestSummary,
+) {
+	item := OptimizationResultItem{Weights: candidate.Weights, Summary: summary}
+	for objective, tracker := range map[OptimizationObjective]*TopKTracker{
+		ObjectiveMaxCAGR:     trackers.cagr,
+		ObjectiveMinDrawdown: trackers.drawdown,
+		ObjectiveMaxCalmar:   trackers.calmar,
+	} {
+		if score, ok := ScoreForObjective(objective, summary); ok {
+			scored := item
+			scored.Score = score
+			tracker.Push(scored)
+		}
+	}
+}
+
+func publishOptimizationProgress(
+	ctx context.Context,
+	repo *repository.ResearchRepo,
+	runID string,
+	evaluated, skipped, total int,
+	progress func(int, int, string),
+) {
+	if progress != nil {
+		progress(evaluated+skipped, total, "evaluating")
+	}
+	_ = repo.UpdateOptimizationProgress(ctx, runID, evaluated)
 }
 
 func buildBacktestInputForCandidate(
@@ -668,12 +981,12 @@ func buildBacktestInputForCandidate(
 	}
 
 	input := BacktestInput{
-		BaseCurrency: snapshot.Collection.BaseCurrency,
-		RebalancePolicy: snapshot.Collection.RebalancePolicy,
-		RebalanceThreshold: snapshot.Collection.RebalanceThreshold,
-		RiskFreeRate: snapshot.Collection.RiskFreeRate,
+		BaseCurrency:        snapshot.Collection.BaseCurrency,
+		RebalancePolicy:     snapshot.Collection.RebalancePolicy,
+		RebalanceThreshold:  snapshot.Collection.RebalanceThreshold,
+		RiskFreeRate:        snapshot.Collection.RiskFreeRate,
 		TransactionCostRate: snapshot.Collection.TransactionCostRate,
-		WindowStart: snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
+		WindowStart:         snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
 		FX: map[string][]ResearchSeriesPoint{},
 	}
 
@@ -686,7 +999,7 @@ func buildBacktestInputForCandidate(
 			AssetKey: a.Item.AssetKey, Name: a.Asset.Name,
 			Currency: a.Asset.Currency, Weight: weight, IsCash: a.IsCash,
 			MaxFillGapDays: ResearchFillGapToleranceDays(a.Asset.InstrumentType),
-			Points: assetSeriesPoints(a.Points),
+			Points:         assetSeriesPoints(a.Points),
 		})
 	}
 
@@ -699,6 +1012,13 @@ func buildBacktestInputForCandidate(
 			points = append(points, ResearchSeriesPoint{Date: p.TradeDate, Value: p.Value})
 		}
 		input.FX[pair] = points
+	}
+	if b := ds.Benchmark; b != nil {
+		input.Benchmark = &BacktestBenchmarkInput{
+			AssetKey: b.Item.AssetKey, Name: b.Asset.Name, Currency: b.Asset.Currency,
+			IsCash: b.IsCash, MaxFillGapDays: ResearchFillGapToleranceDays(b.Asset.InstrumentType),
+			Points: assetSeriesPoints(b.Points),
+		}
 	}
 
 	return input
@@ -715,4 +1035,3 @@ func (s *ResearchService) cancelOptimization(ctx context.Context, runID string) 
 	_ = s.research.FailOptimizationRun(writeCtx, runID,
 		repository.ResearchRunStatusCanceled, "canceled", "user canceled", s.now().UnixMilli())
 }
-

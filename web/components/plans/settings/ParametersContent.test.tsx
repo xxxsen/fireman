@@ -416,6 +416,23 @@ describe("ParametersPage strategy enums", () => {
     expect(updatePlanSettings).not.toHaveBeenCalled();
   });
 
+	it("blocks transaction cost outside [0%, 100%)", async () => {
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={qc}>
+				<ParametersPage />
+			</QueryClientProvider>,
+		);
+		const label = (await screen.findByText("交易成本率")).closest("label");
+		const input = within(label as HTMLElement).getByTestId("percent-input");
+		for (const invalid of ["-1", "100", "120"]) {
+			fireEvent.change(input, { target: { value: invalid } });
+			expect(screen.getAllByText("交易成本率必须大于等于 0% 且小于 100%。").length).toBeGreaterThan(0);
+			fireEvent.click(screen.getByRole("button", { name: "保存" }));
+			expect(updatePlanSettings).not.toHaveBeenCalled();
+		}
+	});
+
   it("blocks save when the plan name is cleared (backend would silently ignore it)", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(

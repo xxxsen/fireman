@@ -20,11 +20,12 @@ var (
 
 // factorBuild collects the per-factor inputs while walking the plan's assets.
 type factorBuild struct {
-	names    []string
-	typeKeys []string
-	mu       []float64
-	sigma    []float64
-	months   []map[string]float64
+	names     []string
+	typeKeys  []string
+	exactKeys []string
+	mu        []float64
+	sigma     []float64
+	months    []map[string]float64
 }
 
 // buildFrozenFactorModel assembles the joint risk model frozen into a run's input
@@ -32,8 +33,9 @@ type factorBuild struct {
 // own forward drift and volatility) plus one shared FX factor per foreign
 // currency. Cross-type correlations blend the frozen monthly history toward the
 // profile prior (shrinkage), falling back to the prior when fewer than 24 common
-// months exist; two holdings of the same (asset_class, region) are forced to ρ=1
-// so identical exposures get no fake diversification.
+// months exist. Exact duplicate asset keys use ρ=1; distinct assets of the same
+// type shrink their frozen historical correlation toward the conservative
+// same-type prior ρ=1.
 //
 // It returns (nil, nil, nil) when there is no risk factor (an all-cash plan), in
 // which case the caller keeps the legacy independent path. It returns an error
@@ -56,6 +58,7 @@ func buildFrozenFactorModel(
 		fb.add(
 			assumptions.AssetFactorKey(a.AssetClass, a.Region)+"#"+a.HoldingID,
 			assumptions.AssetFactorKey(a.AssetClass, a.Region),
+			a.AssetKey,
 			params.MonthlyMu, params.MonthlySigma, a.Months,
 		)
 
@@ -65,7 +68,7 @@ func buildFrozenFactorModel(
 				fxIdx = len(fb.names)
 				fxParams := simulation.ParamsFromAnnual(a.FXModeledReturn, a.FXAnnualVolatility)
 				fxKey := assumptions.FXFactorKey(a.Currency, baseCurrency)
-				fb.add(fxKey, fxKey, fxParams.MonthlyMu, fxParams.MonthlySigma, a.FXMonths)
+				fb.add(fxKey, fxKey, fxKey, fxParams.MonthlyMu, fxParams.MonthlySigma, a.FXMonths)
 				fxIndexByCurrency[a.Currency] = fxIdx
 			}
 			refs[i].FXFactorIndex = fxIdx
@@ -88,17 +91,18 @@ func buildFrozenFactorModel(
 	return &model, refs, nil
 }
 
-func (fb *factorBuild) add(name, typeKey string, mu, sigma float64, months map[string]float64) {
+func (fb *factorBuild) add(name, typeKey, exactKey string, mu, sigma float64, months map[string]float64) {
 	fb.names = append(fb.names, name)
 	fb.typeKeys = append(fb.typeKeys, typeKey)
+	fb.exactKeys = append(fb.exactKeys, exactKey)
 	fb.mu = append(fb.mu, mu)
 	fb.sigma = append(fb.sigma, sigma)
 	fb.months = append(fb.months, months)
 }
 
-// correlations builds the raw correlation matrix and per-pair audit. Same-type
-// pairs are forced to ρ=1; cross-type pairs use the shrunk historical estimate
-// when at least MinCommonMonths overlap, otherwise the profile prior.
+// correlations builds the raw correlation matrix and per-pair audit. Exact
+// duplicates use ρ=1; every other pair uses a shrunk historical estimate when
+// at least MinCommonMonths overlap, otherwise its type prior.
 func (fb *factorBuild) correlations(
 	profile assumptions.Profile,
 ) ([][]float64, map[string]int, map[string]float64, []string, error) {
@@ -131,12 +135,15 @@ func (fb *factorBuild) pairCorrelation(
 	i, j int, priorLookup func(a, b string) (float64, bool), strength int,
 	pk string, pairMonths map[string]int, lambda map[string]float64, priorOnly *[]string,
 ) (float64, error) {
-	if fb.typeKeys[i] == fb.typeKeys[j] {
-		// Identical exposures are the same risk factor: perfectly correlated.
+	if fb.exactKeys[i] != "" && fb.exactKeys[i] == fb.exactKeys[j] {
+		// Duplicate exposure to the exact same asset is one risk factor.
 		lambda[pk] = 0
 		return 1, nil
 	}
-	prior, hasPrior := priorLookup(fb.typeKeys[i], fb.typeKeys[j])
+	prior, hasPrior := 1.0, fb.typeKeys[i] == fb.typeKeys[j]
+	if !hasPrior {
+		prior, hasPrior = priorLookup(fb.typeKeys[i], fb.typeKeys[j])
+	}
 	if !hasPrior {
 		// A missing cross-type correlation prior must block the run, never silently
 		// become ρ=0.

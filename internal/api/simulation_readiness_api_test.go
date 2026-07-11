@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/fireman/fireman/internal/marketdata"
+	"github.com/fireman/fireman/internal/testutil"
 )
 
 // buildAnomalousFixturePoints produces complete calendar years whose
@@ -97,6 +99,27 @@ func postSyncMissing(t *testing.T, client *http.Client, baseURL, planID string) 
 		t.Fatalf("sync-missing status=%d body=%s", resp.StatusCode, body)
 	}
 	return decodeEnvelope(t, body)["data"].(map[string]any)
+}
+
+func TestSimulationReadinessRejectsForeignCash(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	plan := createTestPlan(t, db)
+	insertHoldingRow(t, db, plan.ID, "SYS|cash||USD")
+	router := NewRouter(context.Background(), Deps{DB: db})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plans/"+plan.ID+"/simulation-readiness", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("readiness status=%d body=%s", w.Code, w.Body.String())
+	}
+	readiness := decodeEnvelope(t, w.Body.Bytes())["data"].(map[string]any)
+	if readiness["ready"].(bool) {
+		t.Fatal("foreign cash must block simulation readiness")
+	}
+	blocking := readiness["blocking_assets"].([]any)
+	if len(blocking) != 1 || blocking[0].(map[string]any)["reason"] != "foreign_cash_not_supported" {
+		t.Fatalf("unexpected blocking assets: %+v", blocking)
+	}
 }
 
 // TestSimulationReadiness_IdentityConflict reproduces the 150015 case: the

@@ -34,6 +34,8 @@ const (
 	ResearchReasonNonPositivePoints   = "non_positive_points"
 	ResearchReasonMixedSources        = "mixed_sources"
 	ResearchReasonBenchmarkNoHistory  = "benchmark_history_missing"
+	ResearchReasonBenchmarkWindow     = "benchmark_window_not_covered"
+	ResearchReasonBenchmarkGap        = "benchmark_gap_exceeded"
 	ResearchReasonTooFewEffectiveDays = "too_few_effective_days"
 )
 
@@ -361,6 +363,11 @@ func (s *ResearchService) fxSyncActive(ctx context.Context) (bool, error) {
 
 // --- evaluation ---
 
+type researchBoundedRange struct {
+	lo, hi   int
+	assetKey string
+}
+
 // evaluateResearchReadiness derives the full readiness verdict from one
 // dataset. Pure: no I/O, injectable clock.
 func evaluateResearchReadiness(ds *researchDataset, now time.Time) ResearchReadiness {
@@ -380,426 +387,29 @@ func evaluateResearchReadiness(ds *researchDataset, now time.Time) ResearchReadi
 		out.Warnings = append(out.Warnings, issue)
 	}
 
-	// 1. Weights.
-	weightSum := 0.0
-	for _, a := range ds.Enabled {
-		weightSum += a.Item.Weight
-		if a.Item.Weight < 0 {
-			block(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchReasonNegativeWeight,
-				Message: "权重为负数",
-			})
-		}
-		if a.Item.Weight > 1+ResearchWeightTolerance {
-			block(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchReasonWeightExceeds100,
-				Message: "单资产权重大于 100%",
-			})
-		}
-	}
-	out.WeightSum = weightSum
-	if len(ds.Enabled) == 0 {
-		block(ResearchReadinessIssue{
-			Reason:  ResearchReasonNoEnabledAssets,
-			Message: "集合没有启用的资产",
-		})
-	} else if math.Abs(weightSum-1) > ResearchWeightTolerance {
-		block(ResearchReadinessIssue{
-			Reason:  ResearchReasonWeightSumInvalid,
-			Message: fmt.Sprintf("权重合计不是 100%%（当前 %.4f%%）", weightSum*100),
-		})
-	}
+	evaluateResearchWeights(ds, &out, block)
 
 	// 2. Per-asset history checks + usable window assembly.
-	type boundedRange struct {
-		lo, hi   int
-		assetKey string
-	}
-	var ranges []boundedRange
-	prepared := map[string]preparedSeries{}
-	staleCount, missingCount := 0, 0
-
-	fxBounds := func(pairs []string) (int, int, bool, string) {
-		lo, hi, set := 0, 0, false
-		for _, pair := range pairs {
-			fx, ok := ds.FX[pair]
-			if !ok || !fx.Found {
-				return 0, 0, false, pair
-			}
-			first, err1 := parseResearchDate(fx.Points[0].TradeDate)
-			last, err2 := parseResearchDate(fx.Points[len(fx.Points)-1].TradeDate)
-			if err1 != nil || err2 != nil {
-				return 0, 0, false, pair
-			}
-			if !set {
-				lo, hi, set = first, last, true
-				continue
-			}
-			if first > lo {
-				lo = first
-			}
-			if last < hi {
-				hi = last
-			}
-		}
-		return lo, hi, set, ""
+	fxBounds := func(pairs []string) (int, int, bool) {
+		return researchFXBounds(ds, pairs)
 	}
 
-	for _, a := range ds.Enabled {
-		view := ResearchReadinessAssetView{
-			ItemID:        a.Item.ID,
-			AssetKey:      a.Item.AssetKey,
-			Name:          a.Asset.Name,
-			Currency:      a.Asset.Currency,
-			IsCash:        a.IsCash,
-			Enabled:       a.Item.Enabled,
-			Weight:        a.Item.Weight,
-			AdjustPolicy:  a.Item.AdjustPolicy,
-			PointType:     a.Item.PointType,
-			ListingStatus: a.Asset.ListingStatus,
-			FXPairs:       a.FXPairs,
-		}
-
-		// FX requirements first: they apply to cash and non-cash alike.
-		for _, pair := range a.FXPairs {
-			fx, ok := ds.FX[pair]
-			if !ok || !fx.Found {
-				block(ResearchReadinessIssue{
-					AssetKey: a.Item.AssetKey, Pair: pair, Reason: ResearchReasonFXMissing,
-					Message: fmt.Sprintf("%s 资产需要 %s 历史汇率", a.Asset.Currency, pair),
-				})
-			}
-		}
-
-		if a.IsCash {
-			// Cash: no history requirement; FX bounds (if any) constrain the
-			// window.
-			if lo, hi, ok, _ := fxBounds(a.FXPairs); ok {
-				ranges = append(ranges, boundedRange{lo: lo, hi: hi, assetKey: a.Item.AssetKey})
-				view.HistoryStart = researchDayToDate(lo)
-				view.HistoryEnd = researchDayToDate(hi)
-			}
-			view.HasHistory = true
-			out.Assets = append(out.Assets, view)
-			continue
-		}
-
-		if a.Task != nil {
-			view.SyncStatus = a.Task.Status
-			if a.Task.Status == repository.WorkerTaskStatusFailed {
-				view.SyncError = a.Task.ErrorMessage
-				if view.SyncError == "" {
-					view.SyncError = a.Task.ErrorCode
-				}
-			}
-			if repository.IsActiveWorkerTaskStatus(a.Task.Status) {
-				block(ResearchReadinessIssue{
-					AssetKey: a.Item.AssetKey, Reason: ResearchReasonHistorySyncing,
-					Message: "历史同步正在运行",
-				})
-			}
-		}
-
-		if len(a.Points) == 0 {
-			missingCount++
-			if a.Task != nil && a.Task.Status == repository.WorkerTaskStatusFailed {
-				block(ResearchReadinessIssue{
-					AssetKey: a.Item.AssetKey, Reason: ResearchReasonHistorySyncFailed,
-					Message: "历史同步失败且没有可用旧数据",
-				})
-			} else if a.Task == nil || !repository.IsActiveWorkerTaskStatus(a.Task.Status) {
-				block(ResearchReadinessIssue{
-					AssetKey: a.Item.AssetKey, Reason: ResearchReasonHistoryMissing,
-					Message: "缺少历史点位",
-				})
-			}
-			out.Assets = append(out.Assets, view)
-			continue
-		}
-
-		view.HasHistory = true
-		view.PointCount = len(a.Points)
-		view.HistoryStart = a.Points[0].TradeDate
-		view.HistoryEnd = a.Points[len(a.Points)-1].TradeDate
-		view.DataAsOf = a.State.DataAsOf
-		if view.DataAsOf == "" {
-			view.DataAsOf = view.HistoryEnd
-		}
-
-		if a.Task != nil && a.Task.Status == repository.WorkerTaskStatusFailed {
-			warn(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchWarnSyncFailedStale,
-				Message: "最近一次历史同步失败，当前使用旧数据",
-			})
-		}
-		if a.NonPositiveCount > 0 {
-			block(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchReasonNonPositivePoints,
-				Message: fmt.Sprintf("存在 %d 个非正数点位", a.NonPositiveCount),
-			})
-		}
-		if len(a.SourceNames) > 1 {
-			block(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchReasonMixedSources,
-				Message: "历史点位来自多个数据源，无法确认口径：" + strings.Join(a.SourceNames, ", "),
-			})
-		}
-
-		if a.Asset.ListingStatus != "" && a.Asset.ListingStatus != "active" {
-			warn(ResearchReadinessIssue{
-				AssetKey: a.Item.AssetKey, Reason: ResearchWarnAssetInactive,
-				Message: "资产已停更/退市，数据不再更新",
-			})
-		} else if view.DataAsOf != "" {
-			if asOfDay, err := parseResearchDate(view.DataAsOf); err == nil {
-				nowDay := int(now.Unix() / 86400)
-				tolerance := ResearchStaleToleranceDays(a.Asset.InstrumentType)
-				if nowDay-asOfDay > tolerance {
-					view.Stale = true
-					staleCount++
-					warn(ResearchReadinessIssue{
-						AssetKey: a.Item.AssetKey, Reason: ResearchWarnStaleData,
-						Message: fmt.Sprintf("数据截至 %s，超过 %d 天未更新", view.DataAsOf, tolerance),
-					})
-				}
-			}
-		}
-
-		series, err := prepareSeries(assetPointsToSeries(a.Points))
-		if err != nil || series.empty() {
-			// Non-positive points already blocked above; skip range math.
-			out.Assets = append(out.Assets, view)
-			continue
-		}
-		prepared[a.Item.AssetKey] = series
-		lo, hi := series.firstDay(), series.lastDay()
-		// FX-missing pairs are already blocked per asset above; when FX data
-		// exists it narrows the asset's usable range.
-		if fxLo, fxHi, ok, _ := fxBounds(a.FXPairs); ok {
-			if fxLo > lo {
-				lo = fxLo
-			}
-			if fxHi < hi {
-				hi = fxHi
-			}
-		}
-		if hi > lo {
-			ranges = append(ranges, boundedRange{lo: lo, hi: hi, assetKey: a.Item.AssetKey})
-		}
-		out.Assets = append(out.Assets, view)
-	}
+	ranges, prepared, staleCount, missingCount := evaluateResearchAssets(
+		ds, now, &out, fxBounds, block, warn,
+	)
 	out.DataDependencies.StaleAssetCount = staleCount
 	out.DataDependencies.MissingHistoryCount = missingCount
 
-	// 3. FX-level checks.
-	if ds.FXSyncActive {
-		for _, pair := range ds.FXPairs {
-			block(ResearchReadinessIssue{
-				Pair: pair, Reason: ResearchReasonFXSyncing,
-				Message: "汇率同步正在运行",
-			})
-		}
-	}
-	for _, pair := range ds.FXPairs {
-		fx, ok := ds.FX[pair]
-		if !ok || !fx.Found {
-			continue // already blocked per asset
-		}
-		if fx.NonPositiveCount > 0 {
-			block(ResearchReadinessIssue{
-				Pair: pair, Reason: ResearchReasonNonPositivePoints,
-				Message: fmt.Sprintf("FX %s 存在 %d 个非正数点位", pair, fx.NonPositiveCount),
-			})
-		}
-	}
+	evaluateResearchFX(ds, block)
 
-	// 4. Benchmark.
-	if ds.Benchmark != nil {
-		b := ds.Benchmark
-		if !b.IsCash && len(b.Points) == 0 {
-			block(ResearchReadinessIssue{
-				AssetKey: b.Item.AssetKey, Reason: ResearchReasonBenchmarkNoHistory,
-				Message: "基准资产缺少历史点位",
-			})
-		}
-		for _, pair := range b.FXPairs {
-			fx, ok := ds.FX[pair]
-			if !ok || !fx.Found {
-				block(ResearchReadinessIssue{
-					AssetKey: b.Item.AssetKey, Pair: pair, Reason: ResearchReasonFXMissing,
-					Message: fmt.Sprintf("基准资产需要 %s 历史汇率", pair),
-				})
-			}
-		}
-	}
+	evaluateResearchBenchmark(ds, block)
 
-	// 5. Common window.
-	haveWindow := false
-	var commonLo, commonHi int
-	if len(ds.Enabled) > 0 {
-		if len(ranges) == 0 {
-			if out.DataDependencies.MissingHistoryCount == 0 && allCash(ds) {
-				block(ResearchReadinessIssue{
-					Reason:  ResearchReasonWindowEmpty,
-					Message: "纯现金组合没有可回测的历史区间",
-				})
-			}
-		} else {
-			commonLo, commonHi = ranges[0].lo, ranges[0].hi
-			for _, r := range ranges[1:] {
-				if r.lo > commonLo {
-					commonLo = r.lo
-				}
-				if r.hi < commonHi {
-					commonHi = r.hi
-				}
-			}
-			if commonHi <= commonLo {
-				block(ResearchReadinessIssue{
-					Reason:  ResearchReasonWindowEmpty,
-					Message: "资产历史没有共同重叠区间",
-				})
-			} else {
-				haveWindow = true
-				out.CommonStart = researchDayToDate(commonLo)
-				out.CommonEnd = researchDayToDate(commonHi)
-				for i := range out.Assets {
-					for _, r := range ranges {
-						if r.assetKey != out.Assets[i].AssetKey {
-							continue
-						}
-						out.Assets[i].LimitsCommonStart = r.lo == commonLo
-						out.Assets[i].LimitsCommonEnd = r.hi == commonHi
-					}
-				}
-			}
-		}
-	}
+	commonLo, commonHi, haveWindow := deriveResearchCommonWindow(ds, ranges, &out, block)
 
 	if haveWindow {
-		winLo, winHi := commonLo, commonHi
-		if ds.Collection.StartPolicy == ResearchStartPolicyCustom {
-			if ds.Collection.WindowStart != "" {
-				if d, err := parseResearchDate(ds.Collection.WindowStart); err == nil && d > winLo {
-					winLo = d
-				}
-			}
-			if ds.Collection.WindowEnd != "" {
-				if d, err := parseResearchDate(ds.Collection.WindowEnd); err == nil && d < winHi {
-					winHi = d
-				}
-			}
-		}
-		switch {
-		case winHi <= winLo:
-			block(ResearchReadinessIssue{
-				Reason:  ResearchReasonWindowEmpty,
-				Message: "指定的回测区间与共同可用区间没有重叠",
-			})
-		case winHi-winLo < researchReadinessMinWindowDays:
-			block(ResearchReadinessIssue{
-				Reason: ResearchReasonWindowTooShort,
-				Message: fmt.Sprintf("回测区间 %s ~ %s 短于最小长度 1 年",
-					researchDayToDate(winLo), researchDayToDate(winHi)),
-			})
-		default:
-			out.WindowStart = researchDayToDate(winLo)
-			out.WindowEnd = researchDayToDate(winHi)
-			if winHi-winLo < researchReadinessShortWindowDays {
-				warn(ResearchReadinessIssue{
-					Reason:  ResearchWarnShortWindow,
-					Message: "共同回测区间短于 3 年，结果不建议作为 FIRE 资产决策依据",
-				})
-			}
-
-			// Effective valuation days inside the window.
-			effectiveObs := map[int]bool{}
-			for _, series := range prepared {
-				for _, day := range series.days {
-					if day >= winLo && day <= winHi {
-						effectiveObs[day] = true
-					}
-				}
-			}
-			for _, pair := range ds.FXPairs {
-				fx := ds.FX[pair]
-				if fx == nil || !fx.Found {
-					continue
-				}
-				for _, p := range fx.Points {
-					if d, err := parseResearchDate(p.TradeDate); err == nil && d >= winLo && d <= winHi {
-						effectiveObs[d] = true
-					}
-				}
-			}
-			if len(prepared) > 0 && len(effectiveObs) < researchReadinessMinEffectiveObs {
-				block(ResearchReadinessIssue{
-					Reason:  ResearchReasonTooFewEffectiveDays,
-					Message: "有效估值日不足，无法计算指标",
-				})
-			}
-
-			// Per-asset fill gaps inside the window (warning).
-			for _, a := range ds.Enabled {
-				series, ok := prepared[a.Item.AssetKey]
-				if !ok {
-					continue
-				}
-				tolerance := ResearchFillGapToleranceDays(a.Asset.InstrumentType)
-				fillLo := maxInt(winLo, series.firstDay())
-				fillHi := minInt(winHi, series.lastDay())
-				if fillHi >= fillLo {
-					if _, maxRun := series.fillStats(fillLo, fillHi); maxRun > tolerance {
-						warn(ResearchReadinessIssue{
-							AssetKey: a.Item.AssetKey, Reason: ResearchWarnExcessiveFill,
-							Message: fmt.Sprintf("历史存在超过 %d 天的连续缺口（最长 %d 天），将按前值填充",
-								tolerance, maxRun),
-						})
-					}
-				}
-			}
-			// Lagging data (warning): this asset's series end determines
-			// common_end while another asset's data reaches clearly further.
-			for _, a := range ds.Enabled {
-				series, ok := prepared[a.Item.AssetKey]
-				if !ok || series.lastDay() != commonHi {
-					continue
-				}
-				if anyOtherEndsLater(prepared, a.Item.AssetKey, series.lastDay(), researchDataLaggingSlackDays) {
-					warn(ResearchReadinessIssue{
-						AssetKey: a.Item.AssetKey, Reason: ResearchWarnDataLagging,
-						Message: fmt.Sprintf("该资产数据截至 %s，明显滞后并使共同终点提前",
-							researchDayToDate(series.lastDay())),
-					})
-				}
-			}
-
-			// FX gaps inside the window (blocking).
-			for _, pair := range ds.FXPairs {
-				fx := ds.FX[pair]
-				if fx == nil || !fx.Found {
-					continue
-				}
-				fxSeries, err := prepareSeries(fxPointsToSeries(fx.Points))
-				if err != nil || fxSeries.empty() {
-					continue
-				}
-				fillLo := maxInt(winLo, fxSeries.firstDay())
-				fillHi := minInt(winHi, fxSeries.lastDay())
-				if fillHi < fillLo {
-					continue
-				}
-				if _, maxRun := fxSeries.fillStats(fillLo, fillHi); maxRun > researchReadinessFXFillGapDays {
-					block(ResearchReadinessIssue{
-						Pair: pair, Reason: ResearchReasonFXGapExceeded,
-						Message: fmt.Sprintf("FX %s 历史缺口超过容忍间隔（最长 %d 天）", pair, maxRun),
-					})
-				}
-			}
-
-			// High pairwise correlation (warning).
-			addCorrelationWarnings(ds, prepared, winLo, winHi, warn)
-		}
+		evaluateResearchSelectedWindow(
+			ds, &out, prepared, commonLo, commonHi, fxBounds, block, warn,
+		)
 	}
 
 	// 6. Concentration warnings.
@@ -809,6 +419,48 @@ func evaluateResearchReadiness(ds *researchDataset, now time.Time) ResearchReadi
 	return out
 }
 
+func evaluateResearchSelectedWindow(
+	ds *researchDataset,
+	out *ResearchReadiness,
+	prepared map[string]preparedSeries,
+	commonLo, commonHi int,
+	fxBounds func([]string) (int, int, bool),
+	block, warn func(ResearchReadinessIssue),
+) {
+	winLo, winHi := clampResearchReadinessWindow(ds.Collection, commonLo, commonHi)
+	switch {
+	case winHi <= winLo:
+		block(ResearchReadinessIssue{
+			Reason: ResearchReasonWindowEmpty, Message: "指定的回测区间与共同可用区间没有重叠",
+		})
+	case winHi-winLo < researchReadinessMinWindowDays:
+		block(ResearchReadinessIssue{
+			Reason: ResearchReasonWindowTooShort,
+			Message: fmt.Sprintf("回测区间 %s ~ %s 短于最小长度 1 年",
+				researchDayToDate(winLo), researchDayToDate(winHi)),
+		})
+	default:
+		evaluateValidResearchWindow(
+			ds, out, prepared, commonHi, winLo, winHi, fxBounds, block, warn,
+		)
+	}
+}
+
+func clampResearchReadinessWindow(
+	collection repository.ResearchCollection, commonLo, commonHi int,
+) (int, int) {
+	if collection.StartPolicy != ResearchStartPolicyCustom {
+		return commonLo, commonHi
+	}
+	if day, err := parseResearchDate(collection.WindowStart); err == nil {
+		commonLo = maxInt(commonLo, day)
+	}
+	if day, err := parseResearchDate(collection.WindowEnd); err == nil {
+		commonHi = minInt(commonHi, day)
+	}
+	return commonLo, commonHi
+}
+
 func allCash(ds *researchDataset) bool {
 	for _, a := range ds.Enabled {
 		if !a.IsCash {
@@ -816,6 +468,542 @@ func allCash(ds *researchDataset) bool {
 		}
 	}
 	return len(ds.Enabled) > 0
+}
+
+func evaluateResearchWeights(
+	ds *researchDataset,
+	out *ResearchReadiness,
+	block func(ResearchReadinessIssue),
+) {
+	for _, asset := range ds.Enabled {
+		out.WeightSum += asset.Item.Weight
+		if asset.Item.Weight < 0 {
+			block(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonNegativeWeight, Message: "权重为负数",
+			})
+		}
+		if asset.Item.Weight > 1+ResearchWeightTolerance {
+			block(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonWeightExceeds100,
+				Message: "单资产权重大于 100%",
+			})
+		}
+	}
+	if len(ds.Enabled) == 0 {
+		block(ResearchReadinessIssue{Reason: ResearchReasonNoEnabledAssets, Message: "集合没有启用的资产"})
+		return
+	}
+	if math.Abs(out.WeightSum-1) > ResearchWeightTolerance {
+		block(ResearchReadinessIssue{
+			Reason:  ResearchReasonWeightSumInvalid,
+			Message: fmt.Sprintf("权重合计不是 100%%（当前 %.4f%%）", out.WeightSum*100),
+		})
+	}
+}
+
+func researchFXBounds(ds *researchDataset, pairs []string) (int, int, bool) {
+	lo, hi, set := 0, 0, false
+	for _, pair := range pairs {
+		fx, ok := ds.FX[pair]
+		if !ok || !fx.Found || len(fx.Points) == 0 {
+			return 0, 0, false
+		}
+		first, firstErr := parseResearchDate(fx.Points[0].TradeDate)
+		last, lastErr := parseResearchDate(fx.Points[len(fx.Points)-1].TradeDate)
+		if firstErr != nil || lastErr != nil {
+			return 0, 0, false
+		}
+		if !set {
+			lo, hi, set = first, last, true
+			continue
+		}
+		lo, hi = maxInt(lo, first), minInt(hi, last)
+	}
+	return lo, hi, set
+}
+
+type researchAssetReadinessResult struct {
+	view      ResearchReadinessAssetView
+	series    preparedSeries
+	itemRange *researchBoundedRange
+	stale     bool
+	missing   bool
+}
+
+func evaluateResearchAssets(
+	ds *researchDataset,
+	now time.Time,
+	out *ResearchReadiness,
+	fxBounds func([]string) (int, int, bool),
+	block, warn func(ResearchReadinessIssue),
+) ([]researchBoundedRange, map[string]preparedSeries, int, int) {
+	ranges := make([]researchBoundedRange, 0, len(ds.Enabled))
+	prepared := make(map[string]preparedSeries, len(ds.Enabled))
+	staleCount, missingCount := 0, 0
+	for _, asset := range ds.Enabled {
+		result := evaluateResearchAsset(ds, asset, now, fxBounds, block, warn)
+		out.Assets = append(out.Assets, result.view)
+		if result.itemRange != nil {
+			ranges = append(ranges, *result.itemRange)
+		}
+		if !result.series.empty() {
+			prepared[asset.Item.AssetKey] = result.series
+		}
+		if result.stale {
+			staleCount++
+		}
+		if result.missing {
+			missingCount++
+		}
+	}
+	return ranges, prepared, staleCount, missingCount
+}
+
+func evaluateResearchAsset(
+	ds *researchDataset,
+	asset researchAssetData,
+	now time.Time,
+	fxBounds func([]string) (int, int, bool),
+	block, warn func(ResearchReadinessIssue),
+) researchAssetReadinessResult {
+	result := researchAssetReadinessResult{view: newResearchReadinessAssetView(asset)}
+	evaluateResearchAssetFX(ds, asset, block)
+	if asset.IsCash {
+		result.view.HasHistory = true
+		if lo, hi, ok := fxBounds(asset.FXPairs); ok {
+			result.view.HistoryStart, result.view.HistoryEnd = researchDayToDate(lo), researchDayToDate(hi)
+			result.itemRange = &researchBoundedRange{lo: lo, hi: hi, assetKey: asset.Item.AssetKey}
+		}
+		return result
+	}
+	evaluateResearchAssetTask(asset, &result.view, block)
+	if len(asset.Points) == 0 {
+		result.missing = true
+		evaluateMissingResearchAsset(asset, block)
+		return result
+	}
+	populateResearchAssetHistory(asset, &result.view)
+	evaluateResearchAssetDataQuality(asset, block, warn)
+	result.stale = evaluateResearchAssetStaleness(asset, now, &result.view, warn)
+	series, err := prepareSeries(assetPointsToSeries(asset.Points))
+	if err != nil || series.empty() {
+		return result
+	}
+	result.series = series
+	lo, hi := series.firstDay(), series.lastDay()
+	if fxLo, fxHi, ok := fxBounds(asset.FXPairs); ok {
+		lo, hi = maxInt(lo, fxLo), minInt(hi, fxHi)
+	}
+	if hi > lo {
+		result.itemRange = &researchBoundedRange{lo: lo, hi: hi, assetKey: asset.Item.AssetKey}
+	}
+	return result
+}
+
+func newResearchReadinessAssetView(asset researchAssetData) ResearchReadinessAssetView {
+	return ResearchReadinessAssetView{
+		ItemID: asset.Item.ID, AssetKey: asset.Item.AssetKey, Name: asset.Asset.Name,
+		Currency: asset.Asset.Currency, IsCash: asset.IsCash, Enabled: asset.Item.Enabled,
+		Weight: asset.Item.Weight, AdjustPolicy: asset.Item.AdjustPolicy, PointType: asset.Item.PointType,
+		ListingStatus: asset.Asset.ListingStatus, FXPairs: asset.FXPairs,
+	}
+}
+
+func evaluateResearchAssetFX(
+	ds *researchDataset, asset researchAssetData, block func(ResearchReadinessIssue),
+) {
+	for _, pair := range asset.FXPairs {
+		fx, ok := ds.FX[pair]
+		if !ok || !fx.Found {
+			block(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Pair: pair, Reason: ResearchReasonFXMissing,
+				Message: fmt.Sprintf("%s 资产需要 %s 历史汇率", asset.Asset.Currency, pair),
+			})
+		}
+	}
+}
+
+func evaluateResearchAssetTask(
+	asset researchAssetData,
+	view *ResearchReadinessAssetView,
+	block func(ResearchReadinessIssue),
+) {
+	if asset.Task == nil {
+		return
+	}
+	view.SyncStatus = asset.Task.Status
+	if asset.Task.Status == repository.WorkerTaskStatusFailed {
+		view.SyncError = asset.Task.ErrorMessage
+		if view.SyncError == "" {
+			view.SyncError = asset.Task.ErrorCode
+		}
+	}
+	if repository.IsActiveWorkerTaskStatus(asset.Task.Status) {
+		block(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchReasonHistorySyncing,
+			Message: "历史同步正在运行",
+		})
+	}
+}
+
+func evaluateMissingResearchAsset(asset researchAssetData, block func(ResearchReadinessIssue)) {
+	if asset.Task != nil && asset.Task.Status == repository.WorkerTaskStatusFailed {
+		block(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchReasonHistorySyncFailed,
+			Message: "历史同步失败且没有可用旧数据",
+		})
+		return
+	}
+	if asset.Task == nil || !repository.IsActiveWorkerTaskStatus(asset.Task.Status) {
+		block(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchReasonHistoryMissing, Message: "缺少历史点位",
+		})
+	}
+}
+
+func populateResearchAssetHistory(asset researchAssetData, view *ResearchReadinessAssetView) {
+	view.HasHistory = true
+	view.PointCount = len(asset.Points)
+	view.HistoryStart = asset.Points[0].TradeDate
+	view.HistoryEnd = asset.Points[len(asset.Points)-1].TradeDate
+	view.DataAsOf = asset.State.DataAsOf
+	if view.DataAsOf == "" {
+		view.DataAsOf = view.HistoryEnd
+	}
+}
+
+func evaluateResearchAssetDataQuality(
+	asset researchAssetData, block, warn func(ResearchReadinessIssue),
+) {
+	if asset.Task != nil && asset.Task.Status == repository.WorkerTaskStatusFailed {
+		warn(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchWarnSyncFailedStale,
+			Message: "最近一次历史同步失败，当前使用旧数据",
+		})
+	}
+	if asset.NonPositiveCount > 0 {
+		block(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchReasonNonPositivePoints,
+			Message: fmt.Sprintf("存在 %d 个非正数点位", asset.NonPositiveCount),
+		})
+	}
+	if len(asset.SourceNames) > 1 {
+		block(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchReasonMixedSources,
+			Message: "历史点位来自多个数据源，无法确认口径：" + strings.Join(asset.SourceNames, ", "),
+		})
+	}
+}
+
+func evaluateResearchAssetStaleness(
+	asset researchAssetData,
+	now time.Time,
+	view *ResearchReadinessAssetView,
+	warn func(ResearchReadinessIssue),
+) bool {
+	if asset.Asset.ListingStatus != "" && asset.Asset.ListingStatus != "active" {
+		warn(ResearchReadinessIssue{
+			AssetKey: asset.Item.AssetKey, Reason: ResearchWarnAssetInactive,
+			Message: "资产已停更/退市，数据不再更新",
+		})
+		return false
+	}
+	asOfDay, err := parseResearchDate(view.DataAsOf)
+	if err != nil {
+		return false
+	}
+	tolerance := ResearchStaleToleranceDays(asset.Asset.InstrumentType)
+	if int(now.Unix()/86400)-asOfDay <= tolerance {
+		return false
+	}
+	view.Stale = true
+	warn(ResearchReadinessIssue{
+		AssetKey: asset.Item.AssetKey, Reason: ResearchWarnStaleData,
+		Message: fmt.Sprintf("数据截至 %s，超过 %d 天未更新", view.DataAsOf, tolerance),
+	})
+	return true
+}
+
+func evaluateResearchFX(ds *researchDataset, block func(ResearchReadinessIssue)) {
+	if ds.FXSyncActive {
+		for _, pair := range ds.FXPairs {
+			block(ResearchReadinessIssue{
+				Pair: pair, Reason: ResearchReasonFXSyncing, Message: "汇率同步正在运行",
+			})
+		}
+	}
+	for _, pair := range ds.FXPairs {
+		fx, ok := ds.FX[pair]
+		if ok && fx.Found && fx.NonPositiveCount > 0 {
+			block(ResearchReadinessIssue{
+				Pair: pair, Reason: ResearchReasonNonPositivePoints,
+				Message: fmt.Sprintf("FX %s 存在 %d 个非正数点位", pair, fx.NonPositiveCount),
+			})
+		}
+	}
+}
+
+func evaluateResearchBenchmark(ds *researchDataset, block func(ResearchReadinessIssue)) {
+	benchmark := ds.Benchmark
+	if benchmark == nil {
+		return
+	}
+	if !benchmark.IsCash && len(benchmark.Points) == 0 {
+		block(ResearchReadinessIssue{
+			AssetKey: benchmark.Item.AssetKey, Reason: ResearchReasonBenchmarkNoHistory,
+			Message: "基准资产缺少历史点位",
+		})
+	}
+	for _, pair := range benchmark.FXPairs {
+		fx, ok := ds.FX[pair]
+		if !ok || !fx.Found {
+			block(ResearchReadinessIssue{
+				AssetKey: benchmark.Item.AssetKey, Pair: pair, Reason: ResearchReasonFXMissing,
+				Message: fmt.Sprintf("基准资产需要 %s 历史汇率", pair),
+			})
+		}
+	}
+	if benchmark.NonPositiveCount > 0 {
+		block(ResearchReadinessIssue{
+			AssetKey: benchmark.Item.AssetKey, Reason: ResearchReasonNonPositivePoints,
+			Message: fmt.Sprintf("基准资产存在 %d 个非正数点位", benchmark.NonPositiveCount),
+		})
+	}
+	if len(benchmark.SourceNames) > 1 {
+		block(ResearchReadinessIssue{
+			AssetKey: benchmark.Item.AssetKey, Reason: ResearchReasonMixedSources,
+			Message: "基准资产历史点位来自多个数据源：" + strings.Join(benchmark.SourceNames, ", "),
+		})
+	}
+}
+
+func deriveResearchCommonWindow(
+	ds *researchDataset,
+	ranges []researchBoundedRange,
+	out *ResearchReadiness,
+	block func(ResearchReadinessIssue),
+) (int, int, bool) {
+	if len(ds.Enabled) == 0 {
+		return 0, 0, false
+	}
+	if len(ranges) == 0 {
+		if out.DataDependencies.MissingHistoryCount == 0 && allCash(ds) {
+			block(ResearchReadinessIssue{
+				Reason: ResearchReasonWindowEmpty, Message: "纯现金组合没有可回测的历史区间",
+			})
+		}
+		return 0, 0, false
+	}
+	commonLo, commonHi := ranges[0].lo, ranges[0].hi
+	for _, itemRange := range ranges[1:] {
+		commonLo = maxInt(commonLo, itemRange.lo)
+		commonHi = minInt(commonHi, itemRange.hi)
+	}
+	if commonHi <= commonLo {
+		block(ResearchReadinessIssue{
+			Reason: ResearchReasonWindowEmpty, Message: "资产历史没有共同重叠区间",
+		})
+		return 0, 0, false
+	}
+	out.CommonStart, out.CommonEnd = researchDayToDate(commonLo), researchDayToDate(commonHi)
+	markResearchWindowLimiters(out.Assets, ranges, commonLo, commonHi)
+	return commonLo, commonHi, true
+}
+
+func evaluateValidResearchWindow(
+	ds *researchDataset,
+	out *ResearchReadiness,
+	prepared map[string]preparedSeries,
+	commonHi, winLo, winHi int,
+	fxBounds func([]string) (int, int, bool),
+	block, warn func(ResearchReadinessIssue),
+) {
+	out.WindowStart, out.WindowEnd = researchDayToDate(winLo), researchDayToDate(winHi)
+	evaluateBenchmarkWindow(ds, winLo, winHi, fxBounds, block)
+	if winHi-winLo < researchReadinessShortWindowDays {
+		warn(ResearchReadinessIssue{
+			Reason:  ResearchWarnShortWindow,
+			Message: "共同回测区间短于 3 年，结果不建议作为 FIRE 资产决策依据",
+		})
+	}
+	if len(prepared) > 0 && countEffectiveResearchDays(ds, prepared, winLo, winHi) < researchReadinessMinEffectiveObs {
+		block(ResearchReadinessIssue{
+			Reason: ResearchReasonTooFewEffectiveDays, Message: "有效估值日不足，无法计算指标",
+		})
+	}
+	evaluateResearchFillWarnings(ds, prepared, winLo, winHi, warn)
+	evaluateResearchLagWarnings(ds, prepared, commonHi, warn)
+	evaluateResearchFXGaps(ds, winLo, winHi, block)
+	addCorrelationWarnings(ds, prepared, winLo, winHi, warn)
+}
+
+func evaluateBenchmarkWindow(
+	ds *researchDataset,
+	winLo, winHi int,
+	fxBounds func([]string) (int, int, bool),
+	block func(ResearchReadinessIssue),
+) {
+	benchmark := ds.Benchmark
+	if benchmark == nil {
+		return
+	}
+	benchLo, benchHi, bounded := benchmarkHistoryBounds(benchmark, winLo, winHi, block)
+	if fxLo, fxHi, fxBounded := fxBounds(benchmark.FXPairs); fxBounded {
+		if !bounded {
+			benchLo, benchHi = fxLo, fxHi
+		} else {
+			benchLo, benchHi = maxInt(benchLo, fxLo), minInt(benchHi, fxHi)
+		}
+		bounded = true
+	}
+	if bounded && (benchLo > winLo || benchHi < winHi) {
+		block(ResearchReadinessIssue{
+			AssetKey: benchmark.Item.AssetKey, Reason: ResearchReasonBenchmarkWindow,
+			Message: fmt.Sprintf("基准可用区间 %s ~ %s 未覆盖回测区间 %s ~ %s",
+				researchDayToDate(benchLo), researchDayToDate(benchHi),
+				researchDayToDate(winLo), researchDayToDate(winHi)),
+		})
+	}
+}
+
+func benchmarkHistoryBounds(
+	benchmark *researchAssetData,
+	winLo, winHi int,
+	block func(ResearchReadinessIssue),
+) (int, int, bool) {
+	if benchmark.IsCash {
+		return 0, 0, false
+	}
+	series, err := prepareSeries(assetPointsToSeries(benchmark.Points))
+	if err != nil || series.empty() {
+		return 0, 0, false
+	}
+	fillLo, fillHi := maxInt(winLo, series.firstDay()), minInt(winHi, series.lastDay())
+	if fillHi >= fillLo {
+		tolerance := ResearchFillGapToleranceDays(benchmark.Asset.InstrumentType)
+		if _, maxRun := series.fillStats(fillLo, fillHi); maxRun > tolerance {
+			block(ResearchReadinessIssue{
+				AssetKey: benchmark.Item.AssetKey, Reason: ResearchReasonBenchmarkGap,
+				Message: fmt.Sprintf("基准资产连续缺口 %d 天超过容忍值 %d 天", maxRun, tolerance),
+			})
+		}
+	}
+	return series.firstDay(), series.lastDay(), true
+}
+
+func countEffectiveResearchDays(
+	ds *researchDataset, prepared map[string]preparedSeries, winLo, winHi int,
+) int {
+	effective := map[int]bool{}
+	for _, series := range prepared {
+		for _, day := range series.days {
+			if day >= winLo && day <= winHi {
+				effective[day] = true
+			}
+		}
+	}
+	for _, pair := range ds.FXPairs {
+		fx := ds.FX[pair]
+		if fx == nil || !fx.Found {
+			continue
+		}
+		for _, point := range fx.Points {
+			day, err := parseResearchDate(point.TradeDate)
+			if err == nil && day >= winLo && day <= winHi {
+				effective[day] = true
+			}
+		}
+	}
+	return len(effective)
+}
+
+func evaluateResearchFillWarnings(
+	ds *researchDataset,
+	prepared map[string]preparedSeries,
+	winLo, winHi int,
+	warn func(ResearchReadinessIssue),
+) {
+	for _, asset := range ds.Enabled {
+		series, ok := prepared[asset.Item.AssetKey]
+		if !ok {
+			continue
+		}
+		tolerance := ResearchFillGapToleranceDays(asset.Asset.InstrumentType)
+		fillLo, fillHi := maxInt(winLo, series.firstDay()), minInt(winHi, series.lastDay())
+		if fillHi < fillLo {
+			continue
+		}
+		if _, maxRun := series.fillStats(fillLo, fillHi); maxRun > tolerance {
+			warn(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchWarnExcessiveFill,
+				Message: fmt.Sprintf("历史存在超过 %d 天的连续缺口（最长 %d 天），将按前值填充",
+					tolerance, maxRun),
+			})
+		}
+	}
+}
+
+func evaluateResearchLagWarnings(
+	ds *researchDataset,
+	prepared map[string]preparedSeries,
+	commonHi int,
+	warn func(ResearchReadinessIssue),
+) {
+	for _, asset := range ds.Enabled {
+		series, ok := prepared[asset.Item.AssetKey]
+		if !ok || series.lastDay() != commonHi {
+			continue
+		}
+		if anyOtherEndsLater(prepared, asset.Item.AssetKey, series.lastDay(), researchDataLaggingSlackDays) {
+			warn(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchWarnDataLagging,
+				Message: fmt.Sprintf("该资产数据截至 %s，明显滞后并使共同终点提前",
+					researchDayToDate(series.lastDay())),
+			})
+		}
+	}
+}
+
+func evaluateResearchFXGaps(
+	ds *researchDataset, winLo, winHi int, block func(ResearchReadinessIssue),
+) {
+	for _, pair := range ds.FXPairs {
+		fx := ds.FX[pair]
+		if fx == nil || !fx.Found {
+			continue
+		}
+		series, err := prepareSeries(fxPointsToSeries(fx.Points))
+		if err != nil || series.empty() {
+			continue
+		}
+		fillLo, fillHi := maxInt(winLo, series.firstDay()), minInt(winHi, series.lastDay())
+		if fillHi < fillLo {
+			continue
+		}
+		if _, maxRun := series.fillStats(fillLo, fillHi); maxRun > researchReadinessFXFillGapDays {
+			block(ResearchReadinessIssue{
+				Pair: pair, Reason: ResearchReasonFXGapExceeded,
+				Message: fmt.Sprintf("FX %s 历史缺口超过容忍间隔（最长 %d 天）", pair, maxRun),
+			})
+		}
+	}
+}
+
+func markResearchWindowLimiters(
+	assets []ResearchReadinessAssetView, ranges []researchBoundedRange, commonLo, commonHi int,
+) {
+	byAsset := make(map[string]researchBoundedRange, len(ranges))
+	for _, itemRange := range ranges {
+		byAsset[itemRange.assetKey] = itemRange
+	}
+	for i := range assets {
+		itemRange, ok := byAsset[assets[i].AssetKey]
+		if !ok {
+			continue
+		}
+		assets[i].LimitsCommonStart = itemRange.lo == commonLo
+		assets[i].LimitsCommonEnd = itemRange.hi == commonHi
+	}
 }
 
 func anyOtherEndsLater(prepared map[string]preparedSeries, selfKey string, selfEnd, slack int) bool {

@@ -383,8 +383,7 @@ export function AnalysisContent() {
   // Each job kind tracks its own busy state; running Monte Carlo no longer
   // disables the stress/sensitivity buttons (and vice versa).
   const [activeJobs, setActiveJobs] = useState<Partial<Record<JobKind, string>>>({});
-  const [runsOverride, setRunsOverride] = useState<number | null>(null);
-  const [runsHint, setRunsHint] = useState<string | null>(null);
+  const [runsDraft, setRunsDraft] = useState<string | null>(null);
   const [jobErrors, setJobErrors] = useState<Partial<Record<JobKind, string>>>({});
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [caliber, setCaliber] = useState<"nominal" | "real">("nominal");
@@ -399,7 +398,9 @@ export function AnalysisContent() {
   });
 
   const serverRuns = paramsQ.data?.parameters.simulation_runs;
-  const runs = runsOverride ?? (serverRuns && serverRuns >= 1000 ? serverRuns : 10000);
+  const runsText = runsDraft ?? String(serverRuns && serverRuns >= 1000 ? serverRuns : 10000);
+  const runs = /^\d+$/.test(runsText) ? Number(runsText) : 0;
+  const runsValid = Number.isInteger(runs) && runs >= 1000 && runs <= 100000;
 
   const simsQ = useQuery({
     queryKey: ["simulations", planId],
@@ -407,7 +408,11 @@ export function AnalysisContent() {
   });
 
   const readinessQ = useSimulationReadiness(planId);
-  const readinessBlocked = readinessQ.data ? !readinessQ.data.ready : false;
+  const readinessReady =
+    !readinessQ.isLoading &&
+    !readinessQ.isFetching &&
+    !readinessQ.isError &&
+    readinessQ.data?.ready === true;
 
   const simulations = simsQ.data?.simulations ?? [];
   const selectedRun =
@@ -734,26 +739,27 @@ export function AnalysisContent() {
             <MetricHelp termKey="simulation_runs" />
             <input
               id="analysis-simulation-runs"
-              type="number"
-              min={1000}
-              max={100000}
+              type="text"
+              inputMode="numeric"
               className="ml-2 rounded border border-line px-2 py-1"
-              value={runs}
-              onChange={(e) => setRunsOverride(Number(e.target.value))}
-              onBlur={() => {
-                const clamped = Math.min(100000, Math.max(1000, runs || 1000));
-                if (clamped !== runs) {
-                  setRunsOverride(clamped);
-                  setRunsHint(`模拟次数需在 1000 至 100000 之间，已调整为 ${clamped}`);
-                } else {
-                  setRunsHint(null);
-                }
-              }}
+              value={runsText}
+              aria-invalid={!runsValid}
+              onChange={(e) => setRunsDraft(e.target.value)}
             />
           </div>
           <Button
-            disabled={startMut.isPending || simBusy || readinessBlocked}
-            title={readinessBlocked ? "部分持仓暂时无法用于模拟，请先按提示处理" : undefined}
+            disabled={startMut.isPending || simBusy || !readinessReady || !runsValid}
+            title={
+              !runsValid
+                ? "模拟次数必须是 1000 至 100000 之间的整数"
+                : readinessQ.isLoading || readinessQ.isFetching
+                  ? "正在检查模拟就绪状态"
+                  : readinessQ.isError
+                    ? "模拟就绪状态检查失败，请重试"
+                    : !readinessReady
+                      ? "部分持仓暂时无法用于模拟，请先按提示处理"
+                      : undefined
+            }
             onClick={() => startMut.mutate()}
           >
             运行模拟
@@ -773,7 +779,11 @@ export function AnalysisContent() {
             </>
           )}
         </div>
-        {runsHint && <p className="mt-2 text-xs text-warning">{runsHint}</p>}
+        {!runsValid && (
+          <p className="mt-2 text-xs text-danger">
+            模拟次数必须是 1000 至 100000 之间的整数。
+          </p>
+        )}
         {simPanelError && (
           <Alert variant="danger" className="mt-3">
             <div className="flex flex-wrap items-center gap-3">

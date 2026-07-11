@@ -267,6 +267,9 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 		}},
 		{"floor zero", func(p map[string]any) { p["withdrawal_floor_ratio"] = 0.0 }},
 		{"fixed inflation above cap", func(p map[string]any) { p["fixed_inflation_rate"] = 0.25 }},
+		{"negative transaction cost", func(p map[string]any) { p["transaction_cost_rate"] = -0.01 }},
+		{"transaction cost equals one", func(p map[string]any) { p["transaction_cost_rate"] = 1.0 }},
+		{"unsupported rebalance frequency", func(p map[string]any) { p["rebalance_frequency"] = "weekly" }},
 	}
 
 	for _, tc := range cases {

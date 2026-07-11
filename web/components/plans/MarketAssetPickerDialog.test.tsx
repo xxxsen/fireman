@@ -120,6 +120,16 @@ describe("MarketAssetPickerDialog", () => {
     expect(screen.queryByRole("button", { name: /目录基金1/ })).not.toBeInTheDocument();
   });
 
+	it("hides foreign-currency cash but keeps CNY cash", async () => {
+		pool = [
+			makeMarketAsset(1, { asset_key: "SYS|cash||CNY", instrument_type: "cash", symbol: "CNY", name: "人民币现金", currency: "CNY" }),
+			makeMarketAsset(2, { asset_key: "SYS|cash||USD", instrument_type: "cash", symbol: "USD", name: "美元现金", currency: "USD" }),
+		];
+		renderDialog();
+		expect(await screen.findByRole("button", { name: /人民币现金/ })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /美元现金/ })).not.toBeInTheDocument();
+	});
+
   it("invokes onSelect with the picked asset", async () => {
     const { onSelect } = renderDialog();
     fireEvent.click(await screen.findByRole("button", { name: /目录基金1/ }));

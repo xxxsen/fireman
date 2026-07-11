@@ -706,3 +706,19 @@ export function getLatestOptimization(
     `/api/v1/research/collections/${encodeURIComponent(collectionId)}/optimizations/latest`,
   );
 }
+
+export interface ResearchOptimizationApplyRequest {
+  objective: "max_cagr" | "min_drawdown" | "max_calmar";
+  rank: number;
+  expected_collection_updated_at: number;
+}
+
+export function applyOptimization(
+  optimizationId: string,
+  request: ResearchOptimizationApplyRequest,
+): Promise<ResearchCollectionDetail> {
+  return apiPost(
+    `/api/v1/research/optimizations/${encodeURIComponent(optimizationId)}/apply`,
+    request,
+  );
+}

@@ -98,6 +98,11 @@ func (s *SimulationService) buildOneSnapshotAsset(
 	years := toSimSnapshotYears(snap.Years)
 	currency, instrumentName, instrumentCode := s.snapshotAssetIdentity(ctx, plan, line)
 	isCash := snap.SourceMode == "system_cash" || line.AssetClass == domain.AssetClassCash
+	if isCash && currency != plan.BaseCurrency {
+		return simulation.SnapshotAsset{}, newErr("foreign_cash_not_supported",
+			"FIRE 计划目前只支持与计划基准币种相同的现金持仓",
+			map[string]any{"holding_id": line.HoldingID, "cash_currency": currency, "base_currency": plan.BaseCurrency})
+	}
 	region := line.Region
 	if isCash {
 		region = domain.RegionDomestic
@@ -379,11 +384,12 @@ func buildInputSnapshotStruct(
 	resolved resolvedAssumption,
 ) (*simulation.InputSnapshot, error) {
 	in := &simulation.InputSnapshot{
-		EngineVersion:     simulation.LegacyEngineVersion,
-		PlanID:            plan.ID,
-		BaseCurrency:      plan.BaseCurrency,
-		RandomFactorModel: simulation.FactorModelIndependent,
-		ConfigHash:        configHash,
+		EngineVersion:          simulation.EngineVersion,
+		PlanID:                 plan.ID,
+		BaseCurrency:           plan.BaseCurrency,
+		RandomFactorModel:      simulation.FactorModelIndependent,
+		AggregateCashLiquidity: true,
+		ConfigHash:             configHash,
 		Parameters: simulation.SnapshotParameters{
 			CurrentAge: params.CurrentAge, RetirementAge: params.RetirementAge, EndAge: params.EndAge,
 			TotalAssetsMinor: params.TotalAssetsMinor, AnnualSavingsMinor: params.AnnualSavingsMinor,
@@ -441,9 +447,8 @@ func buildInputSnapshotStruct(
 	// legacy independent path with implicit 0% cash so migrated plans reproduce
 	// their old numbers exactly.
 	if resolved.Mode != assumptions.SourceHistoricalCAGR {
-		// A forward run is a 3.0.0 run even when it has no risk factor (an all-cash
-		// plan): cash must still grow at its frozen forward return.
-		in.EngineVersion = simulation.EngineVersion
+		// Forward modes enable deterministic cash return and the joint factor
+		// model; the engine version is already the current version for every new run.
 		in.DeterministicCashReturn = true
 		freezeTailRiskParams(in, resolved.Profile)
 		fm, refs, err := buildFrozenFactorModel(assets, plan.BaseCurrency, resolved.Profile)

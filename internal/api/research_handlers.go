@@ -44,6 +44,7 @@ func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 	research.POST("/collections/:collection_id/optimizations", s.createOptimization)
 	research.GET("/collections/:collection_id/optimizations/latest", s.getLatestOptimization)
 	research.GET("/optimizations/:optimization_id", s.getOptimization)
+	research.POST("/optimizations/:optimization_id/apply", s.applyOptimization)
 }
 
 // --- screener ---
@@ -364,22 +365,36 @@ func (s Services) createOptimization(c *gin.Context) {
 }
 
 func (s Services) getLatestOptimization(c *gin.Context) {
-	out, err := s.Research.GetLatestOptimization(
+	out, found, err := s.Research.GetLatestOptimization(
 		c.Request.Context(), c.Param("collection_id"))
 	if err != nil {
 		FailErr(c, err)
 		return
 	}
-	if out == nil {
+	if !found {
 		OK(c, nil)
 		return
 	}
-	OK(c, out)
+	OK(c, &out)
 }
 
 func (s Services) getOptimization(c *gin.Context) {
 	out, err := s.Research.GetOptimization(
 		c.Request.Context(), c.Param("optimization_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) applyOptimization(c *gin.Context) {
+	var req service.ResearchOptimizationApplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Research.ApplyOptimization(c.Request.Context(), c.Param("optimization_id"), req)
 	if err != nil {
 		FailErr(c, err)
 		return
