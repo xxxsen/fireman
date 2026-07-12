@@ -31,9 +31,9 @@ const (
 // create/run/read flow; a change here signals a model/engine shift, not just a
 // numeric drift to silently re-baseline.
 const (
-	wantV3TerminalP50 = 577080841
+	wantCurrentTerminalP50 = 577080841
 	// v1 and v2 share the 0.06 equity/domestic/CNY prior for this single-asset
-	// fixture, so their terminal P50 coincides; the v3 geometric prior (0.0608)
+	// fixture, so their terminal P50 coincides; the current geometric prior (0.0608)
 	// produces a strictly different headline, proving the formula is applied per
 	// pinned identity rather than bleeding across runs.
 	wantV1TerminalP50 = 527399522
@@ -69,12 +69,12 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 	runner := worker.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	simRepo := repository.NewSimulationRepo(db)
 
-	// --- v3 default run (follow_global) ---
+	// --- current default run (follow_global) ---
 	setPlanAssumption(t, db, planID, "follow_global", "", 0)
 	run1 := runRegression(ctx, t, services, runner, simRepo, planID)
 	run2 := runRegression(ctx, t, services, runner, simRepo, planID)
 
-	t.Logf("v3 P50=%d inputHash=%s", run1.terminalP50, run1.inputHash)
+	t.Logf("current P50=%d inputHash=%s", run1.terminalP50, run1.inputHash)
 
 	// Reproducibility: an identical fixture run twice is byte-stable.
 	if run1.inputHash != run2.inputHash {
@@ -84,16 +84,16 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 		t.Fatalf("terminal P50 not reproducible: %d vs %d", run1.terminalP50, run2.terminalP50)
 	}
 	// Locked headline value.
-	if run1.terminalP50 != wantV3TerminalP50 {
-		t.Fatalf("v3 terminal P50 = %d, want locked %d (update only with a reviewed model change)",
-			run1.terminalP50, wantV3TerminalP50)
+	if run1.terminalP50 != wantCurrentTerminalP50 {
+		t.Fatalf("current terminal P50 = %d, want locked %d (update only with a reviewed model change)",
+			run1.terminalP50, wantCurrentTerminalP50)
 	}
 	// Four provenance fields exactly match the registry for the current identity.
 	cur := assumptions.CurrentSystemIdentity()
 	assertProvenance(t, run1.snap, assumptions.SystemProfileID, assumptions.SystemProfileVersion,
 		cur.CanonicalHash, cur.EvidenceHash)
 	if run1.snap.AssumptionEvidenceHash != assumptions.CMAEvidenceContentHash {
-		t.Fatalf("v3 evidence hash %q != live artifact %q",
+		t.Fatalf("current evidence hash %q != live artifact %q",
 			run1.snap.AssumptionEvidenceHash, assumptions.CMAEvidenceContentHash)
 	}
 
@@ -108,18 +108,18 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 	v1Hash := registryHash(t, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion)
 	v2Hash := registryHash(t, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version)
 	// Each pin records its OWN frozen content hash (never v3's) and carries no
-	// evidence hash (neither v1 nor the TD064 v2 has a backing CMA artifact).
+	// evidence hash (neither v1 nor the initial v2 has a backing CMA artifact).
 	assertProvenance(t, runV1.snap, assumptions.SystemLegacyProfileID, 1, v1Hash, "")
 	assertProvenance(t, runV2.snap, assumptions.SystemProfileV2ID, 1, v2Hash, "")
 	if runV1.snap.AssumptionProfileContentHash == run1.snap.AssumptionProfileContentHash {
-		t.Fatal("v1 pin must use v1 content, not v3")
+		t.Fatal("v1 pin must use v1 content, not current content")
 	}
 	if runV2.snap.AssumptionProfileContentHash == run1.snap.AssumptionProfileContentHash {
-		t.Fatal("v2 pin must use v2 content, not v3")
+		t.Fatal("v2 pin must use v2 content, not current content")
 	}
-	// The v3 geometric formula must change the headline vs the legacy contents.
+	// The current geometric formula must change the headline vs legacy contents.
 	if run1.terminalP50 == runV1.terminalP50 {
-		t.Fatalf("v3 P50 %d must differ from the v1 historical pin %d", run1.terminalP50, runV1.terminalP50)
+		t.Fatalf("current P50 %d must differ from the v1 historical pin %d", run1.terminalP50, runV1.terminalP50)
 	}
 	// Locked control values.
 	if runV1.terminalP50 != wantV1TerminalP50 {

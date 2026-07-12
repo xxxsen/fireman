@@ -1,7 +1,7 @@
 # FIRE 模拟历史保留与附属分析绑定
 
 ## 1. analysis_results 增加 simulation_run_id
-- `migrations/0014_analysis_results_simulation_run.sql`（增量迁移，遵循 `docs/013` 顺序迁移策略）：`analysis_results` 增加 `simulation_run_id TEXT NOT NULL DEFAULT ''` 列，并建立 `(simulation_run_id, type, created_at DESC)` 索引。历史行 `simulation_run_id=''` 视为未归属/legacy，直至被裁剪。
+- 单一基线 `migrations/0001_init.sql` 中，`analysis_results` 包含 `simulation_run_id TEXT NOT NULL DEFAULT ''` 列和 `(simulation_run_id, type, created_at DESC)` 索引。`simulation_run_id=''` 只用于读取旧快照时的兼容语义；当前开发库由完整基线重建。
 
 ## 2. Monte Carlo 仅保留最近 7 次
 - `SimulationService.SimulationRetentionLimit = 7`。

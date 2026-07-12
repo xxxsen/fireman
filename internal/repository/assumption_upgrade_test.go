@@ -51,7 +51,7 @@ func insertSystemProfileRow(t *testing.T, db *sql.DB, id string, version int, na
 }
 
 // insertRealLegacyV1Row writes the real published v1 fixture into the DB exactly
-// as a pre-td063 release would have.
+// as an older release would have.
 func insertRealLegacyV1Row(t *testing.T, db *sql.DB) (string, string) {
 	t.Helper()
 	canonical, hash := loadFixture(t, "system_cma_v1_canonical.json")
@@ -64,7 +64,7 @@ func insertRealLegacyV1Row(t *testing.T, db *sql.DB) (string, string) {
 }
 
 // insertRealV2Row writes the real published v2 fixture into the DB exactly
-// as a post-td064 (pre-td066) release would have.
+// as an intermediate profile-upgrade release would have.
 func insertRealV2Row(t *testing.T, db *sql.DB) (string, string) {
 	t.Helper()
 	canonical, hash := loadFixture(t, "system_cma_v2_canonical.json")
@@ -408,26 +408,26 @@ func TestEnsureSystemDefaultRejectsTamperedSystemV3(t *testing.T) {
 	}
 }
 
-// TestEnsureSystemDefaultUpgradesTD065V2Variant covers the v2-variant upgrade: a
-// database first initialized on the TD 065 build holds the v2 VARIANT content; the
+// TestEnsureSystemDefaultUpgradesV2EvidenceVariant covers the v2-variant upgrade: a
+// database initialized by the affected build holds the v2 variant content; the
 // upgrade must accept it (recognized variant), keep it byte-for-byte, publish v3,
 // and migrate the v2-pointing default to v3.
-func TestEnsureSystemDefaultUpgradesTD065V2Variant(t *testing.T) {
+func TestEnsureSystemDefaultUpgradesV2EvidenceVariant(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	ctx := context.Background()
 	repo := repository.NewAssumptionProfileRepo(db)
 
-	canonical, hash := loadFixture(t, "system_cma_v2_td065_canonical.json")
+	canonical, hash := loadFixture(t, "system_cma_v2_evidence_variant_canonical.json")
 	insertSystemProfileRow(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version,
-		"系统默认（CMA v2 TD065 变体）", canonical, hash)
+		"系统默认（CMA v2 证据变体）", canonical, hash)
 	seedDefaultPreference(t, db, assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version, "baseline")
 
 	if err := repo.EnsureSystemDefault(ctx); err != nil {
-		t.Fatalf("upgrade TD065 v2 variant: %v", err)
+		t.Fatalf("upgrade v2 evidence variant: %v", err)
 	}
 	// v2 variant is byte-for-byte unchanged.
 	if c, h := readProfileBytes(t, db, assumptions.SystemProfileV2ID); c != canonical || h != hash {
-		t.Fatalf("TD065 v2 variant must be immutable: got hash %s want %s", h, hash)
+		t.Fatalf("v2 evidence variant must be immutable: got hash %s want %s", h, hash)
 	}
 	// v3 published, default migrated.
 	if _, err := repo.Get(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion); err != nil {
@@ -477,7 +477,7 @@ func countReservedUserProfiles(t *testing.T, db *sql.DB) int {
 }
 
 // TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB covers the startup
-// audit repair (cases #1 and #2): a TD 066-upgraded database already holds a correct system v3, yet a
+// audit repair (cases #1 and #2): an upgraded database already holds a correct system v3, yet a
 // user illegally created an active owner_scope=user system_cma_v2@1 and made it the
 // global default + a plan pin. The previous fast path returned as soon as v3 was
 // valid and skipped repair; the tightened path must still migrate the squatter to
@@ -488,7 +488,7 @@ func TestEnsureSystemDefaultRepairsUserV2OnPublishedV3DB(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewAssumptionProfileRepo(db)
 
-	// Correctly published system v3 (registry content), as TD 066 would have left it.
+	// Correctly published system v3 registry content.
 	v3CanonicalBefore, v3HashBefore := insertProfileRowRaw(
 		t, db, assumptions.SystemDefaultProfile(), assumptions.OwnerSystem)
 

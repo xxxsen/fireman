@@ -59,17 +59,17 @@ func HasReservedSystemID(id string) bool {
 // canonical JSON (see internal/repository/testdata).
 const (
 	systemProfileV1CanonicalHash = "6eecc14f7c8c8f812382e9cea88b7c056c18db8e6fd1a832961e63dd66f0971c"
-	// systemProfileV2CanonicalHash is the TD 064 published v2 canonical content.
+	// systemProfileV2CanonicalHash is the initially published v2 canonical content.
 	systemProfileV2CanonicalHash = "3a1545466b5f40856706e66952a3cad26ef546a929e181949727b96dbd143698"
-	// systemProfileV2TD065CanonicalHash is the v2 VARIANT briefly built from
-	// cma_evidence_v2.json during TD 065 (commit 9700d69) under the same v2 identity.
+	// systemProfileV2EvidenceVariantCanonicalHash is the v2 variant briefly built
+	// from cma_evidence_v2.json (commit 9700d69) under the same v2 identity.
 	// Databases first initialized on that build hold this content.
-	systemProfileV2TD065CanonicalHash = "732e64f958bf5d48b6089516cf546b356537b34b23e7fdd7798079a3ac7af570"
-	systemProfileV2TD065EvidenceHash  = "079d7844f2a365771895db97f4e3d5b1388ce6ea23ec6969be86725a9d5bce22"
-	systemProfileV3CanonicalHash      = "27fdbe1790afb5b0f75ec780472e4426abce1f46e966dc689f9dd0dd04cf2886"
-	systemProfileV3EvidenceHash       = "6cc582c4b0a1695199f09c9dc24b0f5d22df3af13cf08f6bc4fe6bef2c119eb2"
-	systemProfileV4CanonicalHash      = "c563c0a414564aaffe1cbb21c2f6c6f8d979ec593d627df6c255602791df735c"
-	systemProfileV4EvidenceHash       = "df3c0203eeccd79c4fcccd76cac779e1b129f094e9eef7e0de6c675b22e2a473"
+	systemProfileV2EvidenceVariantCanonicalHash = "732e64f958bf5d48b6089516cf546b356537b34b23e7fdd7798079a3ac7af570"
+	systemProfileV2EvidenceVariantEvidenceHash  = "079d7844f2a365771895db97f4e3d5b1388ce6ea23ec6969be86725a9d5bce22"
+	systemProfileV3CanonicalHash                = "27fdbe1790afb5b0f75ec780472e4426abce1f46e966dc689f9dd0dd04cf2886"
+	systemProfileV3EvidenceHash                 = "6cc582c4b0a1695199f09c9dc24b0f5d22df3af13cf08f6bc4fe6bef2c119eb2"
+	systemProfileV4CanonicalHash                = "c563c0a414564aaffe1cbb21c2f6c6f8d979ec593d627df6c255602791df735c"
+	systemProfileV4EvidenceHash                 = "df3c0203eeccd79c4fcccd76cac779e1b129f094e9eef7e0de6c675b22e2a473"
 )
 
 // SystemProfileIdentity is one immutable entry in the system-profile registry.
@@ -145,8 +145,8 @@ func CurrentSystemPredecessorRef() string {
 // HistoricalSystemProfileVariant is one recognized, immutable published system
 // profile CONTENT, keyed by (id, version, content_hash). Unlike the identity chain
 // (one canonical content per identity), the variant registry also records contents
-// that were briefly published under an already-used identity — notably the TD 065
-// v2 variant. It is read-only: it backs historical replay/pin
+// that were briefly published under an already-used identity, notably the
+// evidence-backed v2 variant. It is read-only: it backs historical replay/pin
 // provenance and lets EnsureSystemDefault recognize a legitimate historical system
 // row, but a variant can never become the global default.
 type HistoricalSystemProfileVariant struct {
@@ -175,8 +175,8 @@ var historicalSystemProfileVariants = []HistoricalSystemProfileVariant{
 	},
 	{
 		ID: SystemProfileV2ID, Version: SystemProfileV2Version,
-		CanonicalHash: systemProfileV2TD065CanonicalHash,
-		EvidenceHash:  systemProfileV2TD065EvidenceHash,
+		CanonicalHash: systemProfileV2EvidenceVariantCanonicalHash,
+		EvidenceHash:  systemProfileV2EvidenceVariantEvidenceHash,
 		Note:          "v2 variant built from cma_evidence_v2.json (commit 9700d69)",
 	},
 	{

@@ -59,10 +59,10 @@
 
 ### 回归测试
 
-- `sidecars/market-provider/tests/test_td035_regression.py`
-  - 纯 LOF 超时与恢复
-- `sidecars/market-provider/tests/test_td036_regression.py`
-  - dual-code timeout 与恢复
+- `sidecars/market-provider/tests/test_fetch_identity.py`
+  - ETF/LOF 身份隔离与权威数据源选择
+- `sidecars/market-provider/tests/test_timeout_elapsed.py`
+  - 上游调用硬超时与耗时边界
 
 ---
 

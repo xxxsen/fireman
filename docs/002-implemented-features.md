@@ -1,7 +1,6 @@
 # Fireman 已实现功能总览
 
-- 梳理日期：2026-07-11
-- 状态：**功能主体已实现**；人工浏览器验收记录仍有待补签字项
+- 状态：**功能主体已实现**
 
 本文按实施阶段与后续功能收敛归纳**当前代码已具备的能力**，便于 onboarding 与发布前核对。
 
@@ -12,7 +11,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | Go 模块化单体 | `cmd/fireman` + `internal/*`，Gin HTTP API |
-| SQLite | `modernc.org/sqlite`，版本化 migration（0001～0028） |
+| SQLite | `modernc.org/sqlite`，单一 DDL 基线 migration `0001_init.sql` |
 | 三镜像 Docker Compose | `fireman` / `fireman-web` / `fireman-market-provider` |
 | Web API 代理 | 构建时 `API_PROXY_TARGET=http://backend:8080` |
 | Makefile & CI | `make ci`：Go test/lint、Vitest、Next build、sidecar pytest、集成测试 |
@@ -107,10 +106,10 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | 失败状态 | 路径记录资金不足、资产耗尽、期末目标未达等可由账本证明的状态，不推断伪因果标签 |
 | Job + Worker | 异步 `simulation` job，进度与 SSE/轮询 |
 | 参数过期 | 计划参数变更后旧模拟 run 标记 stale |
-| 版本化模拟假设 | CNY 基准的 CMA v3 profile、历史 profile 回放、canonical/evidence hash provenance、固定 seed P50 回归 |
+| 版本化模拟假设 | CNY 基准的 CMA v4 profile、历史 profile 回放、canonical/evidence hash provenance、固定 seed P50 回归 |
 | 前瞻收益校准 | 历史收益向长期先验收缩，支持资产级 override、FX 因子和真实购买力序列 |
 
-详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md)、[019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md) 与 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md)。
+详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md)、[019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md)、[026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md) 与 [032-simulation-assumption-lifecycle-and-effective-inputs.md](./032-simulation-assumption-lifecycle-and-effective-inputs.md)。
 
 ---
 
@@ -185,10 +184,9 @@ FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](
 
 ## 10. 已知限制
 
-1. **人工浏览器验收**：主链路验收记录仍有待签字项，需产品负责人在发布前补齐。
-2. **无 E2E**：依赖 Go 集成测试 + Vitest + 人工浏览器。
-3. **单用户本地优先**：无账号、权限、多租户。
-4. **数据源**：除系统 FX/现金外，市场资产目录与历史数据均由任务化 worker sidecar（AKShare/TickFlow）同步。
+1. **无 E2E**：依赖 Go 集成测试 + Vitest + 人工浏览器。
+2. **单用户本地优先**：无账号、权限、多租户。
+3. **数据源**：除系统 FX/现金外，市场资产目录与历史数据均由任务化 worker sidecar（AKShare/TickFlow）同步。
 
 ---
 

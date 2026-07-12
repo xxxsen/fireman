@@ -29,7 +29,7 @@ import type { OptimizationSubmitConfig } from "@/components/research/Optimizatio
 
 /**
  * The run button's disabled explanation, derived from readiness in priority
- * order (td/099 §4.4): weight -> missing history -> active sync -> FX ->
+ * order: weight -> missing history -> active sync -> FX ->
  * window -> ready.
  */
 export function runDisabledReason(

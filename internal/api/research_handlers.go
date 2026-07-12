@@ -11,7 +11,7 @@ import (
 )
 
 // registerResearchRoutes mounts the portfolio research module under
-// /api/v1/research (td/099 §5.3).
+// /api/v1/research.
 func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 	research := rg.Group("/research")
 

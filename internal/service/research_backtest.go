@@ -9,7 +9,7 @@ import (
 )
 
 // research_backtest.go implements the pure computation core of research
-// portfolio backtests (td/099 §3.6/§6): calendar-day valuation series with
+// portfolio backtests: calendar-day valuation series with
 // bounded forward fill, FX conversion into the collection base currency,
 // common usable window, rebalance policies and all summary metrics.
 //
@@ -20,7 +20,7 @@ import (
 // silently reuse old runs.
 const ResearchEngineVersion = "research_backtest_v4"
 
-// Rebalance policies (td/099 §3.6).
+// Rebalance policies.
 const (
 	ResearchRebalanceMonthly   = "monthly"
 	ResearchRebalanceQuarterly = "quarterly"
@@ -36,7 +36,7 @@ const (
 	ResearchStartPolicyCustom = "custom_range"
 )
 
-// Data-quality defaults (td/099 §3.6/§7).
+// Data-quality defaults.
 //
 // Forward-fill tolerance is expressed in natural days of consecutive filled
 // values between two real observations. Exceeding the tolerance is recorded
@@ -209,7 +209,7 @@ type BacktestBenchmarkSummary struct {
 	MaxDrawdown      float64 `json:"max_drawdown"`
 }
 
-// BacktestSummary is the run overview block (td/099 §3.7). Metrics that can
+// BacktestSummary is the run overview block. Metrics that can
 // be undefined are pointers and are never written as 0.
 type BacktestSummary struct {
 	CumulativeReturn          float64                     `json:"cumulative_return"`
@@ -383,7 +383,7 @@ func (s preparedSeries) fillStats(start, end int) (int, int) {
 }
 
 // ResearchFillGapToleranceDays returns the forward-fill tolerance for one
-// instrument type (td/099 §3.6).
+// instrument type.
 func ResearchFillGapToleranceDays(instrumentType string) int {
 	if instrumentType == "cn_mutual_fund" {
 		return researchFillGapMutualFundDays
@@ -392,7 +392,7 @@ func ResearchFillGapToleranceDays(instrumentType string) int {
 }
 
 // ResearchStaleToleranceDays returns the data-staleness threshold for one
-// instrument type (td/099 §3.5).
+// instrument type.
 func ResearchStaleToleranceDays(instrumentType string) int {
 	if instrumentType == "cn_mutual_fund" {
 		return 10
@@ -427,7 +427,7 @@ func researchFXRouteFor(assetCurrency, baseCurrency string) (researchFXRoute, bo
 }
 
 // ResearchFXPairsFor lists the CNY-leg FX pairs needed to convert
-// assetCurrency into baseCurrency (td/099 §3.6 基准币种处理).
+// assetCurrency into baseCurrency.
 func ResearchFXPairsFor(assetCurrency, baseCurrency string) []string {
 	route, need := researchFXRouteFor(assetCurrency, baseCurrency)
 	if !need {
@@ -1332,7 +1332,7 @@ func buildYears(points []BacktestPoint, effective []bool, lo int) []BacktestYear
 		years = append(years, yearResult)
 		prevEndNAV = yearResult.EndNAV
 	}
-	// Display order: newest first (td/099 §6.2).
+	// Display order: newest first.
 	sort.Slice(years, func(i, j int) bool { return years[i].Year > years[j].Year })
 	return years
 }

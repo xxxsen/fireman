@@ -29,11 +29,11 @@ func provenancePlanParams() (repository.Plan, repository.PlanParameters) {
 }
 
 // TestSnapshotPinnedV2VariantProvenance verifies that an
-// explicit pin of the TD 065 v2 VARIANT records that variant's own historical CMA
-// evidence hash and canonical hash — not the current v3 evidence — so historical
+// explicit pin of the evidence-backed v2 variant records its own historical CMA
+// evidence hash and canonical hash, not the current evidence, so historical
 // replay provenance is exact.
 func TestSnapshotPinnedV2VariantProvenance(t *testing.T) {
-	variant := loadProfileFixture(t, "system_cma_v2_td065_canonical.json")
+	variant := loadProfileFixture(t, "system_cma_v2_evidence_variant_canonical.json")
 	if variant.OwnerScope != assumptions.OwnerSystem {
 		t.Fatalf("v2 variant fixture must be system-owned, got %q", variant.OwnerScope)
 	}
@@ -48,7 +48,7 @@ func TestSnapshotPinnedV2VariantProvenance(t *testing.T) {
 	contentHash, _ := variant.ContentHash()
 	v, ok := assumptions.LookupSystemContent(variant.ID, variant.Version, contentHash)
 	if !ok {
-		t.Fatalf("TD065 v2 variant content %s must be recognized", contentHash)
+		t.Fatalf("v2 evidence variant content %s must be recognized", contentHash)
 	}
 	if in.AssumptionProfileContentHash != contentHash {
 		t.Fatalf("content hash = %q, want %q", in.AssumptionProfileContentHash, contentHash)
@@ -56,16 +56,16 @@ func TestSnapshotPinnedV2VariantProvenance(t *testing.T) {
 	if in.AssumptionEvidenceHash != v.EvidenceHash || in.AssumptionEvidenceHash == "" {
 		t.Fatalf("evidence hash = %q, want the variant's own %q", in.AssumptionEvidenceHash, v.EvidenceHash)
 	}
-	// It must NOT inherit the current v3 evidence.
+	// It must NOT inherit the current system evidence.
 	if in.AssumptionEvidenceHash == assumptions.CMAEvidenceContentHash {
-		t.Fatal("a v2 variant must not inherit the current v3 evidence hash")
+		t.Fatal("a v2 variant must not inherit the current system evidence hash")
 	}
 }
 
-// TestSnapshotTD064V2HasNoEvidenceHash verifies that the TD 064 v2 content is
+// TestSnapshotInitialV2HasNoEvidenceHash verifies that the initial v2 content is
 // recognized but has no backing evidence artifact, so its run snapshot records an
 // empty evidence hash (and its own canonical hash).
-func TestSnapshotTD064V2HasNoEvidenceHash(t *testing.T) {
+func TestSnapshotInitialV2HasNoEvidenceHash(t *testing.T) {
 	v2 := loadProfileFixture(t, "system_cma_v2_canonical.json")
 	resolved := resolvedAssumption{
 		Profile: v2, Mode: assumptions.SourceHistoricalCAGR, Scenario: assumptions.ScenarioBaseline,
@@ -76,7 +76,7 @@ func TestSnapshotTD064V2HasNoEvidenceHash(t *testing.T) {
 		t.Fatalf("build snapshot: %v", err)
 	}
 	if in.AssumptionEvidenceHash != "" {
-		t.Fatalf("TD064 v2 must have no evidence hash, got %q", in.AssumptionEvidenceHash)
+		t.Fatalf("initial v2 content must have no evidence hash, got %q", in.AssumptionEvidenceHash)
 	}
 	contentHash, _ := v2.ContentHash()
 	if in.AssumptionProfileContentHash != contentHash {

@@ -124,7 +124,7 @@ def test_regression_000001_open_fund_nav_frame_names_via_cache() -> None:
 def test_regression_007194_short_bond_fund_fetches_via_open_fund() -> None:
     """007194 长城短债A: history must fetch via the open-fund NAV sources.
 
-    Before td/086, the provider classification gate rejected this frame as
+    The former provider classification gate rejected this frame as
     "unsupported fund classification" because '短债' matched no keyword.
     """
     reset_name_caches()

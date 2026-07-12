@@ -1,4 +1,4 @@
-"""Regression tests for historical fetch fixes (td/034).
+"""Regression tests for historical fetch and identity fixes.
 
 The resolve-path regressions were removed together with the resolve endpoint
 (task-worker refactor); identity/type mismatch handling now happens at

@@ -1,7 +1,5 @@
 # 研究组合自动调优回测
 
-- 方案来源：`td/103-research-portfolio-auto-optimization.md`
-- 实施 review：`td/104-td103-implementation-review.md`、`td/105-td104-implementation-review.md`、`td/106-td105-implementation-review.md`、`td/108-td107-implementation-review.md`
 - 定位：在组合研究集合中，对启用基金自动枚举候选权重组合，运行多轮历史回测，并给出最高收益、最低回撤、收益回撤平衡三组结果。用户可将任一调优结果应用回当前集合，使组合权重、启用状态、锁定状态和回测区间与该次调优结果保持一致。
 
 ## 1. 使用规则
@@ -140,14 +138,14 @@ GET /api/v1/research/collections/{id}/optimization-readiness?weight_step=0.05
 - 存在 FX 缺失、同步中或缺口超限。
 - 共同窗口为空、过短或有效估值日不足。
 
-候选数量默认上限为 20000。调用创建接口时可通过 `max_candidate_count` 进一步收紧本次上限；超过上限会拒绝创建任务。
+候选数量推荐控制在 20000 以内。超过推荐值时 readiness 返回性能 warning，配置弹窗展示实际数量并说明耗时和内存占用会急剧增加，但不阻止创建任务；真正无法生成候选时才阻断。
 
 ## 7. 数据模型与 API
 
-新增 migration：
+相关表位于单一 schema 基线：
 
 ```text
-migrations/0026_research_optimization.sql
+migrations/0001_init.sql
 ```
 
 新增表：
@@ -217,10 +215,10 @@ research_optimization_backtest
 
 优化器版本为 `research_optimizer_v2`。快照逐资产冻结 `item_id`、`asset_key`、权重和锁定标记；候选回测携带与普通回测相同的基准。Top K 使用目标分数降序、CAGR 降序、绝对回撤升序、12 位 canonical 权重向量升序的确定排序，并按 canonical 权重去重。
 
-管理后台 job 过滤支持：
+管理后台统一任务过滤支持：
 
 ```http
-GET /api/v1/admin/jobs?type=research_optimization_backtest
+GET /api/v1/admin/worker-tasks?type=research_optimization_backtest
 ```
 
 ## 9. 已移除的筛选器能力

@@ -6,26 +6,13 @@
 - 当前版本：`research_backtest_v4`、`research_optimizer_v6`（在扣除研究交易成本后的 NAV/收益序列上计算与排序）
 - CVaR 算法版本：`empirical_cvar_v1`
 
-## 0. 实施与验证状态
+## 0. 实现边界
 
 本能力已按本文契约落地到 migration、repository、service、API、worker 和 Web。当前实现以
 `ComputeEmpiricalCVaR` 作为普通回测与自动调优的唯一 CVaR 计算入口，集合、快照、输入哈希、
 优化结果和应用事务均冻结同一尾部风险口径。
 
-完成门禁：
-
-- `make ci`：Go build/test/lint、Web lint/test/build、sidecar test、integration test 全部通过；
-- Web：80 个测试文件、587 个用例通过；
-- sidecar：187 个用例通过，12 个按既有配置 deselect；
-- 性能 fixture：10 个资产、2,000 个候选、2,520 个有效收益日；开启 CVaR 后完整候选回测耗时增加
-  约 `1.44%`，分配内存增加约 `0.31%`，采样峰值堆内存未增加，低于 `25% / 20%` 门槛；
-- 浏览器：`1440x900` 与 `390x844` 验证集合参数、优化结果、普通回测，无重叠或异常裁切；
-- 端到端测试：所有优化候选使用相同有效收益日和尾部场景数；应用后普通回测继续按正权重资产生成自身样本。
-
-`research_optimizer_v4` 针对集合 `rc_0111ff60-fd0c-41e7-8f57-d8b53870c6c7` 的同数据副本完成
-861 个候选实测：成功 861、跳过 0，四个榜单 Top 20 均为 `1006` 个有效收益日和 `987` 个
-20 日场景。最低尾部损失组合的 CVaR 为 `5.1769%`，低于最低回撤组合的 `5.3537%`；前者
-年化收益和最大回撤更差，符合两个目标函数衡量不同风险维度的定义。
+所有优化候选必须使用相同有效收益日和尾部场景数；应用后普通回测继续按正权重资产生成自身样本。最低 CVaR、最低最大回撤和最高收益是不同目标函数，因此最低 CVaR 组合的年化收益或最大回撤可能更差，这不构成计算错误。
 
 ## 1. 结论与实施决策
 
@@ -331,29 +318,26 @@ loss  = 1 - 0.99^20
 
 ## 5. 数据模型与迁移
 
-### 5.1 Migration 编号
+### 5.1 Schema 基线
 
-CVaR 按当前实施优先级占用：
+CVaR 字段已纳入当前单一 DDL 基线：
 
 ```text
-migrations/0029_research_cvar.sql
+migrations/0001_init.sql
 ```
 
-迁移编号只描述已实施能力；不得为暂缓的 Black-Litterman 预留或绑定编号。当前 `0030` 已用于模拟快照复权口径。
+项目首次发布前不得为本功能或暂缓能力新增增量 migration，也不得在 migration 中执行数据回填。
 
 ### 5.2 research_collections
 
-新增：
+表定义包含：
 
 ```sql
-ALTER TABLE research_collections
-  ADD COLUMN tail_risk_confidence REAL NOT NULL DEFAULT 0.95;
-
-ALTER TABLE research_collections
-  ADD COLUMN tail_risk_horizon_days INTEGER NOT NULL DEFAULT 20;
+tail_risk_confidence REAL NOT NULL DEFAULT 0.95,
+tail_risk_horizon_days INTEGER NOT NULL DEFAULT 20
 ```
 
-SQLite 列只保存值，枚举合法性由 service 统一校验。旧集合迁移后固定获得 `0.95 + 20`，旧 run 的 `input_snapshot_json` 和 `summary_json` 不修改。
+SQLite 列只保存值，枚举合法性由 service 统一校验。新集合默认使用 `0.95 + 20`；历史 run 的 `input_snapshot_json` 和 `summary_json` 不修改。
 
 ### 5.3 无需新增结果列
 
@@ -715,8 +699,8 @@ POST /api/v1/research/collections/:id/optimizations
 
 | 文件 | 动作 | 职责 |
 | --- | --- | --- |
-| `migrations/0029_research_cvar.sql` | 新增 | 集合 CVaR 口径 |
-| `migrations/embed.go` | 校验 | migration 通过 embed 自动包含，无手工列表则不改 |
+| `migrations/0001_init.sql` | 修改 | 集合 CVaR 字段纳入完整 schema |
+| `migrations/embed.go` | 校验 | 单一基线通过 embed 加载 |
 | `internal/service/research_cvar.go` | 新增 | 纯 CVaR 数学与样本门槛 |
 | `internal/service/research_backtest.go` | 修改 | summary 接入 tail risk，engine v3 |
 | `internal/service/research_readiness.go` | 修改 | 样本准入和 details |
@@ -959,7 +943,7 @@ O(1)   取 VaR/CVaR
 
 ### 9.7 API 集成测试
 
-- migration 后旧 collection 获得 0.95/20；
+- 空库创建的 collection 默认获得 0.95/20；
 - collection create/get/patch/import/export 完整 round-trip；
 - readiness/create/get/apply 全链路；
 - result JSON 包含 `best_by_cvar`、eligible count 和 frozen summary；
@@ -975,14 +959,14 @@ O(1)   取 VaR/CVaR
 
 门禁：纯函数测试全部通过，金标容差 `1e-12`，无数据库和时间依赖。
 
-### 步骤 2：集合配置和 migration
+### 步骤 2：集合配置和 schema
 
-- migration 0029；
+- 更新单一 DDL 基线；
 - repository/service DTO；
 - CRUD、导入导出、默认值与校验；
 - snapshot/hash。
 
-门禁：fresh DB、0028 upgrade、round-trip、hash 测试全部通过。
+门禁：fresh DB、migration DML 扫描、round-trip、hash 测试全部通过。
 
 ### 步骤 3：普通回测 v3
 
@@ -1052,22 +1036,19 @@ go test ./internal/service -run '^$' -bench 'BenchmarkResearchOptimizationCVaR' 
 13. 在计划中确认资产映射后运行 FIRE 模拟，对比原组合与 CVaR 组合的成功率和真实财富分位数；
 14. 打开历史 `research_backtest_v2` / `research_optimizer_v2` 结果，确认可查看且明确无 CVaR。
 
-验收记录至少包含：集合 id、run/optimization id、input/source hash、配置、四组第一名、应用前后集合 JSON、普通回测 CVaR 对比和 FIRE 对比结果。
+## 12. 关键不变量
 
-## 12. 最终验收清单
-
-- [x] CVaR 只使用回测 `effReturns`，没有第二套收益口径
-- [x] VaR/CVaR loss 符号、滚动复合和 fractional tail 公式正确
-- [x] 90/95/99% 与 1/20 日枚举和样本门槛无静默 fallback
-- [x] 普通回测与优化复用同一纯函数
-- [x] `min_cvar` 在现有离散候选域中稳定排序
-- [x] 所有优化候选冻结相同有效收益日与尾部场景数
-- [x] minimum CAGR 只影响 CVaR 榜单，null 语义正确
-- [x] collection、snapshot、config/input hash 完整冻结
-- [x] apply 原子同步权重、窗口和 CVaR spec
-- [x] 旧 v2 run/result 可读、可应用且不被改写
-- [x] 前端无小数输入问题、无整区抖动、无移动端重叠
-- [x] 数学、service、API、worker、web、性能和运行态验收全部完成
+- CVaR 只使用回测 `effReturns`，没有第二套收益口径；
+- VaR/CVaR loss 符号、滚动复合和 fractional tail 公式一致；
+- 90/95/99% 与 1/20 日枚举和样本门槛无静默 fallback；
+- 普通回测与优化复用同一纯函数；
+- `min_cvar` 在现有离散候选域中稳定排序；
+- 所有优化候选冻结相同有效收益日与尾部场景数；
+- minimum CAGR 只影响 CVaR 榜单，null 语义明确；
+- collection、snapshot、config/input hash 完整冻结；
+- apply 原子同步权重、窗口和 CVaR spec；
+- 旧 v2 run/result 可读、可应用且不被改写；
+- 前端的小数输入、局部刷新和响应式布局遵循公共表单与布局约定。
 
 ## 13. 能力边界
 

@@ -414,7 +414,7 @@ func TestResearchBacktestEndToEnd(t *testing.T) {
 	}
 }
 
-// TestResearchSourceHashIncludesForwardFillAnchor covers td/100 Finding 1:
+// TestResearchSourceHashIncludesForwardFillAnchor covers the forward-fill anchor:
 // when a series has no observation on the window start day, the valuation
 // forward-fills from the last pre-window point, so that anchor must be part
 // of source_hash / input_hash. Points before the anchor stay outside the
@@ -517,7 +517,7 @@ func TestResearchTailRiskChangesInputHashButNotSourceHash(t *testing.T) {
 }
 
 // TestResearchBacktestAnchorChangeCreatesFreshRun is the service-level
-// acceptance for td/100 Finding 1: after a successful run, changing only the
+// After a successful run, changing only the
 // pre-window forward-fill anchor must not reuse the old run.
 func TestResearchBacktestAnchorChangeCreatesFreshRun(t *testing.T) {
 	svc, db := newResearchTestService(t)

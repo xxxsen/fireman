@@ -684,7 +684,7 @@ func (s *TaskFinalizer) finishHistoryCommit(
 		return wrapRepo("set history detail projection", err)
 	}
 
-	// Research screener metrics projection (td/099): keep it in the same
+	// Keep the research screener metrics projection in the same
 	// transaction so the screener never sees points without metrics.
 	metrics := ComputeResearchAssetMetrics(
 		payload.AssetKey, payload.AdjustPolicy, payload.PointType, series, now.UnixMilli())

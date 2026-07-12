@@ -336,7 +336,7 @@ def test_fetch_mutual_fund_hybrid_open_success() -> None:
 def test_fetch_mutual_fund_open_fail_falls_through_fixed_candidates() -> None:
     """Candidate order is fixed and name-independent: when both open-fund
     indicators fail, the money source is still attempted — the fund's name
-    never routes or blocks the source list (td/086)."""
+    never routes or blocks the source list."""
     money_df = pd.DataFrame(
         {
             "净值日期": ["2024-01-02"],
@@ -424,7 +424,7 @@ def test_fetch_timeout_returns_provider_error_envelope() -> None:
 
 def test_mutual_fund_fof_no_longer_gated_by_classification() -> None:
     """FOF/commodity/unknown fund types fetch fine: the provider classification
-    gate ("unsupported fund classification") is removed by td/086."""
+    gate ("unsupported fund classification") has been removed."""
     df = pd.DataFrame(
         {
             "净值日期": ["2024-01-02"],

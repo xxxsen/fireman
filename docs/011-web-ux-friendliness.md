@@ -6,8 +6,6 @@
 
 为保证页面在「加载 / 错误 / 空 / 正常」四种状态下都有一致、可预期、可恢复的体验，所有页面统一复用 `web/components/ui/*` 与 `web/app/globals.css` 中的设计 token，不引入新的第三方 UI 库。
 
-退出标准：连续一轮 review 无任何 P0/P1/P2（依据 `agents.md` §8 与 `.cursor/rules/review.mdc`）。
-
 ## 2. 四态约定
 
 每个数据驱动页面对每个关键查询都必须显式区分四态，禁止 `isLoading || !data` 这种把错误吞进永久加载的写法：

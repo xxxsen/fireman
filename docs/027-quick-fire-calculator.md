@@ -78,7 +78,7 @@ required_start = max(0, required_end / (1 + monthly_return) + spending_m - incom
 - 零收益耗尽、最后一个月归零、稳定收入、积累期、反推所需资本与最早 FIRE 月；
 - 连续重复计算的 JSON 确定性以及每行年度账本恒等式；
 - 严格 API JSON、金额小数、所有 rate/age 边界、32 KiB 上限和投影溢出；
-- retirement income migration 默认值、参数 round-trip、config hash、FIRE 前后收入时点、旧 snapshot 回放和确定性 simulation 对拍；
+- retirement income 基线默认值、参数 round-trip、config hash、FIRE 前后收入时点、旧 snapshot 回放和确定性 simulation 对拍；
 - Web 默认计算、防抖、取消旧请求、非法输入隐藏旧结论、错误重试、草稿损坏恢复、移动年度列表和一次性 transfer。
 
 工程门禁：

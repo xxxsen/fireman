@@ -28,7 +28,7 @@ var (
 )
 
 // research_optimization.go implements the pure candidate generation and
-// objective ranking core for portfolio auto-optimization (td/103).
+// objective ranking core for portfolio auto-optimization.
 // No I/O: the service layer feeds inputs and the job runner orchestrates.
 
 const (
@@ -152,7 +152,7 @@ type OptimizationWarning struct {
 	Message string `json:"message"`
 }
 
-// ValidateOptimizationInput checks preconditions (td/103 §准入规则).
+// ValidateOptimizationInput checks optimization preconditions.
 func ValidateOptimizationInput(assets []OptimizationAsset) error {
 	if len(assets) == 0 {
 		return errOptimizationNoEnabledAssets
@@ -194,7 +194,7 @@ func CountCandidates(assets []OptimizationAsset, weightStep float64) int {
 	return count
 }
 
-// GenerateCandidates enumerates all candidate weight vectors (td/103 §权重搜索规则).
+// GenerateCandidates enumerates all candidate weight vectors.
 func GenerateCandidates(
 	assets []OptimizationAsset, weightStep float64,
 ) []OptimizationWeightVector {

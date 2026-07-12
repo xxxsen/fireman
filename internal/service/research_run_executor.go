@@ -14,7 +14,7 @@ import (
 
 // research_run_executor.go executes one research_backtest task: it reloads
 // the frozen input, verifies the source hash, runs the pure engine and
-// persists all outputs in a single transaction (td/099 §5.5).
+// persists all outputs in a single transaction.
 
 // ErrResearchSourceChanged aborts a run whose underlying market data changed
 // between snapshot freeze and execution.

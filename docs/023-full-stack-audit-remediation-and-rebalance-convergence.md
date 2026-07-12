@@ -65,7 +65,7 @@
 
 - 调仓工作台仅剩两个入口：**持仓校正**（asset-refresh，事实修正）与**调仓执行**（executions，向目标结构收敛）；
 - `POST /plans/:plan_id/asset-refresh` 迁至主 handlers，行为不变；
-- 迁移 `0024_drop_rebalance_drafts.sql` 删除 `rebalance_drafts` / `rebalance_draft_lines` / `rebalance_draft_events` 三表（含历史数据），带数据删表有迁移测试覆盖；
+- `rebalance_drafts` / `rebalance_draft_lines` / `rebalance_draft_events` 三表已从 `migrations/0001_init.sql` 完整基线移除；
 - 共享助手（`amountToleranceMinor` / `formatWan` / `findCashSweepHolding` / `maxStructuralGapWeight`）迁至执行链路文件。
 
 用户路径见 [007-asset-refresh-rebalance-plan.md](./007-asset-refresh-rebalance-plan.md)，执行模型见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)，历史背景见 [005-structural-scale-rebalance.md](./005-structural-scale-rebalance.md)。

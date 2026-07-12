@@ -261,12 +261,12 @@ func TestSystemProfileRegistryGuardsV3(t *testing.T) {
 
 // TestHistoricalSystemProfileVariants pins the read-only variant registry that
 // records every recognized published system CONTENT keyed by (id, version,
-// content_hash), including the TD 065 v2 variant. LookupSystemContent
+// content_hash), including the evidence-backed v2 variant. LookupSystemContent
 // must accept exactly these contents and reject unknown ones, and only the current
 // identity may be a global default.
 func TestHistoricalSystemProfileVariants(t *testing.T) {
 	variants := HistoricalSystemProfileVariants()
-	// v1, v2 (TD064), v2 (TD065 variant), v3, v4.
+	// v1, initial v2, evidence-backed v2 variant, v3, v4.
 	if len(variants) != 5 {
 		t.Fatalf("expected 5 recognized system contents, got %d", len(variants))
 	}
@@ -286,21 +286,21 @@ func TestHistoricalSystemProfileVariants(t *testing.T) {
 		t.Errorf("v4 variant evidence hash %q != artifact %q", v4.EvidenceHash, CMAEvidenceContentHash)
 	}
 
-	// The TD 065 v2 variant is recognized and pins its own evidence hash, distinct
-	// from the TD 064 v2 (which has no evidence artifact).
-	td065, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, systemProfileV2TD065CanonicalHash)
+	// The evidence-backed v2 variant is recognized and pins its own evidence hash,
+	// distinct from the initial v2 content (which has no evidence artifact).
+	variant, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, systemProfileV2EvidenceVariantCanonicalHash)
 	if !ok {
-		t.Fatal("TD 065 v2 variant content must be recognized")
+		t.Fatal("evidence-backed v2 variant content must be recognized")
 	}
-	if td065.EvidenceHash != systemProfileV2TD065EvidenceHash || td065.EvidenceHash == "" {
-		t.Errorf("TD 065 v2 evidence hash %q != pinned %q", td065.EvidenceHash, systemProfileV2TD065EvidenceHash)
+	if variant.EvidenceHash != systemProfileV2EvidenceVariantEvidenceHash || variant.EvidenceHash == "" {
+		t.Errorf("v2 variant evidence hash %q != pinned %q", variant.EvidenceHash, systemProfileV2EvidenceVariantEvidenceHash)
 	}
-	td064, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, systemProfileV2CanonicalHash)
+	initial, ok := LookupSystemContent(SystemProfileV2ID, SystemProfileV2Version, systemProfileV2CanonicalHash)
 	if !ok {
-		t.Fatal("TD 064 v2 content must be recognized")
+		t.Fatal("initial v2 content must be recognized")
 	}
-	if td064.EvidenceHash != "" {
-		t.Errorf("TD 064 v2 must have no evidence artifact, got %q", td064.EvidenceHash)
+	if initial.EvidenceHash != "" {
+		t.Errorf("initial v2 content must have no evidence artifact, got %q", initial.EvidenceHash)
 	}
 
 	// A fabricated system content is never recognized (cannot forge provenance).

@@ -716,7 +716,7 @@ export function applyPlanReplacement(
   );
 }
 
-// --- optimization (td/103) ---
+// --- optimization ---
 
 export interface ResearchOptimizationConfig {
   weight_step: number;

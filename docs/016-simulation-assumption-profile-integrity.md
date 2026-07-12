@@ -10,21 +10,21 @@ Fireman 的前瞻收益、波动率、相关性、厚尾与情景参数由全局
 
 | 状态 | Profile 内容 | 用途 |
 | --- | --- | --- |
-| 当前默认 | `system_cma_v3@1` | 新计划的默认前瞻假设；可设为全局默认 |
+| 当前默认 | `system_cma_v4@1` | 新计划的默认前瞻假设；可设为全局默认 |
 | 历史回放 | `system_cma_v1@1` | 只用于历史 pin/replay，不可重新设为全局默认 |
-| 历史回放 | `system_cma_v2@1`（TD 064 内容） | 只用于历史 pin/replay，不可重新设为全局默认 |
-| 历史回放 | `system_cma_v2@1`（TD 065 内容变体） | 按 content hash 识别，保留其独立 evidence hash |
+| 历史回放 | `system_cma_v2@1`（初始发布内容） | 只用于历史 pin/replay，不可重新设为全局默认 |
+| 历史回放 | `system_cma_v2@1`（证据校准内容变体） | 按 content hash 识别，保留其独立 evidence hash |
+| 历史回放 | `system_cma_v3@1` | 只用于历史 pin/replay，不可重新设为全局默认 |
 
 系统 identity 是 append-only 的。改变收益公式、证据、参数或相关性时必须发布新的 system profile identity；已发布 profile 的 canonical JSON 不更新、不删除。
 
 ## CMA 收益计算
 
-v3 以 committed evidence artifact 生成收益先验。对实际几何收益、通胀和按期末资产比例收取的费用，使用：
+v4 延续 v3 的复利数值政策，并修正来源、费用和 FX 的 provenance 表述。实际几何收益与通胀使用：
 
 ```text
-nominal_after_fee = (1 + real_geometric_return)
-                  * (1 + expected_inflation)
-                  * (1 - annual_fee_rate) - 1
+nominal_geometric_return = (1 + real_geometric_return)
+                         * (1 + expected_inflation) - 1
 ```
 
 FX 长期漂移使用相对购买力平价：
@@ -33,7 +33,7 @@ FX 长期漂移使用相对购买力平价：
 fx_change_to_cny = (1 + cny_inflation) / (1 + quote_inflation) - 1
 ```
 
-只有在写入 profile canonical JSON 时才按四位小数舍入。`internal/assumptions/cma_evidence_v3.json` 保存每个先验的来源、日期、输入和公式约定；artifact SHA-256 与 v3 canonical SHA-256 都被 registry 固定。
+基金净值收益和 profile prior 均按“持续费用已内含”的最终收益解释，模拟不再按 `expense_ratio` 二次扣减。只有在写入 profile canonical JSON 时才按四位小数舍入。`internal/assumptions/cma_evidence_v4.json` 保存每个先验的来源、日期、输入和公式约定；artifact SHA-256 与 v4 canonical SHA-256 都被 registry 固定。
 
 ## 系统 namespace 与升级行为
 
@@ -41,10 +41,10 @@ fx_change_to_cny = (1 + cny_inflation) / (1 + quote_inflation) - 1
 
 启动以及所有需要解析 profile 的读取路径都会执行完整性检查：
 
-1. 当前 `system_cma_v3@1` 必须是 system-owned，且存储的 canonical bytes/hash 与 registry 完全一致。
+1. 当前 `system_cma_v4@1` 必须是 system-owned，且存储的 canonical bytes/hash 与 registry 完全一致。
 2. 任何旧的 user `system_cma_*` profile 会复制为 `user_legacy_<旧 canonical hash 前 16 位>`；计划 pin 与全局默认在同一事务中重定向。冻结的历史 run snapshot 不修改。
 3. 所有 system `system_cma_*` rows 都必须由 `(id, version, content_hash)` 历史内容 registry 识别，且 canonical bytes 的 SHA-256 必须等于存储 hash。未知或篡改内容返回 `system_profile_identity_conflict`，不会被静默覆盖。
-4. 只有首次发布 v3 时才将全局默认从直接前驱 v2 迁移到 v3；后续检查不会覆盖用户主动选择的默认 profile。
+4. 发布新系统身份时只把仍指向直接前驱系统身份的默认值迁移到当前版本；后续检查不会覆盖用户主动选择的默认 profile。
 
 ## Run provenance
 
@@ -61,7 +61,7 @@ fx_change_to_cny = (1 + cny_inflation) / (1 + quote_inflation) - 1
 
 API 端到端测试固定了 50 年 horizon、seed `424242`、1,000 条路径和固定持仓/现金流 fixture：
 
-- v3 terminal P50：`577,080,841` minor
+- 当前 v4 terminal P50：`577,080,841` minor
 - v1/v2 historical control terminal P50：`527,399,522` minor
 
 测试同时校验两次运行的 input hash/P50 相同，以及持久化 snapshot 的四项 provenance。若收益模型、采样引擎或 profile 内容发生有意改变，必须发布新 system identity 并显式更新经审核的回归基线。

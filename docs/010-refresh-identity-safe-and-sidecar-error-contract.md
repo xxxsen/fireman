@@ -14,7 +14,7 @@
 ### 1. `instrument_kind` 持久化并贯穿 refresh
 
 - 为 `instruments` 表新增 `instrument_kind` 字段：
-  - `migrations/0013_instrument_kind.sql`
+  - 字段已纳入 `migrations/0001_init.sql` 完整基线
 - repository 层已支持该字段的读取、创建和更新：
   - `internal/repository/instrument.go`
 - 导入占位资产时直接写入 resolve ticket 中的 `instrument_kind`：
@@ -55,7 +55,3 @@
   - 验证请求体未知字段/缺失字段时返回统一错误结构
 - `sidecars/market-provider/tests/test_error_contract.py`
   - 验证 resolve/fetch/metadata 三类请求的 body validation 均进入统一错误契约
-
-## 本轮 review 结论
-
-该整改已完成对上述遗留问题的修复闭环，未再发现新的缺陷或实现缺失，可视为该事项完成。

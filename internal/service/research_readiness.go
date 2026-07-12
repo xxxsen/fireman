@@ -12,7 +12,7 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// research_readiness.go implements the backtest admission check (td/099 §7):
+// research_readiness.go implements the backtest admission check:
 // the only gate for creating a research backtest run. The dataset loader
 // pulls everything from the local DB; evaluateResearchReadiness is pure so
 // unit tests can construct datasets directly.
@@ -116,7 +116,7 @@ type ResearchReadinessAssetView struct {
 }
 
 // ResearchReadiness is the GET /collections/{id}/readiness response
-// (td/099 §5.4).
+// for backtest admission.
 type ResearchReadiness struct {
 	Ready            bool                         `json:"ready"`
 	WeightSum        float64                      `json:"weight_sum"`

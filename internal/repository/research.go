@@ -1362,7 +1362,7 @@ func (r *ResearchRepo) ListStaleMetricsDimensions(
 	)
 }
 
-// --- optimization runs (td/103) ---
+// --- optimization runs ---
 
 // ResearchOptimizationRun mirrors a research_optimization_runs row.
 type ResearchOptimizationRun struct {

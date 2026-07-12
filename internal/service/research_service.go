@@ -23,7 +23,7 @@ import (
 	taskcore "github.com/fireman/fireman/internal/task"
 )
 
-// ResearchService orchestrates the portfolio research module (td/099):
+// ResearchService orchestrates the portfolio research module:
 // screener, collections, readiness, batch history sync, backtest runs and
 // plan interop. Market data always flows through MarketAssetService tasks;
 // backtests run on the local task queue.
@@ -741,7 +741,7 @@ func researchInputWeight(weight *float64, allOmitted bool, total int) float64 {
 }
 
 // itemsFromPlan converts plan holdings into item inputs: current amounts
-// become weights (td/099 §9.2).
+// become weights.
 func (s *ResearchService) itemsFromPlan(
 	ctx context.Context, planID string,
 ) ([]ResearchCollectionItemInput, string, error) {
@@ -1287,7 +1287,7 @@ func (s *ResearchService) DeleteItem(
 }
 
 // NormalizeWeights rescales enabled unlocked items so enabled weights sum to
-// exactly 1, honoring locked weights (td/099 §3.4). When every unlocked
+// exactly 1, honoring locked weights. When every unlocked
 // weight is 0, the remainder is split equally.
 func (s *ResearchService) NormalizeWeights(
 	ctx context.Context, collectionID string,
@@ -1418,7 +1418,7 @@ type ResearchSyncBlocked struct {
 }
 
 // ResearchSyncResult is the POST /collections/{id}/sync-history response
-// (td/099 §5.4).
+// in one request.
 type ResearchSyncResult struct {
 	Assets  []ResearchSyncAssetResult `json:"assets"`
 	FX      []ResearchSyncFXResult    `json:"fx"`
@@ -1482,7 +1482,7 @@ func (s *ResearchService) GetCollectionSyncStatus(
 
 // SyncCollectionHistory batch-creates (or reuses) asset_history_sync tasks
 // for enabled assets that need data, plus fx_rate_sync for cross-currency
-// collections (td/099 §3.5).
+// collections.
 func (s *ResearchService) SyncCollectionHistory(
 	ctx context.Context, collectionID string, req ResearchSyncRequest,
 ) (ResearchSyncResult, error) {
@@ -1635,7 +1635,7 @@ func researchFXNeedsSync(ds *researchDataset, nowDay int) bool {
 }
 
 // researchAssetNeedsSync decides whether one asset needs a history refresh:
-// missing history, stale data, or a failed last sync (td/099 §3.5).
+// missing history, stale data, or a failed last sync.
 func researchAssetNeedsSync(a researchAssetData, nowDay int) (bool, string) {
 	if len(a.Points) == 0 {
 		return true, "missing_history"
@@ -1719,7 +1719,7 @@ type researchSnapshotSeries struct {
 	SourceName string `json:"source_name,omitempty"`
 	// AnchorDate is the pre-window forward-fill anchor (last observation
 	// strictly before the window start) when the series has no observation
-	// on the window start day itself (td/100 Finding 1). When set it equals
+	// on the window start day itself. When set it equals
 	// FirstDate.
 	AnchorDate string `json:"anchor_date,omitempty"`
 	FirstDate  string `json:"first_date,omitempty"`
@@ -1730,7 +1730,7 @@ type researchSnapshotSeries struct {
 
 // CreateBacktest gates on readiness, freezes the input snapshot, computes
 // source/input hashes and either reuses an existing run or creates task+run
-// in one transaction (td/099 §5.5).
+// in one transaction.
 func (s *ResearchService) CreateBacktest(
 	ctx context.Context, collectionID string,
 ) (ResearchBacktestResult, error) {
@@ -1863,7 +1863,7 @@ func (s *ResearchService) persistQueuedResearchTask(
 }
 
 // buildResearchSnapshot freezes the dataset into the auditable input
-// snapshot (td/099 §5.6).
+// snapshot.
 func buildResearchSnapshot(ds *researchDataset, readiness ResearchReadiness) researchInputSnapshot {
 	snapshot := researchInputSnapshot{
 		EngineVersion: ResearchEngineVersion,
@@ -1956,7 +1956,7 @@ type researchSeriesObs struct {
 }
 
 // summarizeResearchSeries hashes the minimal closure of observations the
-// valuation actually uses (td/100 Finding 1): the in-window slice plus, when
+// valuation actually uses: the in-window slice plus, when
 // the series has no observation on the window start day, the last pre-window
 // observation that forward-fill anchors on. Changing that anchor point must
 // change the source hash.
@@ -2030,10 +2030,10 @@ func summarizeFXSeries(points []repository.MarketDataPoint, winLo, winHi string)
 }
 
 // computeResearchSourceHash hashes the market-data facts of one snapshot
-// (td/099 §5.6): per-series identity, coverage, the pre-window forward-fill
+// per-series identity, coverage, the pre-window forward-fill
 // anchor, per-point hash and the common window. Anchor values are already
 // part of PointsHash; the anchor date is written explicitly so the hash
-// distinguishes anchored from non-anchored coverage (td/100 Finding 1).
+// distinguishes anchored from non-anchored coverage.
 func computeResearchSourceHash(snapshot researchInputSnapshot) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "common:%s..%s\n", snapshot.CommonStart, snapshot.CommonEnd)
@@ -2056,7 +2056,7 @@ func computeResearchSourceHash(snapshot researchInputSnapshot) string {
 }
 
 // computeResearchInputHash hashes everything that decides run reuse
-// (td/099 §5.6): source hash, collection parameters, enabled items, engine
+// source hash, collection parameters, enabled items, engine
 // version, rebalance rule and window policy.
 func computeResearchInputHash(snapshot researchInputSnapshot, ds *researchDataset) string {
 	h := sha256.New()
@@ -2335,7 +2335,7 @@ func (s *ResearchService) GetRunPoints(
 	return out, nil
 }
 
-// ExportRunCSV renders the run's daily curve as CSV (td/099 §5.3).
+// ExportRunCSV renders the run's daily curve as CSV.
 func (s *ResearchService) ExportRunCSV(ctx context.Context, runID string) (string, string, error) {
 	run, err := s.research.GetRun(ctx, runID)
 	if err != nil {

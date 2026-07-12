@@ -1,8 +1,7 @@
 # 组合研究与 FIRE 模拟计算逻辑修正
 
-- 完成日期：2026-07-11
-- 状态：已实施并通过全链路验收
-- 当前版本：`research_backtest_v4`、`research_optimizer_v6`、FIRE `3.4.0`（本文早期章节保留历次版本变更记录）
+- 状态：已实施
+- 当前版本：`research_backtest_v4`、`research_optimizer_v6`、FIRE `3.5.0`（本文早期章节保留历次版本变更记录）
 
 ## 1. 目的与范围
 
@@ -18,7 +17,7 @@
 - [025-research-portfolio-auto-optimization.md](./025-research-portfolio-auto-optimization.md)
 - [019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md)
 
-本文聚焦本次跨模块修正、共同不变量和验收证据。
+本文聚焦跨模块修正、共同不变量和回归要求。
 
 ## 2. 研究回测 v2
 
@@ -299,7 +298,7 @@ CVaR、基准比较和贡献归因。summary 冻结 `total_turnover`、
 `transaction_cost_drag`。`research_optimizer_v5` 及 `research_optimizer_v6` 的所有候选复用同一公式和有效日历，
 因此费用会参与候选排序。旧回测 v3、优化 v4 及更早结果保持只读，页面明确标记未计成本。
 
-## 7. 验收覆盖
+## 7. 正确性约束与回归范围
 
 自动化测试覆盖以下关键不变量：
 
@@ -312,7 +311,7 @@ CVaR、基准比较和贡献归因。summary 冻结 `total_turnover`、
 
 真实 optimization fixture 会创建任务、执行 worker、读取 Top K 并原子应用 rank 1，直接验证候选数一致、A=20% 锁定不变、item identity、基准摘要、冻结窗口和最终 100% 权重。
 
-归档前通过的工程门禁：
+工程门禁：
 
 ```bash
 make build
@@ -325,5 +324,3 @@ make web-test
 make web-build
 make integration-test
 ```
-
-最终结果：Go lint 为 0 issue；Web 共 74 个测试文件、546 个测试通过；API、service、simulation 核心包另以 `-count=1` 无缓存重跑通过。

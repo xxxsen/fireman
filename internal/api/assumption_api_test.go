@@ -210,7 +210,8 @@ func TestSetPreferencesRejectsIneligibleLegacyDefault(t *testing.T) {
 	// Seed the REAL published v1 row (byte-exact fixture). It predates
 	// the tail-truncation field, so it carries zero truncation and fails the
 	// current Validate gate (ineligible even though active), while still being a
-	// registry-recognized system content so the startup audit accepts it. Raw SQL bypasses the service gate, mimicking a pre-td063 upgrade.
+	// registry-recognized system content so the startup audit accepts it. Raw SQL
+	// bypasses the service gate, mimicking an older database upgrade.
 	seedSystemFixtureRow(t, db, assumptions.SystemLegacyProfileID, assumptions.SystemLegacyProfileVersion,
 		"系统默认（CMA v1）", "system_cma_v1_canonical.json")
 	// Seed the REAL published v2 content (byte-exact fixture). It is a

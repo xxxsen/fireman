@@ -1,6 +1,5 @@
 # 组合研究（Portfolio Research）
 
-- 方案来源：`td/099-asset-selection.md`；实施 review 见 `td/100-td099-implementation-review.md`
 - 定位：与「计划」「资产」平级的研究工作台——筛选资产、组建研究集合、运行确定性历史回测，并与 FIRE 计划双向联动。只有用户核对替换预览并明确确认后，研究集合才会原子改写目标计划。
 
 ## 1. 信息架构
@@ -43,8 +42,8 @@
 - 引擎为纯函数（`engine_version = research_backtest_v2`）：自然日估值 + 前值填充（默认容忍 7 天、场外基金 14 天，不在上市前/末点后填充）；FX 转换（CNY 基准直连，其他经 CNY 交叉）且 FX 参与共同区间与缺口检查；再平衡支持 monthly/quarterly/yearly/buy_hold/fixed/threshold。threshold 在任一资产偏离 `>=` 阈值时触发，阈值 0 表示不启用。
 - 指标口径：CAGR（365.25/days）、有效估值日样本标准差 ×√252、负数回撤、Sharpe/Calmar 不可用时为 null、回撤持续期（当前/历史最长）、年度表（不完整年份标记、年内回撤与波动、年初/年末权重偏离）、月度收益、最好/最差年份与月份、正收益月份占比、链接累计贡献、实际单期贡献序列风险分解、链接回撤期贡献、相关性矩阵。
 - 贡献满足精确不变量：累计贡献 `sum_t((NAV[t-1]/NAV[0]) * w[i,t-1] * r[i,t])` 按资产求和等于组合累计收益；峰谷回撤贡献以 `NAV[t-1]/NAV[peak]` 链接后按资产求和等于最大回撤；风险贡献 `cov(c_i, r_p)/var(r_p)` 在非零方差时按资产求和等于 1，零方差时为 null。
-- run 生命周期：readiness 门禁 → 冻结 input snapshot（参数 + 各序列摘要）→ `source_hash` / `input_hash` → 同 `input_hash` 的 succeeded/active run 直接复用 → 事务内建 `jobs` 行（`research_backtest`）+ run 占位 → worker 执行时重载冻结输入并校验 source hash（漂移即失败）→ points/years/months + summary/data_quality 单事务落库。
-- **序列摘要的最小闭包（td/100 Finding 1 修复）**：资产、基准与 FX 序列摘要不止取窗口内点位——若窗口起点当天无真实点位，则把窗口前最后一个点（forward-fill 锚点）一并纳入哈希，锚点日期以 `anchor_date` 写入快照并进入 `source_hash`。锚点之前的点位不影响哈希。由此保证：只改锚点价格必然产生新 run（不复用旧结果），且 freeze 后锚点漂移会被执行前校验拦截。
+- run 生命周期：readiness 门禁 → 冻结 input snapshot（参数 + 各序列摘要）→ `source_hash` / `input_hash` → 同 `input_hash` 的 succeeded/active run 直接复用 → 事务内创建 `worker_tasks` 行（`research_backtest`）和 run 占位 → worker 执行时重载冻结输入并校验 source hash（漂移即失败）→ points/years/months、summary/data_quality 和 task 终态单事务落库。
+- **序列摘要的最小闭包**：资产、基准与 FX 序列摘要不止取窗口内点位——若窗口起点当天无真实点位，则把窗口前最后一个点（forward-fill 锚点）一并纳入哈希，锚点日期以 `anchor_date` 写入快照并进入 `source_hash`。锚点之前的点位不影响哈希。由此保证：只改锚点价格必然产生新 run（不复用旧结果），且 freeze 后锚点漂移会被执行前校验拦截。
 
 ## 6. 结果展示与导出
 
@@ -61,12 +60,12 @@
 
 ## 8. 数据模型与 API
 
-- migration `0025_research.sql`：`research_collections`、`research_collection_items`、`research_saved_filters`、`research_backtest_runs`（含 succeeded 部分唯一索引 `uq_research_backtest_runs_success_input`）、`research_backtest_points/years/months`、`research_asset_metrics`。
+- `migrations/0001_init.sql` 包含 `research_collections`、`research_collection_items`、`research_saved_filters`、`research_backtest_runs`（含 succeeded 部分唯一索引 `uq_research_backtest_runs_success_input`）、`research_backtest_points/years/months` 和 `research_asset_metrics`。
 - API 全部挂 `/api/v1/research`。计划联动使用 `POST /collections/:id/plan-preview` 和 `POST /collections/:id/apply-to-plan`；旧 `copy-to-plan` 在兼容周期内返回 410，防止调用方误以为未落库草稿已经生效。
-- job 类型 `research_backtest` 纳入 worker 分发与 admin 控制台。
+- task type `research_backtest` 纳入统一 worker registry 与 admin 控制台。
 
 ## 9. 测试
 
-- Go：引擎单测（区间/填充/FX/各再平衡/全部指标/年度/回撤持续期/贡献）、readiness 全条件、sync-history 创建/复用/跳过、hash 稳定性与幂等（含锚点闭包回归：改锚点必换 hash、锚点前点位不影响 hash、锚点漂移被 source 校验拦截）、run 事务；`internal/api` 集成测试覆盖 td/099 §11.2。
+- Go：引擎单测（区间/填充/FX/各再平衡/全部指标/年度/回撤持续期/贡献）、readiness 全条件、sync-history 创建/复用/跳过、hash 稳定性与幂等（含锚点闭包回归：改锚点必换 hash、锚点前点位不影响 hash、锚点漂移被 source 校验拦截）以及 run 事务。
 - Web：Vitest 覆盖 §11.3 全部场景（导航、首页、筛选、候选池与比较、权重校验、锁定归一化、readiness、任务轮询、run 状态、图表、移动端标签、CSV/JSON 导入导出）。
 - 手工验收（§11.4）依赖真实行情与 sidecar，由用户执行。

@@ -22,7 +22,7 @@ import (
 )
 
 // research_optimization_service.go implements the service layer for
-// portfolio auto-optimization (td/103): creation, readiness, querying
+// portfolio auto-optimization: creation, readiness, querying
 // and the task executor entry point.
 
 // --- optimization readiness ---
@@ -47,7 +47,7 @@ type OptimizationReadinessRequest struct {
 }
 
 // GetOptimizationReadiness checks whether a collection is ready for
-// auto-optimization (td/103 §Readiness).
+// auto-optimization readiness.
 func (s *ResearchService) GetOptimizationReadiness(
 	ctx context.Context, collectionID string, req OptimizationReadinessRequest,
 ) (OptimizationReadiness, error) {
@@ -398,7 +398,7 @@ type optimizationInputSnapshot struct {
 	Config         OptimizationConfig       `json:"config"`
 }
 
-// CreateOptimization creates an optimization run (td/103 §新增接口).
+// CreateOptimization creates an optimization run.
 func (s *ResearchService) CreateOptimization(
 	ctx context.Context, collectionID string, req ResearchOptimizationRequest,
 ) (ResearchOptimizationCreateResult, error) {
@@ -927,7 +927,7 @@ func validateOptimizationResultWeights(
 // --- optimization task executor ---
 
 // ExecuteOptimizationTask is the entry point called by the task worker
-// for one research_optimization_backtest task (td/103 §Worker 执行流程).
+// for one research_optimization_backtest task.
 func (s *ResearchService) ExecuteOptimizationTask(
 	ctx context.Context,
 	taskID string,

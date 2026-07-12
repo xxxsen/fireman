@@ -73,7 +73,7 @@
 
 > **已废弃**：调仓计划（draft）链路已整体下线，
 > `rebalance_drafts` / `rebalance_draft_lines` / `rebalance_draft_events`
-> 三张表由迁移 `0024_drop_rebalance_drafts.sql` 删除。把持仓从当前结构调到
+> 三张表不再存在于 `migrations/0001_init.sql` 完整基线。把持仓从当前结构调到
 > 目标结构请使用**调仓执行**（`/plans/{id}/rebalance/executions`）：
 > 冻结每行目标变动额，分多日登记真实卖出/买入事件，Complete 按实际执行
 > 增减推导最终持仓并自动归集剩余现金池。需要将持仓事实改成任意状态时，

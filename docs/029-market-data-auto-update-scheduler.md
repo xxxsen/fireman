@@ -10,7 +10,7 @@
 
 ## 数据模型
 
-迁移文件 `migrations/0028_market_data_auto_update_rules.sql`。
+规则表、索引和外键已纳入单一基线 `migrations/0001_init.sql`。
 
 ### 规则表 `market_data_auto_update_rules`
 
