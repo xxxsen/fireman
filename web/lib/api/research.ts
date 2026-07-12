@@ -102,6 +102,8 @@ export interface ResearchCollection {
   benchmark_asset_key?: string;
   risk_free_rate: number;
   transaction_cost_rate: number;
+  tail_risk_confidence: 0.9 | 0.95 | 0.99;
+  tail_risk_horizon_days: 1 | 20;
   status: "active" | "archived";
   created_at: number;
   updated_at: number;
@@ -159,6 +161,7 @@ export interface ResearchRunSummary {
   max_drawdown_recovery?: string;
   effective_return_days: number;
   risk_free_rate: number;
+  tail_risk?: ResearchTailRisk | null;
   contributions: ResearchAssetContribution[];
   correlations?: ResearchCorrelations | null;
   benchmark?: {
@@ -168,6 +171,20 @@ export interface ResearchRunSummary {
     cagr: number;
     max_drawdown: number;
   } | null;
+}
+
+export interface ResearchTailRiskSpec {
+  confidence: 0.9 | 0.95 | 0.99;
+  horizon_days: 1 | 20;
+}
+
+export interface ResearchTailRisk extends ResearchTailRiskSpec {
+  algorithm_version: string;
+  scenario_count: number;
+  tail_count: number;
+  var_loss: number;
+  cvar_loss: number;
+  worst_loss: number;
 }
 
 export interface ResearchAssetContribution {
@@ -271,6 +288,17 @@ export interface ResearchCollectionItemInput {
   note?: string;
 }
 
+/** Build an add-item request without echoing a screener history dimension. */
+export function researchItemInputFromAsset(
+  asset: Pick<ResearchAssetView, "asset_key">,
+): ResearchCollectionItemInput {
+  return {
+    asset_key: asset.asset_key,
+    weight: 0,
+    enabled: true,
+  };
+}
+
 export interface ResearchCollectionInput {
   name: string;
   description?: string;
@@ -284,6 +312,8 @@ export interface ResearchCollectionInput {
   benchmark_asset_key?: string;
   risk_free_rate?: number;
   transaction_cost_rate?: number;
+  tail_risk_confidence?: ResearchTailRiskSpec["confidence"];
+  tail_risk_horizon_days?: ResearchTailRiskSpec["horizon_days"];
   tags?: string[];
   items?: ResearchCollectionItemInput[];
   from_plan_id?: string;
@@ -303,6 +333,8 @@ export interface ResearchCollectionUpdate {
   benchmark_asset_key?: string;
   risk_free_rate?: number;
   transaction_cost_rate?: number;
+  tail_risk_confidence?: ResearchTailRiskSpec["confidence"];
+  tail_risk_horizon_days?: ResearchTailRiskSpec["horizon_days"];
   status?: "active" | "archived";
   tags?: string[];
 }
@@ -422,6 +454,14 @@ export interface ResearchReadinessAssetView {
   limits_common_end?: boolean;
 }
 
+export interface ResearchTailRiskReadiness {
+  confidence: number;
+  horizon_days: number;
+  effective_return_count: number;
+  scenario_count: number;
+  minimum_scenario_count: number;
+}
+
 export interface ResearchReadiness {
   ready: boolean;
   weight_sum: number;
@@ -431,6 +471,7 @@ export interface ResearchReadiness {
   window_end?: string;
   blocking_reasons: ResearchReadinessIssue[];
   warnings: ResearchReadinessIssue[];
+  tail_risk?: ResearchTailRiskReadiness | null;
   assets: ResearchReadinessAssetView[];
   data_dependencies: {
     asset_count: number;
@@ -610,6 +651,8 @@ export interface ResearchOptimizationConfig {
   weight_step: number;
   max_candidate_count?: number;
   top_k?: number;
+  tail_risk: ResearchTailRiskSpec;
+  minimum_cagr?: number | null;
 }
 
 export interface ResearchOptimizationWeightEntry {
@@ -622,7 +665,7 @@ export interface ResearchOptimizationWeightEntry {
 
 export interface ResearchOptimizationResultItem {
   rank: number;
-  objective: "max_cagr" | "min_drawdown" | "max_calmar";
+  objective: "max_cagr" | "min_drawdown" | "max_calmar" | "min_cvar";
   score: number;
   weights: ResearchOptimizationWeightEntry[];
   summary: ResearchRunSummary;
@@ -635,6 +678,9 @@ export interface ResearchOptimizationResult {
   best_by_cagr: ResearchOptimizationResultItem[];
   best_by_drawdown: ResearchOptimizationResultItem[];
   best_by_calmar: ResearchOptimizationResultItem[];
+  best_by_cvar: ResearchOptimizationResultItem[];
+  cvar_eligible_count: number;
+  warnings?: { code: string; message: string }[];
 }
 
 export interface ResearchOptimizationRun {
@@ -667,14 +713,17 @@ export interface ResearchOptimizationReadiness {
   locked_weight_sum: number;
   blocking_reasons: ResearchReadinessIssue[];
   warnings: ResearchReadinessIssue[];
+  tail_risk?: ResearchTailRiskReadiness | null;
 }
 
 export function getOptimizationReadiness(
   collectionId: string,
-  weightStep?: number,
+  params?: { weightStep?: number; confidence?: number; horizonDays?: number },
 ): Promise<ResearchOptimizationReadiness> {
   const qs = new URLSearchParams();
-  if (weightStep !== undefined) qs.set("weight_step", String(weightStep));
+  if (params?.weightStep !== undefined) qs.set("weight_step", String(params.weightStep));
+  if (params?.confidence !== undefined) qs.set("cvar_confidence", String(params.confidence));
+  if (params?.horizonDays !== undefined) qs.set("cvar_horizon_days", String(params.horizonDays));
   const query = qs.toString();
   return apiGet(
     `/api/v1/research/collections/${encodeURIComponent(collectionId)}/optimization-readiness${query ? `?${query}` : ""}`,
@@ -708,7 +757,7 @@ export function getLatestOptimization(
 }
 
 export interface ResearchOptimizationApplyRequest {
-  objective: "max_cagr" | "min_drawdown" | "max_calmar";
+  objective: "max_cagr" | "min_drawdown" | "max_calmar" | "min_cvar";
   rank: number;
   expected_collection_updated_at: number;
 }

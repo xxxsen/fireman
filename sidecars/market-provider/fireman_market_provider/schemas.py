@@ -25,7 +25,7 @@ InstrumentType = Literal[
     "us_etf",
     "fx_rate",
 ]
-PointType = Literal["adjusted_close", "nav", "total_return_index", "fx_rate"]
+PointType = Literal["close", "adjusted_close", "nav", "total_return_index", "fx_rate"]
 ExpenseRatioStatus = Literal["provider_verified", "unavailable", "not_applicable"]
 SourceQuality = Literal["full", "partial", "empty"]
 
@@ -38,7 +38,7 @@ class FetchRequest(BaseModel):
     source_code: str = Field(min_length=1, max_length=64)
     start_date: str | None = None
     end_date: str = Field(min_length=10, max_length=10)
-    adjust_policy: Literal["none", "qfq", "hfq"] = "none"
+    adjust_policy: Literal["none", "hfq"] = "none"
     resolved_name: str | None = None
     instrument_kind: str | None = None
 

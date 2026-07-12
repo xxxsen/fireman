@@ -124,22 +124,35 @@ func seedMarketAssetWithHistory(t *testing.T, db *sql.DB, seed marketAssetSeed) 
 	if len(seed.Points) == 0 {
 		return
 	}
+	adjustPolicy := "none"
+	switch seed.InstrumentType {
+	case "cn_exchange_stock", "cn_exchange_fund", "hk_stock", "hk_etf", "us_stock", "us_etf":
+		adjustPolicy = "hfq"
+	}
 	for _, p := range seed.Points {
 		if _, err := db.ExecContext(ctx, `
 			INSERT OR IGNORE INTO market_asset_points (
 				asset_key, adjust_policy, point_type, trade_date, value, source_name, fetched_at
-			) VALUES (?, 'none', ?, ?, ?, 'test_fixture', ?)`,
-			seed.AssetKey, seed.PointType, p.Date, p.Value, now); err != nil {
+				) VALUES (?, ?, ?, ?, ?, 'test_fixture', ?)`,
+			seed.AssetKey, adjustPolicy, seed.PointType, p.Date, p.Value, now); err != nil {
 			t.Fatal(err)
 		}
 	}
 	last := seed.Points[len(seed.Points)-1]
 	if _, err := db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO market_asset_history_state (
-			asset_key, adjust_policy, point_type, last_task_id, last_success_task_id,
-			last_success_at, data_as_of, point_count, source_name, updated_at
-		) VALUES (?, 'none', ?, 'task_seed', 'task_seed', ?, ?, ?, 'test_fixture', ?)`,
-		seed.AssetKey, seed.PointType, now, last.Date, len(seed.Points), now); err != nil {
+			INSERT INTO market_asset_history_state (
+				asset_key, adjust_policy, point_type, last_task_id, last_success_task_id,
+				last_success_at, data_as_of, point_count, source_name, updated_at
+			) VALUES (?, ?, ?, 'task_seed', 'task_seed', ?, ?, ?, 'test_fixture', ?)
+			ON CONFLICT(asset_key, adjust_policy, point_type) DO UPDATE SET
+				last_task_id=excluded.last_task_id,
+				last_success_task_id=excluded.last_success_task_id,
+				last_success_at=excluded.last_success_at,
+				data_as_of=excluded.data_as_of,
+				point_count=excluded.point_count,
+				source_name=excluded.source_name,
+				updated_at=excluded.updated_at`,
+		seed.AssetKey, adjustPolicy, seed.PointType, now, last.Date, len(seed.Points), now); err != nil {
 		t.Fatal(err)
 	}
 }

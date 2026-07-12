@@ -16,8 +16,8 @@ def hk_exchange_symbol(code: str) -> str:
 
 def hk_adjust_policy(adjust_policy: str) -> str:
     """Map request adjust policy to HK AKShare API values."""
-    if adjust_policy in ("qfq", "hfq"):
-        return adjust_policy
+    if adjust_policy == "hfq":
+        return "hfq"
     return ""
 
 
@@ -25,13 +25,11 @@ def tx_adjust_policy(adjust_policy: str) -> str:
     """Map request adjust policy to Tencent API values."""
     if adjust_policy == "hfq":
         return "hfq"
-    if adjust_policy == "qfq":
-        return "qfq"
     return ""
 
 
 def sina_adjust_policy(adjust_policy: str) -> str:
     """Map request adjust policy to Sina stock API values."""
-    if adjust_policy in ("qfq", "hfq"):
-        return adjust_policy
+    if adjust_policy == "hfq":
+        return "hfq"
     return ""

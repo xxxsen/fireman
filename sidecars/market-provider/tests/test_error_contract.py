@@ -54,7 +54,7 @@ def test_fetch_all_sources_fail_classified_unavailable() -> None:
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             }
         )
     assert response.status_code == 503
@@ -72,7 +72,7 @@ def test_fetch_timeout_classified_timeout() -> None:
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             }
         )
     assert response.status_code == 504

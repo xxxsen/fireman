@@ -386,7 +386,33 @@ export default function ResearchRunDetailPage() {
               value={`当前 ${summary.current_drawdown_days} 天 / 最长 ${summary.max_drawdown_duration_days} 天`}
               help="当前回撤已持续天数与历史最长回撤持续期（峰值到收复）。"
             />
+            {summary.tail_risk && (
+              <>
+                <MetricCard
+                  label={`${summary.tail_risk.horizon_days} 日 ${summary.tail_risk.confidence * 100}% VaR`}
+                  value={formatPercent(summary.tail_risk.var_loss)}
+                  help={`基于 ${summary.tail_risk.scenario_count} 个滚动场景的尾部分位损失。正数表示损失，负数表示该尾部边界仍为收益。`}
+                  tone={summary.tail_risk.var_loss > 0 ? "danger" : "positive"}
+                />
+                <MetricCard
+                  label={`${summary.tail_risk.horizon_days} 日 ${summary.tail_risk.confidence * 100}% CVaR`}
+                  value={formatPercent(summary.tail_risk.cvar_loss)}
+                  help={`历史最差尾部场景的平均损失，共 ${summary.tail_risk.scenario_count} 个场景，尾部计数 ${summary.tail_risk.tail_count}。`}
+                  tone={summary.tail_risk.cvar_loss > 0 ? "danger" : "positive"}
+                />
+                <MetricCard
+                  label={`最差 ${summary.tail_risk.horizon_days} 日损失`}
+                  value={formatPercent(summary.tail_risk.worst_loss)}
+                  help="该次回测冻结口径下观测到的最差持有期损失。"
+                  tone={summary.tail_risk.worst_loss > 0 ? "danger" : "positive"}
+                />
+              </>
+            )}
           </div>
+
+          {!summary.tail_risk && (
+            <p className="text-sm text-ink-muted">该历史回测版本未计算 CVaR</p>
+          )}
 
           {summary.benchmark && (
             <p className="text-sm text-ink-muted">

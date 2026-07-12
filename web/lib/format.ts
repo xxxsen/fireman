@@ -204,7 +204,7 @@ export function formatNullablePercent(value: number | null | undefined): string 
 const DATA_SOURCE_MAP: Record<string, string> = {
   "tickflow.klines:1d": "TickFlow · 日K",
   "ak.fund_etf_hist_em": "东方财富 · ETF 日线",
-  "ak.stock_zh_a_hist_tx": "腾讯财经 · 前复权",
+  "ak.stock_zh_a_hist_tx": "腾讯财经 · 日线",
   "ak.fund_etf_hist_sina": "新浪财经 · ETF",
   "ak.stock_zh_a_hist": "东方财富 · A 股日线",
   "ak.stock_zh_a_daily": "新浪财经 · A 股",
@@ -244,12 +244,22 @@ export function dataSourceLabel(sourceName: string | undefined | null): string {
 export function pointTypeLabel(pointType: string | undefined | null): string {
   if (!pointType) return "—";
   const map: Record<string, string> = {
-    adjusted_close: "前复权收盘价",
+    close: "未复权收盘价",
+    adjusted_close: "复权收盘价",
     nav: "单位净值",
     total_return_index: "累计净值",
     fx_rate: "汇率",
   };
-  return map[pointType] ?? pointType;
+	return map[pointType] ?? pointType;
+}
+
+export function adjustPolicyLabel(adjustPolicy: string | undefined | null): string {
+  if (!adjustPolicy) return "—";
+  const map: Record<string, string> = {
+    none: "未复权",
+    hfq: "后复权",
+  };
+  return map[adjustPolicy] ?? adjustPolicy;
 }
 
 /** Label for annual return row completeness (distinct from calendar-year UI). */

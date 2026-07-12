@@ -36,7 +36,7 @@ function item(
     enabled: true,
     weight: 0,
     weight_locked: false,
-    adjust_policy: "qfq",
+    adjust_policy: "hfq",
     point_type: "adjusted_close",
     asset_class: "equity",
     region: "cn",
@@ -70,6 +70,8 @@ function collection(): ResearchCollectionDetail {
     window_end: "",
     risk_free_rate: 0.02,
     transaction_cost_rate: 0,
+    tail_risk_confidence: 0.95,
+    tail_risk_horizon_days: 20,
     status: "active",
     created_at: 0,
     updated_at: 1234,
@@ -88,14 +90,19 @@ function optimization(): ResearchOptimizationRun {
     collection_id: "rc_1",
     job_id: "job_1",
     status: "succeeded",
-    config: { weight_step: 0.05, top_k: 20 },
+    config: {
+      weight_step: 0.05,
+      top_k: 20,
+      tail_risk: { confidence: 0.95, horizon_days: 20 },
+      minimum_cagr: 0.03,
+    },
     candidate_count: 10,
     evaluated_count: 10,
     base_currency: "CNY",
     rebalance_policy: "monthly",
     window_start: "2020-01-01",
     window_end: "2026-07-01",
-    engine_version: "research_optimizer_v2",
+    engine_version: "research_optimizer_v4",
     created_at: 1750000000000,
     result: {
       candidate_count: 10,
@@ -128,6 +135,40 @@ function optimization(): ResearchOptimizationRun {
       ],
       best_by_drawdown: [],
       best_by_calmar: [],
+      best_by_cvar: [
+        {
+          rank: 1,
+          objective: "min_cvar",
+          score: -0.07,
+          weights: [
+            { item_id: "a", asset_key: "CN|fund|sh|a", name: "资产a", weight: 0.6, locked: false },
+            { item_id: "b", asset_key: "CN|fund|sh|b", name: "资产b", weight: 0.4, locked: false },
+            { item_id: "c", asset_key: "CN|fund|sh|c", name: "资产c", weight: 0, locked: false },
+          ],
+          summary: {
+            cumulative_return: 0.7,
+            cagr: 0.06,
+            annual_volatility: 0.1,
+            max_drawdown: -0.15,
+            current_drawdown_days: 0,
+            max_drawdown_duration_days: 80,
+            effective_return_days: 1000,
+            risk_free_rate: 0.02,
+            contributions: [],
+            tail_risk: {
+              algorithm_version: "empirical_cvar_v1",
+              confidence: 0.95,
+              horizon_days: 20,
+              scenario_count: 981,
+              tail_count: 50,
+              var_loss: -0.05,
+              cvar_loss: 0.07,
+              worst_loss: 0.12,
+            },
+          },
+        },
+      ],
+      cvar_eligible_count: 10,
     },
   };
 }
@@ -161,7 +202,7 @@ describe("OptimizationDetailPage", () => {
     renderPage();
     fireEvent.click(await screen.findByTestId("apply-result-cagr-1"));
     expect(await screen.findByText("目标组合：测试组合")).toBeInTheDocument();
-    expect(screen.getByText("应用后会覆盖当前组合的启用、锁定、权重和回测区间设置。")).toBeInTheDocument();
+    expect(screen.getByText("应用后会同步当前组合的启用、锁定、权重、回测区间和尾部风险口径。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
 
@@ -174,6 +215,23 @@ describe("OptimizationDetailPage", () => {
     await waitFor(() =>
       expect(routerPushMock).toHaveBeenCalledWith("/research/collections/rc_1?optimized_applied=1"),
     );
+  });
+
+  it("renders the CVaR ranking with frozen loss metrics", async () => {
+    renderPage();
+    expect(await screen.findByText("20 日 / 95%")).toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByLabelText("最低尾部损失说明"));
+    expect(await screen.findByText(/最差 5% 场景的平均损失/)).toBeInTheDocument();
+    expect(screen.getByText(/不保证年化收益更高/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tab-cvar"));
+    expect(await screen.findByTestId("result-table-cvar")).toBeInTheDocument();
+    expect(screen.getAllByText("7%").length).toBeGreaterThan(0);
+    expect(screen.getByText("VaR loss")).toBeInTheDocument();
+    expect(screen.getByText("CVaR loss")).toBeInTheDocument();
+    expect(screen.getByText("-5%").closest("td")).toHaveClass("text-positive");
+    expect(screen.getAllByText("7%").some((cell) => cell.closest("td")?.classList.contains("text-danger"))).toBe(true);
+    fireEvent.mouseEnter(screen.getByText("-5%"));
+    expect(await screen.findByText(/981 个场景/)).toBeInTheDocument();
   });
 
 });

@@ -15,6 +15,7 @@ import {
 import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
 import { queryErrorMessage } from "@/lib/query-error";
 import {
+  adjustPolicyLabel,
   dataSourceLabel,
   formatAnnualPeriod,
   formatDateTimeFromMs,
@@ -302,7 +303,7 @@ export default function MarketAssetDetailPage() {
           <div>
             <dt className="text-ink-muted">复权 / 价格类型</dt>
             <dd className="text-ink">
-              {history.adjust_policy || "—"} / {pointTypeLabel(history.point_type)}
+              {adjustPolicyLabel(history.adjust_policy)} / {pointTypeLabel(history.point_type)}
             </dd>
           </div>
           <div className="min-w-0">

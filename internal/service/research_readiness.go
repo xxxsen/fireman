@@ -37,6 +37,9 @@ const (
 	ResearchReasonBenchmarkWindow     = "benchmark_window_not_covered"
 	ResearchReasonBenchmarkGap        = "benchmark_gap_exceeded"
 	ResearchReasonTooFewEffectiveDays = "too_few_effective_days"
+	ResearchReasonCVARSample          = "cvar_sample_insufficient"
+	ResearchReasonUnadjustedSeries    = "unadjusted_price_series"
+	ResearchReasonUnsupportedSeries   = "unsupported_return_series"
 )
 
 // Warning reason codes.
@@ -124,6 +127,15 @@ type ResearchReadiness struct {
 	Warnings         []ResearchReadinessIssue     `json:"warnings"`
 	DataDependencies ResearchDataDependencies     `json:"data_dependencies"`
 	Assets           []ResearchReadinessAssetView `json:"assets"`
+	TailRisk         *ResearchTailRiskReadiness   `json:"tail_risk,omitempty"`
+}
+
+type ResearchTailRiskReadiness struct {
+	Confidence           float64 `json:"confidence"`
+	HorizonDays          int     `json:"horizon_days"`
+	EffectiveReturnCount int     `json:"effective_return_count"`
+	ScenarioCount        int     `json:"scenario_count"`
+	MinimumScenarioCount int     `json:"minimum_scenario_count"`
 }
 
 // --- dataset ---
@@ -295,13 +307,19 @@ func (s *ResearchService) loadBenchmarkData(
 	if err != nil {
 		return researchAssetData{}, wrapRepo("load benchmark asset "+assetKey, err)
 	}
-	adjustPolicy, pointType := "none", DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+	adjustPolicy := DefaultAdjustPolicy(asset.InstrumentType)
+	pointType := DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
 	states, err := s.assets.ListHistoryStatesByAsset(ctx, assetKey)
 	if err != nil {
 		return researchAssetData{}, wrapRepo("list benchmark history states", err)
 	}
 	bestPoints := -1
 	for _, st := range states {
+		if isExchangeTradedResearchAsset(asset) {
+			if st.AdjustPolicy != adjustPolicy || st.PointType != pointType {
+				continue
+			}
+		}
 		if st.PointCount > bestPoints {
 			bestPoints = st.PointCount
 			adjustPolicy, pointType = st.AdjustPolicy, st.PointType
@@ -410,6 +428,9 @@ func evaluateResearchReadiness(ds *researchDataset, now time.Time) ResearchReadi
 		evaluateResearchSelectedWindow(
 			ds, &out, prepared, commonLo, commonHi, fxBounds, block, warn,
 		)
+	}
+	if out.WindowStart != "" && out.WindowEnd != "" && len(out.BlockingReasons) == 0 {
+		evaluateResearchTailRisk(ds, &out, block)
 	}
 
 	// 6. Concentration warnings.
@@ -693,6 +714,29 @@ func evaluateResearchAssetDataQuality(
 			Message: "历史点位来自多个数据源，无法确认口径：" + strings.Join(asset.SourceNames, ", "),
 		})
 	}
+	if isExchangeTradedResearchAsset(asset.Asset) {
+		switch {
+		case asset.Item.AdjustPolicy == "none" || asset.Item.PointType == "close":
+			block(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonUnadjustedSeries,
+				Message: "未复权收盘价不能用于收益回测，请同步后复权历史数据",
+			})
+		case asset.Item.AdjustPolicy != "hfq" || asset.Item.PointType != "adjusted_close":
+			block(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonUnsupportedSeries,
+				Message: "场内资产收益回测只支持后复权收盘价",
+			})
+		}
+	}
+}
+
+func isExchangeTradedResearchAsset(asset repository.MarketAsset) bool {
+	switch asset.InstrumentType {
+	case "cn_exchange_stock", "cn_exchange_fund", "hk_stock", "hk_etf", "us_stock", "us_etf":
+		return true
+	default:
+		return false
+	}
 }
 
 func evaluateResearchAssetStaleness(
@@ -787,12 +831,7 @@ func deriveResearchCommonWindow(
 		return 0, 0, false
 	}
 	if len(ranges) == 0 {
-		if out.DataDependencies.MissingHistoryCount == 0 && allCash(ds) {
-			block(ResearchReadinessIssue{
-				Reason: ResearchReasonWindowEmpty, Message: "纯现金组合没有可回测的历史区间",
-			})
-		}
-		return 0, 0, false
+		return deriveAllCashResearchWindow(ds, out, block)
 	}
 	commonLo, commonHi := ranges[0].lo, ranges[0].hi
 	for _, itemRange := range ranges[1:] {
@@ -808,6 +847,26 @@ func deriveResearchCommonWindow(
 	out.CommonStart, out.CommonEnd = researchDayToDate(commonLo), researchDayToDate(commonHi)
 	markResearchWindowLimiters(out.Assets, ranges, commonLo, commonHi)
 	return commonLo, commonHi, true
+}
+
+func deriveAllCashResearchWindow(
+	ds *researchDataset,
+	out *ResearchReadiness,
+	block func(ResearchReadinessIssue),
+) (int, int, bool) {
+	if out.DataDependencies.MissingHistoryCount != 0 || !allCash(ds) {
+		return 0, 0, false
+	}
+	lo, loErr := parseResearchDate(ds.Collection.WindowStart)
+	hi, hiErr := parseResearchDate(ds.Collection.WindowEnd)
+	if loErr == nil && hiErr == nil && hi > lo {
+		out.CommonStart, out.CommonEnd = ds.Collection.WindowStart, ds.Collection.WindowEnd
+		return lo, hi, true
+	}
+	block(ResearchReadinessIssue{
+		Reason: ResearchReasonWindowEmpty, Message: "纯现金组合需要明确的回测开始和结束日期",
+	})
+	return 0, 0, false
 }
 
 func evaluateValidResearchWindow(
@@ -915,6 +974,105 @@ func countEffectiveResearchDays(
 		}
 	}
 	return len(effective)
+}
+
+func evaluateResearchTailRisk(
+	ds *researchDataset,
+	out *ResearchReadiness,
+	block func(ResearchReadinessIssue),
+) {
+	// Zero/zero is retained for focused in-memory legacy fixtures. Persisted
+	// collections are migrated with explicit defaults and production creates
+	// always canonicalize both fields.
+	if ds.Collection.TailRiskConfidence == 0 && ds.Collection.TailRiskHorizonDays == 0 {
+		return
+	}
+	spec, err := CanonicalTailRiskSpec(TailRiskSpec{
+		Confidence:  ds.Collection.TailRiskConfidence,
+		HorizonDays: ds.Collection.TailRiskHorizonDays,
+	})
+	if err != nil {
+		block(ResearchReadinessIssue{Reason: tailRiskErrorCode(err), Message: err.Error()})
+		return
+	}
+	lo, loErr := parseResearchDate(out.WindowStart)
+	hi, hiErr := parseResearchDate(out.WindowEnd)
+	if loErr != nil || hiErr != nil {
+		return
+	}
+	effective := relevantEffectiveObservationDays(ds, lo, hi)
+	count := len(effective)
+	scenarios := TailRiskScenarioCount(count, spec.HorizonDays)
+	minimum := MinimumTailRiskScenarios(spec.Confidence)
+	out.TailRisk = &ResearchTailRiskReadiness{
+		Confidence: spec.Confidence, HorizonDays: spec.HorizonDays,
+		EffectiveReturnCount: count, ScenarioCount: scenarios, MinimumScenarioCount: minimum,
+	}
+	if scenarios < minimum {
+		block(ResearchReadinessIssue{
+			Reason: ResearchReasonCVARSample,
+			Message: fmt.Sprintf("CVaR 场景数 %d 少于最低要求 %d（%.0f%% / %d 日）",
+				scenarios, minimum, spec.Confidence*100, spec.HorizonDays),
+		})
+	}
+}
+
+func relevantEffectiveObservationDays(ds *researchDataset, lo, hi int) map[int]bool {
+	effective := map[int]bool{}
+	positiveFound, onlyBaseCash := false, true
+	for _, asset := range ds.Enabled {
+		if asset.Item.Weight <= ResearchWeightTolerance {
+			continue
+		}
+		positiveFound = true
+		if !asset.IsCash || len(asset.FXPairs) > 0 {
+			onlyBaseCash = false
+		}
+		appendResearchAssetObservationDays(effective, ds, asset, lo, hi)
+	}
+	if positiveFound && onlyBaseCash {
+		for day := lo + 1; day <= hi; day++ {
+			if isResearchWeekday(day) {
+				effective[day] = true
+			}
+		}
+	}
+	return effective
+}
+
+func appendResearchAssetObservationDays(
+	effective map[int]bool,
+	ds *researchDataset,
+	asset researchAssetData,
+	lo, hi int,
+) {
+	if !asset.IsCash {
+		appendMarketAssetObservationDays(effective, asset.Points, lo, hi)
+	}
+	for _, pair := range asset.FXPairs {
+		fx := ds.FX[pair]
+		if fx == nil || !fx.Found {
+			continue
+		}
+		for _, point := range fx.Points {
+			appendResearchObservationDay(effective, point.TradeDate, lo, hi)
+		}
+	}
+}
+
+func appendMarketAssetObservationDays(
+	effective map[int]bool, points []repository.MarketAssetPoint, lo, hi int,
+) {
+	for _, point := range points {
+		appendResearchObservationDay(effective, point.TradeDate, lo, hi)
+	}
+}
+
+func appendResearchObservationDay(effective map[int]bool, tradeDate string, lo, hi int) {
+	day, err := parseResearchDate(tradeDate)
+	if err == nil && day > lo && day <= hi {
+		effective[day] = true
+	}
 }
 
 func evaluateResearchFillWarnings(
@@ -1085,7 +1243,8 @@ func addCorrelationWarnings(
 	for i := 0; i < len(entries); i++ {
 		for j := i + 1; j < len(entries); j++ {
 			corr, samples, ok := sharedObservationCorrelation(
-				entries[i].series, entries[j].series, winLo, winHi)
+				entries[i].series, entries[j].series, winLo, winHi,
+			)
 			if !ok || samples < researchReadinessCorrelationSample {
 				continue
 			}

@@ -16,7 +16,7 @@ def test_fetch_failure_propagates_and_logs_sources(caplog) -> None:
         source_code="sh510300",
         start_date=None,
         end_date="2026-06-09",
-        adjust_policy="qfq",
+        adjust_policy="hfq",
     )
     with patch(
         "fireman_market_provider.adapters.registry.try_sources",

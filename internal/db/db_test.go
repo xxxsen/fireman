@@ -166,6 +166,23 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		t.Errorf("expected 2 system FX instruments, got %d", fxCount)
 	}
 
+	var confidenceDefault, horizonDefault string
+	if err := pool.QueryRowContext(
+		ctx,
+		"SELECT dflt_value FROM pragma_table_info('research_collections') WHERE name='tail_risk_confidence'",
+	).Scan(&confidenceDefault); err != nil {
+		t.Fatalf("read tail_risk_confidence migration: %v", err)
+	}
+	if err := pool.QueryRowContext(
+		ctx,
+		"SELECT dflt_value FROM pragma_table_info('research_collections') WHERE name='tail_risk_horizon_days'",
+	).Scan(&horizonDefault); err != nil {
+		t.Fatalf("read tail_risk_horizon_days migration: %v", err)
+	}
+	if confidenceDefault != "0.95" || horizonDefault != "20" {
+		t.Fatalf("unexpected CVaR defaults: confidence=%q horizon=%q", confidenceDefault, horizonDefault)
+	}
+
 	if err := Migrate(ctx, pool, dbPath, nil); err != nil {
 		t.Fatalf("second Migrate (idempotent run): %v", err)
 	}
@@ -175,8 +192,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 28 {
-		t.Errorf("expected 28 migration records after idempotent re-run, got %d", migrationCount)
+	if migrationCount != 30 {
+		t.Errorf("expected 30 migration records after idempotent re-run, got %d", migrationCount)
 	}
 }
 

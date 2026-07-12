@@ -725,6 +725,172 @@ func TestRunBacktestTooFewEffectiveDays(t *testing.T) {
 	}
 }
 
+func TestRunBacktestTailRiskMatchesPureFunction(t *testing.T) {
+	points := genDailySeries(t, "2020-01-01", 500, func(i int) float64 {
+		return 100 * math.Pow(1.0002+0.0003*math.Sin(float64(i)/13), float64(i))
+	})
+	in := singleAssetInput(t, points)
+	in.TailRisk = &TailRiskSpec{Confidence: 0.95, HorizonDays: 20}
+	result, err := RunResearchBacktest(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	returns := make([]float64, 0, len(result.Points)-1)
+	for i := 1; i < len(result.Points); i++ {
+		returns = append(returns, result.Points[i].PeriodReturn)
+	}
+	want, err := ComputeEmpiricalCVaR(returns, *in.TailRisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.TailRisk == nil || *result.Summary.TailRisk != want {
+		t.Fatalf("summary tail risk = %+v, want %+v", result.Summary.TailRisk, want)
+	}
+	repeated, err := RunResearchBacktest(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstJSON, _ := json.Marshal(result.Summary)
+	secondJSON, _ := json.Marshal(repeated.Summary)
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatalf("same input produced different summary JSON:\n%s\n%s", firstJSON, secondJSON)
+	}
+}
+
+func TestRunBacktestZeroWeightAssetDoesNotChangeEffectiveMetrics(t *testing.T) {
+	start, _ := time.Parse("2006-01-02", "2020-01-01")
+	positive, zero := make([]ResearchSeriesPoint, 0, 251), make([]ResearchSeriesPoint, 0, 252)
+	for i := 0; i <= 500; i++ {
+		point := ResearchSeriesPoint{
+			Date: start.AddDate(0, 0, i).Format("2006-01-02"), Value: 100 + float64(i)/10,
+		}
+		if i%2 == 0 {
+			positive = append(positive, point)
+		}
+		if i >= 100 && i <= 400 && i%2 == 1 {
+			zero = append(zero, point)
+		}
+	}
+	spec := &TailRiskSpec{Confidence: 0.95, HorizonDays: 20}
+	base := singleAssetInput(t, positive)
+	base.TailRisk = spec
+	withZero := base
+	withZero.Assets = append(append([]BacktestAssetInput(nil), base.Assets...), BacktestAssetInput{
+		AssetKey: "ZERO", Name: "Zero", Currency: "USD", Weight: 0, Points: zero,
+	})
+	withZero.FX = map[string][]ResearchSeriesPoint{"USDCNY": zero}
+	one, err := RunResearchBacktest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := RunResearchBacktest(withZero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Summary.EffectiveReturnDays != len(positive)-1 ||
+		one.Summary.EffectiveReturnDays != two.Summary.EffectiveReturnDays ||
+		one.WindowStart != two.WindowStart || one.WindowEnd != two.WindowEnd ||
+		!almostEqual(one.Summary.CumulativeReturn, two.Summary.CumulativeReturn, 1e-15) ||
+		!almostEqual(one.Summary.CAGR, two.Summary.CAGR, 1e-15) ||
+		!almostEqual(one.Summary.MaxDrawdown, two.Summary.MaxDrawdown, 1e-15) ||
+		!almostEqual(*one.Summary.AnnualVolatility, *two.Summary.AnnualVolatility, 1e-15) ||
+		one.Summary.TailRisk == nil || two.Summary.TailRisk == nil ||
+		*one.Summary.TailRisk != *two.Summary.TailRisk {
+		t.Fatalf("zero-weight asset changed effective metrics: one=%+v two=%+v", one.Summary, two.Summary)
+	}
+}
+
+func TestRunBacktestFrozenEffectiveCalendarIsIdenticalAcrossWeights(t *testing.T) {
+	start, _ := time.Parse("2006-01-02", "2020-01-01")
+	even, odd := make([]ResearchSeriesPoint, 0, 301), make([]ResearchSeriesPoint, 0, 300)
+	for i := 0; i <= 600; i++ {
+		point := ResearchSeriesPoint{
+			Date: start.AddDate(0, 0, i).Format("2006-01-02"), Value: 100 + float64(i)/10,
+		}
+		if i%2 == 0 {
+			even = append(even, point)
+		}
+		if i%2 == 1 {
+			odd = append(odd, point)
+		}
+	}
+	base := BacktestInput{
+		BaseCurrency: "CNY", RebalancePolicy: ResearchRebalanceBuyHold,
+		WindowStart:             start.AddDate(0, 0, 1).Format("2006-01-02"),
+		WindowEnd:               start.AddDate(0, 0, 599).Format("2006-01-02"),
+		TailRisk:                &TailRiskSpec{Confidence: 0.95, HorizonDays: 20},
+		FreezeEffectiveCalendar: true,
+		Assets: []BacktestAssetInput{
+			{AssetKey: "EVEN", Name: "Even", Currency: "CNY", Weight: 1, Points: even},
+			{AssetKey: "ODD", Name: "Odd", Currency: "CNY", Weight: 0, Points: odd},
+		},
+	}
+	one, err := RunResearchBacktest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := base
+	mixed.Assets = append([]BacktestAssetInput(nil), base.Assets...)
+	mixed.Assets[0].Weight, mixed.Assets[1].Weight = 0.8, 0.2
+	two, err := RunResearchBacktest(mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Summary.EffectiveReturnDays != two.Summary.EffectiveReturnDays ||
+		one.Summary.TailRisk == nil || two.Summary.TailRisk == nil ||
+		one.Summary.TailRisk.ScenarioCount != two.Summary.TailRisk.ScenarioCount {
+		t.Fatalf("frozen calendar changed across weights: one=%+v two=%+v", one.Summary, two.Summary)
+	}
+	if one.Summary.EffectiveReturnDays != 598 || one.Summary.TailRisk.ScenarioCount != 579 {
+		t.Fatalf("unexpected frozen sample counts: %+v", one.Summary)
+	}
+}
+
+func TestRunBacktestBaseCashUsesExplicitWeekdayWindow(t *testing.T) {
+	in := BacktestInput{
+		BaseCurrency: "CNY", RebalancePolicy: ResearchRebalanceBuyHold,
+		WindowStart: "2020-01-01", WindowEnd: "2021-06-01",
+		TailRisk: &TailRiskSpec{Confidence: 0.95, HorizonDays: 20},
+		Assets:   []BacktestAssetInput{{AssetKey: "CASH", Name: "Cash", Currency: "CNY", Weight: 1, IsCash: true}},
+	}
+	result, err := RunResearchBacktest(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.TailRisk == nil || result.Summary.TailRisk.VaRLoss != 0 ||
+		result.Summary.TailRisk.CVaRLoss != 0 || result.Summary.TailRisk.WorstLoss != 0 {
+		t.Fatalf("unexpected all-cash tail risk: %+v", result.Summary.TailRisk)
+	}
+	in.WindowEnd = ""
+	if _, err := RunResearchBacktest(in); !errors.Is(err, ErrResearchNoCommonWindow) {
+		t.Fatalf("all-cash run without complete explicit window error = %v", err)
+	}
+}
+
+func TestRunBacktestForeignCashFXObservationsAreEffective(t *testing.T) {
+	start, _ := time.Parse("2006-01-02", "2020-01-01")
+	fx := make([]ResearchSeriesPoint, 0, 260)
+	for i := 0; i < 520; i += 2 {
+		fx = append(fx, ResearchSeriesPoint{
+			Date:  start.AddDate(0, 0, i).Format("2006-01-02"),
+			Value: 7 + 0.1*math.Sin(float64(i)/17),
+		})
+	}
+	result, err := RunResearchBacktest(BacktestInput{
+		BaseCurrency: "CNY", RebalancePolicy: ResearchRebalanceBuyHold,
+		TailRisk: &TailRiskSpec{Confidence: 0.95, HorizonDays: 20},
+		Assets:   []BacktestAssetInput{{AssetKey: "USD_CASH", Currency: "USD", Weight: 1, IsCash: true}},
+		FX:       map[string][]ResearchSeriesPoint{"USDCNY": fx},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.EffectiveReturnDays != len(fx)-1 || result.Summary.TailRisk == nil ||
+		result.Summary.TailRisk.ScenarioCount != len(fx)-20 {
+		t.Fatalf("FX observations were not used as effective days: %+v", result.Summary)
+	}
+}
+
 // --- cash assets ---
 
 func TestRunBacktestCashAsset(t *testing.T) {

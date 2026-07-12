@@ -19,7 +19,8 @@ import (
 // ErrResearchSourceChanged aborts a run whose underlying market data changed
 // between snapshot freeze and execution.
 var ErrResearchSourceChanged = errors.New(
-	"research backtest source data changed since the run was created")
+	"research backtest source data changed since the run was created",
+)
 
 const researchJobPhases = 4
 
@@ -141,6 +142,8 @@ func (s *ResearchService) loadDatasetFromSnapshot(
 		StartPolicy:         snapshot.Collection.StartPolicy,
 		RiskFreeRate:        snapshot.Collection.RiskFreeRate,
 		TransactionCostRate: snapshot.Collection.TransactionCostRate,
+		TailRiskConfidence:  snapshot.Collection.TailRiskConfidence,
+		TailRiskHorizonDays: snapshot.Collection.TailRiskHorizonDays,
 		BenchmarkAssetKey:   snapshot.Collection.BenchmarkAssetKey,
 		WindowStart:         snapshot.WindowStart,
 		WindowEnd:           snapshot.WindowEnd,
@@ -210,6 +213,11 @@ func backtestInputFromDataset(
 		WindowStart:         snapshot.WindowStart,
 		WindowEnd:           snapshot.WindowEnd,
 		FX:                  map[string][]ResearchSeriesPoint{},
+	}
+	if snapshot.Collection.TailRiskConfidence != 0 || snapshot.Collection.TailRiskHorizonDays != 0 {
+		input.TailRisk = &TailRiskSpec{
+			Confidence: snapshot.Collection.TailRiskConfidence, HorizonDays: snapshot.Collection.TailRiskHorizonDays,
+		}
 	}
 	for _, a := range ds.Enabled {
 		input.Assets = append(input.Assets, BacktestAssetInput{

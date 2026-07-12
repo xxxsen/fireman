@@ -46,6 +46,8 @@ type ResearchCollection struct {
 	BenchmarkAssetKey   string  `json:"benchmark_asset_key,omitempty"`
 	RiskFreeRate        float64 `json:"risk_free_rate"`
 	TransactionCostRate float64 `json:"transaction_cost_rate"`
+	TailRiskConfidence  float64 `json:"tail_risk_confidence"`
+	TailRiskHorizonDays int     `json:"tail_risk_horizon_days"`
 	Status              string  `json:"status"`
 	TagsJSON            string  `json:"tags_json"`
 	CreatedAt           int64   `json:"created_at"`
@@ -184,7 +186,8 @@ func (r *ResearchRepo) exec(tx *sql.Tx) dbExec {
 const researchCollectionColumns = `
 	id, name, description, base_currency, initial_amount_minor,
 	rebalance_policy, rebalance_threshold, start_policy, window_start, window_end,
-	benchmark_asset_key, risk_free_rate, transaction_cost_rate,
+		benchmark_asset_key, risk_free_rate, transaction_cost_rate,
+		tail_risk_confidence, tail_risk_horizon_days,
 	status, tags_json, created_at, updated_at`
 
 func scanResearchCollection(row rowScanner) (ResearchCollection, error) {
@@ -194,6 +197,7 @@ func scanResearchCollection(row rowScanner) (ResearchCollection, error) {
 		&c.ID, &c.Name, &c.Description, &c.BaseCurrency, &c.InitialAmountMinor,
 		&c.RebalancePolicy, &c.RebalanceThreshold, &c.StartPolicy, &c.WindowStart, &c.WindowEnd,
 		&benchmark, &c.RiskFreeRate, &c.TransactionCostRate,
+		&c.TailRiskConfidence, &c.TailRiskHorizonDays,
 		&c.Status, &c.TagsJSON, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -220,12 +224,14 @@ func (r *ResearchRepo) CreateCollectionTx(ctx context.Context, tx *sql.Tx, c Res
 		INSERT INTO research_collections (
 			id, name, description, base_currency, initial_amount_minor,
 			rebalance_policy, rebalance_threshold, start_policy, window_start, window_end,
-			benchmark_asset_key, risk_free_rate, transaction_cost_rate,
-			status, tags_json, created_at, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				benchmark_asset_key, risk_free_rate, transaction_cost_rate,
+				tail_risk_confidence, tail_risk_horizon_days,
+				status, tags_json, created_at, updated_at
+			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.Name, c.Description, c.BaseCurrency, c.InitialAmountMinor,
 		c.RebalancePolicy, c.RebalanceThreshold, c.StartPolicy, c.WindowStart, c.WindowEnd,
 		benchmark, c.RiskFreeRate, c.TransactionCostRate,
+		c.TailRiskConfidence, c.TailRiskHorizonDays,
 		c.Status, c.TagsJSON, c.CreatedAt, c.UpdatedAt)
 	return wrapSQL("insert research collection", err)
 }
@@ -240,12 +246,14 @@ func (r *ResearchRepo) UpdateCollectionTx(ctx context.Context, tx *sql.Tx, c Res
 		UPDATE research_collections SET
 			name=?, description=?, base_currency=?, initial_amount_minor=?,
 			rebalance_policy=?, rebalance_threshold=?, start_policy=?, window_start=?, window_end=?,
-			benchmark_asset_key=?, risk_free_rate=?, transaction_cost_rate=?,
+				benchmark_asset_key=?, risk_free_rate=?, transaction_cost_rate=?,
+				tail_risk_confidence=?, tail_risk_horizon_days=?,
 			status=?, tags_json=?, updated_at=?
 		WHERE id=?`,
 		c.Name, c.Description, c.BaseCurrency, c.InitialAmountMinor,
 		c.RebalancePolicy, c.RebalanceThreshold, c.StartPolicy, c.WindowStart, c.WindowEnd,
 		benchmark, c.RiskFreeRate, c.TransactionCostRate,
+		c.TailRiskConfidence, c.TailRiskHorizonDays,
 		c.Status, c.TagsJSON, c.UpdatedAt, c.ID)
 	if err != nil {
 		return wrapSQL("update research collection", err)
@@ -295,7 +303,8 @@ func (r *ResearchRepo) ListCollections(ctx context.Context, status string) ([]Re
 		where = "WHERE status=?"
 		args = append(args, status)
 	}
-	return queryCollect(ctx, r.db,
+	return queryCollect(
+		ctx, r.db,
 		`SELECT `+researchCollectionColumns+` FROM research_collections `+where+`
 		 ORDER BY updated_at DESC, id ASC`, args,
 		func(rows *sql.Rows) (ResearchCollection, error) { return scanResearchCollection(rows) },
@@ -422,7 +431,8 @@ func (r *ResearchRepo) ListItemsTx(
 func (r *ResearchRepo) listItems(
 	ctx context.Context, q rowQuerier, collectionID string,
 ) ([]ResearchCollectionItem, error) {
-	return queryCollect(ctx, q,
+	return queryCollect(
+		ctx, q,
 		`SELECT `+researchItemColumns+` FROM research_collection_items
 		 WHERE collection_id=? ORDER BY sort_order, created_at, id`, []any{collectionID},
 		func(rows *sql.Rows) (ResearchCollectionItem, error) { return scanResearchItem(rows) },
@@ -553,7 +563,8 @@ func (r *ResearchRepo) ListRunsByCollection(
 	if limit <= 0 {
 		limit = 20
 	}
-	return queryCollect(ctx, r.db,
+	return queryCollect(
+		ctx, r.db,
 		`SELECT `+researchRunListColumns+` FROM research_backtest_runs
 		 WHERE collection_id=? ORDER BY created_at DESC, id DESC LIMIT ?`,
 		[]any{collectionID, limit},
@@ -567,7 +578,8 @@ func (r *ResearchRepo) ListRecentRuns(ctx context.Context, limit int) ([]Researc
 	if limit <= 0 {
 		limit = 10
 	}
-	return queryCollect(ctx, r.db,
+	return queryCollect(
+		ctx, r.db,
 		`SELECT `+researchRunListColumns+` FROM research_backtest_runs
 		 ORDER BY created_at DESC, id DESC LIMIT ?`, []any{limit},
 		func(rows *sql.Rows) (ResearchBacktestRun, error) { return scanResearchRun(rows) },
@@ -764,7 +776,8 @@ func (r *ResearchRepo) ListPoints(
 		}
 	}
 	pagedArgs := append(append([]any{}, args...), limit, q.Offset)
-	points, err := queryCollect(ctx, r.db, `
+	points, err := queryCollect(
+		ctx, r.db, `
 		SELECT run_id, trade_date, nav, cumulative_return, period_return, drawdown,
 			benchmark_nav, benchmark_return, weights_json, contributions_json
 		FROM research_backtest_points `+where+`
@@ -787,7 +800,8 @@ func (r *ResearchRepo) ListPoints(
 }
 
 func (r *ResearchRepo) ListYears(ctx context.Context, runID string) ([]ResearchBacktestYear, error) {
-	return queryCollect(ctx, r.db, `
+	return queryCollect(
+		ctx, r.db, `
 		SELECT run_id, year, annual_return, volatility, max_drawdown, start_nav, end_nav, is_partial
 		FROM research_backtest_years WHERE run_id=? ORDER BY year DESC`, []any{runID},
 		func(rows *sql.Rows) (ResearchBacktestYear, error) {
@@ -805,7 +819,8 @@ func (r *ResearchRepo) ListYears(ctx context.Context, runID string) ([]ResearchB
 }
 
 func (r *ResearchRepo) ListMonths(ctx context.Context, runID string) ([]ResearchBacktestMonth, error) {
-	return queryCollect(ctx, r.db, `
+	return queryCollect(
+		ctx, r.db, `
 		SELECT run_id, year, month, monthly_return
 		FROM research_backtest_months WHERE run_id=? ORDER BY year, month`, []any{runID},
 		func(rows *sql.Rows) (ResearchBacktestMonth, error) {
@@ -880,7 +895,8 @@ func (r *ResearchRepo) ListMetricsByAssetKeys(
 		assetKeys,
 		`) ORDER BY asset_key, adjust_policy, point_type`,
 	)
-	return queryCollect(ctx, r.db,
+	return queryCollect(
+		ctx, r.db,
 		query, args,
 		func(rows *sql.Rows) (ResearchAssetMetrics, error) {
 			m, err := scanResearchMetrics(rows)
@@ -1127,16 +1143,24 @@ func (r *ResearchRepo) SearchResearchAssets(
 
 	base := `
 	FROM market_assets a
-	LEFT JOIN (
-		SELECT h1.asset_key, h1.adjust_policy, h1.point_type, h1.data_as_of,
-			h1.point_count, h1.source_name,
-			ROW_NUMBER() OVER (
-				PARTITION BY h1.asset_key
-				ORDER BY h1.point_count DESC, h1.adjust_policy, h1.point_type
-			) AS rn
-		FROM market_asset_history_state h1
-		WHERE h1.point_count > 0
-	) h ON h.asset_key = a.asset_key AND h.rn = 1
+		LEFT JOIN (
+			SELECT h1.asset_key, h1.adjust_policy, h1.point_type, h1.data_as_of,
+				h1.point_count, h1.source_name,
+				ROW_NUMBER() OVER (
+					PARTITION BY h1.asset_key
+					ORDER BY h1.point_count DESC, h1.point_type
+				) AS rn
+			FROM market_asset_history_state h1
+			JOIN market_assets a1 ON a1.asset_key = h1.asset_key
+			WHERE h1.point_count > 0 AND (
+				(a1.instrument_type IN (
+					'cn_exchange_stock', 'cn_exchange_fund', 'hk_stock', 'hk_etf', 'us_stock', 'us_etf'
+				) AND h1.adjust_policy = 'hfq' AND h1.point_type = 'adjusted_close')
+				OR (a1.instrument_type = 'cn_mutual_fund'
+					AND h1.adjust_policy = 'none'
+					AND h1.point_type IN ('nav', 'total_return_index'))
+			)
+		) h ON h.asset_key = a.asset_key AND h.rn = 1
 	LEFT JOIN research_asset_metrics m
 		ON m.asset_key = h.asset_key
 		AND m.adjust_policy = h.adjust_policy
@@ -1307,7 +1331,8 @@ func (r *ResearchRepo) ListStaleMetricsDimensions(
 	if limit <= 0 {
 		limit = 200
 	}
-	return queryCollect(ctx, r.db, `
+	return queryCollect(
+		ctx, r.db, `
 		SELECT h.asset_key, h.adjust_policy, h.point_type
 		FROM market_asset_history_state h
 		LEFT JOIN research_asset_metrics m

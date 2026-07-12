@@ -121,10 +121,10 @@ def tickflow_require_adjust_none() -> bool:
 
 
 # Fireman adjust policies mapped to the SDK's adjust enum. The default
-# REQUIRE_ADJUST_NONE gate keeps qfq/hfq off TickFlow until reconciliation of
+# REQUIRE_ADJUST_NONE gate keeps hfq off TickFlow until reconciliation of
 # the adjusted series is done; this mapping keeps the escape hatch coherent
-# instead of mislabeling unadjusted data under qfq/hfq.
-_TICKFLOW_ADJUST_BY_POLICY = {"none": "none", "qfq": "forward", "hfq": "backward"}
+# instead of mislabeling unadjusted data under hfq.
+_TICKFLOW_ADJUST_BY_POLICY = {"none": "none", "hfq": "backward"}
 
 _client_lock = threading.Lock()
 _client: TickFlow | None = None

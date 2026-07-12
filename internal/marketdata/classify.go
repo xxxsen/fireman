@@ -70,16 +70,6 @@ func FeeTreatmentForType(instrumentType string) string {
 	}
 }
 
-// DefaultAdjustPolicy picks adjust policy for import.
-func DefaultAdjustPolicy(instrumentType string) string {
-	switch instrumentType {
-	case "cn_exchange_stock", "cn_exchange_fund", "us_stock", "us_etf", "hk_stock", "hk_etf":
-		return "qfq"
-	default:
-		return "none"
-	}
-}
-
 // ExpenseRatioFromComponents extracts validated expense ratio if present.
 func ExpenseRatioFromComponents(components map[string]any) *float64 {
 	if components == nil {

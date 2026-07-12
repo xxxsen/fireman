@@ -231,7 +231,7 @@ func TestAutoUpdateScanProcessesMoreThanOneBatch(t *testing.T) {
 	}
 	for i := range 101 {
 		key := fmt.Sprintf("US|us_stock|nasdaq|AUTO%03d", i)
-		if _, err := svc.SetHistory(ctx, key, "none", "adjusted_close", true); err != nil {
+		if _, err := svc.SetHistory(ctx, key, "hfq", "adjusted_close", true); err != nil {
 			t.Fatal(err)
 		}
 	}

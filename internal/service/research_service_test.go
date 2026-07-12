@@ -71,7 +71,7 @@ func insertResearchFixtureAsset(
 		points := make([]repository.MarketAssetPoint, 0, days)
 		for i := 0; i < days; i++ {
 			points = append(points, repository.MarketAssetPoint{
-				AssetKey: key, AdjustPolicy: "none", PointType: "adjusted_close",
+				AssetKey: key, AdjustPolicy: "hfq", PointType: "adjusted_close",
 				TradeDate: st.AddDate(0, 0, i).Format("2006-01-02"),
 				Value:     value(i), SourceName: "test_source", FetchedAt: now,
 			})
@@ -84,7 +84,7 @@ func insertResearchFixtureAsset(
 			INSERT INTO market_asset_history_state
 				(asset_key, adjust_policy, point_type, data_as_of, point_count, source_name, updated_at)
 			VALUES (?,?,?,?,?,?,?)`,
-			key, "none", "adjusted_close", last, days, "test_source", now); err != nil {
+			key, "hfq", "adjusted_close", last, days, "test_source", now); err != nil {
 			t.Fatalf("insert history state: %v", err)
 		}
 	}
@@ -118,6 +118,7 @@ func TestResearchCollectionCRUDAndNormalize(t *testing.T) {
 	insertResearchFixtureAsset(t, svc.sql, "A1", "资产一", "CNY", "2020-01-01", 1643, growthValue(100))
 	insertResearchFixtureAsset(t, svc.sql, "A2", "资产二", "CNY", "2020-01-01", 1643, growthValue(50))
 	insertResearchFixtureAsset(t, svc.sql, "A3", "资产三", "CNY", "2020-01-01", 1643, growthValue(10))
+	insertResearchFixtureAsset(t, svc.sql, "A4", "旧口径资产", "CNY", "", 0, nil)
 
 	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
 		Name: "组合甲",
@@ -158,6 +159,13 @@ func TestResearchCollectionCRUDAndNormalize(t *testing.T) {
 	// Duplicate dimension rejected.
 	if _, err := svc.AddItem(ctx, detail.ID, ResearchCollectionItemInput{AssetKey: "A1"}); err == nil {
 		t.Fatal("duplicate item should fail")
+	}
+
+	_, err = svc.AddItem(ctx, detail.ID, ResearchCollectionItemInput{
+		AssetKey: "A4", AdjustPolicy: "none", PointType: "adjusted_close",
+	})
+	if err == nil {
+		t.Fatal("none + adjusted_close must be rejected instead of canonicalized")
 	}
 
 	// Update + delete item.
@@ -397,7 +405,7 @@ func TestResearchSourceHashIncludesForwardFillAnchor(t *testing.T) {
 	}
 
 	// Mutating the forward-fill anchor must change both hashes.
-	moved, movedInput := snapshotFor(buildDataset(150, 100))
+	moved, movedInput := snapshotFor(buildDataset(120, 100))
 	if moved.SourceHash == base.SourceHash {
 		t.Fatal("source_hash must change when the forward-fill anchor changes")
 	}
@@ -407,7 +415,7 @@ func TestResearchSourceHashIncludesForwardFillAnchor(t *testing.T) {
 
 	// Mutating a point strictly before the anchor stays outside the minimal
 	// closure and must not change the hashes.
-	unrelated, unrelatedInput := snapshotFor(buildDataset(100, 150))
+	unrelated, unrelatedInput := snapshotFor(buildDataset(100, 120))
 	if unrelated.SourceHash != base.SourceHash {
 		t.Fatal("source_hash must ignore points before the forward-fill anchor")
 	}
@@ -422,6 +430,28 @@ func TestResearchSourceHashIncludesForwardFillAnchor(t *testing.T) {
 		if entry.AnchorDate != "" {
 			t.Fatalf("unexpected anchor for %s: %s", entry.AssetKey, entry.AnchorDate)
 		}
+	}
+}
+
+func TestResearchTailRiskChangesInputHashButNotSourceHash(t *testing.T) {
+	ds := rdDataset(rdAsset(t, "A", 1, "2020-01-01", 1642))
+	ds.Collection.TailRiskConfidence = 0.95
+	ds.Collection.TailRiskHorizonDays = 20
+	readiness := evaluateResearchReadiness(ds, rdNow(t))
+	if !readiness.Ready {
+		t.Fatalf("fixture not ready: %+v", readiness.BlockingReasons)
+	}
+	first := buildResearchSnapshot(ds, readiness)
+	firstInputHash := computeResearchInputHash(first, ds)
+
+	ds.Collection.TailRiskConfidence = 0.90
+	second := buildResearchSnapshot(ds, readiness)
+	secondInputHash := computeResearchInputHash(second, ds)
+	if first.SourceHash != second.SourceHash {
+		t.Fatal("CVaR spec must not change source hash")
+	}
+	if firstInputHash == secondInputHash {
+		t.Fatal("CVaR spec must change input hash")
 	}
 }
 
@@ -458,7 +488,7 @@ func TestResearchBacktestAnchorChangeCreatesFreshRun(t *testing.T) {
 
 	// Only the pre-window anchor changes; every in-window point is intact.
 	if _, err := db.ExecContext(ctx, `
-		UPDATE market_asset_points SET value = value * 1.5
+		UPDATE market_asset_points SET value = value * 1.1
 		WHERE asset_key='D1' AND trade_date='2020-05-31'`); err != nil {
 		t.Fatalf("mutate anchor: %v", err)
 	}
@@ -505,7 +535,7 @@ func TestResearchBacktestSourceChanged(t *testing.T) {
 
 	// Mutate one in-window point before the job runs.
 	if _, err := db.ExecContext(ctx, `
-		UPDATE market_asset_points SET value = value * 1.5
+		UPDATE market_asset_points SET value = value * 1.1
 		WHERE asset_key='C1' AND trade_date='2022-01-05'`); err != nil {
 		t.Fatalf("mutate point: %v", err)
 	}
@@ -677,6 +707,14 @@ func TestResearchScreenerFiltersAndMetrics(t *testing.T) {
 	ctx := context.Background()
 	insertResearchFixtureAsset(t, db, "S1", "沪深基金", "CNY", "2020-01-01", 1643, growthValue(100))
 	insertResearchFixtureAsset(t, db, "S2", "无历史", "CNY", "", 0, nil)
+	insertResearchFixtureAsset(t, db, "S3", "仅旧未复权历史", "CNY", "", 0, nil)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO market_asset_history_state
+			(asset_key, adjust_policy, point_type, data_as_of, point_count, source_name, updated_at)
+		VALUES ('S3', 'none', 'adjusted_close', '2024-06-30', 1000, 'legacy_raw', ?)`,
+		researchTestNow.UnixMilli()); err != nil {
+		t.Fatalf("insert legacy raw history: %v", err)
+	}
 
 	// Lazy backfill computes metrics for S1 during the first listing.
 	out, err := svc.ListResearchAssets(ctx, ResearchAssetListParams{})
@@ -700,6 +738,10 @@ func TestResearchScreenerFiltersAndMetrics(t *testing.T) {
 	}
 	if len(s2.QualityBadges) == 0 || s2.QualityBadges[0] != "missing_history" {
 		t.Fatalf("S2 badges wrong: %+v", s2.QualityBadges)
+	}
+	s3, ok := byKey["S3"]
+	if !ok || s3.HasHistory || s3.BacktestReady {
+		t.Fatalf("legacy raw history must not be advertised as research-ready: %+v", s3)
 	}
 
 	// history_status filter.

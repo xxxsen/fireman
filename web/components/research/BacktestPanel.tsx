@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/Button";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import { OptimizationConfigDialog } from "@/components/research/OptimizationConfigDialog";
+import type { OptimizationSubmitConfig } from "@/components/research/OptimizationConfigDialog";
 
 /**
  * The run button's disabled explanation, derived from readiness in priority
@@ -105,8 +106,11 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
   const disabledReason = useMemo(() => runDisabledReason(readiness), [readiness]);
 
   const optReadinessQuery = useQuery({
-    queryKey: ["research", "optimization-readiness", detail.id],
-    queryFn: () => getOptimizationReadiness(detail.id),
+    queryKey: ["research", "optimization-readiness", detail.id, detail.tail_risk_confidence, detail.tail_risk_horizon_days],
+    queryFn: () => getOptimizationReadiness(detail.id, {
+      confidence: detail.tail_risk_confidence,
+      horizonDays: detail.tail_risk_horizon_days,
+    }),
     enabled: !!readiness,
   });
 
@@ -129,7 +133,7 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
   });
 
   const optimizeMutation = useMutation({
-    mutationFn: (config: { weight_step: number; top_k: number }) =>
+    mutationFn: (config: OptimizationSubmitConfig) =>
       createOptimization(detail.id, config),
     onSuccess: (result) => {
       setOptDialogOpen(false);
@@ -153,7 +157,7 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         </Link>
       </div>
 
-      <dl className="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
+      <dl className="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3 lg:grid-cols-6">
         <div>
           <dt className="text-ink-muted">基准币种</dt>
           <dd className="font-medium text-ink">{detail.base_currency}</dd>
@@ -178,6 +182,22 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
           <dt className="text-ink-muted">基准资产</dt>
           <dd className="truncate font-medium text-ink">
             {detail.benchmark_asset_key || "无"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-ink-muted">CVaR 口径</dt>
+          <dd className="font-medium text-ink">
+            {readiness?.tail_risk
+              ? `${readiness.tail_risk.horizon_days} 日 / ${readiness.tail_risk.confidence * 100}%`
+              : `${detail.tail_risk_horizon_days} 日 / ${detail.tail_risk_confidence * 100}%`}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-ink-muted">CVaR 场景</dt>
+          <dd className="font-medium text-ink" data-testid="backtest-cvar-scenarios">
+            {readiness?.tail_risk
+              ? `${readiness.tail_risk.scenario_count} / 最少 ${readiness.tail_risk.minimum_scenario_count}`
+              : "待数据就绪"}
           </dd>
         </div>
       </dl>
@@ -248,6 +268,8 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
           pending={optimizeMutation.isPending}
           onSubmit={(config) => optimizeMutation.mutate(config)}
           collectionId={detail.id}
+          defaultConfidence={detail.tail_risk_confidence}
+          defaultHorizonDays={detail.tail_risk_horizon_days}
         />
       )}
 

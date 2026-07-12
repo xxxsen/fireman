@@ -45,6 +45,8 @@ function detail(): ResearchCollectionDetail {
     window_end: "",
     risk_free_rate: 0.02,
     transaction_cost_rate: 0,
+    tail_risk_confidence: 0.95,
+    tail_risk_horizon_days: 20,
     status: "active",
     created_at: 0,
     updated_at: 0,
@@ -69,6 +71,13 @@ function readiness(overrides: Partial<ResearchReadiness> = {}): ResearchReadines
       fx_pairs: [],
       stale_asset_count: 0,
       missing_history_count: 0,
+    },
+    tail_risk: {
+      confidence: 0.95,
+      horizon_days: 20,
+      effective_return_count: 252,
+      scenario_count: 233,
+      minimum_scenario_count: 100,
     },
     ...overrides,
   };
@@ -192,7 +201,7 @@ describe("runDisabledReason", () => {
           is_cash: false,
           enabled: true,
           weight: 0.5,
-          adjust_policy: "qfq",
+          adjust_policy: "hfq",
           point_type: "adjusted_close",
           listing_status: "active",
           has_history: true,
@@ -319,6 +328,7 @@ describe("BacktestPanel", () => {
     expect(screen.getByTestId("backtest-window")).toHaveTextContent(
       "2018-01-01 ~ 2026-07-01",
     );
+    expect(screen.getByTestId("backtest-cvar-scenarios")).toHaveTextContent("233 / 最少 100");
   });
 
   it("enables the find-optimal button when optimization readiness is ready", async () => {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -542,29 +541,7 @@ func validateAutoUpdateHistoryDimension(
 	adjustPolicy string,
 	pointType string,
 ) error {
-	switch adjustPolicy {
-	case "none", "qfq", "hfq":
-	default:
-		return newErr(
-			"invalid_request", "adjust_policy must be none, qfq or hfq", nil,
-		)
-	}
-	wantPoint := DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
-	if pointType != wantPoint {
-		return newErr(
-			"invalid_request",
-			fmt.Sprintf("point_type must be %s for this asset", wantPoint),
-			nil,
-		)
-	}
-	if asset.InstrumentType == "cn_mutual_fund" && adjustPolicy != "none" {
-		return newErr(
-			"invalid_request",
-			"mutual fund history only supports adjust_policy none",
-			nil,
-		)
-	}
-	return nil
+	return ValidateHistoryDimension(asset, adjustPolicy, pointType)
 }
 
 func (s *AutoUpdateService) markScanFailure(

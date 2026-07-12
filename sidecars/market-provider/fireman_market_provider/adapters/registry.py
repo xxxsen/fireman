@@ -91,11 +91,16 @@ def _cn_em_adjust(adjust_policy: str) -> str:
         return "hfq"
     if adjust_policy == "none":
         return ""
-    return "qfq"
+    raise ValueError(f"unsupported adjust policy {adjust_policy}")
 
 
 def _cn_stock_em_adjust(adjust_policy: str) -> str:
     return _cn_em_adjust(adjust_policy)
+
+
+def _exchange_point_type(adjust_policy: str) -> PointType:
+    """Keep the stored point type consistent with the requested price semantics."""
+    return "close" if adjust_policy == "none" else "adjusted_close"
 
 
 def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> AdapterResult:
@@ -108,7 +113,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     canonical = identity.canonical_code
     em_symbol = identity.eastmoney_symbol
     prefixed = identity.prefixed_symbol
-    policy = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
+    policy = req.adjust_policy if req.adjust_policy in ("hfq", "none") else "hfq"
     em_adjust = _cn_stock_em_adjust(policy)
     tx_adjust = tx_adjust_policy(policy)
     sina_adjust = sina_adjust_policy(policy)
@@ -127,7 +132,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
                 source_name=TICKFLOW_KLINES_SOURCE,
                 name=name,
                 currency="CNY",
-                point_type="adjusted_close",
+                point_type=_exchange_point_type(policy),
                 region="domestic",
             )
 
@@ -180,7 +185,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
         source_name=source_name,
         name=name,
         currency="CNY",
-        point_type="adjusted_close",
+        point_type=_exchange_point_type(policy),
         region="domestic",
     )
 
@@ -206,7 +211,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     identity = require_explicit_cn_code(req.source_code)
     em_symbol = identity.eastmoney_symbol
     prefixed = identity.prefixed_symbol
-    adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
+    adjust = req.adjust_policy if req.adjust_policy in ("hfq", "none") else "hfq"
     em_adjust = _cn_em_adjust(adjust)
     tx_adjust = tx_adjust_policy(adjust)
 
@@ -226,7 +231,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
                 source_name=TICKFLOW_KLINES_SOURCE,
                 name=_fetch_display_name(req.resolved_name, em_symbol, tf_df),
                 currency="CNY",
-                point_type="adjusted_close",
+                point_type=_exchange_point_type(adjust),
                 region="domestic",
             )
 
@@ -298,14 +303,15 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
         sources = [etf_hist, tx_hist]
         if adjust == "none":
             sources.append(sina_hist)
-        sources.append(etf_info)
+            sources.append(etf_info)
     else:
         # Unknown/absent kind: try every compatible source in a fixed order.
         # A failing source never feeds back into the asset's identity.
         sources = [etf_hist, tx_hist]
         if adjust == "none":
             sources.append(sina_hist)
-        sources.extend([lof_hist, etf_info])
+            sources.append(etf_info)
+        sources.append(lof_hist)
 
     df, source_name = try_sources("cn_exchange_fund", sources, deadline)
     if source_name == "ak.stock_zh_a_hist_tx":
@@ -316,7 +322,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
         source_name=source_name,
         name=name,
         currency="CNY",
-        point_type="adjusted_close",
+        point_type=_exchange_point_type(adjust),
         region="domestic",
     )
 
@@ -435,10 +441,11 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
     import akshare as ak
 
     symbol = req.source_code
+    adjust = "" if req.adjust_policy == "none" else req.adjust_policy
     sources: list[tuple[str, UpstreamCall]] = [
         (
             "ak.stock_us_daily",
-            UpstreamCall("stock_us_daily", kwargs=(("symbol", symbol), ("adjust", "qfq"))),
+            UpstreamCall("stock_us_daily", kwargs=(("symbol", symbol), ("adjust", adjust))),
         ),
         (
             "ak.stock_us_hist",
@@ -448,7 +455,7 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
                     ("symbol", symbol),
                     ("start_date", start),
                     ("end_date", end),
-                    ("adjust", "qfq"),
+                    ("adjust", adjust),
                 ),
             ),
         ),
@@ -460,7 +467,7 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
         source_name=source_name,
         name=name,
         currency="USD",
-        point_type="adjusted_close",
+        point_type=_exchange_point_type(req.adjust_policy),
         region="foreign",
     )
 
@@ -499,7 +506,7 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
         source_name=source_name,
         name=name,
         currency="HKD",
-        point_type="adjusted_close",
+        point_type=_exchange_point_type(req.adjust_policy),
         region="foreign",
     )
 

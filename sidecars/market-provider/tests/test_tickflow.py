@@ -239,7 +239,6 @@ def test_api_key_not_in_fallback_logs(
 def test_gate_requires_adjust_none_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_tickflow(monkeypatch)
     assert tickflow_allowed_for_request(_stock_request(adjust_policy="none")) is True
-    assert tickflow_allowed_for_request(_stock_request(adjust_policy="qfq")) is False
     assert tickflow_allowed_for_request(_stock_request(adjust_policy="hfq")) is False
 
 
@@ -359,10 +358,10 @@ def test_try_tickflow_klines_invalid_payloads_miss(
 
 
 def test_try_tickflow_klines_maps_adjust_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the adjust-none gate is lifted, qfq/hfq map to the SDK adjust enum."""
+    """When the adjust-none gate is lifted, canonical policies map to the SDK enum."""
     _enable_tickflow(monkeypatch)
     monkeypatch.setenv("MARKET_PROVIDER_TICKFLOW_REQUIRE_ADJUST_NONE", "false")
-    for policy, expected in (("none", "none"), ("qfq", "forward"), ("hfq", "backward")):
+    for policy, expected in (("none", "none"), ("hfq", "backward")):
         fake = _FakeClient(result=_payload([_TS_20240102], [10.2]))
         with _patch_client(fake):
             df = try_tickflow_klines(
@@ -451,7 +450,7 @@ def test_fetch_stock_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["data"]["name"] == "贵州茅台"
     assert "asset_class" not in body["data"]
     assert body["data"]["currency"] == "CNY"
-    assert body["data"]["point_type"] == "adjusted_close"
+    assert body["data"]["point_type"] == "close"
     assert [p["value"] for p in body["data"]["points"]] == [10.2, 10.3]
     assert [p["date"] for p in body["data"]["points"]] == ["2024-01-02", "2024-01-03"]
 
@@ -498,17 +497,17 @@ def test_fetch_stock_tickflow_timeout_falls_back_to_akshare(
     assert response.json()["data"]["source_name"] == "ak.stock_zh_a_hist"
 
 
-def test_fetch_stock_qfq_does_not_call_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_stock_hfq_does_not_call_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_tickflow(monkeypatch)
     ak_df = pd.DataFrame({"日期": ["2024-01-02"], "收盘": [11.0]})
-    fake = _FakeClient(error=AssertionError("tickflow must not be called for qfq"))
+    fake = _FakeClient(error=AssertionError("tickflow must not be called for hfq"))
     with _patch_client(fake), patch("akshare.stock_zh_a_hist", return_value=ak_df):
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "sh600519",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
     assert response.status_code == 200

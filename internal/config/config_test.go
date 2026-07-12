@@ -32,7 +32,6 @@ func TestLoad_DefaultsFromEmptyJSON(t *testing.T) {
 	}
 }
 
-
 func TestLoad_OverridesAndValidation(t *testing.T) {
 	path := writeConfigFile(t, `{
 		"addr": ":9000",

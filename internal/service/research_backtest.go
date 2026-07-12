@@ -18,7 +18,7 @@ import (
 
 // ResearchEngineVersion participates in input_hash so engine changes never
 // silently reuse old runs.
-const ResearchEngineVersion = "research_backtest_v2"
+const ResearchEngineVersion = "research_backtest_v3"
 
 // Rebalance policies (td/099 §3.6).
 const (
@@ -69,7 +69,8 @@ var (
 	ErrResearchBadPoint        = errors.New("research backtest input contains a non-positive point value")
 	ErrResearchWeightInvalid   = errors.New("research backtest weights do not sum to 100%")
 	ErrResearchNoEffectiveDays = errors.New(
-		"research backtest window has fewer than 2 effective valuation days")
+		"research backtest window has fewer than 2 effective valuation days",
+	)
 )
 
 // ResearchSeriesPoint is one raw (date, value) observation.
@@ -112,6 +113,13 @@ type BacktestInput struct {
 	RebalanceThreshold  float64
 	RiskFreeRate        float64
 	TransactionCostRate float64
+	// TailRisk is required for v3 production runs. Nil is retained only for
+	// focused legacy engine tests and snapshots that predate CVaR.
+	TailRisk *TailRiskSpec
+	// FreezeEffectiveCalendar makes every supplied asset contribute its real
+	// observation dates to the effective-return calendar, even at zero weight.
+	// Optimization uses this so every candidate is ranked on identical samples.
+	FreezeEffectiveCalendar bool
 	// WindowStart/WindowEnd optionally narrow the window; empty means the
 	// full common intersection.
 	WindowStart string
@@ -218,6 +226,7 @@ type BacktestSummary struct {
 	MaxDrawdownRecovery     string                      `json:"max_drawdown_recovery,omitempty"`
 	EffectiveReturnDays     int                         `json:"effective_return_days"`
 	RiskFreeRate            float64                     `json:"risk_free_rate"`
+	TailRisk                *BacktestTailRisk           `json:"tail_risk,omitempty"`
 	Contributions           []BacktestAssetContribution `json:"contributions"`
 	Correlations            *BacktestCorrelations       `json:"correlations,omitempty"`
 	Benchmark               *BacktestBenchmarkSummary   `json:"benchmark,omitempty"`
@@ -538,16 +547,9 @@ func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
 		return nil, err
 	}
 
-	lo, hi, err := commonWindow(assets)
+	lo, hi, err := resolveResearchBacktestWindow(in, assets)
 	if err != nil {
 		return nil, err
-	}
-	lo, hi, err = clampUserWindow(lo, hi, in.WindowStart, in.WindowEnd)
-	if err != nil {
-		return nil, err
-	}
-	if hi-lo < researchMinWindowDays {
-		return nil, fmt.Errorf("%w: %d days", ErrResearchWindowTooShort, hi-lo)
 	}
 
 	res, err := simulatePortfolio(in, assets, fxSeries, fxTolerance, lo, hi)
@@ -555,6 +557,24 @@ func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
 		return nil, err
 	}
 	return res, nil
+}
+
+func resolveResearchBacktestWindow(in BacktestInput, assets []preparedAsset) (int, int, error) {
+	lo, hi, err := commonWindow(assets)
+	if errors.Is(err, ErrResearchNoCommonWindow) && allPositiveAssetsBaseCash(assets) {
+		lo, hi, err = explicitAllCashWindow(in.WindowStart, in.WindowEnd)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	lo, hi, err = clampUserWindow(lo, hi, in.WindowStart, in.WindowEnd)
+	if err != nil {
+		return 0, 0, err
+	}
+	if hi-lo < researchMinWindowDays {
+		return 0, 0, fmt.Errorf("%w: %d days", ErrResearchWindowTooShort, hi-lo)
+	}
+	return lo, hi, nil
 }
 
 func prepareAssets(in BacktestInput, fxSeries map[string]preparedSeries) ([]preparedAsset, error) {
@@ -648,7 +668,7 @@ func commonWindow(assets []preparedAsset) (int, int, error) {
 	lo, hi := 0, 0
 	found := false
 	for _, a := range assets {
-		if a.unbounded {
+		if a.input.Weight <= ResearchWeightTolerance || a.unbounded {
 			continue
 		}
 		if !found {
@@ -720,7 +740,9 @@ func simulatePortfolio(
 	fxTolerance int,
 	lo, hi int,
 ) (*BacktestResult, error) {
-	values, effective, err := buildResearchValueGrid(assets, fxSeries, lo, hi)
+	values, effective, err := buildResearchValueGrid(
+		assets, fxSeries, lo, hi, in.FreezeEffectiveCalendar,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -748,10 +770,13 @@ func simulatePortfolio(
 
 	years := buildYears(points, effective, lo)
 	months := buildMonths(points)
-	summary := buildSummary(
+	summary, err := buildSummary(
 		in, points, years, months, effReturns, effAssetReturns, effContribReturns,
 		assets, targets, walk.weightRows, walk.contribRows, drawdowns, walk.navs, lo, hi,
 	)
+	if err != nil {
+		return nil, err
+	}
 	summary.Benchmark = benchSummary
 
 	dq := buildDataQuality(assets, fxSeries, fxTolerance, lo, hi)
@@ -778,6 +803,7 @@ type researchPortfolioWalk struct {
 
 func buildResearchValueGrid(
 	assets []preparedAsset, fxSeries map[string]preparedSeries, lo, hi int,
+	freezeEffectiveCalendar bool,
 ) ([][]float64, []bool, error) {
 	n := hi - lo + 1
 	values := make([][]float64, len(assets))
@@ -785,24 +811,64 @@ func buildResearchValueGrid(
 		values[i] = make([]float64, n)
 	}
 	effective := make([]bool, n)
-	usedPairs := usedFXPairs(assets)
+	valueRelevant, _, _ := researchEffectiveDependencies(assets, false)
+	calendarRelevant, usedPairs, allBaseCash := researchEffectiveDependencies(
+		assets, freezeEffectiveCalendar,
+	)
 	for t := 0; t < n; t++ {
 		day := lo + t
 		for i, asset := range assets {
-			value, ok := assetValueAt(asset, day)
+			value, ok := researchGridValue(asset, valueRelevant[i], day)
 			if !ok {
 				return nil, nil, fmt.Errorf("%w: asset %s at %s",
 					ErrResearchNoCommonWindow, asset.input.AssetKey, researchDayToDate(day))
 			}
 			values[i][t] = value
-			effective[t] = effective[t] || (!asset.input.IsCash && asset.series.hasObservation(day))
+			if calendarRelevant[i] && !asset.input.IsCash && asset.series.hasObservation(day) {
+				effective[t] = true
+			}
 		}
-		for _, pair := range usedPairs {
+		for pair := range usedPairs {
 			series, ok := fxSeries[pair]
 			effective[t] = effective[t] || (ok && series.hasObservation(day))
 		}
+		if allBaseCash && isResearchWeekday(day) {
+			effective[t] = true
+		}
 	}
 	return values, effective, nil
+}
+
+func researchEffectiveDependencies(
+	assets []preparedAsset, includeZeroWeight bool,
+) ([]bool, map[string]bool, bool) {
+	relevant := make([]bool, len(assets))
+	usedPairs := map[string]bool{}
+	allBaseCash := true
+	for i, asset := range assets {
+		if !includeZeroWeight && asset.input.Weight <= ResearchWeightTolerance {
+			continue
+		}
+		relevant[i] = true
+		if !asset.input.IsCash || asset.fx.need {
+			allBaseCash = false
+		}
+		for _, pair := range fxRoutePairs(asset.fx.route, asset.fx.need) {
+			usedPairs[pair] = true
+		}
+	}
+	return relevant, usedPairs, allBaseCash
+}
+
+func researchGridValue(asset preparedAsset, relevant bool, day int) (float64, bool) {
+	value, ok := assetValueAt(asset, day)
+	if relevant || ok {
+		return value, ok
+	}
+	// A zero-weight asset cannot affect NAV, weights or effective dates.
+	// Keep a neutral placeholder outside its usable range so disabling it
+	// after apply produces the exact same portfolio path.
+	return 1, true
 }
 
 func normalizedResearchTargets(assets []preparedAsset) []float64 {
@@ -1114,7 +1180,8 @@ func buildBenchmarkQuality(
 	quality.RawEnd = researchDayToDate(series.lastDay())
 	quality.RawPointCount = len(series.days)
 	quality.FillCount, quality.MaxFillGapDays = series.fillStats(
-		maxInt(lo, series.firstDay()), minInt(hi, series.lastDay()))
+		maxInt(lo, series.firstDay()), minInt(hi, series.lastDay()),
+	)
 	quality.FillGapExceeded = quality.MaxFillGapDays > tolerance
 	if quality.FillGapExceeded {
 		return nil, fmt.Errorf("%w: benchmark %s fill gap %d exceeds tolerance %d",
@@ -1232,7 +1299,7 @@ func buildSummary(
 	weightRows, contribRows [][]float64,
 	drawdowns, navs []float64,
 	lo, hi int,
-) BacktestSummary {
+) (BacktestSummary, error) {
 	n := len(points)
 	summary := BacktestSummary{
 		CumulativeReturn:    navs[n-1]/navs[0] - 1,
@@ -1240,6 +1307,13 @@ func buildSummary(
 		RiskFreeRate:        in.RiskFreeRate,
 	}
 	populateResearchRiskSummary(&summary, in.RiskFreeRate, effReturns, navs, hi-lo)
+	if in.TailRisk != nil {
+		tailRisk, err := ComputeEmpiricalCVaR(effReturns, *in.TailRisk)
+		if err != nil {
+			return BacktestSummary{}, err
+		}
+		summary.TailRisk = &tailRisk
+	}
 	populateResearchDrawdownWindow(&summary, points, navs, drawdowns)
 	summary.MaxDrawdownDurationDays, summary.CurrentDrawdownDays = drawdownDurations(navs)
 	populateResearchExtremes(&summary, years, months)
@@ -1247,7 +1321,58 @@ func buildSummary(
 		assets, targets, weightRows, contribRows, effReturns, effContribReturns, navs, drawdowns,
 	)
 	summary.Correlations = buildCorrelations(assets, effAssetReturns)
-	return summary
+	return summary, nil
+}
+
+func fxRoutePairs(route researchFXRoute, needed bool) []string {
+	if !needed {
+		return nil
+	}
+	if !route.isCross {
+		return []string{route.direct}
+	}
+	out := []string{route.denom}
+	if route.numer != "CNYCNY" {
+		out = append(out, route.numer)
+	}
+	return out
+}
+
+func isResearchWeekday(day int) bool {
+	weekday := time.Unix(int64(day)*86400, 0).UTC().Weekday()
+	return weekday != time.Saturday && weekday != time.Sunday
+}
+
+func allPositiveAssetsBaseCash(assets []preparedAsset) bool {
+	found := false
+	for _, asset := range assets {
+		if asset.input.Weight <= ResearchWeightTolerance {
+			continue
+		}
+		found = true
+		if !asset.input.IsCash || asset.fx.need {
+			return false
+		}
+	}
+	return found
+}
+
+func explicitAllCashWindow(start, end string) (int, int, error) {
+	if start == "" || end == "" {
+		return 0, 0, ErrResearchNoCommonWindow
+	}
+	lo, err := parseResearchDate(start)
+	if err != nil {
+		return 0, 0, err
+	}
+	hi, err := parseResearchDate(end)
+	if err != nil {
+		return 0, 0, err
+	}
+	if hi <= lo {
+		return 0, 0, ErrResearchNoCommonWindow
+	}
+	return lo, hi, nil
 }
 
 func populateResearchRiskSummary(

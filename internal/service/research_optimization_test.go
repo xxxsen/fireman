@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/fireman/fireman/internal/repository"
 )
@@ -25,11 +26,17 @@ func seedSucceededOptimization(
 		BestByCAGR: []OptimizationResultItem{{
 			Rank: 1, Objective: ObjectiveMaxCAGR, Score: 0.1, Weights: weights,
 		}},
+		BestByCVaR: []OptimizationResultItem{{
+			Rank: 1, Objective: ObjectiveMinCVaR, Score: -0.1, Weights: weights,
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := optimizationInputSnapshot{Assets: make([]researchSnapshotAsset, 0, len(detail.Items))}
+	snapshot := optimizationInputSnapshot{
+		Assets: make([]researchSnapshotAsset, 0, len(detail.Items)),
+		Config: OptimizationConfig{TailRisk: TailRiskSpec{Confidence: 0.99, HorizonDays: 1}},
+	}
 	for _, item := range detail.Items {
 		snapshot.Assets = append(snapshot.Assets, researchSnapshotAsset{
 			ItemID: item.ID, AssetKey: item.AssetKey,
@@ -147,6 +154,16 @@ func TestComputeOptimizationInputHash_Deterministic(t *testing.T) {
 		if h != hash1 {
 			t.Fatalf("hash changed on iteration %d: %s != %s", i, h, hash1)
 		}
+	}
+	snapshot.Config.TailRisk = TailRiskSpec{Confidence: 0.95, HorizonDays: 20}
+	withTailRisk := computeOptimizationInputHash(snapshot)
+	if withTailRisk == hash1 {
+		t.Fatal("CVaR spec did not participate in optimization input hash")
+	}
+	minimum := 0.03
+	snapshot.Config.MinimumCAGR = &minimum
+	if got := computeOptimizationInputHash(snapshot); got == withTailRisk {
+		t.Fatal("minimum CAGR did not participate in optimization input hash")
 	}
 }
 
@@ -534,6 +551,138 @@ func TestTopKTrackerStableTiesAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestTopKTrackerCVaROrderUsesVaRBeforeReturn(t *testing.T) {
+	tail := func(cvar, valueAtRisk float64) *BacktestTailRisk {
+		return &BacktestTailRisk{CVaRLoss: cvar, VaRLoss: valueAtRisk}
+	}
+	tracker := NewTopKTracker(ObjectiveMinCVaR, 3)
+	tracker.Push(OptimizationResultItem{
+		Score: -0.08, Summary: BacktestSummary{CAGR: 0.20, TailRisk: tail(0.08, 0.07)},
+		Weights: []OptimizationWeightEntry{{ItemID: "b", AssetKey: "B", Weight: 1}},
+	})
+	tracker.Push(OptimizationResultItem{
+		Score: -0.08, Summary: BacktestSummary{CAGR: 0.10, TailRisk: tail(0.08, 0.06)},
+		Weights: []OptimizationWeightEntry{{ItemID: "a", AssetKey: "A", Weight: 1}},
+	})
+	tracker.Push(OptimizationResultItem{
+		Score: -0.07, Summary: BacktestSummary{CAGR: 0.01, TailRisk: tail(0.07, 0.07)},
+		Weights: []OptimizationWeightEntry{{ItemID: "c", AssetKey: "C", Weight: 1}},
+	})
+	got := tracker.Results()
+	if len(got) != 3 || got[0].Weights[0].AssetKey != "C" || got[1].Weights[0].AssetKey != "A" {
+		t.Fatalf("unexpected CVaR order: %+v", got)
+	}
+}
+
+func TestTrackOptimizationCandidateMinimumCAGROnlyFiltersCVaR(t *testing.T) {
+	trackers := newOptimizationCandidateTrackers(5)
+	minimum := 0.05
+	eligible := trackOptimizationCandidate(trackers, OptimizationWeightVector{
+		Weights: []OptimizationWeightEntry{{ItemID: "a", AssetKey: "A", Weight: 1}},
+	}, BacktestSummary{
+		CAGR: 0.04, MaxDrawdown: -0.1,
+		TailRisk: &BacktestTailRisk{CVaRLoss: 0.08, VaRLoss: 0.06},
+	}, &minimum)
+	if eligible || len(trackers.cvar.Results()) != 0 {
+		t.Fatal("candidate below minimum CAGR entered CVaR ranking")
+	}
+	if len(trackers.cagr.Results()) != 1 || len(trackers.drawdown.Results()) != 1 || len(trackers.calmar.Results()) != 1 {
+		t.Fatal("minimum CAGR incorrectly filtered a non-CVaR ranking")
+	}
+}
+
+func optimizationTestPoints(start string, count int) []repository.MarketAssetPoint {
+	day, _ := time.Parse("2006-01-02", start)
+	out := make([]repository.MarketAssetPoint, count)
+	for i := range out {
+		out[i] = repository.MarketAssetPoint{
+			TradeDate: day.AddDate(0, 0, i).Format("2006-01-02"), Value: 100 + float64(i),
+		}
+	}
+	return out
+}
+
+func TestBuildBacktestInputForCandidateRetainsZeroWeightAssetsAndFreezesCalendar(t *testing.T) {
+	ds := &researchDataset{
+		Enabled: []researchAssetData{
+			{Item: repository.ResearchCollectionItem{AssetKey: "A"}, Asset: repository.MarketAsset{Name: "A", Currency: "CNY"}},
+			{Item: repository.ResearchCollectionItem{AssetKey: "B"}, Asset: repository.MarketAsset{Name: "B", Currency: "CNY"}},
+		},
+		FX: map[string]*researchFXData{},
+	}
+	snapshot := optimizationInputSnapshot{
+		Collection: researchSnapshotParams{BaseCurrency: "CNY"},
+		Config:     OptimizationConfig{TailRisk: TailRiskSpec{Confidence: 0.95, HorizonDays: 20}},
+	}
+	input := buildBacktestInputForCandidate(snapshot, ds, OptimizationWeightVector{
+		Weights: []OptimizationWeightEntry{{AssetKey: "A", Weight: 1}, {AssetKey: "B", Weight: 0}},
+	})
+	if !input.FreezeEffectiveCalendar || len(input.Assets) != 2 || input.Assets[1].Weight != 0 {
+		t.Fatalf("optimization input did not preserve its frozen asset universe: %+v", input)
+	}
+}
+
+func TestOptimizationTailRiskSnapshotVersionCompatibility(t *testing.T) {
+	for _, version := range []string{OptimizationTailRiskV3Version, OptimizationEngineVersion} {
+		if !optimizationEngineHasTailRiskSnapshot(version) {
+			t.Fatalf("tail-risk optimization version %q was not recognized", version)
+		}
+	}
+	if optimizationEngineHasTailRiskSnapshot("research_optimizer_v2") {
+		t.Fatal("v2 optimization must not be treated as carrying a tail-risk snapshot")
+	}
+}
+
+func TestValidateOptimizationCandidateSamplesRejectsMismatch(t *testing.T) {
+	expectedDays, expectedScenarios := -1, -1
+	first := BacktestSummary{
+		EffectiveReturnDays: 1006,
+		TailRisk:            &BacktestTailRisk{ScenarioCount: 987},
+	}
+	if err := validateOptimizationCandidateSamples(first, &expectedDays, &expectedScenarios); err != nil {
+		t.Fatal(err)
+	}
+	if expectedDays != 1006 || expectedScenarios != 987 {
+		t.Fatalf("first candidate did not freeze samples: %d/%d", expectedDays, expectedScenarios)
+	}
+	second := first
+	second.EffectiveReturnDays = 1003
+	second.TailRisk = &BacktestTailRisk{ScenarioCount: 984}
+	if err := validateOptimizationCandidateSamples(second, &expectedDays, &expectedScenarios); !errors.Is(err, errOptimizationSampleMismatch) {
+		t.Fatalf("sample mismatch error = %v", err)
+	}
+}
+
+func TestOptimizationTailRiskReadinessChecksEveryPotentialPositiveAsset(t *testing.T) {
+	ds := &researchDataset{
+		Enabled: []researchAssetData{
+			{
+				Item:  repository.ResearchCollectionItem{ID: "long", AssetKey: "LONG", Enabled: true},
+				Asset: repository.MarketAsset{Name: "Long"}, Points: optimizationTestPoints("2020-01-01", 140),
+			},
+			{
+				Item:  repository.ResearchCollectionItem{ID: "short", AssetKey: "SHORT", Enabled: true},
+				Asset: repository.MarketAsset{Name: "Short"}, Points: optimizationTestPoints("2020-01-01", 100),
+			},
+			{
+				Item:  repository.ResearchCollectionItem{ID: "ignored", AssetKey: "IGNORED", Enabled: true, WeightLocked: true},
+				Asset: repository.MarketAsset{Name: "Ignored"}, Points: optimizationTestPoints("2020-01-01", 2),
+			},
+		},
+		FX: map[string]*researchFXData{},
+	}
+	out := OptimizationReadiness{BlockingReasons: []ResearchReadinessIssue{}}
+	appendOptimizationTailRiskIssues(ds, ResearchReadiness{
+		WindowStart: "2020-01-01", WindowEnd: "2020-05-19",
+	}, TailRiskSpec{Confidence: 0.95, HorizonDays: 20}, &out)
+	if out.TailRisk == nil || out.TailRisk.ScenarioCount != 80 || out.TailRisk.MinimumScenarioCount != 100 {
+		t.Fatalf("unexpected conservative tail-risk summary: %+v", out.TailRisk)
+	}
+	if len(out.BlockingReasons) != 1 || out.BlockingReasons[0].AssetKey != "SHORT" || out.BlockingReasons[0].Reason != ResearchReasonCVARSample {
+		t.Fatalf("unexpected blockers: %+v", out.BlockingReasons)
+	}
+}
+
 // --- readiness ---
 
 func TestOptimizationReadiness_WeightSumDoesNotBlock(t *testing.T) {
@@ -740,13 +889,16 @@ func TestApplyOptimizationAtomically(t *testing.T) {
 	}
 	optimizationID := seedSucceededOptimization(t, db, detail, weights)
 	updated, err := svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
-		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+		Objective: ObjectiveMinCVaR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
 	})
 	if err != nil {
 		t.Fatalf("ApplyOptimization: %v", err)
 	}
 	if updated.StartPolicy != ResearchStartPolicyCustom || updated.WindowStart != "2021-01-01" || updated.WindowEnd != "2023-12-31" {
 		t.Fatalf("optimization window not applied: %+v", updated.ResearchCollection)
+	}
+	if updated.TailRiskConfidence != 0.99 || updated.TailRiskHorizonDays != 1 {
+		t.Fatalf("optimization tail-risk spec not applied: %+v", updated.ResearchCollection)
 	}
 	if updated.UpdatedAt <= detail.UpdatedAt {
 		t.Fatalf("collection version did not advance: %d <= %d", updated.UpdatedAt, detail.UpdatedAt)
@@ -756,6 +908,28 @@ func TestApplyOptimizationAtomically(t *testing.T) {
 		if math.Abs(item.Weight-want) > 1e-12 || item.Enabled != (want > 0) || item.WeightLocked != (want > 0) {
 			t.Fatalf("item %d not atomically applied: %+v", i, item.ResearchCollectionItem)
 		}
+	}
+}
+
+func TestApplyLegacyOptimizationPreservesCurrentTailRiskSpec(t *testing.T) {
+	svc, db, detail := createOptimizationApplyFixture(t)
+	weights := []OptimizationWeightEntry{
+		{ItemID: detail.Items[0].ID, AssetKey: detail.Items[0].AssetKey, Weight: 0.7},
+		{ItemID: detail.Items[1].ID, AssetKey: detail.Items[1].AssetKey, Weight: 0.3},
+		{ItemID: detail.Items[2].ID, AssetKey: detail.Items[2].AssetKey, Weight: 0},
+	}
+	optimizationID := seedSucceededOptimization(t, db, detail, weights)
+	if _, err := db.Exec(`UPDATE research_optimization_runs SET engine_version='research_optimizer_v2' WHERE id=?`, optimizationID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TailRiskConfidence != detail.TailRiskConfidence || updated.TailRiskHorizonDays != detail.TailRiskHorizonDays {
+		t.Fatalf("legacy apply overwrote current CVaR spec: before=%+v after=%+v", detail.ResearchCollection, updated.ResearchCollection)
 	}
 }
 
@@ -844,6 +1018,38 @@ func TestApplyOptimizationRollsBackOnItemUpdateFailure(t *testing.T) {
 	for i := range after.Items {
 		if after.Items[i].Weight != detail.Items[i].Weight || after.Items[i].Enabled != detail.Items[i].Enabled || after.Items[i].WeightLocked != detail.Items[i].WeightLocked {
 			t.Fatalf("failed transaction changed item %d: before=%+v after=%+v", i, detail.Items[i], after.Items[i])
+		}
+	}
+}
+
+func TestApplyOptimizationRollsBackWhenCollectionSpecWriteFails(t *testing.T) {
+	svc, db, detail := createOptimizationApplyFixture(t)
+	weights := []OptimizationWeightEntry{
+		{ItemID: detail.Items[0].ID, AssetKey: detail.Items[0].AssetKey, Weight: 0.7},
+		{ItemID: detail.Items[1].ID, AssetKey: detail.Items[1].AssetKey, Weight: 0.3},
+		{ItemID: detail.Items[2].ID, AssetKey: detail.Items[2].AssetKey, Weight: 0},
+	}
+	optimizationID := seedSucceededOptimization(t, db, detail, weights)
+	if _, err := db.Exec(`CREATE TRIGGER fail_optimization_collection_apply BEFORE UPDATE ON research_collections
+		BEGIN SELECT RAISE(ABORT, 'injected collection failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyOptimization(context.Background(), optimizationID, ResearchOptimizationApplyRequest{
+		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
+	}); err == nil {
+		t.Fatal("expected injected collection update failure")
+	}
+	after, err := svc.GetCollection(context.Background(), detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UpdatedAt != detail.UpdatedAt || after.WindowStart != detail.WindowStart ||
+		after.TailRiskConfidence != detail.TailRiskConfidence || after.TailRiskHorizonDays != detail.TailRiskHorizonDays {
+		t.Fatalf("failed transaction changed collection: before=%+v after=%+v", detail.ResearchCollection, after.ResearchCollection)
+	}
+	for i := range after.Items {
+		if after.Items[i].Weight != detail.Items[i].Weight || after.Items[i].Enabled != detail.Items[i].Enabled {
+			t.Fatalf("failed transaction changed item %d", i)
 		}
 	}
 }
@@ -952,11 +1158,11 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 		view.CandidateCount != result.CandidateCount || view.EvaluatedCount != result.EvaluatedCount {
 		t.Fatalf("candidate count mismatch: view=%+v result=%+v", view, result)
 	}
-	if len(result.BestByCAGR) == 0 {
-		t.Fatal("worker returned no ranked results")
+	if len(result.BestByCAGR) == 0 || len(result.BestByCVaR) == 0 || result.CVaREligibleCount != result.EvaluatedCount {
+		t.Fatalf("worker returned incomplete ranked results: %+v", result)
 	}
 	for _, ranked := range [][]OptimizationResultItem{
-		result.BestByCAGR, result.BestByDrawdown, result.BestByCalmar,
+		result.BestByCAGR, result.BestByDrawdown, result.BestByCVaR, result.BestByCalmar,
 	} {
 		for _, item := range ranked {
 			if item.Summary.Benchmark == nil {
@@ -977,6 +1183,32 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 		}
 	}
 
+	highMinimum := 2.0
+	filtered, err := svc.CreateOptimization(context.Background(), detail.ID, ResearchOptimizationRequest{
+		WeightStep: 0.05, MaxCandidateCount: 20000, TopK: 20,
+		MinimumCAGR: &highMinimum,
+	})
+	if err != nil {
+		t.Fatalf("create filtered optimization: %v", err)
+	}
+	if err := svc.ExecuteOptimizationJob(context.Background(), filtered.Optimization.JobID,
+		func() bool { return false }, nil); err != nil {
+		t.Fatalf("execute filtered optimization: %v", err)
+	}
+	filteredView, err := svc.GetOptimization(context.Background(), filtered.Optimization.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var filteredResult OptimizationResult
+	if err := json.Unmarshal(filteredView.Result, &filteredResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(filteredResult.BestByCVaR) != 0 || filteredResult.CVaREligibleCount != 0 ||
+		len(filteredResult.BestByCAGR) == 0 || len(filteredResult.Warnings) != 1 ||
+		filteredResult.Warnings[0].Code != "cvar_minimum_cagr_unmet" {
+		t.Fatalf("unexpected empty CVaR leaderboard result: %+v", filteredResult)
+	}
+
 	applied, err := svc.ApplyOptimization(context.Background(), view.ID, ResearchOptimizationApplyRequest{
 		Objective: ObjectiveMaxCAGR, Rank: 1, ExpectedCollectionUpdatedAt: detail.UpdatedAt,
 	})
@@ -987,6 +1219,9 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 		t.Fatalf("apply did not restore frozen window: optimization=%s..%s collection=%s..%s",
 			view.WindowStart, view.WindowEnd, applied.WindowStart, applied.WindowEnd)
 	}
+	if applied.TailRiskConfidence != DefaultTailRiskConfidence || applied.TailRiskHorizonDays != DefaultTailRiskHorizon {
+		t.Fatalf("apply did not restore frozen CVaR spec: %+v", applied.ResearchCollection)
+	}
 	weightSum := 0.0
 	for _, item := range applied.Items {
 		if item.Enabled {
@@ -995,5 +1230,27 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 	}
 	if math.Abs(weightSum-1) > 1e-12 {
 		t.Fatalf("applied weights must sum to 100%%, got %.16f", weightSum)
+	}
+	ordinary, err := svc.CreateBacktest(context.Background(), applied.ID)
+	if err != nil {
+		t.Fatalf("create reproducing backtest: %v", err)
+	}
+	if err := svc.ExecuteBacktestJob(context.Background(), ordinary.Run.JobID, nil, nil); err != nil {
+		t.Fatalf("execute reproducing backtest: %v", err)
+	}
+	ordinaryDetail, err := svc.GetRun(context.Background(), ordinary.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ordinarySummary BacktestSummary
+	if err := json.Unmarshal(ordinaryDetail.Summary, &ordinarySummary); err != nil {
+		t.Fatal(err)
+	}
+	selected := result.BestByCAGR[0]
+	if ordinarySummary.TailRisk == nil || selected.Summary.TailRisk == nil ||
+		math.Abs(ordinarySummary.TailRisk.CVaRLoss-selected.Summary.TailRisk.CVaRLoss) > 1e-12 ||
+		math.Abs(ordinarySummary.TailRisk.VaRLoss-selected.Summary.TailRisk.VaRLoss) > 1e-12 {
+		t.Fatalf("ordinary backtest did not reproduce applied optimization CVaR: ordinary=%+v selected=%+v",
+			ordinarySummary.TailRisk, selected.Summary.TailRisk)
 	}
 }

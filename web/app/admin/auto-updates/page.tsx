@@ -11,7 +11,7 @@ import {
   updateAdminAutoUpdate,
 } from "@/lib/api/admin";
 import type { AdminAutoUpdateRule, AdminPage } from "@/lib/api/admin";
-import { formatDateTimeFromMs } from "@/lib/format";
+import { adjustPolicyLabel, formatDateTimeFromMs, pointTypeLabel } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 
 const HOURS = [1, 6, 12, 24, 48, 72, 168];
@@ -227,7 +227,7 @@ function AutoUpdatesContent() {
         <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索资产代码或名称" className="border border-line px-2 py-1" />
       </div>
       {histories.isError && <p role="alert" className="mb-2 text-sm text-danger">资产历史自动更新配置加载失败：{queryErrorMessage(histories.error)}</p>}
-      {histories.isLoading ? <p>加载中…</p> : (histories.data?.items.length ?? 0) === 0 ? <p>未配置资产历史自动更新。</p> : <div className="overflow-x-auto"><table className="w-full min-w-[1040px] text-sm"><thead><tr><th>资产</th><th>状态</th><th>周期</th><th>下次执行</th><th>最近成功</th><th>最近失败</th><th>任务</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{histories.data?.items.map((rule) => <tr key={rule.id} className="border-t border-line"><td>{rule.target_label}</td><RuleCells rule={rule} pending={pendingTarget === rule.id} onUpdate={(active, hours) => updateRule(rule, active, hours)} /></tr>)}</tbody></table></div>}
+      {histories.isLoading ? <p>加载中…</p> : (histories.data?.items.length ?? 0) === 0 ? <p>未配置资产历史自动更新。</p> : <div className="overflow-x-auto"><table className="w-full min-w-[1160px] text-sm"><thead><tr><th>资产</th><th>口径</th><th>状态</th><th>周期</th><th>下次执行</th><th>最近成功</th><th>最近失败</th><th>任务</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{histories.data?.items.map((rule) => <tr key={rule.id} className="border-t border-line"><td>{rule.target_label}</td><td>{adjustPolicyLabel(rule.adjust_policy)} · {pointTypeLabel(rule.point_type)}</td><RuleCells rule={rule} pending={pendingTarget === rule.id} onUpdate={(active, hours) => updateRule(rule, active, hours)} /></tr>)}</tbody></table></div>}
     </section>
   </div>;
 }

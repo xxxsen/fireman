@@ -10,6 +10,7 @@ import {
   getReadiness,
   listRuns,
   normalizeWeights,
+  researchItemInputFromAsset,
   updateCollection,
   updateCollectionItem,
   type ResearchAssetView,
@@ -119,15 +120,9 @@ export default function ResearchCollectionPage() {
     onError: (err) => setItemError(queryErrorMessage(err)),
   });
 
-  const addItemMutation = useMutation({
-    mutationFn: (asset: ResearchAssetView) =>
-      addCollectionItem(id, {
-        asset_key: asset.asset_key,
-        weight: 0,
-        enabled: true,
-        adjust_policy: asset.adjust_policy,
-        point_type: asset.point_type,
-      }),
+	  const addItemMutation = useMutation({
+	    mutationFn: (asset: ResearchAssetView) =>
+	      addCollectionItem(id, researchItemInputFromAsset(asset)),
     onSuccess: (detail) => {
       setItemError(null);
       applyDetail(detail);

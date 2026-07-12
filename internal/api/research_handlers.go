@@ -208,7 +208,8 @@ func (s Services) updateResearchItem(c *gin.Context) {
 		return
 	}
 	out, err := s.Research.UpdateItem(
-		c.Request.Context(), c.Param("collection_id"), c.Param("item_id"), req)
+		c.Request.Context(), c.Param("collection_id"), c.Param("item_id"), req,
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -218,7 +219,8 @@ func (s Services) updateResearchItem(c *gin.Context) {
 
 func (s Services) deleteResearchItem(c *gin.Context) {
 	out, err := s.Research.DeleteItem(
-		c.Request.Context(), c.Param("collection_id"), c.Param("item_id"))
+		c.Request.Context(), c.Param("collection_id"), c.Param("item_id"),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -275,7 +277,8 @@ func (s Services) createResearchBacktest(c *gin.Context) {
 
 func (s Services) listResearchRuns(c *gin.Context) {
 	out, err := s.Research.ListRuns(
-		c.Request.Context(), c.Param("collection_id"), atoiDefault(c.Query("limit"), 20))
+		c.Request.Context(), c.Param("collection_id"), atoiDefault(c.Query("limit"), 20),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -334,12 +337,31 @@ func (s Services) exportResearchRunCSV(c *gin.Context) {
 func (s Services) getOptimizationReadiness(c *gin.Context) {
 	weightStep := 0.05
 	if raw := strings.TrimSpace(c.Query("weight_step")); raw != "" {
-		if v, err := strconv.ParseFloat(raw, 64); err == nil {
-			weightStep = v
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			Fail(c, http.StatusBadRequest, "invalid_request", "weight_step must be a number", nil)
+			return
 		}
+		weightStep = v
+	}
+	confidence, ok := floatQueryPtr(c, "cvar_confidence")
+	if !ok {
+		return
+	}
+	var horizonDays *int
+	if raw := strings.TrimSpace(c.Query("cvar_horizon_days")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil {
+			Fail(c, http.StatusBadRequest, "invalid_request", "cvar_horizon_days must be an integer", nil)
+			return
+		}
+		horizonDays = &v
 	}
 	out, err := s.Research.GetOptimizationReadiness(
-		c.Request.Context(), c.Param("collection_id"), weightStep)
+		c.Request.Context(), c.Param("collection_id"), service.OptimizationReadinessRequest{
+			WeightStep: weightStep, Confidence: confidence, HorizonDays: horizonDays,
+		},
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -356,7 +378,8 @@ func (s Services) createOptimization(c *gin.Context) {
 		}
 	}
 	out, err := s.Research.CreateOptimization(
-		c.Request.Context(), c.Param("collection_id"), req)
+		c.Request.Context(), c.Param("collection_id"), req,
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -366,7 +389,8 @@ func (s Services) createOptimization(c *gin.Context) {
 
 func (s Services) getLatestOptimization(c *gin.Context) {
 	out, found, err := s.Research.GetLatestOptimization(
-		c.Request.Context(), c.Param("collection_id"))
+		c.Request.Context(), c.Param("collection_id"),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -380,7 +404,8 @@ func (s Services) getLatestOptimization(c *gin.Context) {
 
 func (s Services) getOptimization(c *gin.Context) {
 	out, err := s.Research.GetOptimization(
-		c.Request.Context(), c.Param("optimization_id"))
+		c.Request.Context(), c.Param("optimization_id"),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
