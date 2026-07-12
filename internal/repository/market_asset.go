@@ -14,23 +14,25 @@ var ErrMarketAssetNotFound = errors.New("market asset not found")
 
 // MarketAsset mirrors a market_assets row (global asset directory).
 type MarketAsset struct {
-	AssetKey       string `json:"asset_key"`
-	Market         string `json:"market"`
-	InstrumentType string `json:"instrument_type"`
-	RegionCode     string `json:"region_code"`
-	Symbol         string `json:"symbol"`
-	Name           string `json:"name"`
-	Exchange       string `json:"exchange"`
-	InstrumentKind string `json:"instrument_kind"`
-	Currency       string `json:"currency"`
-	Active         bool   `json:"active"`
-	ListingStatus  string `json:"listing_status"`
-	LastSeenAt     int64  `json:"last_seen_at"`
-	SourceName     string `json:"source_name"`
-	SourceAsOf     string `json:"source_as_of"`
-	RefreshedAt    int64  `json:"refreshed_at"`
-	CreatedAt      int64  `json:"created_at"`
-	UpdatedAt      int64  `json:"updated_at"`
+	AssetKey        string `json:"asset_key"`
+	Market          string `json:"market"`
+	InstrumentType  string `json:"instrument_type"`
+	RegionCode      string `json:"region_code"`
+	Symbol          string `json:"symbol"`
+	Name            string `json:"name"`
+	Exchange        string `json:"exchange"`
+	InstrumentKind  string `json:"instrument_kind"`
+	CanonicalSymbol string `json:"canonical_symbol"`
+	FeeMode         string `json:"fee_mode"`
+	Currency        string `json:"currency"`
+	Active          bool   `json:"active"`
+	ListingStatus   string `json:"listing_status"`
+	LastSeenAt      int64  `json:"last_seen_at"`
+	SourceName      string `json:"source_name"`
+	SourceAsOf      string `json:"source_as_of"`
+	RefreshedAt     int64  `json:"refreshed_at"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
 }
 
 // BuildMarketAssetKey derives the canonical asset key from structured fields:
@@ -102,14 +104,16 @@ func (r *MarketAssetRepo) UpsertAssetTx(ctx context.Context, tx *sql.Tx, a Marke
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO market_assets (
 			asset_key, market, instrument_type, region_code, symbol, name,
-			exchange, instrument_kind, currency,
+			exchange, instrument_kind, canonical_symbol, fee_mode, currency,
 			active, listing_status, last_seen_at,
 			source_name, source_as_of, refreshed_at, created_at, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,1,'active',?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,'active',?,?,?,?,?,?)
 		ON CONFLICT(asset_key) DO UPDATE SET
 			name=excluded.name,
 			exchange=excluded.exchange,
 			instrument_kind=excluded.instrument_kind,
+			canonical_symbol=excluded.canonical_symbol,
+			fee_mode=excluded.fee_mode,
 			currency=excluded.currency,
 			active=1,
 			listing_status='active',
@@ -119,7 +123,7 @@ func (r *MarketAssetRepo) UpsertAssetTx(ctx context.Context, tx *sql.Tx, a Marke
 			refreshed_at=excluded.refreshed_at,
 			updated_at=excluded.updated_at`,
 		a.AssetKey, a.Market, a.InstrumentType, a.RegionCode, a.Symbol, a.Name,
-		a.Exchange, a.InstrumentKind, a.Currency,
+		a.Exchange, a.InstrumentKind, a.CanonicalSymbol, a.FeeMode, a.Currency,
 		seenAt, a.SourceName, a.SourceAsOf, seenAt, seenAt, seenAt)
 	if err != nil {
 		return fmt.Errorf("upsert market asset %s: %w", a.AssetKey, err)
@@ -167,7 +171,7 @@ func (r *MarketAssetRepo) CountActiveByTypeSourcesTx(
 
 const marketAssetColumns = `
 	asset_key, market, instrument_type, region_code, symbol, name,
-	exchange, instrument_kind, currency, active, listing_status, last_seen_at,
+	exchange, instrument_kind, canonical_symbol, fee_mode, currency, active, listing_status, last_seen_at,
 	source_name, source_as_of, refreshed_at, created_at, updated_at`
 
 func scanMarketAsset(row rowScanner) (MarketAsset, error) {
@@ -175,7 +179,8 @@ func scanMarketAsset(row rowScanner) (MarketAsset, error) {
 	var active int
 	err := row.Scan(
 		&a.AssetKey, &a.Market, &a.InstrumentType, &a.RegionCode, &a.Symbol, &a.Name,
-		&a.Exchange, &a.InstrumentKind, &a.Currency, &active, &a.ListingStatus, &a.LastSeenAt,
+		&a.Exchange, &a.InstrumentKind, &a.CanonicalSymbol, &a.FeeMode, &a.Currency,
+		&active, &a.ListingStatus, &a.LastSeenAt,
 		&a.SourceName, &a.SourceAsOf, &a.RefreshedAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

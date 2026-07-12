@@ -40,6 +40,7 @@ const (
 	ResearchReasonCVARSample          = "cvar_sample_insufficient"
 	ResearchReasonUnadjustedSeries    = "unadjusted_price_series"
 	ResearchReasonUnsupportedSeries   = "unsupported_return_series"
+	ResearchReasonDuplicateFund       = "duplicate_canonical_fund"
 )
 
 // Warning reason codes.
@@ -406,6 +407,7 @@ func evaluateResearchReadiness(ds *researchDataset, now time.Time) ResearchReadi
 	}
 
 	evaluateResearchWeights(ds, &out, block)
+	evaluateCanonicalFundDuplicates(ds, block)
 
 	// 2. Per-asset history checks + usable window assembly.
 	fxBounds := func(pairs []string) (int, int, bool) {
@@ -438,6 +440,35 @@ func evaluateResearchReadiness(ds *researchDataset, now time.Time) ResearchReadi
 
 	out.Ready = len(out.BlockingReasons) == 0
 	return out
+}
+
+func evaluateCanonicalFundDuplicates(
+	ds *researchDataset,
+	block func(ResearchReadinessIssue),
+) {
+	seen := map[string]string{}
+	for _, data := range ds.Enabled {
+		identity := canonicalFundIdentity(data.Asset)
+		if identity == "" {
+			continue
+		}
+		if existingAssetKey, exists := seen[identity]; exists {
+			canonical := data.Asset.CanonicalSymbol
+			if canonical == "" {
+				canonical = data.Asset.Symbol
+			}
+			block(ResearchReadinessIssue{
+				AssetKey: data.Asset.AssetKey,
+				Reason:   ResearchReasonDuplicateFund,
+				Message: fmt.Sprintf(
+					"该资产与 %s 对应同一主基金 %s，请仅保留一个交易代码",
+					existingAssetKey, canonical,
+				),
+			})
+			continue
+		}
+		seen[identity] = data.Asset.AssetKey
+	}
 }
 
 func evaluateResearchSelectedWindow(

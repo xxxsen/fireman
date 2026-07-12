@@ -11,7 +11,9 @@ vi.mock("@/lib/api/research", async (importOriginal) => ({
 }));
 
 function renderDialog(onSubmit = vi.fn()) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   render(
     <QueryClientProvider client={client}>
       <OptimizationConfigDialog
@@ -52,19 +54,23 @@ describe("OptimizationConfigDialog", () => {
 
   it("queries readiness with the selected CVaR spec", async () => {
     renderDialog();
-    await waitFor(() => expect(getReadinessMock).toHaveBeenCalledWith("rc_1", {
-      weightStep: 0.05,
-      confidence: 0.95,
-      horizonDays: 20,
-    }));
+    await waitFor(() =>
+      expect(getReadinessMock).toHaveBeenCalledWith("rc_1", {
+        weightStep: 0.05,
+        confidence: 0.95,
+        horizonDays: 20,
+      }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "99%" }));
     fireEvent.click(screen.getByRole("button", { name: "1 日" }));
-    await waitFor(() => expect(getReadinessMock).toHaveBeenLastCalledWith("rc_1", {
-      weightStep: 0.05,
-      confidence: 0.99,
-      horizonDays: 1,
-    }));
+    await waitFor(() =>
+      expect(getReadinessMock).toHaveBeenLastCalledWith("rc_1", {
+        weightStep: 0.05,
+        confidence: 0.99,
+        horizonDays: 1,
+      }),
+    );
   });
 
   it("keeps decimal input editable and submits minimum CAGR only as a CVaR filter", async () => {
@@ -112,5 +118,34 @@ describe("OptimizationConfigDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "99%" }));
     expect(screen.getByText("233 / 最少 100")).toBeInTheDocument();
     expect(await screen.findByText("更新中…")).toBeInTheDocument();
+  });
+
+  it("shows candidate performance warning inside the dialog without blocking submission", async () => {
+    getReadinessMock.mockResolvedValue({
+      ready: true,
+      candidate_count: 20001,
+      enabled_count: 6,
+      locked_count: 0,
+      tunable_count: 6,
+      locked_weight_sum: 0,
+      blocking_reasons: [],
+      warnings: [
+        {
+          reason: "candidate_count_exceeds_recommendation",
+          message: "当前候选数量 20001，推荐控制在 20000 以内；超过推荐数量后，模拟耗时和内存占用会急剧增加",
+        },
+      ],
+    });
+
+    renderDialog();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("candidate-count")).toHaveTextContent("20,001"),
+    );
+    expect(
+      screen.getByText(/当前候选数量 20001，推荐控制在 20000 以内/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/模拟耗时和内存占用会急剧增加/)).toBeInTheDocument();
+    expect(screen.getByTestId("start-optimization")).toBeEnabled();
   });
 });

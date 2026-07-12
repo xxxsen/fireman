@@ -3,7 +3,7 @@
 - 状态：已完整实施
 - 适用范围：组合研究普通回测、寻找最优组合、结果应用及复制到 FIRE 计划后的验证
 - 初始版本：`research_backtest_v3`、`research_optimizer_v4`
-- 当前版本：`research_backtest_v4`、`research_optimizer_v5`（在扣除研究交易成本后的 NAV/收益序列上计算与排序）
+- 当前版本：`research_backtest_v4`、`research_optimizer_v6`（在扣除研究交易成本后的 NAV/收益序列上计算与排序）
 - CVaR 算法版本：`empirical_cvar_v1`
 
 ## 0. 实施与验证状态
@@ -616,6 +616,14 @@ research_optimizer_v4
 上述为 CVaR 首次发布版本。当前 `research_optimizer_v5` 继续使用相同
 `empirical_cvar_v1`，但候选回测先按单边换手扣除交易成本；CVaR、minimum CAGR 和
 四组 Top K 均基于扣费后的 `effReturns`，不再允许使用未扣费收益另行排序。
+
+`research_optimizer_v6` 不改变上述收益、成本或 CVaR 公式。该版本使用组合数公式展示
+真实候选数量，将 `20000` 从执行上限调整为性能推荐值；超过推荐值时 readiness 保持
+`ready=true` 并返回警告。worker 按候选流式生成和回测，不再预先持有完整候选数组，
+因此用户确认性能影响后仍可提交、观察进度和取消任务。单个调优任务默认使用 4 个
+候选 evaluator 并行回测，由单一 aggregator 串行维护样本一致性、Top K、计数和进度；
+运行时可通过 `research_optimization_concurrency` 调整并发度，实际值不超过
+`GOMAXPROCS` 和候选数量。该执行优化不改变输入哈希或结果排序语义。
 
 ### 6.6 稳定 Top K 与 Apply
 

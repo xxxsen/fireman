@@ -196,7 +196,9 @@ export function historyDepthLabel(depth: string | undefined): string {
   return depth ? (map[depth] ?? depth) : "—";
 }
 
-export function formatNullablePercent(value: number | null | undefined): string {
+export function formatNullablePercent(
+  value: number | null | undefined,
+): string {
   if (value == null || Number.isNaN(value)) return "—";
   return formatPercent(value);
 }
@@ -211,6 +213,7 @@ const DATA_SOURCE_MAP: Record<string, string> = {
   "ak.fund_lof_hist_em": "东方财富 · LOF",
   "ak.fund_etf_fund_info_em": "东方财富 · ETF 净值",
   "ak.fund_open_fund_info_em": "东方财富 · 公募基金",
+  "em.fund_open_history": "东方财富 · 公募基金净值",
   "ak.fund_money_fund_info_em": "东方财富 · 货币基金",
   "ak.stock_us_daily": "美股 · 日线",
   "ak.currency_boc_sina": "新浪 · 外汇",
@@ -250,10 +253,12 @@ export function pointTypeLabel(pointType: string | undefined | null): string {
     total_return_index: "累计净值",
     fx_rate: "汇率",
   };
-	return map[pointType] ?? pointType;
+  return map[pointType] ?? pointType;
 }
 
-export function adjustPolicyLabel(adjustPolicy: string | undefined | null): string {
+export function adjustPolicyLabel(
+  adjustPolicy: string | undefined | null,
+): string {
   if (!adjustPolicy) return "—";
   const map: Record<string, string> = {
     none: "未复权",
@@ -284,9 +289,9 @@ export function annualCompletenessLabel(row: {
  * Returns "—" for an empty list.
  */
 export function compressYears(years: number[]): string {
-  const sorted = Array.from(new Set(years.filter((y) => Number.isFinite(y)))).sort(
-    (a, b) => a - b,
-  );
+  const sorted = Array.from(
+    new Set(years.filter((y) => Number.isFinite(y))),
+  ).sort((a, b) => a - b);
   if (sorted.length === 0) return "—";
   const ranges: string[] = [];
   let start = sorted[0]!;

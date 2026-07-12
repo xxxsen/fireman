@@ -31,16 +31,18 @@ const (
 // --- result payload schemas (written by the sidecar into resource_db) ---
 
 type directoryResultAsset struct {
-	Market         string `json:"market"`
-	InstrumentType string `json:"instrument_type"`
-	RegionCode     string `json:"region_code"`
-	Symbol         string `json:"symbol"`
-	Name           string `json:"name"`
-	Exchange       string `json:"exchange"`
-	InstrumentKind string `json:"instrument_kind"`
-	Currency       string `json:"currency"`
-	SourceName     string `json:"source_name"`
-	SourceAsOf     string `json:"source_as_of"`
+	Market          string `json:"market"`
+	InstrumentType  string `json:"instrument_type"`
+	RegionCode      string `json:"region_code"`
+	Symbol          string `json:"symbol"`
+	Name            string `json:"name"`
+	Exchange        string `json:"exchange"`
+	InstrumentKind  string `json:"instrument_kind"`
+	CanonicalSymbol string `json:"canonical_symbol"`
+	FeeMode         string `json:"fee_mode"`
+	Currency        string `json:"currency"`
+	SourceName      string `json:"source_name"`
+	SourceAsOf      string `json:"source_as_of"`
 }
 
 type directoryResult struct {
@@ -176,17 +178,14 @@ func collectDirectoryResultAssets(
 	catSources := map[directoryCategory]map[string]bool{}
 	accepted := make([]directoryResultAsset, 0, len(result.Assets))
 	for _, a := range result.Assets {
-		if a.Market == "" || a.InstrumentType == "" || strings.TrimSpace(a.Symbol) == "" {
-			return nil, nil, nil, permanentErr("invalid_result_payload",
-				"directory asset entry is missing market/instrument_type/symbol")
+		a, err := normalizeDirectoryResultAsset(a)
+		if err != nil {
+			return nil, nil, nil, err
 		}
 		cat := directoryCategory{a.Market, a.InstrumentType}
 		if !required[cat] {
 			// Entries outside the requested scope are ignored, never written.
 			continue
-		}
-		if strings.TrimSpace(a.Name) == "" {
-			a.Name = a.Symbol
 		}
 		counts[cat]++
 		if catSources[cat] == nil {
@@ -196,6 +195,52 @@ func collectDirectoryResultAssets(
 		accepted = append(accepted, a)
 	}
 	return accepted, counts, catSources, nil
+}
+
+func normalizeDirectoryResultAsset(a directoryResultAsset) (directoryResultAsset, error) {
+	if a.Market == "" || a.InstrumentType == "" || strings.TrimSpace(a.Symbol) == "" {
+		return a, permanentErr("invalid_result_payload",
+			"directory asset entry is missing market/instrument_type/symbol")
+	}
+	if strings.TrimSpace(a.Name) == "" {
+		a.Name = a.Symbol
+	}
+	if strings.TrimSpace(a.CanonicalSymbol) == "" {
+		a.CanonicalSymbol = a.Symbol
+	}
+	if a.InstrumentType != "cn_mutual_fund" {
+		a.FeeMode = ""
+		return a, nil
+	}
+	return normalizeMutualFundFeeIdentity(a)
+}
+
+func normalizeMutualFundFeeIdentity(a directoryResultAsset) (directoryResultAsset, error) {
+	if a.FeeMode == "" {
+		if strings.HasSuffix(a.Name, "(后端)") || strings.HasSuffix(a.Name, "（后端）") {
+			return a, permanentErr("invalid_result_payload",
+				fmt.Sprintf("back-end mutual fund %s has no canonical fee identity", a.Symbol))
+		}
+		a.FeeMode = "standard"
+	}
+	if a.FeeMode != "standard" && a.FeeMode != "front_end" && a.FeeMode != "back_end" {
+		return a, permanentErr("invalid_result_payload",
+			fmt.Sprintf("mutual fund %s has unsupported fee_mode %q", a.Symbol, a.FeeMode))
+	}
+	if len(a.CanonicalSymbol) != 6 || strings.Trim(a.CanonicalSymbol, "0123456789") != "" {
+		return a, permanentErr("invalid_result_payload",
+			fmt.Sprintf("mutual fund %s has invalid canonical_symbol %q", a.Symbol, a.CanonicalSymbol))
+	}
+	if a.FeeMode == "back_end" && a.CanonicalSymbol == a.Symbol {
+		return a, permanentErr("invalid_result_payload",
+			fmt.Sprintf("back-end mutual fund %s is not linked to a distinct canonical symbol", a.Symbol))
+	}
+	if a.FeeMode != "back_end" && a.CanonicalSymbol != a.Symbol {
+		return a, permanentErr("invalid_result_payload",
+			fmt.Sprintf("mutual fund %s fee_mode %s cannot alias canonical symbol %s",
+				a.Symbol, a.FeeMode, a.CanonicalSymbol))
+	}
+	return a, nil
 }
 
 func directorySources(sources map[string]bool) []string {
@@ -238,17 +283,19 @@ func (s *PostProcessService) validateDirectoryCoverageTx(
 
 func directoryAssetFromResult(a directoryResultAsset) repository.MarketAsset {
 	return repository.MarketAsset{
-		AssetKey:       repository.BuildMarketAssetKey(a.Market, a.InstrumentType, a.RegionCode, a.Symbol),
-		Market:         a.Market,
-		InstrumentType: a.InstrumentType,
-		RegionCode:     a.RegionCode,
-		Symbol:         a.Symbol,
-		Name:           a.Name,
-		Exchange:       a.Exchange,
-		InstrumentKind: a.InstrumentKind,
-		Currency:       a.Currency,
-		SourceName:     a.SourceName,
-		SourceAsOf:     a.SourceAsOf,
+		AssetKey:        repository.BuildMarketAssetKey(a.Market, a.InstrumentType, a.RegionCode, a.Symbol),
+		Market:          a.Market,
+		InstrumentType:  a.InstrumentType,
+		RegionCode:      a.RegionCode,
+		Symbol:          a.Symbol,
+		Name:            a.Name,
+		Exchange:        a.Exchange,
+		InstrumentKind:  a.InstrumentKind,
+		CanonicalSymbol: a.CanonicalSymbol,
+		FeeMode:         a.FeeMode,
+		Currency:        a.Currency,
+		SourceName:      a.SourceName,
+		SourceAsOf:      a.SourceAsOf,
 	}
 }
 

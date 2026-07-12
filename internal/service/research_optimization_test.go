@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,13 +359,144 @@ func TestCountCandidates_MatchesGenerate(t *testing.T) {
 	}
 }
 
-func TestCountCandidatesStopsAfterHardLimit(t *testing.T) {
-	assets := make([]OptimizationAsset, 10)
+func TestCountCandidatesReturnsExactCountAboveRecommendation(t *testing.T) {
+	assets := make([]OptimizationAsset, 4)
 	for i := range assets {
 		assets[i] = OptimizationAsset{ItemID: fmt.Sprintf("i%d", i), AssetKey: fmt.Sprintf("a%d", i)}
 	}
-	if got := CountCandidates(assets, 0.001); got != OptimizationHardMaxCandidate+1 {
-		t.Fatalf("over-limit candidate count = %d, want sentinel %d", got, OptimizationHardMaxCandidate+1)
+	const want = 167668501 // C(1000+4-1, 4-1)
+	if got := CountCandidates(assets, 0.001); got != want {
+		t.Fatalf("over-recommendation candidate count = %d, want %d", got, want)
+	}
+}
+
+func TestVisitOptimizationCandidatesStopsWithoutMaterializingGrid(t *testing.T) {
+	assets := make([]OptimizationAsset, 4)
+	for i := range assets {
+		assets[i] = OptimizationAsset{ItemID: fmt.Sprintf("i%d", i), AssetKey: fmt.Sprintf("a%d", i)}
+	}
+	visited := VisitOptimizationCandidates(assets, 0.001, func(OptimizationWeightVector) bool {
+		return false
+	})
+	if visited != 1 {
+		t.Fatalf("visited=%d, want early stop after 1 candidate", visited)
+	}
+}
+
+func TestEvaluateOptimizationCandidatesUsesFourWorkersAndIsDeterministic(t *testing.T) {
+	svc, _ := newResearchTestService(t)
+	ds := &researchDataset{
+		Enabled: []researchAssetData{
+			{
+				Item:  repository.ResearchCollectionItem{ID: "i1", AssetKey: "A", Enabled: true},
+				Asset: repository.MarketAsset{AssetKey: "A", Name: "A", Currency: "CNY"},
+			},
+			{
+				Item:  repository.ResearchCollectionItem{ID: "i2", AssetKey: "B", Enabled: true},
+				Asset: repository.MarketAsset{AssetKey: "B", Name: "B", Currency: "CNY"},
+			},
+		},
+		FX: map[string]*researchFXData{},
+	}
+	assets := []OptimizationAsset{
+		{ItemID: "i1", AssetKey: "A", Name: "A"},
+		{ItemID: "i2", AssetKey: "B", Name: "B"},
+	}
+	snapshot := optimizationInputSnapshot{
+		Collection: researchSnapshotParams{BaseCurrency: "CNY", RebalancePolicy: ResearchRebalanceMonthly},
+		Config: OptimizationConfig{
+			WeightStep: 0.1, TopK: 5,
+			TailRisk: TailRiskSpec{Confidence: 0.95, HorizonDays: 20},
+		},
+	}
+	candidateCount := CountCandidates(assets, snapshot.Config.WeightStep)
+	backtest := func(input BacktestInput) (*BacktestResult, error) {
+		weight := input.Assets[0].Weight
+		calmar := weight
+		return &BacktestResult{Summary: BacktestSummary{
+			CAGR: weight, MaxDrawdown: -(1 - weight), Calmar: &calmar,
+			EffectiveReturnDays: 252,
+			TailRisk: &BacktestTailRisk{
+				Confidence: 0.95, HorizonDays: 20, ScenarioCount: 233,
+				VaRLoss: 1 - weight/2, CVaRLoss: 1 - weight,
+			},
+		}}, nil
+	}
+
+	svc.SetOptimizationConcurrency(1)
+	svc.optimizationBacktest = backtest
+	sequential, err := svc.evaluateOptimizationCandidates(
+		context.Background(), "", snapshot, ds, assets, candidateCount, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("sequential evaluation: %v", err)
+	}
+
+	started := make(chan struct{}, candidateCount)
+	release := make(chan struct{})
+	svc.SetOptimizationConcurrency(4)
+	svc.optimizationBacktest = func(input BacktestInput) (*BacktestResult, error) {
+		started <- struct{}{}
+		<-release
+		return backtest(input)
+	}
+	type evaluationOutcome struct {
+		result OptimizationResult
+		err    error
+	}
+	done := make(chan evaluationOutcome, 1)
+	go func() {
+		result, evalErr := svc.evaluateOptimizationCandidates(
+			context.Background(), "", snapshot, ds, assets, candidateCount, nil, nil,
+		)
+		done <- evaluationOutcome{result: result, err: evalErr}
+	}()
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("four optimization evaluators did not start concurrently")
+		}
+	}
+	close(release)
+	parallel := <-done
+	if parallel.err != nil {
+		t.Fatalf("parallel evaluation: %v", parallel.err)
+	}
+	sequentialJSON, err := json.Marshal(sequential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallelJSON, err := json.Marshal(parallel.result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(parallelJSON) != string(sequentialJSON) {
+		t.Fatalf("parallel result differs from sequential result\nparallel=%s\nsequential=%s",
+			parallelJSON, sequentialJSON)
+	}
+}
+
+func TestEvaluateOptimizationCandidatesCancelsParallelPoolBeforeEvaluation(t *testing.T) {
+	svc, _ := newResearchTestService(t)
+	called := false
+	svc.optimizationBacktest = func(BacktestInput) (*BacktestResult, error) {
+		called = true
+		return nil, errors.New("must not run")
+	}
+	assets := []OptimizationAsset{{ItemID: "i1", AssetKey: "A"}}
+	_, err := svc.evaluateOptimizationCandidates(
+		context.Background(), "", optimizationInputSnapshot{
+			Config: OptimizationConfig{WeightStep: 0.1, TopK: 5},
+		},
+		&researchDataset{FX: map[string]*researchFXData{}},
+		assets, CountCandidates(assets, 0.1), func() bool { return true }, nil,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel error=%v, want context.Canceled", err)
+	}
+	if called {
+		t.Fatal("candidate evaluator ran after cancellation")
 	}
 }
 
@@ -797,7 +929,7 @@ func TestOptimizationReadiness_FXMissingBlocks(t *testing.T) {
 	}
 }
 
-func TestOptimizationReadiness_MaxCandidateCountBlocks(t *testing.T) {
+func TestOptimizationReadiness_MaxCandidateCountWarnsWithoutBlocking(t *testing.T) {
 	ds := &researchDataset{
 		Enabled: []researchAssetData{
 			{
@@ -821,17 +953,22 @@ func TestOptimizationReadiness_MaxCandidateCountBlocks(t *testing.T) {
 		WeightStep:        0.05,
 		MaxCandidateCount: 1,
 	})
-	if r.Ready {
-		t.Error("expected not ready when candidate count exceeds max_candidate_count")
+	if !r.Ready {
+		t.Errorf("expected ready when candidate count exceeds recommendation, blocking: %v", r.BlockingReasons)
 	}
 	found := false
-	for _, b := range r.BlockingReasons {
-		if b.Reason == "candidate_count_exceeds_limit" {
+	for _, warning := range r.Warnings {
+		if warning.Reason == "candidate_count_exceeds_recommendation" {
 			found = true
+			for _, want := range []string{"当前候选数量 21", "推荐控制在 1 以内", "模拟耗时和内存占用会急剧增加"} {
+				if !strings.Contains(warning.Message, want) {
+					t.Errorf("warning %q does not contain %q", warning.Message, want)
+				}
+			}
 		}
 	}
 	if !found {
-		t.Error("expected candidate_count_exceeds_limit blocking reason")
+		t.Error("expected candidate_count_exceeds_recommendation warning")
 	}
 }
 
@@ -1134,10 +1271,14 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 	})
 
 	created, err := svc.CreateOptimization(context.Background(), detail.ID, ResearchOptimizationRequest{
-		WeightStep: 0.05, MaxCandidateCount: 20000, TopK: 20,
+		WeightStep: 0.05, MaxCandidateCount: 1, TopK: 20,
 	})
 	if err != nil {
 		t.Fatalf("create optimization: %v", err)
+	}
+	if created.Optimization.CandidateCount <= 1 {
+		t.Fatalf("expected creation above recommendation to succeed, candidate_count=%d",
+			created.Optimization.CandidateCount)
 	}
 	if err := svc.ExecuteOptimizationJob(context.Background(), created.Optimization.JobID,
 		func() bool { return false }, nil); err != nil {

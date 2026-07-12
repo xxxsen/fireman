@@ -10,17 +10,22 @@ const setMarketAssetHistoryAutoUpdateMock = vi.hoisted(() => vi.fn());
 const useWorkerTaskPollingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ assetKey: encodeURIComponent("CN|cn_mutual_fund||007194") }),
+  useParams: () => ({
+    assetKey: encodeURIComponent("CN|cn_mutual_fund||007194"),
+  }),
 }));
 
 vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
-  getMarketAssetDetail: (...args: unknown[]) => getMarketAssetDetailMock(...args),
-  setMarketAssetHistoryAutoUpdate: (...args: unknown[]) => setMarketAssetHistoryAutoUpdateMock(...args),
+  getMarketAssetDetail: (...args: unknown[]) =>
+    getMarketAssetDetailMock(...args),
+  setMarketAssetHistoryAutoUpdate: (...args: unknown[]) =>
+    setMarketAssetHistoryAutoUpdateMock(...args),
 }));
 
 vi.mock("@/hooks/useWorkerTaskPolling", () => ({
-  useWorkerTaskPolling: (...args: unknown[]) => useWorkerTaskPollingMock(...args),
+  useWorkerTaskPolling: (...args: unknown[]) =>
+    useWorkerTaskPollingMock(...args),
 }));
 
 // ECharts does not render in jsdom; the stub exposes what the page passed in
@@ -91,7 +96,9 @@ function makeDetail(): MarketAssetDetail {
 }
 
 function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <MarketAssetDetailPage />
@@ -149,7 +156,10 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
     // 2024-08-01..2026-07-01 monthly; the 1y window 2025-07-01.. holds 13 points.
     expect(chart).toHaveAttribute("data-count", "13");
     expect(chart).toHaveAttribute("data-first-date", "2025-07-01");
-    expect(screen.getByTestId("history-range-1y")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("history-range-1y")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.getByTestId("history-range-summary")).toHaveTextContent(
       "当前区间 近 1 年 · 13 / 24 个点",
     );
@@ -173,10 +183,16 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
     const chart = screen.getByTestId("return-chart");
     expect(chart).toHaveAttribute("data-count", "24");
     expect(chart).toHaveAttribute("data-first-date", "2024-08-01");
-    expect(screen.getByTestId("history-range-all")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("history-range-all")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     // And back to a shorter window.
     fireEvent.click(screen.getByTestId("history-range-1y"));
-    expect(screen.getByTestId("return-chart")).toHaveAttribute("data-count", "13");
+    expect(screen.getByTestId("return-chart")).toHaveAttribute(
+      "data-count",
+      "13",
+    );
   });
 
   it("disables ranges without enough points and titles the reason", async () => {
@@ -194,6 +210,35 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
     renderPage();
     await screen.findByTestId("history-current-task");
     expect(screen.queryByTestId("history-range-all")).not.toBeInTheDocument();
+  });
+});
+
+describe("MarketAssetDetailPage mutual fund fee identity", () => {
+  beforeEach(() => {
+    getMarketAssetDetailMock.mockReset();
+    useWorkerTaskPollingMock.mockReset();
+    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+  });
+
+  it("explains shared NAV history without claiming transaction fees are included", async () => {
+    const detail = makeDetailWithHistory();
+    detail.asset.symbol = "000157";
+    detail.asset.name = "富国全球科技互联网股票(QDII)A(后端)";
+    detail.asset.canonical_symbol = "100055";
+    detail.asset.fee_mode = "back_end";
+    getMarketAssetDetailMock.mockResolvedValue(detail);
+
+    renderPage();
+
+    expect(await screen.findByTestId("fund-fee-mode")).toHaveTextContent(
+      "后端收费",
+    );
+    expect(screen.getByTestId("canonical-fund-symbol")).toHaveTextContent(
+      "100055",
+    );
+    expect(screen.getByTestId("fund-fee-history-note")).toHaveTextContent(
+      "回测仅使用净值序列，不包含申购、赎回或后端申购费用",
+    );
   });
 });
 
@@ -266,44 +311,80 @@ describe("MarketAssetDetailPage automatic update", () => {
     };
     getMarketAssetDetailMock
       .mockResolvedValueOnce(initial)
-      .mockResolvedValue({ ...initial, history: { ...initial.history, auto_update: updatedRule } });
+      .mockResolvedValue({
+        ...initial,
+        history: { ...initial.history, auto_update: updatedRule },
+      });
     setMarketAssetHistoryAutoUpdateMock.mockResolvedValue(updatedRule);
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "启用每日自动更新" }));
-    await waitFor(() => expect(setMarketAssetHistoryAutoUpdateMock).toHaveBeenCalledWith({
-      asset_key: initial.asset.asset_key,
-      adjust_policy: initial.history.adjust_policy,
-      point_type: initial.history.point_type,
-      enabled: true,
-    }));
-    expect(await screen.findByRole("button", { name: "自动更新：每 1 天" })).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "启用每日自动更新" }),
+    );
+    await waitFor(() =>
+      expect(setMarketAssetHistoryAutoUpdateMock).toHaveBeenCalledWith({
+        asset_key: initial.asset.asset_key,
+        adjust_policy: initial.history.adjust_policy,
+        point_type: initial.history.point_type,
+        enabled: true,
+      }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "自动更新：每 1 天" }),
+    ).toBeInTheDocument();
   });
 
   it("pauses an enabled rule without changing its history dimension", async () => {
     const initial = makeDetailWithHistory();
     const enabledRule = {
-      id: "aur_history", target_type: "asset_history" as const, sync_key: "",
-      asset_key: initial.asset.asset_key, adjust_policy: initial.history.adjust_policy,
-      point_type: initial.history.point_type, enabled: true, interval_hours: 6,
-      next_run_at: Date.now(), last_task_id: "", last_error_code: "",
-      last_error_message: "", version: 2, created_at: Date.now(), updated_at: Date.now(),
-    };
-    const disabledRule = { ...enabledRule, enabled: false, next_run_at: null, version: 3 };
-    const enabledDetail = { ...initial, history: { ...initial.history, auto_update: enabledRule } };
-    getMarketAssetDetailMock
-      .mockResolvedValueOnce(enabledDetail)
-      .mockResolvedValue({ ...initial, history: { ...initial.history, auto_update: disabledRule } });
-    setMarketAssetHistoryAutoUpdateMock.mockResolvedValue(disabledRule);
-    renderPage();
-
-    fireEvent.click(await screen.findByRole("button", { name: "自动更新：每 6 小时" }));
-    await waitFor(() => expect(setMarketAssetHistoryAutoUpdateMock).toHaveBeenCalledWith({
+      id: "aur_history",
+      target_type: "asset_history" as const,
+      sync_key: "",
       asset_key: initial.asset.asset_key,
       adjust_policy: initial.history.adjust_policy,
       point_type: initial.history.point_type,
+      enabled: true,
+      interval_hours: 6,
+      next_run_at: Date.now(),
+      last_task_id: "",
+      last_error_code: "",
+      last_error_message: "",
+      version: 2,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+    const disabledRule = {
+      ...enabledRule,
       enabled: false,
-    }));
-    expect(await screen.findByRole("button", { name: "启用每日自动更新" })).toBeInTheDocument();
+      next_run_at: null,
+      version: 3,
+    };
+    const enabledDetail = {
+      ...initial,
+      history: { ...initial.history, auto_update: enabledRule },
+    };
+    getMarketAssetDetailMock
+      .mockResolvedValueOnce(enabledDetail)
+      .mockResolvedValue({
+        ...initial,
+        history: { ...initial.history, auto_update: disabledRule },
+      });
+    setMarketAssetHistoryAutoUpdateMock.mockResolvedValue(disabledRule);
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "自动更新：每 6 小时" }),
+    );
+    await waitFor(() =>
+      expect(setMarketAssetHistoryAutoUpdateMock).toHaveBeenCalledWith({
+        asset_key: initial.asset.asset_key,
+        adjust_policy: initial.history.adjust_policy,
+        point_type: initial.history.point_type,
+        enabled: false,
+      }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "启用每日自动更新" }),
+    ).toBeInTheDocument();
   });
 });

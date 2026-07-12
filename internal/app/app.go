@@ -71,6 +71,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	maintenance := &service.MaintenanceGate{}
 	services := api.NewServices(pool, cfg.DBPath, maintenance, resources, loc)
+	services.Research.SetOptimizationConcurrency(cfg.ResearchOptimizationConcurrency)
 	jobRepo := repository.NewJobRepo(pool)
 	simRepo := repository.NewSimulationRepo(pool)
 	runner := jobs.NewSimulationRunner(pool, simRepo)

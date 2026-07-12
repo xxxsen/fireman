@@ -25,7 +25,10 @@ import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { CollectionParamsForm } from "@/components/research/CollectionParamsForm";
-import { WeightEditor, type WeightUpdates } from "@/components/research/WeightEditor";
+import {
+  WeightEditor,
+  type WeightUpdates,
+} from "@/components/research/WeightEditor";
 import { DataStatusPanel } from "@/components/research/DataStatusPanel";
 import { BacktestPanel } from "@/components/research/BacktestPanel";
 import { AddAssetDialog } from "@/components/research/AddAssetDialog";
@@ -69,7 +72,9 @@ export default function ResearchCollectionPage() {
   const applyDetail = useCallback(
     (detail: ResearchCollectionDetail) => {
       queryClient.setQueryData(["research", "collection", id], detail);
-      void queryClient.invalidateQueries({ queryKey: ["research", "readiness", id] });
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "readiness", id],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["research", "optimization-readiness", id],
       });
@@ -78,8 +83,13 @@ export default function ResearchCollectionPage() {
   );
 
   const updateItemMutation = useMutation({
-    mutationFn: ({ itemId, patch }: { itemId: string; patch: ResearchItemUpdate }) =>
-      updateCollectionItem(id, itemId, patch),
+    mutationFn: ({
+      itemId,
+      patch,
+    }: {
+      itemId: string;
+      patch: ResearchItemUpdate;
+    }) => updateCollectionItem(id, itemId, patch),
     onSuccess: (detail) => {
       setItemError(null);
       applyDetail(detail);
@@ -120,9 +130,9 @@ export default function ResearchCollectionPage() {
     onError: (err) => setItemError(queryErrorMessage(err)),
   });
 
-	  const addItemMutation = useMutation({
-	    mutationFn: (asset: ResearchAssetView) =>
-	      addCollectionItem(id, researchItemInputFromAsset(asset)),
+  const addItemMutation = useMutation({
+    mutationFn: (asset: ResearchAssetView) =>
+      addCollectionItem(id, researchItemInputFromAsset(asset)),
     onSuccess: (detail) => {
       setItemError(null);
       applyDetail(detail);
@@ -185,7 +195,9 @@ export default function ResearchCollectionPage() {
         backLabel="组合研究"
         title={detail.name}
         status={
-          detail.status === "archived" ? <Badge variant="neutral">已归档</Badge> : undefined
+          detail.status === "archived" ? (
+            <Badge variant="neutral">已归档</Badge>
+          ) : undefined
         }
         description={detail.description || undefined}
         secondaryActions={
@@ -207,7 +219,11 @@ export default function ResearchCollectionPage() {
             >
               复制到计划
             </Button>
-            <Button variant="secondary" onClick={exportJSON} data-testid="export-collection-json">
+            <Button
+              variant="secondary"
+              onClick={exportJSON}
+              data-testid="export-collection-json"
+            >
               导出 JSON
             </Button>
             <Button
@@ -230,7 +246,10 @@ export default function ResearchCollectionPage() {
         />
 
         {itemError && (
-          <p className="rounded-md border border-danger/25 bg-danger/5 px-3 py-2 text-sm text-danger" role="alert">
+          <p
+            className="rounded-md border border-danger/25 bg-danger/5 px-3 py-2 text-sm text-danger"
+            role="alert"
+          >
             {itemError}
           </p>
         )}
@@ -248,7 +267,9 @@ export default function ResearchCollectionPage() {
           detail={detail}
           readiness={readinessQuery.data}
           pending={itemsPending}
-          onUpdateItem={(itemId, patch) => updateItemMutation.mutate({ itemId, patch })}
+          onUpdateItem={(itemId, patch) =>
+            updateItemMutation.mutate({ itemId, patch })
+          }
           onDeleteItem={(itemId) => deleteItemMutation.mutate(itemId)}
           onApplyWeights={(updates) => batchWeightsMutation.mutate(updates)}
           onNormalize={() => normalizeMutation.mutate()}
@@ -272,6 +293,13 @@ export default function ResearchCollectionPage() {
         open={addAssetOpen}
         onClose={() => setAddAssetOpen(false)}
         existingAssetKeys={new Set(detail.items.map((it) => it.asset_key))}
+        existingCanonicalFundSymbols={
+          new Set(
+            detail.items
+              .filter((it) => it.instrument_type === "cn_mutual_fund")
+              .map((it) => it.canonical_symbol || it.symbol),
+          )
+        }
         onAdd={(asset) => addItemMutation.mutate(asset)}
         addPending={addItemMutation.isPending}
       />

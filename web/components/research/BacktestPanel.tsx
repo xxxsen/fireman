@@ -16,7 +16,11 @@ import {
   type ResearchRunView,
 } from "@/lib/api/research";
 import { queryErrorMessage } from "@/lib/query-error";
-import { formatDateTimeFromMs, formatNullablePercent, formatPercent } from "@/lib/format";
+import {
+  formatDateTimeFromMs,
+  formatNullablePercent,
+  formatPercent,
+} from "@/lib/format";
 import { Button } from "@/components/ui/Button";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
@@ -28,7 +32,9 @@ import type { OptimizationSubmitConfig } from "@/components/research/Optimizatio
  * order (td/099 §4.4): weight -> missing history -> active sync -> FX ->
  * window -> ready.
  */
-export function runDisabledReason(readiness: ResearchReadiness | undefined): string | null {
+export function runDisabledReason(
+  readiness: ResearchReadiness | undefined,
+): string | null {
   if (!readiness) return "正在检查数据就绪状态…";
   if (readiness.ready) return null;
   const reasons = new Set(readiness.blocking_reasons.map((r) => r.reason));
@@ -50,12 +56,16 @@ export function runDisabledReason(readiness: ResearchReadiness | undefined): str
   if (reasons.has("fx_missing") || reasons.has("fx_gap_exceeded")) {
     return "汇率数据缺失或存在缺口，请同步汇率";
   }
-  if (reasons.has("common_window_empty") || reasons.has("common_window_too_short")) {
+  if (
+    reasons.has("common_window_empty") ||
+    reasons.has("common_window_too_short")
+  ) {
     const blockers = readiness.assets
       .filter((a) => a.limits_common_start || a.limits_common_end)
       .map((a) => a.name);
     return (
-      "共同历史区间不足" + (blockers.length > 0 ? `（受限于 ${blockers.join("、")}）` : "")
+      "共同历史区间不足" +
+      (blockers.length > 0 ? `（受限于 ${blockers.join("、")}）` : "")
     );
   }
   return readiness.blocking_reasons[0]?.message ?? "数据未就绪";
@@ -73,23 +83,27 @@ export function optimizationDisabledReason(
     return "集合没有启用的资产";
   }
   if (optReadiness.ready) return null;
+  let fallbackReason: string | null = null;
   for (const b of optReadiness.blocking_reasons) {
+    // Candidate count depends on the weight step selected inside the dialog.
+    // Keep the entry available so the user can inspect and adjust that input.
+    if (b.reason === "candidate_count_exceeds_limit") continue;
     if (b.reason === "no_enabled_assets") return "集合没有启用的资产";
     if (b.reason === "too_many_enabled_assets")
       return `启用资产 ${optReadiness.enabled_count} 个超过上限 10 个`;
     if (b.reason === "locked_weight_exceeds_100")
       return `锁定权重合计 ${formatPercent(optReadiness.locked_weight_sum)} 超过 100%`;
-    if (b.reason === "candidate_count_exceeds_limit")
-      return b.message || `候选组合 ${optReadiness.candidate_count} 超过上限，请增大步长或减少资产`;
-    if (b.reason === "candidate_count_zero") return b.message || "当前设置无法生成候选组合";
+    if (b.reason === "candidate_count_zero")
+      return b.message || "当前设置无法生成候选组合";
     if (b.reason === "history_missing" || b.reason === "history_sync_failed")
       return "存在缺历史资产，请先同步数据";
     if (b.reason === "history_syncing" || b.reason === "fx_syncing")
       return "数据同步任务进行中，完成后可运行";
     if (b.reason === "fx_missing" || b.reason === "fx_gap_exceeded")
       return "汇率数据缺失或存在缺口";
+    fallbackReason ??= b.message || "调优条件未满足";
   }
-  return optReadiness.blocking_reasons[0]?.message ?? "调优条件未满足";
+  return fallbackReason;
 }
 
 export interface BacktestPanelProps {
@@ -98,19 +112,33 @@ export interface BacktestPanelProps {
   latestRuns: ResearchRunView[];
 }
 
-export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelProps) {
+export function BacktestPanel({
+  detail,
+  readiness,
+  latestRuns,
+}: BacktestPanelProps) {
   const router = useRouter();
   const [reusedNotice, setReusedNotice] = useState(false);
   const [optDialogOpen, setOptDialogOpen] = useState(false);
 
-  const disabledReason = useMemo(() => runDisabledReason(readiness), [readiness]);
+  const disabledReason = useMemo(
+    () => runDisabledReason(readiness),
+    [readiness],
+  );
 
   const optReadinessQuery = useQuery({
-    queryKey: ["research", "optimization-readiness", detail.id, detail.tail_risk_confidence, detail.tail_risk_horizon_days],
-    queryFn: () => getOptimizationReadiness(detail.id, {
-      confidence: detail.tail_risk_confidence,
-      horizonDays: detail.tail_risk_horizon_days,
-    }),
+    queryKey: [
+      "research",
+      "optimization-readiness",
+      detail.id,
+      detail.tail_risk_confidence,
+      detail.tail_risk_horizon_days,
+    ],
+    queryFn: () =>
+      getOptimizationReadiness(detail.id, {
+        confidence: detail.tail_risk_confidence,
+        horizonDays: detail.tail_risk_horizon_days,
+      }),
     enabled: !!readiness,
   });
 
@@ -146,7 +174,10 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
   const latest = latestRuns[0];
 
   return (
-    <section className="rounded-lg border border-line bg-surface p-4" data-testid="backtest-panel">
+    <section
+      className="rounded-lg border border-line bg-surface p-4"
+      data-testid="backtest-panel"
+    >
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-base font-semibold text-ink">回测</h2>
         <Link
@@ -165,7 +196,8 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         <div>
           <dt className="text-ink-muted">再平衡</dt>
           <dd className="font-medium text-ink">
-            {REBALANCE_POLICY_LABELS[detail.rebalance_policy] ?? detail.rebalance_policy}
+            {REBALANCE_POLICY_LABELS[detail.rebalance_policy] ??
+              detail.rebalance_policy}
             {detail.rebalance_policy === "threshold" &&
               `（${formatPercent(detail.rebalance_threshold)}）`}
           </dd>
@@ -194,7 +226,10 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
         </div>
         <div>
           <dt className="text-ink-muted">CVaR 场景</dt>
-          <dd className="font-medium text-ink" data-testid="backtest-cvar-scenarios">
+          <dd
+            className="font-medium text-ink"
+            data-testid="backtest-cvar-scenarios"
+          >
             {readiness?.tail_risk
               ? `${readiness.tail_risk.scenario_count} / 最少 ${readiness.tail_risk.minimum_scenario_count}`
               : "待数据就绪"}
@@ -274,8 +309,13 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
       )}
 
       {latest && (
-        <div className="mt-4 border-t border-line pt-3" data-testid="latest-run">
-          <h3 className="mb-1.5 text-sm font-semibold text-ink">最近一次回测</h3>
+        <div
+          className="mt-4 border-t border-line pt-3"
+          data-testid="latest-run"
+        >
+          <h3 className="mb-1.5 text-sm font-semibold text-ink">
+            最近一次回测
+          </h3>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
             <Link
               href={`/research/collections/${detail.id}/runs/${latest.id}`}
@@ -291,7 +331,9 @@ export function BacktestPanel({ detail, readiness, latestRuns }: BacktestPanelPr
                 {formatNullablePercent(latest.summary.annual_volatility)}
               </span>
             )}
-            <span className="text-xs text-ink-muted">{formatDateTimeFromMs(latest.created_at)}</span>
+            <span className="text-xs text-ink-muted">
+              {formatDateTimeFromMs(latest.created_at)}
+            </span>
           </div>
         </div>
       )}
@@ -314,8 +356,13 @@ function LatestOptimizationEntry({
   optimization: ResearchOptimizationRun;
 }) {
   return (
-    <div className="mt-4 border-t border-line pt-3" data-testid="latest-optimization">
-      <h3 className="mb-1.5 text-sm font-semibold text-ink">最近一次自动调优</h3>
+    <div
+      className="mt-4 border-t border-line pt-3"
+      data-testid="latest-optimization"
+    >
+      <h3 className="mb-1.5 text-sm font-semibold text-ink">
+        最近一次自动调优
+      </h3>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
         <Link
           href={`/research/collections/${collectionId}/optimizations/${optimization.id}`}
@@ -326,7 +373,8 @@ function LatestOptimizationEntry({
         {runStatusBadge(optimization.status)}
         {optimization.status === "succeeded" && (
           <span className="text-xs text-ink-muted">
-            候选 {optimization.candidate_count} · 已评估 {optimization.evaluated_count}
+            候选 {optimization.candidate_count} · 已评估{" "}
+            {optimization.evaluated_count}
           </span>
         )}
         <span className="text-xs text-ink-muted">

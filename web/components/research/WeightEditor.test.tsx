@@ -65,7 +65,9 @@ function detail(items: ResearchCollectionItemView[]): ResearchCollectionDetail {
   };
 }
 
-function readiness(overrides: Partial<ResearchReadiness> = {}): ResearchReadiness {
+function readiness(
+  overrides: Partial<ResearchReadiness> = {},
+): ResearchReadiness {
   return {
     ready: true,
     weight_sum: 1,
@@ -135,7 +137,10 @@ describe("WeightEditor", () => {
   it("shows an invalid weight sum with the gap", () => {
     render(
       <WeightEditor
-        detail={detail([item("a", { weight: 0.5 }), item("b", { weight: 0.3 })])}
+        detail={detail([
+          item("a", { weight: 0.5 }),
+          item("b", { weight: 0.3 }),
+        ])}
         {...baseHandlers}
       />,
     );
@@ -147,7 +152,10 @@ describe("WeightEditor", () => {
   it("shows a valid weight sum without gap text", () => {
     render(
       <WeightEditor
-        detail={detail([item("a", { weight: 0.6 }), item("b", { weight: 0.4 })])}
+        detail={detail([
+          item("a", { weight: 0.6 }),
+          item("b", { weight: 0.4 }),
+        ])}
         {...baseHandlers}
       />,
     );
@@ -174,7 +182,10 @@ describe("WeightEditor", () => {
     const onUpdateItem = vi.fn();
     render(
       <WeightEditor
-        detail={detail([item("a", { weight: 0.5 }), item("b", { weight: 0.5 })])}
+        detail={detail([
+          item("a", { weight: 0.5 }),
+          item("b", { weight: 0.5 }),
+        ])}
         {...baseHandlers}
         onUpdateItem={onUpdateItem}
       />,
@@ -219,7 +230,10 @@ describe("WeightEditor", () => {
     );
     fireEvent.click(screen.getByTestId("equal-weight"));
     expect(onApplyWeights).toHaveBeenCalledTimes(1);
-    const updates = onApplyWeights.mock.calls[0]![0] as { itemId: string; weight: number }[];
+    const updates = onApplyWeights.mock.calls[0]![0] as {
+      itemId: string;
+      weight: number;
+    }[];
     expect(updates).toHaveLength(2);
     expect(updates.map((u) => u.itemId)).toEqual(["a", "b"]);
     expect(updates.reduce((s, u) => s + u.weight, 0)).toBeCloseTo(1, 9);
@@ -229,7 +243,10 @@ describe("WeightEditor", () => {
     const onNormalize = vi.fn();
     render(
       <WeightEditor
-        detail={detail([item("a", { weight: 0.5, weight_locked: true }), item("b", { weight: 0.3 })])}
+        detail={detail([
+          item("a", { weight: 0.5, weight_locked: true }),
+          item("b", { weight: 0.3 }),
+        ])}
         {...baseHandlers}
         onNormalize={onNormalize}
       />,
@@ -241,7 +258,10 @@ describe("WeightEditor", () => {
   it("disables 剩余分配 when weights already valid", () => {
     render(
       <WeightEditor
-        detail={detail([item("a", { weight: 0.5 }), item("b", { weight: 0.5 })])}
+        detail={detail([
+          item("a", { weight: 0.5 }),
+          item("b", { weight: 0.5 }),
+        ])}
         {...baseHandlers}
       />,
     );
@@ -249,7 +269,11 @@ describe("WeightEditor", () => {
   });
 
   it("shows per-item data status badges from readiness", () => {
-    const items = [item("a"), item("b"), item("cash", { is_cash: true, name: "现金 CNY" })];
+    const items = [
+      item("a"),
+      item("b"),
+      item("cash", { is_cash: true, name: "现金 CNY" }),
+    ];
     render(
       <WeightEditor
         detail={detail(items)}
@@ -304,14 +328,42 @@ describe("WeightEditor", () => {
         {...baseHandlers}
       />,
     );
-    expect(screen.getByTestId("common-window")).toHaveTextContent("2018-01-01 ~ 2026-07-01");
+    expect(screen.getByTestId("common-window")).toHaveTextContent(
+      "2018-01-01 ~ 2026-07-01",
+    );
   });
 
   it("shows the fixed backward-adjusted return series without a policy selector", () => {
     render(<WeightEditor detail={detail([item("a")])} {...baseHandlers} />);
-    expect(screen.getByTestId("return-series-a")).toHaveTextContent("后复权 · 复权收盘价");
+    expect(screen.getByTestId("return-series-a")).toHaveTextContent(
+      "后复权 · 复权收盘价",
+    );
     expect(screen.queryByLabelText("复权口径")).not.toBeInTheDocument();
     expect(screen.queryByText("前复权")).not.toBeInTheDocument();
+  });
+
+  it("labels a back-end fee code and states transaction fees are excluded", () => {
+    render(
+      <WeightEditor
+        detail={detail([
+          item("000157", {
+            asset_key: "CN|cn_mutual_fund||000157",
+            symbol: "000157",
+            name: "富国全球科技互联网股票(QDII)A(后端)",
+            instrument_type: "cn_mutual_fund",
+            instrument_type_label: "场外基金",
+            adjust_policy: "none",
+            point_type: "total_return_index",
+            canonical_symbol: "100055",
+            fee_mode: "back_end",
+          }),
+        ])}
+        {...baseHandlers}
+      />,
+    );
+
+    expect(screen.getByText(/后端收费 · 共用 100055 净值/)).toBeInTheDocument();
+    expect(screen.getByText("不含申购/赎回收费")).toBeInTheDocument();
   });
 
   it("does not render draggable asset rows or a drag handle", () => {

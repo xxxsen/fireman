@@ -4,10 +4,13 @@ import pandas as pd
 from unittest.mock import patch
 
 from fireman_market_provider.adapters.fallback import try_sources
-from fireman_market_provider.timeout_util import UpstreamCall, clear_test_dispatch, register_test_dispatch
+from fireman_market_provider.timeout_util import (
+    UpstreamCall,
+    clear_test_dispatch,
+    register_test_dispatch,
+)
 from fireman_market_provider.timeout_util import (
     DEFAULT_FETCH_TIMEOUT_SECONDS,
-    DEFAULT_FETCH_UPSTREAM_TIMEOUT_SECONDS,
     DEFAULT_RESOLVE_TIMEOUT_SECONDS,
     fetch_timeout_seconds,
     fetch_upstream_timeout_seconds,
@@ -47,7 +50,9 @@ def test_fetch_path_uses_fetch_timeout(monkeypatch) -> None:
     df = pd.DataFrame({"date": ["2024-01-01"], "close": [1.0]})
     clear_test_dispatch()
     register_test_dispatch("primary_df", lambda: df)
-    with patch("fireman_market_provider.adapters.fallback.call_with_timeout") as mock_timeout:
+    with patch(
+        "fireman_market_provider.adapters.fallback.call_with_timeout"
+    ) as mock_timeout:
         mock_timeout.return_value = df
         result, name = try_sources("demo", [("primary", UpstreamCall("primary_df"))])
         assert name == "primary"

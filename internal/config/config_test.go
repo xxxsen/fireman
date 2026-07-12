@@ -30,6 +30,10 @@ func TestLoad_DefaultsFromEmptyJSON(t *testing.T) {
 	if cfg.WorkerConcurrency != 1 {
 		t.Errorf("expected default worker concurrency 1, got %d", cfg.WorkerConcurrency)
 	}
+	if cfg.ResearchOptimizationConcurrency != 4 {
+		t.Errorf("expected default research optimization concurrency 4, got %d",
+			cfg.ResearchOptimizationConcurrency)
+	}
 	if cfg.AutoUpdateScanIntervalMinutes != 60 {
 		t.Errorf("expected default auto-update interval 60, got %d", cfg.AutoUpdateScanIntervalMinutes)
 	}
@@ -70,7 +74,8 @@ func TestLoad_OverridesAndValidation(t *testing.T) {
 		"market_provider_url": "http://127.0.0.1:18081",
 		"timezone": "Asia/Shanghai",
 		"log_level": "debug",
-		"worker_concurrency": 2
+		"worker_concurrency": 2,
+		"research_optimization_concurrency": 6
 	}`)
 	cfg, err := Load(path)
 	if err != nil {
@@ -81,6 +86,10 @@ func TestLoad_OverridesAndValidation(t *testing.T) {
 	}
 	if cfg.WorkerConcurrency != 2 {
 		t.Errorf("expected worker concurrency 2, got %d", cfg.WorkerConcurrency)
+	}
+	if cfg.ResearchOptimizationConcurrency != 6 {
+		t.Errorf("expected research optimization concurrency 6, got %d",
+			cfg.ResearchOptimizationConcurrency)
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected log level debug, got %q", cfg.LogLevel)
@@ -97,6 +106,17 @@ func TestLoad_RejectsInvalidWorkerConcurrency(t *testing.T) {
 	path := writeConfigFile(t, `{"worker_concurrency": 0}`)
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for worker concurrency 0")
+	}
+}
+
+func TestLoad_RejectsInvalidResearchOptimizationConcurrency(t *testing.T) {
+	for _, value := range []string{"0", "33"} {
+		t.Run(value, func(t *testing.T) {
+			path := writeConfigFile(t, `{"research_optimization_concurrency":`+value+`}`)
+			if _, err := Load(path); err == nil {
+				t.Errorf("expected research optimization concurrency %s to fail", value)
+			}
+		})
 	}
 }
 

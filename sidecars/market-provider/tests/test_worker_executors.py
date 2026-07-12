@@ -76,7 +76,9 @@ def _register_hk_boards(hkex: pd.DataFrame | None = None) -> None:
     )
     register_test_dispatch(
         "em_hk_equity_list",
-        lambda **kwargs: pd.DataFrame({"代码": ["00700", "5"], "名称": ["腾讯控股", "汇丰控股"]}),
+        lambda **kwargs: pd.DataFrame(
+            {"代码": ["00700", "5"], "名称": ["腾讯控股", "汇丰控股"]}
+        ),
     )
     register_test_dispatch(
         "em_hk_fund_list",
@@ -159,10 +161,17 @@ class TestDirectorySync:
         )
         tracked(
             "em_cn_lof_list",
-            pd.DataFrame({"代码": ["161725"], "名称": ["招商白酒LOF"], "市场标识": [0]}),
+            pd.DataFrame(
+                {"代码": ["161725"], "名称": ["招商白酒LOF"], "市场标识": [0]}
+            ),
         )
-        tracked("em_cn_sh_a_list", pd.DataFrame({"代码": ["600000"], "名称": ["浦发银行"]}))
-        tracked("fund_name_em", pd.DataFrame({"基金代码": ["000001"], "基金简称": ["华夏成长"]}))
+        tracked(
+            "em_cn_sh_a_list", pd.DataFrame({"代码": ["600000"], "名称": ["浦发银行"]})
+        )
+        tracked(
+            "fund_name_em",
+            pd.DataFrame({"基金代码": ["000001"], "基金简称": ["华夏成长"]}),
+        )
 
         result = execute_directory_sync(_unit_payload("cn_exchange_fund", "cn_all"))
         assert result["sync_key"] == "cn_exchange_fund"
@@ -184,7 +193,9 @@ class TestDirectorySync:
         assert first["source_name"] == "em.us_equity_list"
 
     def test_empty_listing_fails_whole_task(self) -> None:
-        register_test_dispatch("hkex_list_of_securities", lambda **kwargs: pd.DataFrame())
+        register_test_dispatch(
+            "hkex_list_of_securities", lambda **kwargs: pd.DataFrame()
+        )
         with pytest.raises(TaskFailure) as exc:
             execute_directory_sync(_unit_payload("hk_stock", "hk_all"))
         assert exc.value.error_code == "directory_data_incomplete"
@@ -230,7 +241,9 @@ class TestDirectorySync:
     def test_missing_sync_key_rejected(self) -> None:
         _register_hk_boards()
         with pytest.raises(TaskFailure) as exc:
-            execute_directory_sync({"scope": "hk_all", "instrument_types": ["hk_stock"]})
+            execute_directory_sync(
+                {"scope": "hk_all", "instrument_types": ["hk_stock"]}
+            )
         assert exc.value.error_code == "invalid_task_payload"
 
 
@@ -249,7 +262,9 @@ HISTORY_PAYLOAD = {
 
 
 class TestHistorySync:
-    def test_raw_price_cannot_be_labeled_adjusted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_raw_price_cannot_be_labeled_adjusted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         def fake_fetch(req):
             return FetchData(
                 provider="akshare",
@@ -264,7 +279,8 @@ class TestHistorySync:
             )
 
         monkeypatch.setattr(
-            "fireman_market_provider.worker.executors.history.fetch_instrument", fake_fetch
+            "fireman_market_provider.worker.executors.history.fetch_instrument",
+            fake_fetch,
         )
         with pytest.raises(TaskFailure) as exc:
             execute_history_sync(
@@ -336,7 +352,11 @@ class TestHistorySync:
             }
         )
 
-        assert captured == {"symbol": "000157", "indicator": "累计净值走势"}
+        assert captured == {
+            "symbol": "000157",
+            "indicator": "累计净值走势",
+            "expected_canonical_symbol": None,
+        }
         assert result["source_name"] == "em.fund_open_history:累计净值走势"
         assert result["point_type"] == "total_return_index"
         assert result["points"] == [
@@ -405,7 +425,8 @@ class TestHistorySync:
             )
 
         monkeypatch.setattr(
-            "fireman_market_provider.worker.executors.history.fetch_instrument", fake_fetch
+            "fireman_market_provider.worker.executors.history.fetch_instrument",
+            fake_fetch,
         )
         result = execute_history_sync(
             {**HISTORY_PAYLOAD, "replacement_mode": "full", "requested_range": "full"}
@@ -413,7 +434,9 @@ class TestHistorySync:
         assert result["source_name"] == "ak.fund_etf_hist_em"
         assert len(result["points"]) == 2
 
-    def test_unpinned_failure_maps_to_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_unpinned_failure_maps_to_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         def boom(req):
             raise RuntimeError("all sources failed")
 
@@ -450,7 +473,8 @@ class TestHistorySync:
             )
 
         monkeypatch.setattr(
-            "fireman_market_provider.worker.executors.history.fetch_instrument", fake_fetch
+            "fireman_market_provider.worker.executors.history.fetch_instrument",
+            fake_fetch,
         )
         result = execute_history_sync(
             {
@@ -521,7 +545,8 @@ class TestHistorySync:
             )
 
         monkeypatch.setattr(
-            "fireman_market_provider.worker.executors.history.fetch_instrument", fake_fetch
+            "fireman_market_provider.worker.executors.history.fetch_instrument",
+            fake_fetch,
         )
         result = execute_history_sync(
             {
@@ -570,7 +595,10 @@ class TestCNDirectorySync:
         register_test_dispatch(
             "em_cn_sh_a_list",
             lambda **kwargs: pd.DataFrame(
-                {"代码": ["600036", "12345", "ABCDEF"], "名称": ["招商银行", "坏码", "坏码2"]}
+                {
+                    "代码": ["600036", "12345", "ABCDEF"],
+                    "名称": ["招商银行", "坏码", "坏码2"],
+                }
             ),
         )
         register_test_dispatch(
@@ -621,6 +649,52 @@ class TestCNDirectorySync:
         assert by_symbol["159915"]["region_code"] == "sz"
         assert by_symbol["166009"]["region_code"] == "sz"
         assert by_symbol["166009"]["instrument_kind"] == "lof"
+
+    def test_cn_mutual_fund_directory_links_front_and_back_fee_codes(self) -> None:
+        register_test_dispatch(
+            "fund_name_em",
+            lambda **kwargs: pd.DataFrame(
+                {
+                    "基金代码": ["100055", "000157", "007194"],
+                    "基金简称": [
+                        "富国全球科技互联网股票(QDII)A",
+                        "富国全球科技互联网股票(QDII)A(后端)",
+                        "长城短债A",
+                    ],
+                    "基金类型": ["QDII-普通股票", "QDII-普通股票", "债券型-中短债"],
+                    "拼音全称": ["SAMEFUND", "SAMEFUND", "OTHERFUND"],
+                }
+            ),
+        )
+
+        result = execute_directory_sync(_unit_payload("cn_mutual_fund", "cn_all"))
+        by_symbol = {asset["symbol"]: asset for asset in result["assets"]}
+
+        assert by_symbol["100055"]["canonical_symbol"] == "100055"
+        assert by_symbol["100055"]["fee_mode"] == "front_end"
+        assert by_symbol["000157"]["canonical_symbol"] == "100055"
+        assert by_symbol["000157"]["fee_mode"] == "back_end"
+        assert by_symbol["007194"]["canonical_symbol"] == "007194"
+        assert by_symbol["007194"]["fee_mode"] == "standard"
+
+    def test_cn_mutual_fund_directory_rejects_ambiguous_backend_mapping(self) -> None:
+        register_test_dispatch(
+            "fund_name_em",
+            lambda **kwargs: pd.DataFrame(
+                {
+                    "基金代码": ["100055", "100056", "000157"],
+                    "基金简称": ["同名基金A", "同名基金A", "同名基金A(后端)"],
+                    "基金类型": ["混合型", "混合型", "混合型"],
+                    "拼音全称": ["SAME", "SAME", "SAME"],
+                }
+            ),
+        )
+
+        with pytest.raises(TaskFailure) as exc:
+            execute_directory_sync(_unit_payload("cn_mutual_fund", "cn_all"))
+
+        assert exc.value.error_code == "directory_data_incomplete"
+        assert "maps to 2 canonical candidates" in exc.value.message
 
 
 # --- fx_rate_sync ---

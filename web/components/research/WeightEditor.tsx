@@ -8,7 +8,11 @@ import {
   type ResearchReadiness,
   type ResearchReadinessAssetView,
 } from "@/lib/api/research";
-import { formatPercent, instrumentTypeLabel, pointTypeLabel } from "@/lib/format";
+import {
+  formatPercent,
+  instrumentTypeLabel,
+  pointTypeLabel,
+} from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
@@ -140,7 +144,10 @@ function WeightInput({
   );
 }
 
-function dataStatusBadge(view: ResearchReadinessAssetView | undefined, isCash: boolean) {
+function dataStatusBadge(
+  view: ResearchReadinessAssetView | undefined,
+  isCash: boolean,
+) {
   if (isCash) return <Badge variant="positive">现金（无需历史）</Badge>;
   if (!view) return <Badge variant="neutral">—</Badge>;
   if (view.sync_status === "pending" || view.sync_status === "running") {
@@ -185,9 +192,13 @@ export function WeightEditor({
     let maxWeight = 0;
     let maxWeightName = "";
     for (const it of enabled) {
-      byCurrency.set(it.currency, (byCurrency.get(it.currency) ?? 0) + it.weight);
+      byCurrency.set(
+        it.currency,
+        (byCurrency.get(it.currency) ?? 0) + it.weight,
+      );
       byMarket.set(it.market, (byMarket.get(it.market) ?? 0) + it.weight);
-      const typeLabel = it.instrument_type_label || instrumentTypeLabel(it.instrument_type);
+      const typeLabel =
+        it.instrument_type_label || instrumentTypeLabel(it.instrument_type);
       byType.set(typeLabel, (byType.get(typeLabel) ?? 0) + it.weight);
       if (it.weight > maxWeight) {
         maxWeight = it.weight;
@@ -198,34 +209,59 @@ export function WeightEditor({
     let fxMissing = 0;
     if (readiness) {
       missingHistory = readiness.data_dependencies.missing_history_count;
-      fxMissing = readiness.blocking_reasons.filter((r) => r.reason === "fx_missing").length;
+      fxMissing = readiness.blocking_reasons.filter(
+        (r) => r.reason === "fx_missing",
+      ).length;
     }
-    return { weightSum, byCurrency, byMarket, byType, maxWeight, maxWeightName, missingHistory, fxMissing };
+    return {
+      weightSum,
+      byCurrency,
+      byMarket,
+      byType,
+      maxWeight,
+      maxWeightName,
+      missingHistory,
+      fxMissing,
+    };
   }, [enabled, readiness]);
 
   const weightValid = Math.abs(summary.weightSum - 1) <= 1e-6;
 
   function applyEqualWeight() {
     const weights = equalWeights(enabled.length);
-    onApplyWeights(enabled.map((it, idx) => ({ itemId: it.id, weight: weights[idx]! })));
+    onApplyWeights(
+      enabled.map((it, idx) => ({ itemId: it.id, weight: weights[idx]! })),
+    );
   }
 
-  function applyGroupEqual(groupOf: (it: ResearchCollectionItemView) => string) {
+  function applyGroupEqual(
+    groupOf: (it: ResearchCollectionItemView) => string,
+  ) {
     const updates = groupEqualWeights(
       enabled.map((it) => ({ id: it.id, group: groupOf(it) || "其他" })),
     );
     onApplyWeights(
-      Array.from(updates.entries()).map(([itemId, weight]) => ({ itemId, weight })),
+      Array.from(updates.entries()).map(([itemId, weight]) => ({
+        itemId,
+        weight,
+      })),
     );
   }
 
   function applyRemainder() {
     const updates = distributeRemainder(
-      enabled.map((it) => ({ id: it.id, weight: it.weight, locked: it.weight_locked })),
+      enabled.map((it) => ({
+        id: it.id,
+        weight: it.weight,
+        locked: it.weight_locked,
+      })),
     );
     if (updates.size === 0) return;
     onApplyWeights(
-      Array.from(updates.entries()).map(([itemId, weight]) => ({ itemId, weight })),
+      Array.from(updates.entries()).map(([itemId, weight]) => ({
+        itemId,
+        weight,
+      })),
     );
   }
 
@@ -238,11 +274,18 @@ export function WeightEditor({
   }
 
   return (
-    <section className="rounded-lg border border-line bg-surface p-4" data-testid="weight-editor">
+    <section
+      className="rounded-lg border border-line bg-surface p-4"
+      data-testid="weight-editor"
+    >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold text-ink">资产与权重</h2>
         <div className="flex flex-wrap gap-1.5">
-          <Button variant="secondary" onClick={onAddAsset} data-testid="add-asset">
+          <Button
+            variant="secondary"
+            onClick={onAddAsset}
+            data-testid="add-asset"
+          >
             添加资产
           </Button>
           <Button
@@ -294,7 +337,10 @@ export function WeightEditor({
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm" data-testid="weight-table">
+          <table
+            className="w-full min-w-[980px] text-sm"
+            data-testid="weight-table"
+          >
             <thead>
               <tr className="border-b border-line text-left text-xs text-ink-muted">
                 <th className="px-2 py-2 font-medium">启用</th>
@@ -327,7 +373,9 @@ export function WeightEditor({
                         type="checkbox"
                         checked={it.enabled}
                         disabled={pending}
-                        onChange={(e) => onUpdateItem(it.id, { enabled: e.target.checked })}
+                        onChange={(e) =>
+                          onUpdateItem(it.id, { enabled: e.target.checked })
+                        }
                         aria-label={`启用 ${it.name}`}
                       />
                     </td>
@@ -342,7 +390,18 @@ export function WeightEditor({
                               </Badge>
                             )}
                           </span>
-                          <span className="block text-xs text-ink-muted">{it.symbol || it.asset_key}</span>
+                          <span className="block text-xs text-ink-muted">
+                            {it.symbol || it.asset_key}
+                          </span>
+                          {(it.fee_mode === "front_end" ||
+                            it.fee_mode === "back_end") && (
+                            <span className="mt-0.5 block text-xs text-info">
+                              {it.fee_mode === "front_end"
+                                ? "前端收费"
+                                : "后端收费"}{" "}
+                              · 共用 {it.canonical_symbol || it.symbol} 净值
+                            </span>
+                          )}
                         </span>
                       </span>
                     </td>
@@ -359,10 +418,17 @@ export function WeightEditor({
                           type="checkbox"
                           checked={it.weight_locked}
                           disabled={pending || !it.enabled}
-                          onChange={(e) => onUpdateItem(it.id, { weight_locked: e.target.checked })}
+                          onChange={(e) =>
+                            onUpdateItem(it.id, {
+                              weight_locked: e.target.checked,
+                            })
+                          }
                           aria-label={`锁定 ${it.name} 权重`}
                         />
-                        <span className="text-[10px] text-ink-muted" data-testid={`opt-hint-${it.id}`}>
+                        <span
+                          className="text-[10px] text-ink-muted"
+                          data-testid={`opt-hint-${it.id}`}
+                        >
                           {!it.enabled
                             ? "不参与"
                             : it.weight_locked
@@ -376,7 +442,8 @@ export function WeightEditor({
                     <td className="px-2 py-2 text-xs">{it.currency}</td>
                     <td className="px-2 py-2">
                       <span className="block text-xs">
-                        {it.instrument_type_label || instrumentTypeLabel(it.instrument_type)}
+                        {it.instrument_type_label ||
+                          instrumentTypeLabel(it.instrument_type)}
                       </span>
                       {!it.is_cash && isExchangeTraded(it.instrument_type) && (
                         <span
@@ -391,23 +458,41 @@ export function WeightEditor({
                           {pointTypeLabel(it.point_type)}
                         </span>
                       )}
+                      {(it.fee_mode === "front_end" ||
+                        it.fee_mode === "back_end") && (
+                        <span className="mt-0.5 block text-[10px] text-warning">
+                          不含申购/赎回收费
+                        </span>
+                      )}
                     </td>
-                    <td className="px-2 py-2 font-mono-numeric text-xs">{rv?.data_as_of ?? "—"}</td>
-                    <td className="px-2 py-2 font-mono-numeric text-xs">{rv?.history_start ?? "—"}</td>
+                    <td className="px-2 py-2 font-mono-numeric text-xs">
+                      {rv?.data_as_of ?? "—"}
+                    </td>
+                    <td className="px-2 py-2 font-mono-numeric text-xs">
+                      {rv?.history_start ?? "—"}
+                    </td>
                     <td className="px-2 py-2 font-mono-numeric text-xs">
                       {rv?.history_end ?? "—"}
                       {rv?.limits_common_start && (
-                        <span className="ml-1 text-warning" title="该资产决定了共同起点">
+                        <span
+                          className="ml-1 text-warning"
+                          title="该资产决定了共同起点"
+                        >
                           ⤒
                         </span>
                       )}
                       {rv?.limits_common_end && (
-                        <span className="ml-1 text-warning" title="该资产决定了共同终点">
+                        <span
+                          className="ml-1 text-warning"
+                          title="该资产决定了共同终点"
+                        >
                           ⤓
                         </span>
                       )}
                     </td>
-                    <td className="px-2 py-2">{dataStatusBadge(rv, it.is_cash)}</td>
+                    <td className="px-2 py-2">
+                      {dataStatusBadge(rv, it.is_cash)}
+                    </td>
                     <td className="px-2 py-2 text-right">
                       <button
                         type="button"
@@ -434,12 +519,18 @@ export function WeightEditor({
         <div className="flex justify-between gap-3">
           <dt className="text-ink-muted">权重合计</dt>
           <dd
-            className={weightValid ? "font-medium text-positive" : "font-medium text-warning"}
+            className={
+              weightValid
+                ? "font-medium text-positive"
+                : "font-medium text-warning"
+            }
             data-testid="weight-sum"
           >
             {formatPercent(summary.weightSum)}
             {!weightValid && enabled.length > 0 && (
-              <span className="ml-1">（差 {formatPercent(1 - summary.weightSum)}）</span>
+              <span className="ml-1">
+                （差 {formatPercent(1 - summary.weightSum)}）
+              </span>
             )}
           </dd>
         </div>

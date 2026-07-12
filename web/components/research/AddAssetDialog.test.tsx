@@ -38,14 +38,19 @@ function asset(overrides: Partial<ResearchAssetView> = {}): ResearchAssetView {
   };
 }
 
-function renderDialog(props: Partial<Parameters<typeof AddAssetDialog>[0]> = {}) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderDialog(
+  props: Partial<Parameters<typeof AddAssetDialog>[0]> = {},
+) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <AddAssetDialog
         open
         onClose={vi.fn()}
         existingAssetKeys={new Set()}
+        existingCanonicalFundSymbols={new Set()}
         onAdd={vi.fn()}
         addPending={false}
         {...props}
@@ -79,10 +84,19 @@ describe("AddAssetDialog", () => {
   it("lets users type and add a returned asset", async () => {
     const onAdd = vi.fn();
     renderDialog({ onAdd });
-    fireEvent.change(screen.getByTestId("add-asset-search"), { target: { value: "510300" } });
-    await waitFor(() => expect(listResearchAssetsMock).toHaveBeenLastCalledWith({ q: "510300", limit: 20 }));
+    fireEvent.change(screen.getByTestId("add-asset-search"), {
+      target: { value: "510300" },
+    });
+    await waitFor(() =>
+      expect(listResearchAssetsMock).toHaveBeenLastCalledWith({
+        q: "510300",
+        limit: 20,
+      }),
+    );
     fireEvent.click(await screen.findByTestId("add-CN|fund|sh|510300"));
-    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ asset_key: "CN|fund|sh|510300" }));
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ asset_key: "CN|fund|sh|510300" }),
+    );
   });
 
   it("marks existing assets as already added", async () => {
@@ -90,5 +104,30 @@ describe("AddAssetDialog", () => {
     const button = await screen.findByTestId("add-CN|fund|sh|510300");
     expect(button).toBeDisabled();
     expect(button).toHaveTextContent("已加入");
+  });
+
+  it("blocks another fee code of the same canonical fund", async () => {
+    listResearchAssetsMock.mockResolvedValue({
+      assets: [
+        asset({
+          asset_key: "CN|cn_mutual_fund||000157",
+          instrument_type: "cn_mutual_fund",
+          instrument_type_label: "场外基金",
+          symbol: "000157",
+          name: "富国全球科技互联网股票(QDII)A(后端)",
+          canonical_symbol: "100055",
+          fee_mode: "back_end",
+        }),
+      ],
+      total: 1,
+    });
+    renderDialog({ existingCanonicalFundSymbols: new Set(["100055"]) });
+
+    const button = await screen.findByTestId("add-CN|cn_mutual_fund||000157");
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent("同一基金已加入");
+    expect(
+      screen.getByText(/后端收费 · 净值主代码 100055/),
+    ).toBeInTheDocument();
   });
 });

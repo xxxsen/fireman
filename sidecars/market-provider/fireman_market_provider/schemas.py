@@ -41,6 +41,7 @@ class FetchRequest(BaseModel):
     adjust_policy: Literal["none", "hfq"] = "none"
     resolved_name: str | None = None
     instrument_kind: str | None = None
+    canonical_symbol: str | None = None
 
 
 class HistoricalPoint(BaseModel):

@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -255,9 +257,9 @@ func appendOptimizationCandidateIssues(
 ) {
 	out.CandidateCount = CountCandidates(assets, config.WeightStep)
 	if out.CandidateCount > config.MaxCandidateCount {
-		out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
-			Reason: "candidate_count_exceeds_limit",
-			Message: fmt.Sprintf("候选数量 %d 超过上限 %d，请增大步长或减少资产",
+		out.Warnings = append(out.Warnings, ResearchReadinessIssue{
+			Reason: "candidate_count_exceeds_recommendation",
+			Message: fmt.Sprintf("当前候选数量 %d，推荐控制在 %d 以内；超过推荐数量后，模拟耗时和内存占用会急剧增加",
 				out.CandidateCount, config.MaxCandidateCount),
 		})
 	}
@@ -940,12 +942,13 @@ func (s *ResearchService) ExecuteOptimizationJob(
 		s.cancelOptimization(ctx, run.ID)
 		return context.Canceled
 	}
-	candidates := GenerateCandidates(buildOptimizationExecutionAssets(snapshot, ds), snapshot.Config.WeightStep)
+	assets := buildOptimizationExecutionAssets(snapshot, ds)
+	candidateCount := CountCandidates(assets, snapshot.Config.WeightStep)
 	if progress != nil {
-		progress(0, len(candidates), "evaluating")
+		progress(0, candidateCount, "evaluating")
 	}
 	optResult, err := s.evaluateOptimizationCandidates(
-		ctx, run.ID, snapshot, ds, candidates, cancelCheck, progress,
+		ctx, run.ID, snapshot, ds, assets, candidateCount, cancelCheck, progress,
 	)
 	if err != nil {
 		return err
@@ -967,7 +970,7 @@ func (s *ResearchService) ExecuteOptimizationJob(
 	}
 
 	if progress != nil {
-		progress(len(candidates), len(candidates), "done")
+		progress(candidateCount, candidateCount, "done")
 	}
 	return nil
 }
@@ -1043,61 +1046,246 @@ func newOptimizationCandidateTrackers(topK int) optimizationCandidateTrackers {
 	}
 }
 
+type optimizationCandidateEvaluation struct {
+	candidate OptimizationWeightVector
+	summary   *BacktestSummary
+	err       error
+}
+
+type optimizationCandidateGeneration struct {
+	count        int
+	userCanceled bool
+}
+
+func (s *ResearchService) optimizationWorkerCount(candidateCount int) int {
+	workers := s.optimizationConcurrency
+	if workers < 1 {
+		workers = DefaultResearchOptimizationConcurrency
+	}
+	if maxProcs := runtime.GOMAXPROCS(0); workers > maxProcs {
+		workers = maxProcs
+	}
+	if candidateCount > 0 && workers > candidateCount {
+		workers = candidateCount
+	}
+	return maxInt(1, workers)
+}
+
+func (s *ResearchService) startOptimizationCandidatePool(
+	ctx context.Context,
+	stop context.CancelFunc,
+	snapshot optimizationInputSnapshot,
+	ds *researchDataset,
+	assets []OptimizationAsset,
+	candidateCount int,
+	cancelCheck func() bool,
+) (<-chan optimizationCandidateEvaluation, <-chan optimizationCandidateGeneration) {
+	workerCount := s.optimizationWorkerCount(candidateCount)
+	candidates := make(chan OptimizationWeightVector, workerCount*2)
+	generationDone := startOptimizationCandidateGenerator(
+		ctx, stop, assets, snapshot.Config.WeightStep, cancelCheck, candidates,
+	)
+	evaluations := s.startOptimizationCandidateEvaluators(
+		ctx, snapshot, ds, workerCount, candidates,
+	)
+	return evaluations, generationDone
+}
+
+func startOptimizationCandidateGenerator(
+	ctx context.Context,
+	stop context.CancelFunc,
+	assets []OptimizationAsset,
+	weightStep float64,
+	cancelCheck func() bool,
+	candidates chan<- OptimizationWeightVector,
+) <-chan optimizationCandidateGeneration {
+	done := make(chan optimizationCandidateGeneration, 1)
+	go func() {
+		defer close(candidates)
+		userCanceled := false
+		generated := VisitOptimizationCandidates(assets, weightStep, func(candidate OptimizationWeightVector) bool {
+			if cancelCheck != nil && cancelCheck() {
+				userCanceled = true
+				stop()
+				return false
+			}
+			select {
+			case <-ctx.Done():
+				return false
+			case candidates <- candidate:
+				return true
+			}
+		})
+		done <- optimizationCandidateGeneration{count: generated, userCanceled: userCanceled}
+	}()
+	return done
+}
+
+func (s *ResearchService) startOptimizationCandidateEvaluators(
+	ctx context.Context,
+	snapshot optimizationInputSnapshot,
+	ds *researchDataset,
+	workerCount int,
+	candidates <-chan OptimizationWeightVector,
+) <-chan optimizationCandidateEvaluation {
+	evaluations := make(chan optimizationCandidateEvaluation, workerCount)
+	backtest := s.optimizationBacktest
+	if backtest == nil {
+		backtest = RunResearchBacktest
+	}
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			runOptimizationCandidateEvaluator(ctx, snapshot, ds, candidates, evaluations, backtest)
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(evaluations)
+	}()
+	return evaluations
+}
+
+func runOptimizationCandidateEvaluator(
+	ctx context.Context,
+	snapshot optimizationInputSnapshot,
+	ds *researchDataset,
+	candidates <-chan OptimizationWeightVector,
+	evaluations chan<- optimizationCandidateEvaluation,
+	backtest func(BacktestInput) (*BacktestResult, error),
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case candidate, ok := <-candidates:
+			if !ok {
+				return
+			}
+			result, err := backtest(buildBacktestInputForCandidate(snapshot, ds, candidate))
+			evaluation := optimizationCandidateEvaluation{candidate: candidate, err: err}
+			if err == nil && result != nil {
+				evaluation.summary = &result.Summary
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case evaluations <- evaluation:
+			}
+		}
+	}
+}
+
+type optimizationEvaluationAccumulator struct {
+	trackers                                     optimizationCandidateTrackers
+	evaluated, skipped, cvarEligible, visited    int
+	expectedEffectiveDays, expectedScenarioCount int
+	progressInterval, candidateCount             int
+	minimumCAGR                                  *float64
+}
+
+func newOptimizationEvaluationAccumulator(
+	snapshot optimizationInputSnapshot, candidateCount int,
+) *optimizationEvaluationAccumulator {
+	return &optimizationEvaluationAccumulator{
+		trackers:              newOptimizationCandidateTrackers(snapshot.Config.TopK),
+		expectedEffectiveDays: -1, expectedScenarioCount: -1,
+		progressInterval: maxInt(1, candidateCount/100), candidateCount: candidateCount,
+		minimumCAGR: snapshot.Config.MinimumCAGR,
+	}
+}
+
+func (a *optimizationEvaluationAccumulator) accept(evaluation optimizationCandidateEvaluation) error {
+	if evaluation.err != nil || evaluation.summary == nil || evaluation.summary.TailRisk == nil {
+		a.skipped++
+	} else {
+		if err := validateOptimizationCandidateSamples(
+			*evaluation.summary, &a.expectedEffectiveDays, &a.expectedScenarioCount,
+		); err != nil {
+			return err
+		}
+		a.evaluated++
+		if trackOptimizationCandidate(a.trackers, evaluation.candidate, *evaluation.summary, a.minimumCAGR) {
+			a.cvarEligible++
+		}
+	}
+	a.visited++
+	return nil
+}
+
+func (a *optimizationEvaluationAccumulator) result() OptimizationResult {
+	result := OptimizationResult{
+		CandidateCount: a.candidateCount, EvaluatedCount: a.evaluated, SkippedCount: a.skipped,
+		BestByCAGR: a.trackers.cagr.Results(), BestByDrawdown: a.trackers.drawdown.Results(),
+		BestByCalmar: a.trackers.calmar.Results(), BestByCVaR: a.trackers.cvar.Results(),
+		CVaREligibleCount: a.cvarEligible,
+	}
+	if a.cvarEligible == 0 {
+		result.Warnings = append(result.Warnings, OptimizationWarning{
+			Code: "cvar_minimum_cagr_unmet", Message: "没有候选达到最低 CAGR 门槛",
+		})
+	}
+	return result
+}
+
 func (s *ResearchService) evaluateOptimizationCandidates(
 	ctx context.Context,
 	runID string,
 	snapshot optimizationInputSnapshot,
 	ds *researchDataset,
-	candidates []OptimizationWeightVector,
+	assets []OptimizationAsset,
+	candidateCount int,
 	cancelCheck func() bool,
 	progress func(int, int, string),
 ) (OptimizationResult, error) {
-	trackers := newOptimizationCandidateTrackers(snapshot.Config.TopK)
-	evaluated, skipped, cvarEligible := 0, 0, 0
-	expectedEffectiveDays, expectedScenarioCount := -1, -1
-	progressInterval := maxInt(1, len(candidates)/100)
-	for i, candidate := range candidates {
-		if cancelCheck != nil && cancelCheck() {
-			s.cancelOptimization(ctx, runID)
-			return OptimizationResult{}, context.Canceled
+	accumulator := newOptimizationEvaluationAccumulator(snapshot, candidateCount)
+	var stopErr error
+	poolCtx, stopPool := context.WithCancel(ctx)
+	defer stopPool()
+	evaluations, generationDone := s.startOptimizationCandidatePool(
+		poolCtx, stopPool, snapshot, ds, assets, candidateCount, cancelCheck,
+	)
+	for evaluation := range evaluations {
+		if stopErr != nil {
+			continue
 		}
-		result, err := RunResearchBacktest(buildBacktestInputForCandidate(snapshot, ds, candidate))
-		if err != nil || result.Summary.TailRisk == nil {
-			skipped++
-		} else {
-			if sampleErr := validateOptimizationCandidateSamples(
-				result.Summary, &expectedEffectiveDays, &expectedScenarioCount,
-			); sampleErr != nil {
-				s.failOptimization(ctx, runID, "candidate_sample_mismatch", sampleErr.Error())
-				return OptimizationResult{}, sampleErr
-			}
-			evaluated++
-			if trackOptimizationCandidate(trackers, candidate, result.Summary, snapshot.Config.MinimumCAGR) {
-				cvarEligible++
-			}
+		if sampleErr := accumulator.accept(evaluation); sampleErr != nil {
+			s.failOptimization(ctx, runID, "candidate_sample_mismatch", sampleErr.Error())
+			stopErr = sampleErr
+			stopPool()
+			continue
 		}
-		if (i+1)%progressInterval == 0 {
-			publishOptimizationProgress(ctx, s.research, runID, evaluated, skipped, len(candidates), progress)
+		if accumulator.visited%accumulator.progressInterval == 0 {
+			publishOptimizationProgress(ctx, s.research, runID,
+				accumulator.evaluated, accumulator.skipped, candidateCount, progress)
 		}
 	}
-	if evaluated == 0 {
+	generation := <-generationDone
+	if generation.userCanceled {
+		s.cancelOptimization(ctx, runID)
+		return OptimizationResult{}, context.Canceled
+	}
+	if ctx.Err() != nil {
+		return OptimizationResult{}, fmt.Errorf("optimization context ended: %w", ctx.Err())
+	}
+	if stopErr != nil {
+		return OptimizationResult{}, stopErr
+	}
+	if generation.count != candidateCount || accumulator.visited != candidateCount {
+		countErr := fmt.Errorf("%w: expected=%d generated=%d evaluated_or_skipped=%d",
+			errOptimizationCandidateCount, candidateCount, generation.count, accumulator.visited)
+		s.failOptimization(ctx, runID, "candidate_count_mismatch", countErr.Error())
+		return OptimizationResult{}, countErr
+	}
+	if accumulator.evaluated == 0 {
 		s.failOptimization(ctx, runID, "all_candidates_failed", "所有候选组合回测失败")
 		return OptimizationResult{}, fmt.Errorf(
-			"%w: candidate_count=%d", errOptimizationAllCandidates, len(candidates),
+			"%w: candidate_count=%d", errOptimizationAllCandidates, candidateCount,
 		)
 	}
-	result := OptimizationResult{
-		CandidateCount: len(candidates), EvaluatedCount: evaluated, SkippedCount: skipped,
-		BestByCAGR: trackers.cagr.Results(), BestByDrawdown: trackers.drawdown.Results(),
-		BestByCalmar: trackers.calmar.Results(), BestByCVaR: trackers.cvar.Results(),
-		CVaREligibleCount: cvarEligible,
-	}
-	if cvarEligible == 0 {
-		result.Warnings = append(result.Warnings, OptimizationWarning{
-			Code: "cvar_minimum_cagr_unmet", Message: "没有候选达到最低 CAGR 门槛",
-		})
-	}
-	return result, nil
+	return accumulator.result(), nil
 }
 
 func validateOptimizationCandidateSamples(

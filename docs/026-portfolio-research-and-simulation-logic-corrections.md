@@ -2,7 +2,7 @@
 
 - 完成日期：2026-07-11
 - 状态：已实施并通过全链路验收
-- 当前版本：`research_backtest_v4`、`research_optimizer_v5`、FIRE `3.4.0`（本文早期章节保留历次版本变更记录）
+- 当前版本：`research_backtest_v4`、`research_optimizer_v6`、FIRE `3.4.0`（本文早期章节保留历次版本变更记录）
 
 ## 1. 目的与范围
 
@@ -296,7 +296,7 @@ nav_after_rebalance = nav_before_rebalance - cost
 周末和节假日不产生独立费用点。扣费后的 period return 进入 CAGR、回撤、波动率、
 CVaR、基准比较和贡献归因。summary 冻结 `total_turnover`、
 `total_transaction_cost_minor` 和相对同调仓路径不计费终值的
-`transaction_cost_drag`。`research_optimizer_v5` 的所有候选复用同一公式和有效日历，
+`transaction_cost_drag`。`research_optimizer_v5` 及 `research_optimizer_v6` 的所有候选复用同一公式和有效日历，
 因此费用会参与候选排序。旧回测 v3、优化 v4 及更早结果保持只读，页面明确标记未计成本。
 
 ## 7. 验收覆盖

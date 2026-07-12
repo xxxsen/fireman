@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ var (
 	errOptimizationLockedWeight      = errors.New("locked weight exceeds 100%")
 	errOptimizationAllCandidates     = errors.New("all optimization candidates failed")
 	errOptimizationSampleMismatch    = errors.New("optimization candidates used inconsistent effective samples")
+	errOptimizationCandidateCount    = errors.New("optimization candidate generation count mismatch")
 	errOptimizationInvalidEntry      = errors.New("调优结果包含无效资产身份或权重，请重新运行调优")
 	errOptimizationAssetMismatch     = errors.New("调优结果与当前组合资产不一致，请重新运行调优")
 	errOptimizationDuplicateAsset    = errors.New("调优结果包含重复资产，请重新运行调优")
@@ -30,18 +32,20 @@ var (
 // No I/O: the service layer feeds inputs and the job runner orchestrates.
 
 const (
-	OptimizationEngineVersion       = "research_optimizer_v5"
-	OptimizationTailRiskV3Version   = "research_optimizer_v3"
-	OptimizationTailRiskV4Version   = "research_optimizer_v4"
-	OptimizationDefaultWeightStep   = 0.05
-	OptimizationDefaultTopK         = 20
-	OptimizationDefaultMaxCandidate = 20000
-	OptimizationMaxEnabledAssets    = 10
-	OptimizationHardMaxCandidate    = 20000
+	OptimizationEngineVersion              = "research_optimizer_v6"
+	OptimizationTailRiskV5Version          = "research_optimizer_v5"
+	OptimizationTailRiskV3Version          = "research_optimizer_v3"
+	OptimizationTailRiskV4Version          = "research_optimizer_v4"
+	OptimizationDefaultWeightStep          = 0.05
+	OptimizationDefaultTopK                = 20
+	OptimizationDefaultMaxCandidate        = 20000
+	OptimizationMaxEnabledAssets           = 10
+	DefaultResearchOptimizationConcurrency = 4
 )
 
 func optimizationEngineHasTailRiskSnapshot(version string) bool {
-	return version == OptimizationEngineVersion || version == OptimizationTailRiskV4Version ||
+	return version == OptimizationEngineVersion || version == OptimizationTailRiskV5Version ||
+		version == OptimizationTailRiskV4Version ||
 		version == OptimizationTailRiskV3Version
 }
 
@@ -71,9 +75,6 @@ func (c *OptimizationConfig) NormalizeDefaults() {
 	}
 	if c.MaxCandidateCount == 0 {
 		c.MaxCandidateCount = OptimizationDefaultMaxCandidate
-	}
-	if c.MaxCandidateCount > OptimizationHardMaxCandidate {
-		c.MaxCandidateCount = OptimizationHardMaxCandidate
 	}
 	if c.TopK == 0 {
 		c.TopK = OptimizationDefaultTopK
@@ -172,11 +173,25 @@ func ValidateOptimizationInput(assets []OptimizationAsset) error {
 	return nil
 }
 
-// CountCandidates computes the exact number for every runnable grid. Once the
-// hard execution limit is exceeded it returns limit+1 immediately; readiness
-// blocks that grid, so enumerating the unreachable tail would only waste work.
+// CountCandidates computes the exact grid size without enumerating candidates.
+// It saturates at MaxInt only for API inputs far below the supported UI steps.
 func CountCandidates(assets []OptimizationAsset, weightStep float64) int {
-	return enumerateOptimizationCandidates(assets, weightStep, nil, OptimizationHardMaxCandidate+1)
+	grid, ok := prepareOptimizationGrid(assets, weightStep)
+	if !ok {
+		return 0
+	}
+	if math.Abs(grid.remaining) <= 1e-12 {
+		return 1
+	}
+	n := len(grid.tunable)
+	if n == 0 {
+		return 0
+	}
+	count := saturatedBinomial(grid.fullParts+n-1, n-1)
+	if grid.residual > 0 {
+		count = saturatedMultiply(count, n)
+	}
+	return count
 }
 
 // GenerateCandidates enumerates all candidate weight vectors (td/103 §权重搜索规则).
@@ -184,41 +199,100 @@ func GenerateCandidates(
 	assets []OptimizationAsset, weightStep float64,
 ) []OptimizationWeightVector {
 	var results []OptimizationWeightVector
-	enumerateOptimizationCandidates(assets, weightStep, func(vec OptimizationWeightVector) {
+	VisitOptimizationCandidates(assets, weightStep, func(vec OptimizationWeightVector) bool {
 		results = append(results, vec)
-	}, 0)
+		return true
+	})
 	return results
 }
 
-// enumerateOptimizationCandidates is the single source of truth for both
-// counting and generating the residual-aware candidate grid.
-func enumerateOptimizationCandidates(
+// VisitOptimizationCandidates streams the residual-aware grid. Returning
+// false stops enumeration promptly, which keeps cancellation responsive even
+// for grids above the recommended candidate count.
+func VisitOptimizationCandidates(
 	assets []OptimizationAsset,
 	weightStep float64,
-	emit func(OptimizationWeightVector),
-	limit int,
+	visit func(OptimizationWeightVector) bool,
 ) int {
 	grid, ok := prepareOptimizationGrid(assets, weightStep)
 	if !ok {
 		return 0
 	}
 	if math.Abs(grid.remaining) <= 1e-12 {
-		return emitOptimizationCandidate(grid.locked, grid.tunable, nil, emit)
+		if visit != nil {
+			visit(buildOptimizationCandidate(grid.locked, grid.tunable, nil))
+		}
+		return 1
 	}
-	if len(grid.tunable) == 0 {
+	n := len(grid.tunable)
+	if n == 0 {
 		return 0
 	}
 	count := 0
-	seen := map[string]struct{}{}
-	n := len(grid.tunable)
-	for mask := 1; mask < 1<<n; mask++ {
-		indices := optimizationSubsetIndices(mask, n)
-		count += enumerateOptimizationSubset(grid, indices, seen, emit, remainingCandidateLimit(limit, count))
-		if limit > 0 && count >= limit {
-			return limit
+	emitParts := func(parts []int, residualReceiver int) bool {
+		weights := make([]float64, n)
+		for i, part := range parts {
+			weights[i] = float64(part) * grid.weightStep
+		}
+		if residualReceiver >= 0 {
+			weights[residualReceiver] += grid.residual
+		}
+		count++
+		return visit == nil || visit(buildOptimizationCandidate(grid.locked, grid.tunable, weights))
+	}
+	if grid.residual == 0 {
+		visitWeakCompositions(grid.fullParts, n, func(parts []int) bool {
+			return emitParts(parts, -1)
+		})
+		return count
+	}
+	for receiver := 0; receiver < n; receiver++ {
+		if !visitWeakCompositions(grid.fullParts, n, func(parts []int) bool {
+			return emitParts(parts, receiver)
+		}) {
+			break
 		}
 	}
 	return count
+}
+
+func visitWeakCompositions(total, slots int, visit func([]int) bool) bool {
+	parts := make([]int, slots)
+	var walk func(remaining, index int) bool
+	walk = func(remaining, index int) bool {
+		if index == slots-1 {
+			parts[index] = remaining
+			return visit(parts)
+		}
+		for value := 0; value <= remaining; value++ {
+			parts[index] = value
+			if !walk(remaining-value, index+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return walk(total, 0)
+}
+
+func saturatedBinomial(n, k int) int {
+	if n < 0 || k < 0 || k > n {
+		return 0
+	}
+	value := new(big.Int).Binomial(int64(n), int64(k))
+	maxInt := new(big.Int).SetInt64(int64(^uint(0) >> 1))
+	if value.Cmp(maxInt) > 0 {
+		return int(^uint(0) >> 1)
+	}
+	return int(value.Int64())
+}
+
+func saturatedMultiply(value, factor int) int {
+	maxInt := int(^uint(0) >> 1)
+	if factor > 0 && value > maxInt/factor {
+		return maxInt
+	}
+	return value * factor
 }
 
 type optimizationGrid struct {
@@ -262,127 +336,8 @@ func prepareOptimizationGrid(assets []OptimizationAsset, weightStep float64) (op
 	return grid, true
 }
 
-func optimizationSubsetIndices(mask, size int) []int {
-	indices := make([]int, 0, popcount(mask))
-	for i := 0; i < size; i++ {
-		if mask&(1<<i) != 0 {
-			indices = append(indices, i)
-		}
-	}
-	return indices
-}
-
-func enumerateOptimizationSubset(
-	grid optimizationGrid,
-	indices []int,
-	seen map[string]struct{},
-	emit func(OptimizationWeightVector),
-	limit int,
-) int {
-	if grid.residual == 0 {
-		return enumerateExactOptimizationSubset(grid, indices, seen, emit, limit)
-	}
-	return enumerateResidualOptimizationSubset(grid, indices, seen, emit, limit)
-}
-
-func enumerateExactOptimizationSubset(
-	grid optimizationGrid,
-	indices []int,
-	seen map[string]struct{},
-	emit func(OptimizationWeightVector),
-	limit int,
-) int {
-	count := 0
-	for _, parts := range integerCompositions(grid.fullParts, len(indices)) {
-		weights := make([]float64, len(grid.tunable))
-		for i, index := range indices {
-			weights[index] = float64(parts[i]) * grid.weightStep
-		}
-		count += emitUniqueOptimizationCandidate(grid.locked, grid.tunable, weights, seen, emit)
-		if limit > 0 && count >= limit {
-			return limit
-		}
-	}
-	return count
-}
-
-func enumerateResidualOptimizationSubset(
-	grid optimizationGrid,
-	indices []int,
-	seen map[string]struct{},
-	emit func(OptimizationWeightVector),
-	limit int,
-) int {
-	minimumParts := len(indices) - 1
-	if grid.fullParts < minimumParts {
-		return 0
-	}
-	count := 0
-	for receiverPos, receiverIdx := range indices {
-		for _, extras := range integerWeakCompositions(grid.fullParts-minimumParts, len(indices)) {
-			weights := residualOptimizationWeights(grid, indices, extras, receiverPos)
-			weights[receiverIdx] += grid.residual
-			count += emitUniqueOptimizationCandidate(grid.locked, grid.tunable, weights, seen, emit)
-			if limit > 0 && count >= limit {
-				return limit
-			}
-		}
-	}
-	return count
-}
-
-func residualOptimizationWeights(
-	grid optimizationGrid, indices, extras []int, receiverPos int,
-) []float64 {
-	weights := make([]float64, len(grid.tunable))
-	for pos, index := range indices {
-		parts := extras[pos]
-		if pos != receiverPos {
-			parts++
-		}
-		weights[index] = float64(parts) * grid.weightStep
-	}
-	return weights
-}
-
-func remainingCandidateLimit(limit, count int) int {
-	if limit <= 0 {
-		return 0
-	}
-	return limit - count
-}
-
 func optimizationFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
-}
-
-func emitUniqueOptimizationCandidate(
-	locked, tunable []OptimizationAsset,
-	weights []float64,
-	seen map[string]struct{},
-	emit func(OptimizationWeightVector),
-) int {
-	vec := buildOptimizationCandidate(locked, tunable, weights)
-	key := canonicalOptimizationWeights(vec.Weights)
-	if _, ok := seen[key]; ok {
-		return 0
-	}
-	seen[key] = struct{}{}
-	if emit != nil {
-		emit(vec)
-	}
-	return 1
-}
-
-func emitOptimizationCandidate(
-	locked, tunable []OptimizationAsset,
-	weights []float64,
-	emit func(OptimizationWeightVector),
-) int {
-	if emit != nil {
-		emit(buildOptimizationCandidate(locked, tunable, weights))
-	}
-	return 1
 }
 
 func buildOptimizationCandidate(
@@ -407,55 +362,6 @@ func optimizationWeightEntry(asset OptimizationAsset, weight float64, locked boo
 		ItemID: asset.ItemID, AssetKey: asset.AssetKey, Name: asset.Name,
 		Weight: weight, Locked: locked,
 	}
-}
-
-// integerCompositions returns all ways to split total into k positive parts.
-func integerCompositions(total, k int) [][]int {
-	if k <= 0 || total < k {
-		return nil
-	}
-	if k == 1 {
-		return [][]int{{total}}
-	}
-	var results [][]int
-	var helper func(remaining, slots int, current []int)
-	helper = func(remaining, slots int, current []int) {
-		if slots == 1 {
-			results = append(results, append(append([]int{}, current...), remaining))
-			return
-		}
-		for v := 1; v <= remaining-slots+1; v++ {
-			helper(remaining-v, slots-1, append(current, v))
-		}
-	}
-	helper(total, k, nil)
-	return results
-}
-
-// integerWeakCompositions returns all ordered splits into non-negative parts.
-func integerWeakCompositions(total, k int) [][]int {
-	if total < 0 || k <= 0 {
-		return nil
-	}
-	if k == 1 {
-		return [][]int{{total}}
-	}
-	var results [][]int
-	for first := 0; first <= total; first++ {
-		for _, rest := range integerWeakCompositions(total-first, k-1) {
-			results = append(results, append([]int{first}, rest...))
-		}
-	}
-	return results
-}
-
-func popcount(x int) int {
-	count := 0
-	for x != 0 {
-		count += x & 1
-		x >>= 1
-	}
-	return count
 }
 
 // TopKTracker maintains the top-K items for one objective.

@@ -198,6 +198,17 @@ describe("OptimizationDetailPage", () => {
     expect(await screen.findByText(/单位波动风险/)).toBeInTheDocument();
   });
 
+  it("does not mislabel the current streaming optimizer as a pre-cost version", async () => {
+    const current = optimization();
+    current.engine_version = "research_optimizer_v6";
+    getOptimizationMock.mockResolvedValue(current);
+
+    renderPage();
+
+    await screen.findByText("夏普比率");
+    expect(screen.queryByText(/未计研究交易成本/)).not.toBeInTheDocument();
+  });
+
   it("applies a result to the collection and navigates back", async () => {
     renderPage();
     fireEvent.click(await screen.findByTestId("apply-result-cagr-1"));

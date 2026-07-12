@@ -19,7 +19,12 @@ import pandas as pd
 from ..logutil import get_logger
 from ..normalize import normalize_dataframe
 from ..schemas import FetchData, FetchRequest, PointType
-from ..timeout_util import UpstreamCall, call_with_timeout, fetch_timeout_seconds, fetch_upstream_timeout_seconds
+from ..timeout_util import (
+    UpstreamCall,
+    call_with_timeout,
+    fetch_timeout_seconds,
+    fetch_upstream_timeout_seconds,
+)
 from .classification import (
     CnMutualFundSourceKind,
     default_region,
@@ -28,7 +33,12 @@ from .classification import (
 from .cn_code import require_explicit_cn_code
 from .fallback import try_sources
 from .names import lookup_cn_mutual_fund_name_readonly, name_from_dataframe
-from .symbols import hk_adjust_policy, hk_exchange_symbol, sina_adjust_policy, tx_adjust_policy
+from .symbols import (
+    hk_adjust_policy,
+    hk_exchange_symbol,
+    sina_adjust_policy,
+    tx_adjust_policy,
+)
 from .tickflow import (
     TICKFLOW_KLINES_SOURCE,
     tickflow_allowed_for_request,
@@ -105,7 +115,6 @@ def _exchange_point_type(adjust_policy: str) -> PointType:
 
 def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
-    import akshare as ak
 
     # Exchange identity must be explicit (directory-provided region prefix);
     # raises AssetIdentityError otherwise instead of guessing from prefixes.
@@ -190,7 +199,9 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     )
 
 
-def _fetch_display_name(resolved_name: str | None, symbol: str, df: pd.DataFrame) -> str:
+def _fetch_display_name(
+    resolved_name: str | None, symbol: str, df: pd.DataFrame
+) -> str:
     if resolved_name and resolved_name.strip() and resolved_name.strip() != symbol:
         return resolved_name.strip()
     from_df = name_from_dataframe(df, symbol)
@@ -204,7 +215,6 @@ def _fetch_display_name(resolved_name: str | None, symbol: str, df: pd.DataFrame
 
 def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
-    import akshare as ak
 
     # Directory identity only: the request must carry an explicit region
     # prefix; the parse below is pure format conversion.
@@ -342,26 +352,44 @@ _CN_MUTUAL_FUND_ATTEMPTS: tuple[tuple[CnMutualFundSourceKind, str, str], ...] = 
 )
 
 
-def _cn_mutual_fund_call(source_name: str, symbol: str) -> UpstreamCall:
+def _cn_mutual_fund_call(
+    source_name: str, symbol: str, canonical_symbol: str | None = None
+) -> UpstreamCall:
     if source_name == "em.fund_open_history:累计净值走势":
         return UpstreamCall(
             "em_fund_open_history",
-            kwargs=(("symbol", symbol), ("indicator", "累计净值走势")),
+            kwargs=(
+                ("symbol", symbol),
+                ("indicator", "累计净值走势"),
+                ("expected_canonical_symbol", canonical_symbol),
+            ),
         )
     if source_name == "em.fund_open_history:单位净值走势":
         return UpstreamCall(
             "em_fund_open_history",
-            kwargs=(("symbol", symbol), ("indicator", "单位净值走势")),
+            kwargs=(
+                ("symbol", symbol),
+                ("indicator", "单位净值走势"),
+                ("expected_canonical_symbol", canonical_symbol),
+            ),
         )
     if source_name == "ak.fund_open_fund_info_em:累计净值走势":
         return UpstreamCall(
             "fund_open_fund_info_em",
-            kwargs=(("symbol", symbol), ("indicator", "累计净值走势"), ("period", "成立来")),
+            kwargs=(
+                ("symbol", symbol),
+                ("indicator", "累计净值走势"),
+                ("period", "成立来"),
+            ),
         )
     if source_name == "ak.fund_open_fund_info_em:单位净值走势":
         return UpstreamCall(
             "fund_open_fund_info_em",
-            kwargs=(("symbol", symbol), ("indicator", "单位净值走势"), ("period", "成立来")),
+            kwargs=(
+                ("symbol", symbol),
+                ("indicator", "单位净值走势"),
+                ("period", "成立来"),
+            ),
         )
     if source_name == "ak.fund_money_fund_info_em":
         return UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", symbol),))
@@ -386,12 +414,14 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
         if remaining <= 0:
             raise TimeoutError(f"fetch cn_mutual_fund {symbol}: deadline exceeded")
         timeout = fetch_upstream_timeout_seconds(remaining)
-        call = _cn_mutual_fund_call(source_name, symbol)
+        call = _cn_mutual_fund_call(source_name, symbol, req.canonical_symbol)
         try:
             df = call_with_timeout(call, timeout)
             if df is None or df.empty:
                 errors.append(f"{source_name}: empty")
-                logger.warning("fetch cn_mutual_fund %s: %s returned empty", symbol, source_name)
+                logger.warning(
+                    "fetch cn_mutual_fund %s: %s returned empty", symbol, source_name
+                )
                 continue
             meta = describe_cn_mutual_fund(df, symbol, req.resolved_name)
             df = _filter_df_by_date(df, start, end)
@@ -443,21 +473,24 @@ def _fetch_cn_mutual_fund(req: FetchRequest, start: str, end: str) -> AdapterRes
                 exc,
             )
 
-    summary = "; ".join(errors) or "cn_mutual_fund fetch failed for all candidate sources"
+    summary = (
+        "; ".join(errors) or "cn_mutual_fund fetch failed for all candidate sources"
+    )
     logger.error("fetch cn_mutual_fund %s: all sources failed: %s", symbol, summary)
     raise RuntimeError(summary)
 
 
 def _fetch_us_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
-    import akshare as ak
 
     symbol = req.source_code
     adjust = "" if req.adjust_policy == "none" else req.adjust_policy
     sources: list[tuple[str, UpstreamCall]] = [
         (
             "ak.stock_us_daily",
-            UpstreamCall("stock_us_daily", kwargs=(("symbol", symbol), ("adjust", adjust))),
+            UpstreamCall(
+                "stock_us_daily", kwargs=(("symbol", symbol), ("adjust", adjust))
+            ),
         ),
         (
             "ak.stock_us_hist",
@@ -486,7 +519,6 @@ def _fetch_us_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
 
 def _fetch_hk_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
-    import akshare as ak
 
     symbol = hk_exchange_symbol(req.source_code)
     adjust = hk_adjust_policy(req.adjust_policy)
@@ -506,7 +538,9 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
         ),
         (
             "ak.stock_hk_daily",
-            UpstreamCall("stock_hk_daily", kwargs=(("symbol", symbol), ("adjust", adjust))),
+            UpstreamCall(
+                "stock_hk_daily", kwargs=(("symbol", symbol), ("adjust", adjust))
+            ),
         ),
     ]
     df, source_name = try_sources("hk equity", sources, deadline)
@@ -525,7 +559,6 @@ def _fetch_hk_equity(req: FetchRequest, start: str, end: str) -> AdapterResult:
 
 def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
     deadline = time.monotonic() + fetch_timeout_seconds()
-    import akshare as ak
 
     code = req.source_code.upper()
     pair_map = {
@@ -536,7 +569,10 @@ def _fetch_fx_rate(req: FetchRequest, start: str, end: str) -> AdapterResult:
         raise ValueError(f"unsupported fx code {code}")
     label, _ = pair_map[code]
     sources: list[tuple[str, UpstreamCall]] = [
-        ("ak.currency_boc_sina", UpstreamCall("currency_boc_sina", kwargs=(("symbol", label),))),
+        (
+            "ak.currency_boc_sina",
+            UpstreamCall("currency_boc_sina", kwargs=(("symbol", label),)),
+        ),
         ("ak.fx_pair_quote", UpstreamCall("fx_pair_quote", kwargs=(("symbol", code),))),
     ]
     df, source_name = try_sources("fx_rate", sources, deadline)
@@ -590,7 +626,9 @@ def fetch_instrument(req: FetchRequest) -> FetchData:
         result.source_name,
     )
     components = dict(result.expense_ratio_components or {})
-    components.setdefault("region", result.region or default_region(req.market, req.instrument_type))
+    components.setdefault(
+        "region", result.region or default_region(req.market, req.instrument_type)
+    )
 
     expense_ratio = result.expense_ratio
     expense_status = result.expense_ratio_status

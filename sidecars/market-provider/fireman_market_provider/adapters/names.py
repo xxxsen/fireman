@@ -15,7 +15,6 @@ from ..timeout_util import (
     UpstreamCall,
     call_with_timeout,
     mutual_fund_name_fetch_timeout_seconds,
-    resolve_deadline_seconds,
     resolve_timeout_seconds,
 )
 
@@ -63,9 +62,23 @@ def _cache_ttl() -> float:
 
 def reset_name_caches() -> None:
     """Clear cached spot tables (for tests only)."""
-    global _ETF_NAME_MAP, _LOF_NAME_MAP, _STOCK_NAME_MAP, _HK_NAME_MAP, _MUTUAL_FUND_NAME_MAP
-    global _ETF_LOADED_AT, _LOF_LOADED_AT, _STOCK_LOADED_AT, _HK_LOADED_AT, _MUTUAL_FUND_LOADED_AT
-    global _MUTUAL_FUND_REFRESHED_AT, _MUTUAL_FUND_REFRESH_EVENT, _XQ_NAME_CACHE, _XQ_NAME_LOADED_AT
+    global \
+        _ETF_NAME_MAP, \
+        _LOF_NAME_MAP, \
+        _STOCK_NAME_MAP, \
+        _HK_NAME_MAP, \
+        _MUTUAL_FUND_NAME_MAP
+    global \
+        _ETF_LOADED_AT, \
+        _LOF_LOADED_AT, \
+        _STOCK_LOADED_AT, \
+        _HK_LOADED_AT, \
+        _MUTUAL_FUND_LOADED_AT
+    global \
+        _MUTUAL_FUND_REFRESHED_AT, \
+        _MUTUAL_FUND_REFRESH_EVENT, \
+        _XQ_NAME_CACHE, \
+        _XQ_NAME_LOADED_AT
     global _XQ_NEGATIVE_AT, _INDIVIDUAL_NEGATIVE_AT
     _ETF_NAME_MAP = None
     _LOF_NAME_MAP = None
@@ -144,7 +157,11 @@ def _mutual_fund_cache_expires_at(refreshed_at: str | None) -> str | None:
     parsed = _parse_refreshed_at(refreshed_at or "")
     if parsed is None:
         return None
-    return (parsed + timedelta(seconds=_mutual_fund_cache_ttl())).replace(microsecond=0).isoformat()
+    return (
+        (parsed + timedelta(seconds=_mutual_fund_cache_ttl()))
+        .replace(microsecond=0)
+        .isoformat()
+    )
 
 
 def _read_mutual_fund_cache_from_disk() -> dict[str, str] | None:
@@ -195,8 +212,20 @@ def _write_mutual_fund_cache_to_disk(names: dict[str, str]) -> None:
 def _fetch_mutual_fund_name_map_from_upstream() -> dict[str, str]:
     timeout = mutual_fund_name_fetch_timeout_seconds()
     df = call_with_timeout(UpstreamCall("fund_name_em"), timeout)
-    code_col = "基金代码" if "基金代码" in df.columns else "代码" if "代码" in df.columns else None
-    name_col = "基金简称" if "基金简称" in df.columns else "名称" if "名称" in df.columns else None
+    code_col = (
+        "基金代码"
+        if "基金代码" in df.columns
+        else "代码"
+        if "代码" in df.columns
+        else None
+    )
+    name_col = (
+        "基金简称"
+        if "基金简称" in df.columns
+        else "名称"
+        if "名称" in df.columns
+        else None
+    )
     if code_col is None or name_col is None:
         return {}
     return {
@@ -262,8 +291,6 @@ def _load_etf_name_map(deadline: float | None = None) -> dict[str, str]:
     now = time.monotonic()
     if _ETF_NAME_MAP is not None and now - _ETF_LOADED_AT < ttl:
         return _ETF_NAME_MAP
-    import akshare as ak
-
     timeout = _remaining_deadline(deadline)
     df = call_with_timeout(UpstreamCall("fund_etf_spot_em"), timeout)
     _ETF_NAME_MAP = {
@@ -310,8 +337,6 @@ def _load_stock_name_map(deadline: float | None = None) -> dict[str, str]:
     now = time.monotonic()
     if _STOCK_NAME_MAP is not None and now - _STOCK_LOADED_AT < ttl:
         return _STOCK_NAME_MAP
-    import akshare as ak
-
     timeout = _remaining_deadline(deadline)
     df = call_with_timeout(UpstreamCall("stock_zh_a_spot_em"), timeout)
     code_col = "代码" if "代码" in df.columns else None
@@ -343,7 +368,9 @@ def _name_from_xq_basic_info(df: pd.DataFrame) -> str | None:
     return None
 
 
-def _lookup_cn_exchange_fund_name_xq(bare: str, deadline: float | None = None) -> str | None:
+def _lookup_cn_exchange_fund_name_xq(
+    bare: str, deadline: float | None = None
+) -> str | None:
     code = _normalize_code(bare)
     ttl = _cache_ttl()
     now = time.monotonic()
@@ -353,7 +380,11 @@ def _lookup_cn_exchange_fund_name_xq(bare: str, deadline: float | None = None) -
     if _is_negative_cached(_XQ_NEGATIVE_AT, code, now):
         return None
 
-    timeout = _remaining_deadline(deadline) if deadline is not None else resolve_timeout_seconds()
+    timeout = (
+        _remaining_deadline(deadline)
+        if deadline is not None
+        else resolve_timeout_seconds()
+    )
     try:
         df = call_with_timeout(
             UpstreamCall("fund_individual_basic_info_xq", kwargs=(("symbol", code),)),
@@ -371,12 +402,18 @@ def _lookup_cn_exchange_fund_name_xq(bare: str, deadline: float | None = None) -
     return name
 
 
-def _lookup_cn_stock_name_individual(bare: str, deadline: float | None = None) -> str | None:
+def _lookup_cn_stock_name_individual(
+    bare: str, deadline: float | None = None
+) -> str | None:
     code = _normalize_code(bare)
     now = time.monotonic()
     if _is_negative_cached(_INDIVIDUAL_NEGATIVE_AT, code, now):
         return None
-    timeout = _remaining_deadline(deadline) if deadline is not None else resolve_timeout_seconds()
+    timeout = (
+        _remaining_deadline(deadline)
+        if deadline is not None
+        else resolve_timeout_seconds()
+    )
     try:
         df = call_with_timeout(
             UpstreamCall("stock_individual_info_em", kwargs=(("symbol", bare),)),
@@ -405,7 +442,9 @@ def lookup_cn_stock_name(symbol: str, deadline: float | None = None) -> str | No
     return _lookup_cn_stock_name_individual(code, deadline)
 
 
-def lookup_cn_exchange_fund_name(symbol: str, deadline: float | None = None) -> str | None:
+def lookup_cn_exchange_fund_name(
+    symbol: str, deadline: float | None = None
+) -> str | None:
     """Display-name lookup across the definite fund spot sources, in fixed order.
 
     Queries the ETF, LOF and XQ sources for every code — never routes by code
@@ -452,10 +491,14 @@ def resolve_cn_mutual_fund_name(symbol: str, deadline: float) -> str | None:
     xq_timeout = min(15, remaining)
     if xq_timeout <= 0:
         return None
-    return _lookup_cn_exchange_fund_name_xq(code, deadline=time.monotonic() + xq_timeout)
+    return _lookup_cn_exchange_fund_name_xq(
+        code, deadline=time.monotonic() + xq_timeout
+    )
 
 
-def resolve_cn_exchange_fund_name(symbol: str, df: pd.DataFrame, deadline: float | None = None) -> str:
+def resolve_cn_exchange_fund_name(
+    symbol: str, df: pd.DataFrame, deadline: float | None = None
+) -> str:
     from_df = name_from_dataframe(df, symbol)
     if from_df:
         return from_df
@@ -471,8 +514,6 @@ def _load_hk_name_map(deadline: float | None = None) -> dict[str, str]:
     now = time.monotonic()
     if _HK_NAME_MAP is not None and now - _HK_LOADED_AT < ttl:
         return _HK_NAME_MAP
-    import akshare as ak
-
     from .symbols import hk_exchange_symbol
 
     timeout = _remaining_deadline(deadline)
@@ -493,7 +534,9 @@ def _load_hk_name_map(deadline: float | None = None) -> dict[str, str]:
 
 
 def _memory_mutual_fund_cache_fresh() -> bool:
-    return _MUTUAL_FUND_NAME_MAP is not None and _is_mutual_fund_cache_fresh(_MUTUAL_FUND_REFRESHED_AT)
+    return _MUTUAL_FUND_NAME_MAP is not None and _is_mutual_fund_cache_fresh(
+        _MUTUAL_FUND_REFRESHED_AT
+    )
 
 
 def _refresh_mutual_fund_name_map_sync(deadline: float | None = None) -> dict[str, str]:
@@ -538,7 +581,9 @@ def _refresh_mutual_fund_name_map_sync(deadline: float | None = None) -> dict[st
                 _MUTUAL_FUND_REFRESH_EVENT = None
 
 
-def _load_mutual_fund_name_map(deadline: float | None = None, *, force: bool = False) -> dict[str, str]:
+def _load_mutual_fund_name_map(
+    deadline: float | None = None, *, force: bool = False
+) -> dict[str, str]:
     """Load CN mutual fund names with 1-day TTL and disk persistence."""
     global _MUTUAL_FUND_NAME_MAP, _MUTUAL_FUND_LOADED_AT
 
@@ -588,7 +633,9 @@ def lookup_cn_mutual_fund_name_readonly(symbol: str) -> str | None:
     return None
 
 
-def lookup_cn_mutual_fund_name(symbol: str, deadline: float | None = None) -> str | None:
+def lookup_cn_mutual_fund_name(
+    symbol: str, deadline: float | None = None
+) -> str | None:
     code = _normalize_code(symbol)
     try:
         return _load_mutual_fund_name_map(deadline).get(code)

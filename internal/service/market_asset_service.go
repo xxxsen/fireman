@@ -130,6 +130,8 @@ type AssetHistorySyncPayload struct {
 	Exchange           string `json:"exchange"`
 	Symbol             string `json:"symbol"`
 	InstrumentKind     string `json:"instrument_kind"`
+	CanonicalSymbol    string `json:"canonical_symbol"`
+	FeeMode            string `json:"fee_mode"`
 	AdjustPolicy       string `json:"adjust_policy"`
 	PointType          string `json:"point_type"`
 	RequestedRange     string `json:"requested_range"`
@@ -1174,15 +1176,17 @@ func (s *MarketAssetService) buildHistoryPayload(
 	ctx context.Context, asset repository.MarketAsset, req HistorySyncRequest,
 ) (AssetHistorySyncPayload, error) {
 	base := AssetHistorySyncPayload{
-		AssetKey:       asset.AssetKey,
-		Market:         asset.Market,
-		InstrumentType: asset.InstrumentType,
-		RegionCode:     asset.RegionCode,
-		Exchange:       asset.Exchange,
-		Symbol:         asset.Symbol,
-		InstrumentKind: asset.InstrumentKind,
-		AdjustPolicy:   req.AdjustPolicy,
-		PointType:      req.PointType,
+		AssetKey:        asset.AssetKey,
+		Market:          asset.Market,
+		InstrumentType:  asset.InstrumentType,
+		RegionCode:      asset.RegionCode,
+		Exchange:        asset.Exchange,
+		Symbol:          asset.Symbol,
+		InstrumentKind:  asset.InstrumentKind,
+		CanonicalSymbol: asset.CanonicalSymbol,
+		FeeMode:         asset.FeeMode,
+		AdjustPolicy:    req.AdjustPolicy,
+		PointType:       req.PointType,
 	}
 	if err := requireDirectoryIdentity(asset); err != nil {
 		return base, err

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,11 +40,13 @@ func benchmarkResearchInput() BacktestInput {
 
 func BenchmarkResearchOptimizationCVaR(b *testing.B) {
 	for _, tc := range []struct {
-		name     string
-		tailRisk *TailRiskSpec
+		name        string
+		tailRisk    *TailRiskSpec
+		parallelism int
 	}{
-		{name: "without_tail_risk"},
-		{name: "with_tail_risk", tailRisk: &TailRiskSpec{Confidence: 0.95, HorizonDays: 20}},
+		{name: "without_tail_risk", parallelism: 1},
+		{name: "with_tail_risk", tailRisk: &TailRiskSpec{Confidence: 0.95, HorizonDays: 20}, parallelism: 1},
+		{name: "with_tail_risk_parallel_4", tailRisk: &TailRiskSpec{Confidence: 0.95, HorizonDays: 20}, parallelism: 4},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			in := benchmarkResearchInput()
@@ -58,10 +61,8 @@ func BenchmarkResearchOptimizationCVaR(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for iteration := 0; iteration < b.N; iteration++ {
-				for candidate := 0; candidate < researchCVaRBenchmarkCandidates; candidate++ {
-					if _, err := RunResearchBacktest(in); err != nil {
-						b.Fatal(err)
-					}
+				if err := runResearchOptimizationBenchmarkBatch(in, tc.parallelism); err != nil {
+					b.Fatal(err)
 				}
 			}
 			b.StopTimer()
@@ -72,6 +73,46 @@ func BenchmarkResearchOptimizationCVaR(b *testing.B) {
 				b.ReportMetric(float64(peak-baseline.HeapInuse)/float64(b.N), "peak_heap_B/op")
 			}
 		})
+	}
+}
+
+func runResearchOptimizationBenchmarkBatch(in BacktestInput, parallelism int) error {
+	if parallelism <= 1 {
+		for range researchCVaRBenchmarkCandidates {
+			if _, err := RunResearchBacktest(in); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	jobs := make(chan struct{}, parallelism*2)
+	errors := make(chan error, 1)
+	var workers sync.WaitGroup
+	workers.Add(parallelism)
+	for range parallelism {
+		go func() {
+			defer workers.Done()
+			for range jobs {
+				if _, err := RunResearchBacktest(in); err != nil {
+					select {
+					case errors <- err:
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+	for range researchCVaRBenchmarkCandidates {
+		jobs <- struct{}{}
+	}
+	close(jobs)
+	workers.Wait()
+	select {
+	case err := <-errors:
+		return err
+	default:
+		return nil
 	}
 }
 

@@ -80,6 +80,8 @@ def _asset(
     currency: str,
     source_name: str,
     as_of: str,
+    canonical_symbol: str | None = None,
+    fee_mode: str = "",
 ) -> dict[str, Any]:
     return {
         "market": market,
@@ -92,6 +94,8 @@ def _asset(
         "currency": currency,
         "source_name": source_name,
         "source_as_of": as_of,
+        "canonical_symbol": canonical_symbol or symbol,
+        "fee_mode": fee_mode,
     }
 
 
@@ -220,29 +224,71 @@ def _list_cn_mutual_fund() -> list[dict[str, Any]]:
     df = _call("fund_name_em")
     code_col, name_col = _require_columns(df, source)
     kind_col = _column(df, "基金类型")
+    pinyin_col = _column(df, "拼音全称")
     as_of = _today()
-    out: list[dict[str, Any]] = []
-    for idx, (_, row) in enumerate(df.iterrows()):
-        del idx
+    records: list[tuple[str, str, str, str]] = []
+    for _, row in df.iterrows():
         code = str(row[code_col]).strip()
         if not code or code.lower() == "nan" or not code.isdigit():
             continue
         name = str(row[name_col]).strip() or code
         kind = str(row[kind_col]).strip() if kind_col is not None else ""
+        pinyin = str(row[pinyin_col]).strip() if pinyin_col is not None else ""
         if kind.lower() == "nan":
             kind = ""
+        if pinyin.lower() == "nan":
+            pinyin = ""
+        records.append((code.zfill(6), name, kind, pinyin))
+
+    by_identity: dict[tuple[str, str, str], list[str]] = {}
+    for code, name, kind, pinyin in records:
+        by_identity.setdefault((name, kind, pinyin), []).append(code)
+
+    backend_to_canonical: dict[str, str] = {}
+    for code, name, kind, pinyin in records:
+        if name.endswith("(后端)"):
+            base_name = name.removesuffix("(后端)")
+        elif name.endswith("（后端）"):
+            base_name = name.removesuffix("（后端）")
+        else:
+            continue
+        candidates = [
+            candidate
+            for candidate in by_identity.get((base_name, kind, pinyin), [])
+            if candidate != code
+        ]
+        if len(candidates) != 1:
+            raise TaskFailure(
+                "directory_data_incomplete",
+                f"back-end fund {code} maps to {len(candidates)} canonical candidates",
+            )
+        backend_to_canonical[code] = candidates[0]
+
+    front_codes = set(backend_to_canonical.values())
+    out: list[dict[str, Any]] = []
+    for code, name, kind, _ in records:
+        canonical_symbol = backend_to_canonical.get(code, code)
+        fee_mode = (
+            "back_end"
+            if code in backend_to_canonical
+            else "front_end"
+            if code in front_codes
+            else "standard"
+        )
         out.append(
             _asset(
                 market="CN",
                 instrument_type="cn_mutual_fund",
                 region_code="",
-                symbol=code.zfill(6),
+                symbol=code,
                 name=name,
                 exchange="",
                 kind=kind,
                 currency="CNY",
                 source_name=source,
                 as_of=as_of,
+                canonical_symbol=canonical_symbol,
+                fee_mode=fee_mode,
             )
         )
     return out
@@ -272,7 +318,9 @@ _HKEX_ETP_SUB_CATEGORIES = {
 def _hkex_rows() -> pd.DataFrame:
     df = _call("hkex_list_of_securities")
     if df is None or df.empty:
-        raise TaskFailure("directory_data_incomplete", f"{_HKEX_SOURCE} returned no rows")
+        raise TaskFailure(
+            "directory_data_incomplete", f"{_HKEX_SOURCE} returned no rows"
+        )
     required = ("symbol", "name_en", "category", "sub_category", "currency")
     missing = [col for col in required if col not in df.columns]
     if missing:
@@ -291,7 +339,10 @@ def _hk_display_names() -> dict[str, str]:
     failure never silently downgrades every name to English.
     """
     names: dict[str, str] = {}
-    for operation, source in (("em_hk_equity_list", "em.hk_equity_list"), ("em_hk_fund_list", "em.hk_fund_list")):
+    for operation, source in (
+        ("em_hk_equity_list", "em.hk_equity_list"),
+        ("em_hk_fund_list", "em.hk_fund_list"),
+    ):
         df = _call(operation)
         code_col, name_col = _require_columns(df, source)
         for code, name in _rows(df, code_col, name_col):
@@ -388,7 +439,9 @@ def _list_hk_etf() -> list[dict[str, Any]]:
     )
 
 
-def _us_entries(operation: str, source: str, instrument_type: str, kind: str) -> list[dict[str, Any]]:
+def _us_entries(
+    operation: str, source: str, instrument_type: str, kind: str
+) -> list[dict[str, Any]]:
     df = _call(operation)
     code_col, name_col = _require_columns(df, source)
     as_of = _today()
@@ -439,7 +492,11 @@ def _list_category(instrument_type: str, force: bool) -> list[dict[str, Any]]:
     if not force:
         cached = _cache.get(instrument_type)
         if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
-            logger.info("directory %s: served from cache (%d assets)", instrument_type, len(cached[1]))
+            logger.info(
+                "directory %s: served from cache (%d assets)",
+                instrument_type,
+                len(cached[1]),
+            )
             return cached[1]
     lister = _LISTERS.get(instrument_type)
     if lister is None:
@@ -453,7 +510,8 @@ def _list_category(instrument_type: str, force: bool) -> list[dict[str, Any]]:
         raise
     except TimeoutError as exc:
         raise TaskFailure(
-            "market_provider_timeout", f"directory listing for {instrument_type} timed out"
+            "market_provider_timeout",
+            f"directory listing for {instrument_type} timed out",
         ) from exc
     except Exception as exc:  # noqa: BLE001
         raise TaskFailure(

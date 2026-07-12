@@ -27,21 +27,23 @@ import (
 // plan interop. Market data always flows through MarketAssetService tasks;
 // backtests run on the local jobs queue.
 type ResearchService struct {
-	sql         *sql.DB
-	research    *repository.ResearchRepo
-	assets      *repository.MarketAssetRepo
-	tasks       *repository.WorkerTaskRepo
-	jobs        *repository.JobRepo
-	instruments *repository.InstrumentRepo
-	marketData  *repository.MarketDataRepo
-	plans       *repository.PlanRepo
-	holdings    *repository.HoldingsRepo
-	params      *repository.ParametersRepo
-	alloc       *repository.AllocationRepo
-	holdingSvc  *HoldingsService
-	portfolio   *repository.PortfolioSnapshotRepo
-	marketSvc   *MarketAssetService
-	now         func() time.Time
+	sql                     *sql.DB
+	research                *repository.ResearchRepo
+	assets                  *repository.MarketAssetRepo
+	tasks                   *repository.WorkerTaskRepo
+	jobs                    *repository.JobRepo
+	instruments             *repository.InstrumentRepo
+	marketData              *repository.MarketDataRepo
+	plans                   *repository.PlanRepo
+	holdings                *repository.HoldingsRepo
+	params                  *repository.ParametersRepo
+	alloc                   *repository.AllocationRepo
+	holdingSvc              *HoldingsService
+	portfolio               *repository.PortfolioSnapshotRepo
+	marketSvc               *MarketAssetService
+	optimizationConcurrency int
+	optimizationBacktest    func(BacktestInput) (*BacktestResult, error)
+	now                     func() time.Time
 }
 
 func NewResearchService(
@@ -58,22 +60,33 @@ func NewResearchService(
 ) *ResearchService {
 	snapshotSvc := marketdata.NewSnapshotService(repository.NewSnapshotRepo(sqlDB), assets)
 	return &ResearchService{
-		sql:         sqlDB,
-		research:    research,
-		assets:      assets,
-		tasks:       tasks,
-		jobs:        jobs,
-		instruments: instruments,
-		marketData:  marketData,
-		plans:       plans,
-		holdings:    holdings,
-		params:      repository.NewParametersRepo(sqlDB),
-		alloc:       repository.NewAllocationRepo(sqlDB),
-		holdingSvc:  NewHoldingsService(sqlDB, plans, holdings, snapshotSvc, assets),
-		portfolio:   repository.NewPortfolioSnapshotRepo(sqlDB),
-		marketSvc:   marketSvc,
-		now:         time.Now,
+		sql:                     sqlDB,
+		research:                research,
+		assets:                  assets,
+		tasks:                   tasks,
+		jobs:                    jobs,
+		instruments:             instruments,
+		marketData:              marketData,
+		plans:                   plans,
+		holdings:                holdings,
+		params:                  repository.NewParametersRepo(sqlDB),
+		alloc:                   repository.NewAllocationRepo(sqlDB),
+		holdingSvc:              NewHoldingsService(sqlDB, plans, holdings, snapshotSvc, assets),
+		portfolio:               repository.NewPortfolioSnapshotRepo(sqlDB),
+		marketSvc:               marketSvc,
+		optimizationConcurrency: DefaultResearchOptimizationConcurrency,
+		optimizationBacktest:    RunResearchBacktest,
+		now:                     time.Now,
 	}
+}
+
+// SetOptimizationConcurrency configures candidate-level parallelism. It is
+// called during application startup before the service is used.
+func (s *ResearchService) SetOptimizationConcurrency(concurrency int) {
+	if concurrency < 1 {
+		concurrency = DefaultResearchOptimizationConcurrency
+	}
+	s.optimizationConcurrency = concurrency
 }
 
 // Allowed collection enum values.
@@ -361,6 +374,8 @@ type ResearchCollectionItemView struct {
 	InstrumentType      string `json:"instrument_type"`
 	InstrumentTypeLabel string `json:"instrument_type_label"`
 	Currency            string `json:"currency"`
+	CanonicalSymbol     string `json:"canonical_symbol"`
+	FeeMode             string `json:"fee_mode"`
 	ListingStatus       string `json:"listing_status"`
 	IsCash              bool   `json:"is_cash"`
 }
@@ -575,10 +590,19 @@ func (s *ResearchService) buildItems(
 		}
 	}
 	seen := map[string]bool{}
+	seenCanonicalFunds := map[string]string{}
 	for i, in := range inputs {
-		item, dimKey, err := s.buildResearchItem(ctx, collectionID, in, i, len(inputs), allOmitted, now)
+		item, asset, dimKey, err := s.buildResearchItem(
+			ctx, collectionID, in, i, len(inputs), allOmitted, now,
+		)
 		if err != nil {
 			return nil, err
+		}
+		if canonicalKey := canonicalFundIdentity(asset); canonicalKey != "" {
+			if existingAssetKey, exists := seenCanonicalFunds[canonicalKey]; exists {
+				return nil, duplicateCanonicalFundError(asset, existingAssetKey)
+			}
+			seenCanonicalFunds[canonicalKey] = asset.AssetKey
 		}
 		if seen[dimKey] {
 			return nil, newErr("invalid_request",
@@ -597,23 +621,24 @@ func (s *ResearchService) buildResearchItem(
 	index, total int,
 	allWeightsOmitted bool,
 	now int64,
-) (repository.ResearchCollectionItem, string, error) {
+) (repository.ResearchCollectionItem, repository.MarketAsset, string, error) {
 	var zero repository.ResearchCollectionItem
+	var zeroAsset repository.MarketAsset
 	assetKey := strings.TrimSpace(in.AssetKey)
 	if assetKey == "" {
-		return zero, "", newErr("invalid_request", "items require asset_key", nil)
+		return zero, zeroAsset, "", newErr("invalid_request", "items require asset_key", nil)
 	}
 	asset, err := s.assets.GetByKey(ctx, assetKey)
 	if err != nil {
 		if errors.Is(err, repository.ErrMarketAssetNotFound) {
-			return zero, "", newErr("market_asset_not_found", "market asset not found: "+assetKey, nil)
+			return zero, zeroAsset, "", newErr("market_asset_not_found", "market asset not found: "+assetKey, nil)
 		}
-		return zero, "", wrapRepo("load market asset", err)
+		return zero, zeroAsset, "", wrapRepo("load market asset", err)
 	}
 	adjustPolicy := strings.TrimSpace(in.AdjustPolicy)
 	pointType := strings.TrimSpace(in.PointType)
 	if err := validateHistoryDimensionPair(adjustPolicy, pointType); err != nil {
-		return zero, "", err
+		return zero, zeroAsset, "", err
 	}
 	if adjustPolicy == "" {
 		adjustPolicy = DefaultAdjustPolicy(asset.InstrumentType)
@@ -626,11 +651,11 @@ func (s *ResearchService) buildResearchItem(
 		}
 	}
 	if err := ValidateHistoryDimension(asset, adjustPolicy, pointType); err != nil {
-		return zero, "", err
+		return zero, zeroAsset, "", err
 	}
 	weight := researchInputWeight(in.Weight, allWeightsOmitted, total)
 	if weight < 0 || weight > 1+ResearchWeightTolerance {
-		return zero, "", newErr("invalid_request",
+		return zero, zeroAsset, "", newErr("invalid_request",
 			fmt.Sprintf("weight for %s must be within [0, 1]", assetKey), nil)
 	}
 	enabled := true
@@ -644,7 +669,64 @@ func (s *ResearchService) buildResearchItem(
 		AssetClass: strings.TrimSpace(in.AssetClass), Region: strings.TrimSpace(in.Region),
 		Note: strings.TrimSpace(in.Note), SortOrder: index, CreatedAt: now, UpdatedAt: now,
 	}
-	return item, assetKey + "|" + adjustPolicy + "|" + pointType, nil
+	return item, asset, assetKey + "|" + adjustPolicy + "|" + pointType, nil
+}
+
+func canonicalFundIdentity(asset repository.MarketAsset) string {
+	if asset.InstrumentType != "cn_mutual_fund" {
+		return ""
+	}
+	canonical := strings.TrimSpace(asset.CanonicalSymbol)
+	if canonical == "" {
+		canonical = strings.TrimSpace(asset.Symbol)
+	}
+	if canonical == "" {
+		return ""
+	}
+	return strings.ToUpper(asset.Market) + "|" + asset.InstrumentType + "|" + canonical
+}
+
+func duplicateCanonicalFundError(asset repository.MarketAsset, existingAssetKey string) error {
+	canonical := strings.TrimSpace(asset.CanonicalSymbol)
+	if canonical == "" {
+		canonical = asset.Symbol
+	}
+	return newErr(
+		"duplicate_fund_exposure",
+		fmt.Sprintf("交易代码 %s 与已加入资产对应同一主基金 %s，不能重复加入组合", asset.Symbol, canonical),
+		map[string]any{
+			"asset_key": asset.AssetKey, "existing_asset_key": existingAssetKey,
+			"canonical_symbol": canonical,
+		},
+	)
+}
+
+func (s *ResearchService) validateCanonicalFundConflict(
+	ctx context.Context,
+	assetKey string,
+	existing []repository.ResearchCollectionItem,
+) error {
+	asset, err := s.assets.GetByKey(ctx, strings.TrimSpace(assetKey))
+	if err != nil {
+		if errors.Is(err, repository.ErrMarketAssetNotFound) {
+			return newErr("market_asset_not_found", "market asset not found: "+assetKey, nil)
+		}
+		return wrapRepo("load candidate research item asset", err)
+	}
+	canonicalKey := canonicalFundIdentity(asset)
+	if canonicalKey == "" {
+		return nil
+	}
+	for _, item := range existing {
+		existingAsset, loadErr := s.assets.GetByKey(ctx, item.AssetKey)
+		if loadErr != nil {
+			return wrapRepo("load existing research item asset", loadErr)
+		}
+		if canonicalFundIdentity(existingAsset) == canonicalKey {
+			return duplicateCanonicalFundError(asset, existingAsset.AssetKey)
+		}
+	}
+	return nil
 }
 
 func researchInputWeight(weight *float64, allOmitted bool, total int) float64 {
@@ -835,6 +917,8 @@ func (s *ResearchService) GetCollection(
 			view.InstrumentType = asset.InstrumentType
 			view.InstrumentTypeLabel = instrumentTypeLabelZH(asset.InstrumentType)
 			view.Currency = asset.Currency
+			view.CanonicalSymbol = asset.CanonicalSymbol
+			view.FeeMode = asset.FeeMode
 			view.ListingStatus = asset.ListingStatus
 			view.IsCash = isSystemCashAsset(asset)
 		}
@@ -1059,6 +1143,9 @@ func (s *ResearchService) AddItem(
 	existing, err := s.research.ListItems(ctx, collectionID)
 	if err != nil {
 		return zero, wrapRepo("list research items", err)
+	}
+	if err := s.validateCanonicalFundConflict(ctx, in.AssetKey, existing); err != nil {
+		return zero, err
 	}
 	now := s.now().UnixMilli()
 	items, err := s.buildItems(ctx, collectionID, []ResearchCollectionItemInput{in}, now)

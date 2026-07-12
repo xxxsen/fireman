@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from fireman_market_provider.adapters import em_fund_history
 
 
@@ -70,3 +72,25 @@ def test_unit_nav_is_decoded_without_executing_javascript(monkeypatch) -> None:
 
     assert list(frame.columns) == ["净值日期", "单位净值"]
     assert frame["单位净值"].tolist() == [1.1, 1.2]
+
+
+def test_directory_canonical_code_must_match_explicit_page_redirect(
+    monkeypatch,
+) -> None:
+    def fake_get(url: str, **kwargs: object) -> _Response:
+        del kwargs
+        if url.endswith("/pingzhongdata/000157.js"):
+            return _Response(301, "")
+        if url.endswith("/000157.html"):
+            return _Response(
+                200,
+                '<script>location.href = "http://fund.eastmoney.com/100055.html";</script>',
+            )
+        raise AssertionError(f"unexpected URL {url}")
+
+    monkeypatch.setattr(em_fund_history.requests, "get", fake_get)
+
+    with pytest.raises(ValueError, match="not directory canonical code 100099"):
+        em_fund_history.em_fund_open_history(
+            "000157", "累计净值走势", expected_canonical_symbol="100099"
+        )

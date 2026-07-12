@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 import pytest
 
-pytestmark = pytest.mark.subprocess
-
 from fireman_market_provider.timeout_util import UpstreamCall, call_with_timeout
+
+pytestmark = pytest.mark.subprocess
 
 
 def test_timeout_returns_within_deadline() -> None:

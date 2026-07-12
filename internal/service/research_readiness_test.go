@@ -117,6 +117,25 @@ func TestReadinessPassesForHealthyPortfolio(t *testing.T) {
 	}
 }
 
+func TestReadinessBlocksExistingDuplicateCanonicalFund(t *testing.T) {
+	front := rdAsset(t, "CN|cn_mutual_fund||100055", 0.5, "2020-01-01", 1642)
+	back := rdAsset(t, "CN|cn_mutual_fund||000157", 0.5, "2020-01-01", 1642)
+	front.Asset.InstrumentType = "cn_mutual_fund"
+	front.Asset.Symbol = "100055"
+	front.Asset.CanonicalSymbol = "100055"
+	front.Asset.FeeMode = "front_end"
+	back.Asset.InstrumentType = "cn_mutual_fund"
+	back.Asset.Symbol = "000157"
+	back.Asset.CanonicalSymbol = "100055"
+	back.Asset.FeeMode = "back_end"
+
+	readiness := evaluateResearchReadiness(rdDataset(front, back), rdNow(t))
+
+	if !hasBlock(readiness, ResearchReasonDuplicateFund) {
+		t.Fatalf("expected duplicate canonical fund block, got %+v", readiness.BlockingReasons)
+	}
+}
+
 func TestReadinessReportsExactCVaRSampleGate(t *testing.T) {
 	asset := rdAsset(t, "TAIL", 1, "2020-01-01", 400)
 	ds := rdDataset(asset)

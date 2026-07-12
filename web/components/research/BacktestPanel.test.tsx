@@ -26,8 +26,10 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api/research", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/research")>()),
   createBacktest: (...args: unknown[]) => createBacktestMock(...args),
-  getOptimizationReadiness: (...args: unknown[]) => getOptimizationReadinessMock(...args),
-  getLatestOptimization: (...args: unknown[]) => getLatestOptimizationMock(...args),
+  getOptimizationReadiness: (...args: unknown[]) =>
+    getOptimizationReadinessMock(...args),
+  getLatestOptimization: (...args: unknown[]) =>
+    getLatestOptimizationMock(...args),
   createOptimization: (...args: unknown[]) => createOptimizationMock(...args),
 }));
 
@@ -55,7 +57,9 @@ function detail(): ResearchCollectionDetail {
   };
 }
 
-function readiness(overrides: Partial<ResearchReadiness> = {}): ResearchReadiness {
+function readiness(
+  overrides: Partial<ResearchReadiness> = {},
+): ResearchReadiness {
   return {
     ready: true,
     weight_sum: 1,
@@ -132,8 +136,13 @@ function run(overrides: Partial<ResearchRunView> = {}): ResearchRunView {
   };
 }
 
-function renderPanel(r?: ResearchReadiness, latestRuns: ResearchRunView[] = []) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderPanel(
+  r?: ResearchReadiness,
+  latestRuns: ResearchRunView[] = [],
+) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <BacktestPanel detail={detail()} readiness={r} latestRuns={latestRuns} />
@@ -179,12 +188,18 @@ describe("runDisabledReason", () => {
   });
 
   it("reports active sync tasks", () => {
-    const r = readiness({ ready: false, blocking_reasons: [issue("history_syncing")] });
+    const r = readiness({
+      ready: false,
+      blocking_reasons: [issue("history_syncing")],
+    });
     expect(runDisabledReason(r)).toContain("同步任务进行中");
   });
 
   it("reports fx problems", () => {
-    const r = readiness({ ready: false, blocking_reasons: [issue("fx_missing")] });
+    const r = readiness({
+      ready: false,
+      blocking_reasons: [issue("fx_missing")],
+    });
     expect(runDisabledReason(r)).toContain("汇率");
   });
 
@@ -244,13 +259,18 @@ describe("optimizationDisabledReason", () => {
   });
 
   it("allows an all-locked 100% fixed candidate", () => {
-		expect(
-			optimizationDisabledReason(
-				readiness(),
-				optReadiness({ ready: true, enabled_count: 2, tunable_count: 0, candidate_count: 1 }),
-			),
-		).toBeNull();
-	});
+    expect(
+      optimizationDisabledReason(
+        readiness(),
+        optReadiness({
+          ready: true,
+          enabled_count: 2,
+          tunable_count: 0,
+          candidate_count: 1,
+        }),
+      ),
+    ).toBeNull();
+  });
 
   it("prioritizes no enabled assets over the tunable count", () => {
     expect(
@@ -264,6 +284,22 @@ describe("optimizationDisabledReason", () => {
         }),
       ),
     ).toBe("集合没有启用的资产");
+  });
+
+  it("ignores candidate overflow but preserves another hard blocker", () => {
+    expect(
+      optimizationDisabledReason(
+        readiness(),
+        optReadiness({
+          ready: false,
+          candidate_count: 20001,
+          blocking_reasons: [
+            issue("candidate_count_exceeds_limit", "候选数量超限"),
+            issue("cvar_sample_insufficient", "CVaR 场景不足"),
+          ],
+        }),
+      ),
+    ).toBe("CVaR 场景不足");
   });
 });
 
@@ -295,19 +331,28 @@ describe("BacktestPanel", () => {
     );
     expect(screen.getByTestId("run-disabled-reason")).toHaveTextContent("汇率");
     await waitFor(() =>
-      expect(screen.getByTestId("opt-disabled-reason")).toHaveTextContent("超过上限"),
+      expect(screen.getByTestId("opt-disabled-reason")).toHaveTextContent(
+        "超过上限",
+      ),
     );
   });
 
   it("runs a backtest and navigates to the run page", async () => {
-    createBacktestMock.mockResolvedValue({ run: run({ status: "queued" }), reused: false });
+    createBacktestMock.mockResolvedValue({
+      run: run({ status: "queued" }),
+      reused: false,
+    });
     renderPanel(readiness());
     const btn = screen.getByTestId("run-backtest");
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
-    await waitFor(() => expect(createBacktestMock).toHaveBeenCalledWith("rc_1"));
     await waitFor(() =>
-      expect(routerPushMock).toHaveBeenCalledWith("/research/collections/rc_1/runs/rbr_1"),
+      expect(createBacktestMock).toHaveBeenCalledWith("rc_1"),
+    );
+    await waitFor(() =>
+      expect(routerPushMock).toHaveBeenCalledWith(
+        "/research/collections/rc_1/runs/rbr_1",
+      ),
     );
   });
 
@@ -328,7 +373,9 @@ describe("BacktestPanel", () => {
     expect(screen.getByTestId("backtest-window")).toHaveTextContent(
       "2018-01-01 ~ 2026-07-01",
     );
-    expect(screen.getByTestId("backtest-cvar-scenarios")).toHaveTextContent("233 / 最少 100");
+    expect(screen.getByTestId("backtest-cvar-scenarios")).toHaveTextContent(
+      "233 / 最少 100",
+    );
   });
 
   it("enables the find-optimal button when optimization readiness is ready", async () => {
@@ -336,6 +383,35 @@ describe("BacktestPanel", () => {
     await waitFor(() =>
       expect(screen.getByTestId("find-optimal")).toBeEnabled(),
     );
+  });
+
+  it("opens the optimization dialog when candidate count exceeds the recommendation", async () => {
+    getOptimizationReadinessMock.mockResolvedValue(
+      optReadiness({
+        ready: true,
+        candidate_count: 20001,
+        blocking_reasons: [],
+        warnings: [
+          issue(
+            "candidate_count_exceeds_recommendation",
+            "当前候选数量 20001，推荐控制在 20000 以内；超过推荐数量后，模拟耗时和内存占用会急剧增加",
+          ),
+        ],
+      }),
+    );
+    renderPanel(readiness());
+
+    await waitFor(() =>
+      expect(screen.getByTestId("find-optimal")).toBeEnabled(),
+    );
+    expect(screen.queryByTestId("opt-disabled-reason")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("find-optimal"));
+    expect(
+      await screen.findByRole("dialog", { name: "寻找最优组合" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(/当前候选数量 20001，推荐控制在 20000 以内/),
+    ).toBeInTheDocument();
   });
 
   it("disables the find-optimal button when optimization is not ready", async () => {
@@ -348,7 +424,9 @@ describe("BacktestPanel", () => {
     );
     renderPanel(readiness());
     await waitFor(() =>
-      expect(screen.getByTestId("opt-disabled-reason")).toHaveTextContent("超过上限"),
+      expect(screen.getByTestId("opt-disabled-reason")).toHaveTextContent(
+        "超过上限",
+      ),
     );
     expect(screen.getByTestId("find-optimal")).toBeDisabled();
   });

@@ -445,6 +445,45 @@ func TestInternalPostProcess_DirectoryUnitIsolation(t *testing.T) {
 		"permanent_error", "result_task_mismatch")
 }
 
+func TestInternalPostProcess_PersistsMutualFundFeeIdentity(t *testing.T) {
+	st := newInternalStack(t)
+	taskID := syncUnitTask(t, st, "cn_mutual_fund")
+	result := directoryUnitResult("cn_mutual_fund", "cn_all", []map[string]any{
+		{
+			"market": "CN", "instrument_type": "cn_mutual_fund", "region_code": "",
+			"symbol": "100055", "name": "富国全球科技互联网股票(QDII)A",
+			"instrument_kind": "QDII-普通股票", "currency": "CNY",
+			"canonical_symbol": "100055", "fee_mode": "front_end",
+			"source_name": "ak.fund_name_em", "source_as_of": "2026-07-12",
+		},
+		{
+			"market": "CN", "instrument_type": "cn_mutual_fund", "region_code": "",
+			"symbol": "000157", "name": "富国全球科技互联网股票(QDII)A(后端)",
+			"instrument_kind": "QDII-普通股票", "currency": "CNY",
+			"canonical_symbol": "100055", "fee_mode": "back_end",
+			"source_name": "ak.fund_name_em", "source_as_of": "2026-07-12",
+		},
+	})
+	markPreComplete(t, st.db, taskID, uploadResult(t, st, result))
+	assertOutcome(t, notifyPostProcess(t, st, taskID), "success", "")
+
+	for _, expected := range []struct{ symbol, canonical, mode string }{
+		{"100055", "100055", "front_end"},
+		{"000157", "100055", "back_end"},
+	} {
+		var canonical, mode string
+		if err := st.db.QueryRow(`
+			SELECT canonical_symbol, fee_mode FROM market_assets
+			WHERE instrument_type='cn_mutual_fund' AND symbol=?`, expected.symbol).
+			Scan(&canonical, &mode); err != nil {
+			t.Fatal(err)
+		}
+		if canonical != expected.canonical || mode != expected.mode {
+			t.Fatalf("symbol %s got canonical=%s mode=%s", expected.symbol, canonical, mode)
+		}
+	}
+}
+
 func historySyncResult(assetKey, source string, dates []string, values []float64) []byte {
 	points := make([]map[string]any, len(dates))
 	for i, d := range dates {

@@ -37,6 +37,8 @@ export interface ResearchAssetView {
   name: string;
   exchange: string;
   instrument_kind: string;
+  canonical_symbol?: string;
+  fee_mode?: "" | "standard" | "front_end" | "back_end";
   currency: string;
   active: boolean;
   listing_status: string;
@@ -80,12 +82,7 @@ export function listResearchAssets(
 // --- collections ---
 
 export type ResearchRebalancePolicy =
-  | "monthly"
-  | "quarterly"
-  | "yearly"
-  | "buy_hold"
-  | "fixed"
-  | "threshold";
+  "monthly" | "quarterly" | "yearly" | "buy_hold" | "fixed" | "threshold";
 
 export type ResearchStartPolicy = "common_intersection" | "custom_range";
 
@@ -134,6 +131,8 @@ export interface ResearchCollectionItemView extends ResearchCollectionItem {
   instrument_type: string;
   instrument_type_label: string;
   currency: string;
+  canonical_symbol?: string;
+  fee_mode?: "" | "standard" | "front_end" | "back_end";
   listing_status: string;
   is_cash: boolean;
 }
@@ -240,7 +239,8 @@ export interface ResearchDataQuality {
   benchmark?: ResearchSeriesQuality | null;
 }
 
-export type ResearchRunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+export type ResearchRunStatus =
+  "queued" | "running" | "succeeded" | "failed" | "canceled";
 
 export interface ResearchJobView {
   status: string;
@@ -350,7 +350,9 @@ export function listCollections(
   return apiGet(`/api/v1/research/collections${qs}`);
 }
 
-export function createCollection(input: ResearchCollectionInput): Promise<ResearchCollectionDetail> {
+export function createCollection(
+  input: ResearchCollectionInput,
+): Promise<ResearchCollectionDetail> {
   return apiPost("/api/v1/research/collections", input);
 }
 
@@ -362,7 +364,10 @@ export function updateCollection(
   id: string,
   input: ResearchCollectionUpdate,
 ): Promise<ResearchCollectionDetail> {
-  return apiPatch(`/api/v1/research/collections/${encodeURIComponent(id)}`, input);
+  return apiPatch(
+    `/api/v1/research/collections/${encodeURIComponent(id)}`,
+    input,
+  );
 }
 
 export function deleteCollection(
@@ -418,7 +423,9 @@ export function deleteCollectionItem(
   );
 }
 
-export function normalizeWeights(collectionId: string): Promise<ResearchCollectionDetail> {
+export function normalizeWeights(
+  collectionId: string,
+): Promise<ResearchCollectionDetail> {
   return apiPost(
     `/api/v1/research/collections/${encodeURIComponent(collectionId)}/normalize-weights`,
     {},
@@ -533,7 +540,9 @@ export interface ResearchBacktestResult {
   reused: boolean;
 }
 
-export function createBacktest(collectionId: string): Promise<ResearchBacktestResult> {
+export function createBacktest(
+  collectionId: string,
+): Promise<ResearchBacktestResult> {
   return apiPost(
     `/api/v1/research/collections/${encodeURIComponent(collectionId)}/backtests`,
     {},
@@ -574,7 +583,9 @@ export function listRuns(
   );
 }
 
-export function listRecentRuns(limit?: number): Promise<{ runs: ResearchRunView[] }> {
+export function listRecentRuns(
+  limit?: number,
+): Promise<{ runs: ResearchRunView[] }> {
   const qs = limit ? `?limit=${limit}` : "";
   return apiGet(`/api/v1/research/runs${qs}`);
 }
@@ -602,7 +613,13 @@ export interface ResearchRunPointsResult {
 
 export function getRunPoints(
   runId: string,
-  params?: { from?: string; to?: string; limit?: number; offset?: number; includeWeights?: boolean },
+  params?: {
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+    includeWeights?: boolean;
+  },
 ): Promise<ResearchRunPointsResult> {
   const qs = new URLSearchParams();
   if (params?.from) qs.set("from", params.from);
@@ -611,7 +628,9 @@ export function getRunPoints(
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
   if (params?.includeWeights) qs.set("include_weights", "true");
   const query = qs.toString();
-  return apiGet(`/api/v1/research/runs/${encodeURIComponent(runId)}/points${query ? `?${query}` : ""}`);
+  return apiGet(
+    `/api/v1/research/runs/${encodeURIComponent(runId)}/points${query ? `?${query}` : ""}`,
+  );
 }
 
 /** Absolute URL of the run CSV export used by download links. */
@@ -763,9 +782,12 @@ export function getOptimizationReadiness(
   params?: { weightStep?: number; confidence?: number; horizonDays?: number },
 ): Promise<ResearchOptimizationReadiness> {
   const qs = new URLSearchParams();
-  if (params?.weightStep !== undefined) qs.set("weight_step", String(params.weightStep));
-  if (params?.confidence !== undefined) qs.set("cvar_confidence", String(params.confidence));
-  if (params?.horizonDays !== undefined) qs.set("cvar_horizon_days", String(params.horizonDays));
+  if (params?.weightStep !== undefined)
+    qs.set("weight_step", String(params.weightStep));
+  if (params?.confidence !== undefined)
+    qs.set("cvar_confidence", String(params.confidence));
+  if (params?.horizonDays !== undefined)
+    qs.set("cvar_horizon_days", String(params.horizonDays));
   const query = qs.toString();
   return apiGet(
     `/api/v1/research/collections/${encodeURIComponent(collectionId)}/optimization-readiness${query ? `?${query}` : ""}`,

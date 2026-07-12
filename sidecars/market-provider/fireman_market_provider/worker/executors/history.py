@@ -117,6 +117,7 @@ def _fetch_request(payload: dict[str, Any], start_date: str | None) -> FetchRequ
         adjust_policy=payload.get("adjust_policy", "none"),
         resolved_name=None,
         instrument_kind=payload.get("instrument_kind") or None,
+        canonical_symbol=payload.get("canonical_symbol") or None,
     )
 
 
@@ -140,7 +141,9 @@ def _cn_identity(payload: dict[str, Any]) -> CNExchangeCode:
     return _cn_directory_identity(payload)
 
 
-def _build_stock_zh_a_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_stock_zh_a_hist(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     identity = _cn_identity(payload)
     return UpstreamCall(
         "stock_zh_a_hist",
@@ -154,7 +157,9 @@ def _build_stock_zh_a_hist(payload: dict[str, Any], start: str, end: str) -> Ups
     )
 
 
-def _build_stock_zh_a_hist_tx(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_stock_zh_a_hist_tx(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     identity = _cn_identity(payload)
     return UpstreamCall(
         "stock_zh_a_hist_tx",
@@ -167,7 +172,9 @@ def _build_stock_zh_a_hist_tx(payload: dict[str, Any], start: str, end: str) -> 
     )
 
 
-def _build_stock_zh_a_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_stock_zh_a_daily(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     identity = _cn_identity(payload)
     return UpstreamCall(
         "stock_zh_a_daily",
@@ -180,7 +187,9 @@ def _build_stock_zh_a_daily(payload: dict[str, Any], start: str, end: str) -> Up
     )
 
 
-def _build_fund_etf_hist_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_fund_etf_hist_em(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     identity = _cn_identity(payload)
     return UpstreamCall(
         "fund_etf_hist_em",
@@ -194,7 +203,9 @@ def _build_fund_etf_hist_em(payload: dict[str, Any], start: str, end: str) -> Up
     )
 
 
-def _build_fund_lof_hist_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_fund_lof_hist_em(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     identity = _cn_identity(payload)
     return UpstreamCall(
         "fund_lof_hist_em",
@@ -208,17 +219,27 @@ def _build_fund_lof_hist_em(payload: dict[str, Any], start: str, end: str) -> Up
     )
 
 
-def _build_fund_etf_hist_sina(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_fund_etf_hist_sina(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     del start, end
     identity = _cn_identity(payload)
-    return UpstreamCall("fund_etf_hist_sina", kwargs=(("symbol", identity.prefixed_symbol),))
+    return UpstreamCall(
+        "fund_etf_hist_sina", kwargs=(("symbol", identity.prefixed_symbol),)
+    )
 
 
-def _build_fund_etf_fund_info_em(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_fund_etf_fund_info_em(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     identity = _cn_identity(payload)
     return UpstreamCall(
         "fund_etf_fund_info_em",
-        kwargs=(("fund", identity.eastmoney_symbol), ("start_date", start), ("end_date", end)),
+        kwargs=(
+            ("fund", identity.eastmoney_symbol),
+            ("start_date", start),
+            ("end_date", end),
+        ),
     )
 
 
@@ -245,21 +266,29 @@ def _build_em_open_fund_history(indicator: str) -> CallBuilder:
             kwargs=(
                 ("symbol", str(payload.get("symbol", ""))),
                 ("indicator", indicator),
+                ("expected_canonical_symbol", payload.get("canonical_symbol") or None),
             ),
         )
 
     return build
 
 
-def _build_money_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
-    del start, end
-    return UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", str(payload.get("symbol", ""))),))
-
-
-def _build_financial_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_money_fund_info(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     del start, end
     return UpstreamCall(
-        "fund_financial_fund_info_em", kwargs=(("symbol", str(payload.get("symbol", ""))),)
+        "fund_money_fund_info_em", kwargs=(("symbol", str(payload.get("symbol", ""))),)
+    )
+
+
+def _build_financial_fund_info(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
+    del start, end
+    return UpstreamCall(
+        "fund_financial_fund_info_em",
+        kwargs=(("symbol", str(payload.get("symbol", ""))),),
     )
 
 
@@ -276,7 +305,9 @@ def _build_stock_hk_hist(payload: dict[str, Any], start: str, end: str) -> Upstr
     )
 
 
-def _build_stock_hk_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_stock_hk_daily(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     del start, end
     return UpstreamCall(
         "stock_hk_daily",
@@ -287,12 +318,17 @@ def _build_stock_hk_daily(payload: dict[str, Any], start: str, end: str) -> Upst
     )
 
 
-def _build_stock_us_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+def _build_stock_us_daily(
+    payload: dict[str, Any], start: str, end: str
+) -> UpstreamCall:
     del start, end
     policy = str(payload.get("adjust_policy", "none"))
     return UpstreamCall(
         "stock_us_daily",
-        kwargs=(("symbol", str(payload.get("symbol", ""))), ("adjust", "" if policy == "none" else policy)),
+        kwargs=(
+            ("symbol", str(payload.get("symbol", ""))),
+            ("adjust", "" if policy == "none" else policy),
+        ),
     )
 
 
@@ -362,7 +398,9 @@ def _filter_points(points: list, start_iso: str | None) -> list:
     return [p for p in points if p.date >= start_iso]
 
 
-def _fetch_pinned_tickflow(payload: dict[str, Any], start: str, end: str) -> pd.DataFrame:
+def _fetch_pinned_tickflow(
+    payload: dict[str, Any], start: str, end: str
+) -> pd.DataFrame:
     if not tickflow_enabled():
         raise SourceUnavailable("tickflow source is disabled in this deployment")
     if payload.get("instrument_type") not in _CN_EXCHANGE_TYPES:
@@ -377,8 +415,16 @@ def _fetch_pinned_tickflow(payload: dict[str, Any], start: str, end: str) -> pd.
     return df
 
 
-def _history_point_type(instrument_type: str, adjust_policy: str, requested: str) -> str:
-    if instrument_type in (*_CN_EXCHANGE_TYPES, "hk_stock", "hk_etf", "us_stock", "us_etf"):
+def _history_point_type(
+    instrument_type: str, adjust_policy: str, requested: str
+) -> str:
+    if instrument_type in (
+        *_CN_EXCHANGE_TYPES,
+        "hk_stock",
+        "hk_etf",
+        "us_stock",
+        "us_etf",
+    ):
         return "close" if adjust_policy == "none" else "adjusted_close"
     return requested
 
@@ -399,7 +445,9 @@ def _execute_pinned(payload: dict[str, Any], source_name: str) -> list:
         "ak.fund_etf_hist_sina",
         "ak.fund_etf_fund_info_em",
     ):
-        raise SourceUnavailable(f"source {source_name} cannot guarantee adjusted history")
+        raise SourceUnavailable(
+            f"source {source_name} cannot guarantee adjusted history"
+        )
 
     builders = _PINNED_SOURCES.get(instrument_type, {})
     builder = builders.get(source_name)
@@ -435,16 +483,23 @@ def _execute_unpinned(payload: dict[str, Any]) -> tuple[list, str, str]:
         # chain must never degrade an identity failure into a retryable one.
         raise TaskFailure("asset_identity_incomplete", str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise TaskFailure("market_provider_unavailable", f"history fetch failed: {exc}") from exc
+        raise TaskFailure(
+            "market_provider_unavailable", f"history fetch failed: {exc}"
+        ) from exc
     return list(data.points), data.source_name, data.point_type
 
 
 def execute_history_sync(payload: dict[str, Any]) -> dict[str, Any]:
     asset_key = str(payload.get("asset_key", "")).strip()
     instrument_type = str(payload.get("instrument_type", "")).strip()
-    if not asset_key or not instrument_type or not str(payload.get("symbol", "")).strip():
+    if (
+        not asset_key
+        or not instrument_type
+        or not str(payload.get("symbol", "")).strip()
+    ):
         raise TaskFailure(
-            "invalid_task_payload", "history payload needs asset_key, instrument_type and symbol"
+            "invalid_task_payload",
+            "history payload needs asset_key, instrument_type and symbol",
         )
     adjust_policy = str(payload.get("adjust_policy", "none") or "none")
     point_type = str(payload.get("point_type", "") or "adjusted_close")
@@ -460,7 +515,9 @@ def execute_history_sync(payload: dict[str, Any]) -> dict[str, Any]:
     if required_source:
         points = _execute_pinned(payload, required_source)
         source_name = required_source
-        actual_point_type = _history_point_type(instrument_type, adjust_policy, point_type)
+        actual_point_type = _history_point_type(
+            instrument_type, adjust_policy, point_type
+        )
     else:
         points, source_name, actual_point_type = _execute_unpinned(payload)
 

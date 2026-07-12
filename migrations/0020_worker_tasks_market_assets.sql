@@ -56,6 +56,8 @@ CREATE TABLE market_assets (
   exchange           TEXT NOT NULL DEFAULT '',
   instrument_kind    TEXT NOT NULL DEFAULT '',
   currency           TEXT NOT NULL DEFAULT '',
+  canonical_symbol   TEXT NOT NULL DEFAULT '',
+  fee_mode           TEXT NOT NULL DEFAULT '',
   active             INTEGER NOT NULL DEFAULT 1,
   listing_status     TEXT NOT NULL DEFAULT 'active',
   last_seen_at       INTEGER NOT NULL,
@@ -69,6 +71,9 @@ CREATE TABLE market_assets (
 
 CREATE INDEX idx_market_assets_search
 ON market_assets(market, instrument_type, active);
+
+CREATE INDEX idx_market_assets_canonical_fund
+ON market_assets(market, instrument_type, canonical_symbol);
 
 -- 资产目录同步状态；实时任务状态统一从 worker_tasks 读取，这里只保存关联与
 -- 最后成功信息，避免出现两份需要同步的状态。

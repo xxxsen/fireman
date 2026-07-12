@@ -212,6 +212,65 @@ func TestResearchCollectionCRUDAndNormalize(t *testing.T) {
 	}
 }
 
+func TestResearchCollectionRejectsFrontAndBackCodesOfSameFund(t *testing.T) {
+	svc, db := newResearchTestService(t)
+	ctx := context.Background()
+	assets := repository.NewMarketAssetRepo(db)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range []repository.MarketAsset{
+		{
+			AssetKey: "CN|cn_mutual_fund||100055", Market: "CN",
+			InstrumentType: "cn_mutual_fund", Symbol: "100055",
+			Name: "富国全球科技互联网股票(QDII)A", InstrumentKind: "QDII-普通股票",
+			CanonicalSymbol: "100055", FeeMode: "front_end", Currency: "CNY",
+			SourceName: "fixture",
+		},
+		{
+			AssetKey: "CN|cn_mutual_fund||000157", Market: "CN",
+			InstrumentType: "cn_mutual_fund", Symbol: "000157",
+			Name: "富国全球科技互联网股票(QDII)A(后端)", InstrumentKind: "QDII-普通股票",
+			CanonicalSymbol: "100055", FeeMode: "back_end", Currency: "CNY",
+			SourceName: "fixture",
+		},
+	} {
+		if err := assets.UpsertAssetTx(ctx, tx, asset, researchTestNow.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
+		Name:  "收费模式去重",
+		Items: []ResearchCollectionItemInput{{AssetKey: "CN|cn_mutual_fund||100055"}},
+	})
+	_, err = svc.AddItem(ctx, detail.ID, ResearchCollectionItemInput{
+		AssetKey: "CN|cn_mutual_fund||000157",
+	})
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != "duplicate_fund_exposure" {
+		t.Fatalf("expected duplicate_fund_exposure, got %T %v", err, err)
+	}
+	if !strings.Contains(appErr.Message, "主基金 100055") {
+		t.Fatalf("unexpected duplicate message: %s", appErr.Message)
+	}
+
+	_, err = svc.CreateCollection(ctx, ResearchCollectionInput{
+		Name: "批量收费模式去重",
+		Items: []ResearchCollectionItemInput{
+			{AssetKey: "CN|cn_mutual_fund||100055"},
+			{AssetKey: "CN|cn_mutual_fund||000157"},
+		},
+	})
+	if !errors.As(err, &appErr) || appErr.Code != "duplicate_fund_exposure" {
+		t.Fatalf("batch create expected duplicate_fund_exposure, got %T %v", err, err)
+	}
+}
+
 func strptr(s string) *string { return &s }
 
 func TestResearchBacktestEndToEnd(t *testing.T) {

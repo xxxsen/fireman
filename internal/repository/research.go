@@ -1215,7 +1215,8 @@ func buildResearchAssetSelectSQL(base, where, order string) string {
 	var query strings.Builder
 	query.WriteString(`
 	SELECT a.asset_key, a.market, a.instrument_type, a.region_code, a.symbol, a.name,
-		a.exchange, a.instrument_kind, a.currency, a.active, a.listing_status,
+		a.exchange, a.instrument_kind, a.canonical_symbol, a.fee_mode,
+		a.currency, a.active, a.listing_status,
 		a.last_seen_at, a.source_name, a.source_as_of, a.refreshed_at, a.created_at, a.updated_at,
 		h.adjust_policy, h.point_type, h.data_as_of, h.point_count, h.source_name,
 		(CASE WHEN `)
@@ -1253,7 +1254,8 @@ func scanResearchAssetRow(rows *sql.Rows) (ResearchAssetRow, error) {
 	err := rows.Scan(
 		&row.Asset.AssetKey, &row.Asset.Market, &row.Asset.InstrumentType,
 		&row.Asset.RegionCode, &row.Asset.Symbol, &row.Asset.Name,
-		&row.Asset.Exchange, &row.Asset.InstrumentKind, &row.Asset.Currency,
+		&row.Asset.Exchange, &row.Asset.InstrumentKind,
+		&row.Asset.CanonicalSymbol, &row.Asset.FeeMode, &row.Asset.Currency,
 		&fields.active, &row.Asset.ListingStatus,
 		&row.Asset.LastSeenAt, &row.Asset.SourceName, &row.Asset.SourceAsOf,
 		&row.Asset.RefreshedAt, &row.Asset.CreatedAt, &row.Asset.UpdatedAt,

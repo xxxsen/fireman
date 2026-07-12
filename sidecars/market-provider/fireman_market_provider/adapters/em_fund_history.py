@@ -40,12 +40,17 @@ def _request_text(url: str) -> tuple[int, str]:
     return response.status_code, response.content.decode("utf-8-sig", errors="replace")
 
 
-def _script_for_code(symbol: str) -> str:
+def _script_for_code(symbol: str, expected_canonical_symbol: str | None = None) -> str:
     if _CODE_RE.fullmatch(symbol) is None:
         raise ValueError(f"invalid mutual fund code {symbol!r}")
 
     status, script = _request_text(f"{_FUND_HOST}/pingzhongdata/{symbol}.js")
     if status == 200 and "Data_netWorthTrend" in script:
+        if expected_canonical_symbol and expected_canonical_symbol != symbol:
+            raise ValueError(
+                f"fund {symbol} serves its own history but directory expects canonical "
+                f"code {expected_canonical_symbol}"
+            )
         return script
 
     _, fund_page = _request_text(f"{_FUND_HOST}/{symbol}.html")
@@ -54,6 +59,11 @@ def _script_for_code(symbol: str) -> str:
         return ""
 
     canonical_code = match.group(1)
+    if expected_canonical_symbol and canonical_code != expected_canonical_symbol:
+        raise ValueError(
+            f"fund {symbol} redirects to {canonical_code}, not directory canonical "
+            f"code {expected_canonical_symbol}"
+        )
     canonical_status, canonical_script = _request_text(
         f"{_FUND_HOST}/pingzhongdata/{canonical_code}.js"
     )
@@ -109,9 +119,15 @@ def _unit_nav_frame(script: str) -> pd.DataFrame:
     return frame.dropna(subset=["净值日期", "单位净值"])
 
 
-def em_fund_open_history(symbol: str, indicator: str) -> pd.DataFrame:
+def em_fund_open_history(
+    symbol: str,
+    indicator: str,
+    expected_canonical_symbol: str | None = None,
+) -> pd.DataFrame:
     """Return cumulative or unit NAV history for an open mutual fund."""
-    script = _script_for_code(symbol.strip())
+    script = _script_for_code(
+        symbol.strip(), (expected_canonical_symbol or "").strip() or None
+    )
     if not script:
         return pd.DataFrame()
     if indicator == "累计净值走势":

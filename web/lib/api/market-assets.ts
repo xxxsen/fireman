@@ -2,12 +2,7 @@ import { apiGet, apiPost, apiPut } from "./client";
 
 /** Worker task status enum for market data sync tasks. */
 export type WorkerTaskStatus =
-  | "pending"
-  | "running"
-  | "pre_complete"
-  | "complete"
-  | "failed"
-  | "canceled";
+  "pending" | "running" | "pre_complete" | "complete" | "failed" | "canceled";
 
 export interface WorkerTask {
   id: string;
@@ -23,7 +18,9 @@ export interface WorkerTask {
 
 /** Active statuses keep polling; terminal statuses stop it. */
 export function isTaskActive(status: WorkerTaskStatus | undefined): boolean {
-  return status === "pending" || status === "running" || status === "pre_complete";
+  return (
+    status === "pending" || status === "running" || status === "pre_complete"
+  );
 }
 
 export interface MarketAsset {
@@ -35,6 +32,8 @@ export interface MarketAsset {
   name: string;
   exchange: string;
   instrument_kind: string;
+  canonical_symbol?: string;
+  fee_mode?: "" | "standard" | "front_end" | "back_end";
   currency: string;
   active: boolean;
   listing_status: string;
@@ -78,7 +77,8 @@ export interface DirectorySyncUnitView {
 }
 
 /** Scope aggregate status computed by the backend from directory sync units. */
-export type DirectoryScopeStatus = "running" | "complete" | "partial" | "failed" | "never";
+export type DirectoryScopeStatus =
+  "running" | "complete" | "partial" | "failed" | "never";
 
 /** Aggregated sync view of one directory scope. */
 export interface DirectoryScopeSyncView {
@@ -107,10 +107,13 @@ export interface MarketAssetListParams {
   offset?: number;
 }
 
-export function listMarketAssets(params?: MarketAssetListParams): Promise<MarketAssetListResult> {
+export function listMarketAssets(
+  params?: MarketAssetListParams,
+): Promise<MarketAssetListResult> {
   const qs = new URLSearchParams();
   if (params?.market) qs.set("market", params.market);
-  if (params?.instrumentTypes?.length) qs.set("instrument_types", params.instrumentTypes.join(","));
+  if (params?.instrumentTypes?.length)
+    qs.set("instrument_types", params.instrumentTypes.join(","));
   if (params?.symbolQ) qs.set("symbol_q", params.symbolQ);
   if (params?.nameQ) qs.set("name_q", params.nameQ);
   if (params?.includeInactive) qs.set("include_inactive", "true");
@@ -146,7 +149,9 @@ export interface DirectorySyncResult {
  * `existed: true`.
  */
 export function syncMarketAssets(
-  body: { scope: DirectorySyncScope; force?: boolean } | { sync_key: string; force?: boolean },
+  body:
+    | { scope: DirectorySyncScope; force?: boolean }
+    | { sync_key: string; force?: boolean },
 ): Promise<DirectorySyncResult> {
   return apiPost("/api/v1/market-assets/sync", body);
 }
