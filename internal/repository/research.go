@@ -22,11 +22,12 @@ const (
 	ResearchCollectionStatusArchived = "archived"
 )
 
-// Research backtest run status values (aligned with job statuses).
+// Research run status values exposed by views. The authoritative value is
+// always joined from worker_tasks; run tables do not persist task lifecycle.
 const (
-	ResearchRunStatusQueued    = "queued"
+	ResearchRunStatusQueued    = WorkerTaskStatusPending
 	ResearchRunStatusRunning   = "running"
-	ResearchRunStatusSucceeded = "succeeded"
+	ResearchRunStatusSucceeded = WorkerTaskStatusComplete
 	ResearchRunStatusFailed    = "failed"
 	ResearchRunStatusCanceled  = "canceled"
 )
@@ -76,7 +77,7 @@ type ResearchCollectionItem struct {
 type ResearchBacktestRun struct {
 	ID                string `json:"id"`
 	CollectionID      string `json:"collection_id"`
-	JobID             string `json:"job_id"`
+	TaskID            string `json:"task_id"`
 	InputHash         string `json:"input_hash"`
 	InputSnapshotJSON string `json:"input_snapshot_json,omitempty"`
 	SourceHash        string `json:"source_hash"`
@@ -503,21 +504,23 @@ func (r *ResearchRepo) SumEnabledWeightsByCollections(
 // --- backtest runs ---
 
 const researchRunColumns = `
-	id, collection_id, job_id, input_hash, input_snapshot_json, source_hash,
+	id, collection_id, task_id, input_hash, input_snapshot_json, source_hash,
 	engine_version, base_currency, rebalance_policy, window_start, window_end,
-	status, summary_json, data_quality_json, created_at, completed_at`
+	COALESCE((SELECT status FROM worker_tasks WHERE id=research_backtest_runs.task_id),'unknown'),
+	summary_json, data_quality_json, created_at, completed_at`
 
 // researchRunListColumns omits input_snapshot_json (potentially large) for
 // listings.
 const researchRunListColumns = `
-	id, collection_id, job_id, input_hash, '' AS input_snapshot_json, source_hash,
+	id, collection_id, task_id, input_hash, '' AS input_snapshot_json, source_hash,
 	engine_version, base_currency, rebalance_policy, window_start, window_end,
-	status, summary_json, data_quality_json, created_at, completed_at`
+	COALESCE((SELECT status FROM worker_tasks WHERE id=research_backtest_runs.task_id),'unknown'),
+	summary_json, data_quality_json, created_at, completed_at`
 
 func scanResearchRun(row rowScanner) (ResearchBacktestRun, error) {
 	var run ResearchBacktestRun
 	err := row.Scan(
-		&run.ID, &run.CollectionID, &run.JobID, &run.InputHash, &run.InputSnapshotJSON, &run.SourceHash,
+		&run.ID, &run.CollectionID, &run.TaskID, &run.InputHash, &run.InputSnapshotJSON, &run.SourceHash,
 		&run.EngineVersion, &run.BaseCurrency, &run.RebalancePolicy, &run.WindowStart, &run.WindowEnd,
 		&run.Status, &run.SummaryJSON, &run.DataQualityJSON, &run.CreatedAt, &run.CompletedAt,
 	)
@@ -533,13 +536,13 @@ func scanResearchRun(row rowScanner) (ResearchBacktestRun, error) {
 func (r *ResearchRepo) CreateRunTx(ctx context.Context, tx *sql.Tx, run ResearchBacktestRun) error {
 	_, err := r.exec(tx).ExecContext(ctx, `
 		INSERT INTO research_backtest_runs (
-			id, collection_id, job_id, input_hash, input_snapshot_json, source_hash,
+			id, collection_id, task_id, input_hash, input_snapshot_json, source_hash,
 			engine_version, base_currency, rebalance_policy, window_start, window_end,
-			status, summary_json, data_quality_json, created_at, completed_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		run.ID, run.CollectionID, run.JobID, run.InputHash, run.InputSnapshotJSON, run.SourceHash,
+			summary_json, data_quality_json, created_at, completed_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		run.ID, run.CollectionID, run.TaskID, run.InputHash, run.InputSnapshotJSON, run.SourceHash,
 		run.EngineVersion, run.BaseCurrency, run.RebalancePolicy, run.WindowStart, run.WindowEnd,
-		run.Status, run.SummaryJSON, run.DataQualityJSON, run.CreatedAt, run.CompletedAt)
+		run.SummaryJSON, run.DataQualityJSON, run.CreatedAt, run.CompletedAt)
 	return wrapSQL("insert research run", err)
 }
 
@@ -549,9 +552,9 @@ func (r *ResearchRepo) GetRun(ctx context.Context, id string) (ResearchBacktestR
 	return scanResearchRun(row)
 }
 
-func (r *ResearchRepo) GetRunByJobID(ctx context.Context, jobID string) (ResearchBacktestRun, error) {
+func (r *ResearchRepo) GetRunByTaskID(ctx context.Context, taskID string) (ResearchBacktestRun, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT `+researchRunColumns+` FROM research_backtest_runs WHERE job_id=?`, jobID)
+		`SELECT `+researchRunColumns+` FROM research_backtest_runs WHERE task_id=?`, taskID)
 	return scanResearchRun(row)
 }
 
@@ -624,7 +627,9 @@ func (r *ResearchRepo) FindSucceededRunByInputHash(
 ) (ResearchBacktestRun, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+researchRunColumns+` FROM research_backtest_runs
-		 WHERE collection_id=? AND input_hash=? AND status=?
+		 WHERE collection_id=? AND input_hash=? AND EXISTS (
+		   SELECT 1 FROM worker_tasks t WHERE t.id=research_backtest_runs.task_id AND t.status=?
+		 )
 		 ORDER BY created_at DESC LIMIT 1`,
 		collectionID, inputHash, ResearchRunStatusSucceeded)
 	return scanResearchRun(row)
@@ -637,18 +642,18 @@ func (r *ResearchRepo) FindActiveRunByInputHash(
 ) (ResearchBacktestRun, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+researchRunColumns+` FROM research_backtest_runs
-		 WHERE collection_id=? AND input_hash=? AND status IN (?,?)
+		 WHERE collection_id=? AND input_hash=? AND EXISTS (
+		   SELECT 1 FROM worker_tasks t WHERE t.id=research_backtest_runs.task_id AND t.status IN (?,?,?)
+		 )
 		 ORDER BY created_at DESC LIMIT 1`,
-		collectionID, inputHash, ResearchRunStatusQueued, ResearchRunStatusRunning)
+		collectionID, inputHash, WorkerTaskStatusPending, WorkerTaskStatusRunning, WorkerTaskStatusPreComplete)
 	return scanResearchRun(row)
 }
 
-// MarkRunRunning transitions a queued run to running.
-func (r *ResearchRepo) MarkRunRunning(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE research_backtest_runs SET status=? WHERE id=? AND status=?`,
-		ResearchRunStatusRunning, id, ResearchRunStatusQueued)
-	return wrapSQL("mark research run running", err)
+// MarkRunRunning is retained as a no-op while processors are migrated. Task
+// lifecycle is owned exclusively by worker_tasks.
+func (r *ResearchRepo) MarkRunRunning(_ context.Context, _ string) error {
+	return nil
 }
 
 // CompleteRunTx finalizes a successful run inside the caller's transaction.
@@ -657,17 +662,16 @@ func (r *ResearchRepo) CompleteRunTx(
 ) error {
 	_, err := r.exec(tx).ExecContext(ctx, `
 		UPDATE research_backtest_runs
-		SET status=?, summary_json=?, data_quality_json=?, completed_at=?
+		SET summary_json=?, data_quality_json=?, completed_at=?
 		WHERE id=?`,
-		ResearchRunStatusSucceeded, summaryJSON, dataQualityJSON, completedAt, id)
+		summaryJSON, dataQualityJSON, completedAt, id)
 	return wrapSQL("complete research run", err)
 }
 
 // FailRun marks a run failed/canceled.
-func (r *ResearchRepo) FailRun(ctx context.Context, id, status string, completedAt int64) error {
+func (r *ResearchRepo) FailRun(ctx context.Context, id, _ string, completedAt int64) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE research_backtest_runs SET status=?, completed_at=? WHERE id=?`,
-		status, completedAt, id)
+		UPDATE research_backtest_runs SET completed_at=? WHERE id=?`, completedAt, id)
 	return wrapSQL("fail research run", err)
 }
 
@@ -1364,7 +1368,7 @@ func (r *ResearchRepo) ListStaleMetricsDimensions(
 type ResearchOptimizationRun struct {
 	ID                string `json:"id"`
 	CollectionID      string `json:"collection_id"`
-	JobID             string `json:"job_id"`
+	TaskID            string `json:"task_id"`
 	Status            string `json:"status"`
 	InputHash         string `json:"input_hash"`
 	SourceHash        string `json:"source_hash"`
@@ -1385,21 +1389,41 @@ type ResearchOptimizationRun struct {
 }
 
 const optimizationRunColumns = `
-	id, collection_id, job_id, status, input_hash, source_hash,
+	id, collection_id, task_id,
+	COALESCE((SELECT status FROM worker_tasks WHERE id=research_optimization_runs.task_id),'unknown'),
+	input_hash, source_hash,
 	engine_version, base_currency, rebalance_policy, window_start, window_end,
-	config_json, input_snapshot_json, candidate_count, evaluated_count,
-	result_json, error_code, error_message, created_at, completed_at`
+	config_json, input_snapshot_json, candidate_count,
+	CASE WHEN COALESCE((SELECT status FROM worker_tasks WHERE id=research_optimization_runs.task_id),'')
+	  IN ('pending','running','pre_complete')
+	  THEN COALESCE((SELECT progress_current FROM worker_tasks
+	                 WHERE id=research_optimization_runs.task_id),evaluated_count)
+	  ELSE evaluated_count END,
+	result_json,
+	COALESCE((SELECT error_code FROM worker_tasks WHERE id=research_optimization_runs.task_id),''),
+	COALESCE((SELECT error_message FROM worker_tasks WHERE id=research_optimization_runs.task_id),''),
+	created_at, completed_at`
 
 const optimizationRunListColumns = `
-	id, collection_id, job_id, status, input_hash, source_hash,
+	id, collection_id, task_id,
+	COALESCE((SELECT status FROM worker_tasks WHERE id=research_optimization_runs.task_id),'unknown'),
+	input_hash, source_hash,
 	engine_version, base_currency, rebalance_policy, window_start, window_end,
-	config_json, '' AS input_snapshot_json, candidate_count, evaluated_count,
-	result_json, error_code, error_message, created_at, completed_at`
+	config_json, '' AS input_snapshot_json, candidate_count,
+	CASE WHEN COALESCE((SELECT status FROM worker_tasks WHERE id=research_optimization_runs.task_id),'')
+	  IN ('pending','running','pre_complete')
+	  THEN COALESCE((SELECT progress_current FROM worker_tasks
+	                 WHERE id=research_optimization_runs.task_id),evaluated_count)
+	  ELSE evaluated_count END,
+	result_json,
+	COALESCE((SELECT error_code FROM worker_tasks WHERE id=research_optimization_runs.task_id),''),
+	COALESCE((SELECT error_message FROM worker_tasks WHERE id=research_optimization_runs.task_id),''),
+	created_at, completed_at`
 
 func scanOptimizationRun(row rowScanner) (ResearchOptimizationRun, error) {
 	var run ResearchOptimizationRun
 	err := row.Scan(
-		&run.ID, &run.CollectionID, &run.JobID, &run.Status,
+		&run.ID, &run.CollectionID, &run.TaskID, &run.Status,
 		&run.InputHash, &run.SourceHash, &run.EngineVersion,
 		&run.BaseCurrency, &run.RebalancePolicy, &run.WindowStart, &run.WindowEnd,
 		&run.ConfigJSON, &run.InputSnapshotJSON, &run.CandidateCount, &run.EvaluatedCount,
@@ -1420,17 +1444,16 @@ func (r *ResearchRepo) CreateOptimizationRunTx(
 ) error {
 	_, err := r.exec(tx).ExecContext(ctx, `
 		INSERT INTO research_optimization_runs (
-			id, collection_id, job_id, status, input_hash, source_hash,
+			id, collection_id, task_id, input_hash, source_hash,
 			engine_version, base_currency, rebalance_policy, window_start, window_end,
 			config_json, input_snapshot_json, candidate_count, evaluated_count,
-			result_json, error_code, error_message, created_at, completed_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		run.ID, run.CollectionID, run.JobID, run.Status,
+			result_json, created_at, completed_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		run.ID, run.CollectionID, run.TaskID,
 		run.InputHash, run.SourceHash, run.EngineVersion,
 		run.BaseCurrency, run.RebalancePolicy, run.WindowStart, run.WindowEnd,
 		run.ConfigJSON, run.InputSnapshotJSON, run.CandidateCount, run.EvaluatedCount,
-		run.ResultJSON, run.ErrorCode, run.ErrorMessage,
-		run.CreatedAt, run.CompletedAt)
+		run.ResultJSON, run.CreatedAt, run.CompletedAt)
 	return wrapSQL("insert optimization run", err)
 }
 
@@ -1442,11 +1465,11 @@ func (r *ResearchRepo) GetOptimizationRun(
 	return scanOptimizationRun(row)
 }
 
-func (r *ResearchRepo) GetOptimizationRunByJobID(
-	ctx context.Context, jobID string,
+func (r *ResearchRepo) GetOptimizationRunByTaskID(
+	ctx context.Context, taskID string,
 ) (ResearchOptimizationRun, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs WHERE job_id=?`, jobID)
+		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs WHERE task_id=?`, taskID)
 	return scanOptimizationRun(row)
 }
 
@@ -1457,9 +1480,11 @@ func (r *ResearchRepo) FindActiveOptimizationByInputHash(
 ) (ResearchOptimizationRun, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs
-		 WHERE collection_id=? AND input_hash=? AND status IN (?,?)
+		 WHERE collection_id=? AND input_hash=? AND EXISTS (
+		   SELECT 1 FROM worker_tasks t WHERE t.id=research_optimization_runs.task_id AND t.status IN (?,?,?)
+		 )
 		 ORDER BY created_at DESC LIMIT 1`,
-		collectionID, inputHash, ResearchRunStatusQueued, ResearchRunStatusRunning)
+		collectionID, inputHash, WorkerTaskStatusPending, WorkerTaskStatusRunning, WorkerTaskStatusPreComplete)
 	return scanOptimizationRun(row)
 }
 
@@ -1470,47 +1495,47 @@ func (r *ResearchRepo) FindSucceededOptimizationByInputHash(
 ) (ResearchOptimizationRun, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+optimizationRunColumns+` FROM research_optimization_runs
-		 WHERE collection_id=? AND input_hash=? AND status=?
+		 WHERE collection_id=? AND input_hash=? AND EXISTS (
+		   SELECT 1 FROM worker_tasks t WHERE t.id=research_optimization_runs.task_id AND t.status=?
+		 )
 		 ORDER BY created_at DESC LIMIT 1`,
 		collectionID, inputHash, ResearchRunStatusSucceeded)
 	return scanOptimizationRun(row)
 }
 
-func (r *ResearchRepo) MarkOptimizationRunning(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE research_optimization_runs SET status=? WHERE id=? AND status=?`,
-		ResearchRunStatusRunning, id, ResearchRunStatusQueued)
-	return wrapSQL("mark optimization run running", err)
+func (r *ResearchRepo) MarkOptimizationRunning(_ context.Context, _ string) error {
+	return nil
 }
 
 func (r *ResearchRepo) UpdateOptimizationProgress(
-	ctx context.Context, id string, evaluated int,
+	_ context.Context, _ string, _ int,
 ) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE research_optimization_runs SET evaluated_count=? WHERE id=?`,
-		evaluated, id)
-	return wrapSQL("update optimization progress", err)
+	return nil
 }
 
 func (r *ResearchRepo) CompleteOptimizationRun(
 	ctx context.Context, id, resultJSON string, evaluated int, completedAt int64,
 ) error {
-	_, err := r.db.ExecContext(ctx, `
+	return r.CompleteOptimizationRunTx(ctx, nil, id, resultJSON, evaluated, completedAt)
+}
+
+func (r *ResearchRepo) CompleteOptimizationRunTx(
+	ctx context.Context, tx *sql.Tx, id, resultJSON string, evaluated int, completedAt int64,
+) error {
+	_, err := r.exec(tx).ExecContext(ctx, `
 		UPDATE research_optimization_runs
-		SET status=?, result_json=?, evaluated_count=?, completed_at=?
+		SET result_json=?, evaluated_count=?, completed_at=?
 		WHERE id=?`,
-		ResearchRunStatusSucceeded, resultJSON, evaluated, completedAt, id)
+		resultJSON, evaluated, completedAt, id)
 	return wrapSQL("complete optimization run", err)
 }
 
 func (r *ResearchRepo) FailOptimizationRun(
-	ctx context.Context, id, status, errorCode, errorMessage string, completedAt int64,
+	ctx context.Context, id, _, _, _ string, completedAt int64,
 ) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE research_optimization_runs
-		SET status=?, error_code=?, error_message=?, completed_at=?
-		WHERE id=?`,
-		status, errorCode, errorMessage, completedAt, id)
+		SET completed_at=? WHERE id=?`, completedAt, id)
 	return wrapSQL("fail optimization run", err)
 }
 

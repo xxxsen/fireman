@@ -28,7 +28,7 @@ var (
 type Config struct {
 	Addr string `json:"addr"`
 	// InternalAddr serves the sidecar-facing internal API (resource upload,
-	// task post-process). It must never be published outside the docker
+	// task finalization). It must never be published outside the docker
 	// network.
 	InternalAddr                    string `json:"internal_addr"`
 	DBPath                          string `json:"db_path"`

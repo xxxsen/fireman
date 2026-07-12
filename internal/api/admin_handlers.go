@@ -15,8 +15,7 @@ func (s Services) registerAdminRoutes(rg *gin.RouterGroup) {
 	admin.GET("/overview", s.adminOverview)
 	admin.GET("/worker-tasks", s.adminListWorkerTasks)
 	admin.GET("/worker-tasks/:task_id", s.adminWorkerTaskDetail)
-	admin.GET("/jobs", s.adminListJobs)
-	admin.GET("/post-process-records", s.adminListPostProcessRecords)
+	admin.GET("/finalize-records", s.adminListFinalizeRecords)
 	admin.GET("/data-versions", s.adminListDataVersions)
 	admin.GET("/auto-updates", s.adminListAutoUpdates)
 	admin.GET("/auto-updates/directories", s.adminListAutoUpdateDirectories)
@@ -89,10 +88,10 @@ func (s Services) adminOverview(c *gin.Context) {
 
 func (s Services) adminListWorkerTasks(c *gin.Context) {
 	out, err := s.Admin.ListWorkerTasks(c.Request.Context(), service.AdminWorkerTaskListParams{
-		Type:   c.Query("type"),
-		Status: c.Query("status"),
-		Query:  c.Query("q"),
-		Limit:  atoiDefault(c.Query("limit"), 20),
+		WorkerType: c.Query("worker_type"),
+		Type:       c.Query("type"), Status: c.Query("status"),
+		ScopeType: c.Query("scope_type"), ScopeID: c.Query("scope_id"),
+		Query: c.Query("q"), Limit: atoiDefault(c.Query("limit"), 20),
 		Offset: atoiDefault(c.Query("offset"), 0),
 	})
 	if err != nil {
@@ -111,23 +110,8 @@ func (s Services) adminWorkerTaskDetail(c *gin.Context) {
 	OK(c, out)
 }
 
-func (s Services) adminListJobs(c *gin.Context) {
-	out, err := s.Admin.ListJobs(c.Request.Context(), service.AdminJobListParams{
-		Type:   c.Query("type"),
-		Status: c.Query("status"),
-		PlanID: c.Query("plan_id"),
-		Limit:  atoiDefault(c.Query("limit"), 20),
-		Offset: atoiDefault(c.Query("offset"), 0),
-	})
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) adminListPostProcessRecords(c *gin.Context) {
-	out, err := s.Admin.ListPostProcessRecords(c.Request.Context(), service.AdminPostProcessRecordParams{
+func (s Services) adminListFinalizeRecords(c *gin.Context) {
+	out, err := s.Admin.ListFinalizeRecords(c.Request.Context(), service.AdminFinalizeRecordParams{
 		TaskID:   c.Query("task_id"),
 		Result:   c.Query("result"),
 		TaskType: c.Query("task_type"),

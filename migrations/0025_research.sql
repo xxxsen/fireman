@@ -60,7 +60,7 @@ CREATE TABLE research_saved_filters (
 CREATE TABLE research_backtest_runs (
   id                    TEXT PRIMARY KEY,
   collection_id         TEXT NOT NULL,
-  job_id                TEXT NOT NULL UNIQUE,
+  task_id               TEXT NOT NULL UNIQUE,
   input_hash            TEXT NOT NULL,
   input_snapshot_json   TEXT NOT NULL,
   source_hash           TEXT NOT NULL,
@@ -69,18 +69,16 @@ CREATE TABLE research_backtest_runs (
   rebalance_policy      TEXT NOT NULL,
   window_start          TEXT NOT NULL,
   window_end            TEXT NOT NULL,
-  status                TEXT NOT NULL,
   summary_json          TEXT NOT NULL DEFAULT '{}',
   data_quality_json     TEXT NOT NULL DEFAULT '{}',
   created_at            INTEGER NOT NULL,
   completed_at          INTEGER,
   FOREIGN KEY(collection_id) REFERENCES research_collections(id) ON DELETE CASCADE,
-  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT
 );
 
-CREATE UNIQUE INDEX uq_research_backtest_runs_success_input
-ON research_backtest_runs(collection_id, input_hash)
-WHERE status = 'succeeded';
+CREATE INDEX idx_research_backtest_runs_input
+ON research_backtest_runs(collection_id, input_hash);
 
 CREATE INDEX idx_research_backtest_runs_collection
 ON research_backtest_runs(collection_id, created_at DESC);
@@ -123,7 +121,7 @@ CREATE TABLE research_backtest_months (
 );
 
 -- 筛选器使用的预计算研究指标（收益/风险/风险收益），按历史维度存储。
--- 在历史 post-process 提交时与 detail projection 一起计算；筛选查询时对
+-- 在历史 finalization 提交时与 detail projection 一起计算；筛选查询时对
 -- 已有历史但缺指标的维度做惰性补算。
 CREATE TABLE research_asset_metrics (
   asset_key          TEXT NOT NULL,

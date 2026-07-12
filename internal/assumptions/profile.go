@@ -134,6 +134,7 @@ var (
 	errCorrelationDuplicate     = errors.New("duplicate correlation prior for the same factor pair")
 	errCorrelationUnknownFactor = errors.New("correlation prior references a factor with no asset/fx prior")
 	errCorrelationIncomplete    = errors.New("missing correlation prior for a required factor pair")
+	errCorrelationSelfMissing   = errors.New("missing same-type correlation prior")
 	errCoverageMissingAsset     = errors.New("missing required base-currency return prior")
 	errCoverageMissingFX        = errors.New("native-currency asset prior has no matching fx prior")
 )
@@ -447,7 +448,7 @@ func (p *Profile) ValidateSelfCorrelationCoverage() error {
 			continue
 		}
 		if _, ok := seen[key]; !ok {
-			return fmt.Errorf("missing same-type correlation prior: %s", key)
+			return fmt.Errorf("%w: %s", errCorrelationSelfMissing, key)
 		}
 	}
 	return nil

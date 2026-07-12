@@ -12,7 +12,7 @@ import (
 	"github.com/fireman/fireman/internal/repository"
 )
 
-// research_run_executor.go executes one research_backtest job: it reloads
+// research_run_executor.go executes one research_backtest task: it reloads
 // the frozen input, verifies the source hash, runs the pure engine and
 // persists all outputs in a single transaction (td/099 §5.5).
 
@@ -24,19 +24,29 @@ var ErrResearchSourceChanged = errors.New(
 
 const researchJobPhases = 4
 
-// ExecuteBacktestJob is the entry point called by the jobs worker for one
-// research_backtest job. Run status converges with the job outcome: engine
+// ExecuteBacktestTask is the entry point called by the task worker for one
+// research_backtest task. Run status converges with the task outcome: engine
 // or verification errors mark the run failed; a pending cancel marks it
 // canceled; worker shutdown leaves it running for the requeue reconciler.
-func (s *ResearchService) ExecuteBacktestJob(
+func (s *ResearchService) ExecuteBacktestTask(
 	ctx context.Context,
-	jobID string,
+	taskID string,
 	cancelCheck func() bool,
 	progress func(done, total int, phase string),
 ) error {
-	run, err := s.research.GetRunByJobID(ctx, jobID)
+	return s.ExecuteBacktestTaskOwned(ctx, taskID, cancelCheck, progress, nil)
+}
+
+func (s *ResearchService) ExecuteBacktestTaskOwned(
+	ctx context.Context,
+	taskID string,
+	cancelCheck func() bool,
+	progress func(done, total int, phase string),
+	complete func(*sql.Tx) error,
+) error {
+	run, err := s.research.GetRunByTaskID(ctx, taskID)
 	if err != nil {
-		return fmt.Errorf("load research run for job %s: %w", jobID, err)
+		return fmt.Errorf("load research run for task %s: %w", taskID, err)
 	}
 	if run.Status == repository.ResearchRunStatusSucceeded {
 		return nil
@@ -67,7 +77,7 @@ func (s *ResearchService) ExecuteBacktestJob(
 	if progress != nil {
 		progress(3, researchJobPhases, "persisting")
 	}
-	if err := s.persistBacktestResult(ctx, run.ID, result); err != nil {
+	if err := s.persistBacktestResult(ctx, run.ID, result, complete); err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
@@ -265,7 +275,7 @@ func assetSeriesPoints(points []repository.MarketAssetPoint) []ResearchSeriesPoi
 // persistBacktestResult writes points/years/months and the run summary in
 // one transaction so a run is never half-visible.
 func (s *ResearchService) persistBacktestResult(
-	ctx context.Context, runID string, result *BacktestResult,
+	ctx context.Context, runID string, result *BacktestResult, complete func(*sql.Tx) error,
 ) error {
 	summaryJSON, err := json.Marshal(result.Summary)
 	if err != nil {
@@ -329,6 +339,11 @@ func (s *ResearchService) persistBacktestResult(
 			ctx, tx, runID, string(summaryJSON), string(dqJSON), completedAt,
 		); err != nil {
 			return fmt.Errorf("complete research run: %w", err)
+		}
+		if complete != nil {
+			if err := complete(tx); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

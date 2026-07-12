@@ -17,7 +17,7 @@ import {
   SensitivityHeatmap,
   TornadoChart,
 } from "@/components/charts/SensitivityCharts";
-import { useJobStatus } from "@/hooks/useJobStatus";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 import {
   SimulationReadinessPanel,
   useSimulationReadiness,
@@ -33,7 +33,7 @@ import {
 } from "@/lib/api/analysis";
 import { getHoldings } from "@/lib/api/holdings";
 import {
-  cancelJob,
+  cancelTask,
   createSimulation,
   listPaths,
   listSimulations,
@@ -87,7 +87,11 @@ function CaliberToggle({
     return null;
   }
   return (
-    <div className="mt-4 flex items-center gap-2 text-sm" role="group" aria-label="金额口径">
+    <div
+      className="mt-4 flex items-center gap-2 text-sm"
+      role="group"
+      aria-label="金额口径"
+    >
       <span className="text-ink-muted">金额口径</span>
       {(["nominal", "real"] as const).map((opt) => (
         <button
@@ -104,7 +108,9 @@ function CaliberToggle({
           {caliberLabel(opt)}
         </button>
       ))}
-      <span className="text-xs text-ink-muted">起点购买力 = 名义金额 ÷ 路径累计通胀</span>
+      <span className="text-xs text-ink-muted">
+        起点购买力 = 名义金额 ÷ 路径累计通胀
+      </span>
     </div>
   );
 }
@@ -118,15 +124,19 @@ function RunAssumptionCard({
     ? (RETURN_MODE_LABELS[assumption.mode] ?? assumption.mode)
     : "旧版未冻结运行级模式";
   const factorLabel =
-    FACTOR_MODEL_LABELS[assumption.random_factor_model] ?? assumption.random_factor_model;
+    FACTOR_MODEL_LABELS[assumption.random_factor_model] ??
+    assumption.random_factor_model;
   const riskAssets = assumption.assets.filter((a) => !a.is_cash);
   return (
     <section className="mt-4 rounded-lg border border-line bg-surface-muted/40 p-3 text-sm">
       <h3 className="font-medium text-ink">本次模拟的收益假设</h3>
       <p className="mt-1 text-xs text-ink-muted">
         引擎 {assumption.engine_version} · {modeLabel}
-        {assumption.profile_id ? ` · ${assumption.profile_id}@${assumption.profile_version}` : ""}
-        {assumption.scenario ? ` · 假设情景 ${assumption.scenario}` : ""} · {factorLabel}
+        {assumption.profile_id
+          ? ` · ${assumption.profile_id}@${assumption.profile_version}`
+          : ""}
+        {assumption.scenario ? ` · 假设情景 ${assumption.scenario}` : ""} ·{" "}
+        {factorLabel}
       </p>
       {assumption.correlation_prior_only && (
         <p className="mt-1 text-xs text-warning">
@@ -157,8 +167,12 @@ function RunAssumptionCard({
                     {a.instrument_name || a.holding_id}
                     {a.instrument_code ? `（${a.instrument_code}）` : ""}
                   </td>
-                  <td className="py-1 pr-3">{a.region ? regionLabel(a.region) : "—"}</td>
-                  <td className="py-1 pr-3">{formatPercent(a.historical_annual_geometric_return)}</td>
+                  <td className="py-1 pr-3">
+                    {a.region ? regionLabel(a.region) : "—"}
+                  </td>
+                  <td className="py-1 pr-3">
+                    {formatPercent(a.historical_annual_geometric_return)}
+                  </td>
                   <td className="py-1 pr-3 font-medium">
                     {formatPercent(a.forward_annual_geometric_return)}
                   </td>
@@ -166,14 +180,26 @@ function RunAssumptionCard({
                     {a.has_fx ? formatPercent(a.fx_forward_return) : "—"}
                   </td>
                   <td className="py-1 pr-3 text-ink-muted">
-                    {a.fee_treatment === "embedded" ? "持续费用已内含" : "无持续费用处理"} / {a.fx_treatment === "embedded_in_asset_nav" ? "汇率已含于净值" : a.fx_treatment === "separate_factor" ? "独立汇率因子" : "无汇率因子"}
+                    {a.fee_treatment === "embedded"
+                      ? "持续费用已内含"
+                      : "无持续费用处理"}{" "}
+                    /{" "}
+                    {a.fx_treatment === "embedded_in_asset_nav"
+                      ? "汇率已含于净值"
+                      : a.fx_treatment === "separate_factor"
+                        ? "独立汇率因子"
+                        : "无汇率因子"}
                   </td>
                   <td className="py-1 pr-3 font-medium">
                     {formatPercent(a.base_currency_forward_return)}
                   </td>
-                  <td className="py-1 pr-3">{formatPercent(a.historical_weight)}</td>
+                  <td className="py-1 pr-3">
+                    {formatPercent(a.historical_weight)}
+                  </td>
                   <td className="py-1 pr-3">{a.sample_years || "—"}</td>
-                  <td className="py-1 pr-3">{formatPercent(a.annual_volatility_used)}</td>
+                  <td className="py-1 pr-3">
+                    {formatPercent(a.annual_volatility_used)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -181,7 +207,8 @@ function RunAssumptionCard({
         </div>
       )}
       <p className="mt-2 text-xs text-ink-muted">
-        历史收益不代表未来；前瞻年化为历史与长期先验在对数空间的收缩结果。基金净值已反映管理费、托管费等持续费用，系统不会按 expense ratio 重复扣除。
+        历史收益不代表未来；前瞻年化为历史与长期先验在对数空间的收缩结果。基金净值已反映管理费、托管费等持续费用，系统不会按
+        expense ratio 重复扣除。
       </p>
     </section>
   );
@@ -190,25 +217,27 @@ function RunAssumptionCard({
 function simulationOptionLabel(run: SimulationRun): string {
   const date = formatDateTimeFromMs(run.created_at);
   const success = run.summary_json?.success_probability;
-  const status = run.job_status ?? (typeof success === "number" ? "succeeded" : "unknown");
+  const status =
+    run.task_status ?? (typeof success === "number" ? "complete" : "unknown");
   const statusLabels: Record<string, string> = {
-    queued: "排队中",
+    pending: "排队中",
     running: "运行中",
     failed: "失败",
     canceled: "已取消",
     unknown: "状态未知",
   };
-  const tail = status === "succeeded" && typeof success === "number"
-    ? `成功率 ${formatPercent(success)}`
-    : (statusLabels[status] ?? status);
+  const tail =
+    status === "complete" && typeof success === "number"
+      ? `成功率 ${formatPercent(success)}`
+      : (statusLabels[status] ?? status);
   return `${date} · ${run.runs} 次 · ${tail}`;
 }
 
 function AnalysisJobPanel({
   title,
   termKey,
-  activeJobId,
-  jobState,
+  activeTaskId,
+  taskState,
   panelError,
   onRetry,
   onRun,
@@ -222,8 +251,8 @@ function AnalysisJobPanel({
 }: {
   title: string;
   termKey: "stress_test" | "sensitivity_test";
-  activeJobId: string | null;
-  jobState: ReturnType<typeof useJobStatus>;
+  activeTaskId: string | null;
+  taskState: ReturnType<typeof useTaskStatus>;
   panelError?: string | null;
   onRetry?: () => void;
   onRun: () => void;
@@ -239,12 +268,17 @@ function AnalysisJobPanel({
   listError?: string | null;
   onReloadList?: () => void;
 }) {
-  const jobBusy = !!activeJobId;
+  const jobBusy = !!activeTaskId;
   const report = latest?.result_json;
-  const scenarios = (report?.scenarios as Array<Record<string, unknown>> | undefined) ?? [];
-  const tornado = (report?.tornado as Array<Record<string, unknown>> | undefined) ?? [];
-  const heatmap = (report?.heatmap as Array<Array<Record<string, unknown>>> | undefined) ?? [];
-  const curves = (report?.curves as Array<Record<string, unknown>> | undefined) ?? [];
+  const scenarios =
+    (report?.scenarios as Array<Record<string, unknown>> | undefined) ?? [];
+  const tornado =
+    (report?.tornado as Array<Record<string, unknown>> | undefined) ?? [];
+  const heatmap =
+    (report?.heatmap as Array<Array<Record<string, unknown>>> | undefined) ??
+    [];
+  const curves =
+    (report?.curves as Array<Record<string, unknown>> | undefined) ?? [];
 
   const worstId = report?.worst_scenario_id as string | undefined;
 
@@ -261,13 +295,18 @@ function AnalysisJobPanel({
         {runDisabled && runDisabledHint && (
           <span className="text-sm text-ink-muted">{runDisabledHint}</span>
         )}
-        {activeJobId && (
+        {activeTaskId && (
           <>
             <span className="text-sm text-ink-muted">
-              {jobState.job?.status ?? "连接中"}… {Math.round(jobState.progress * 100)}%
+              {taskState.task?.status ?? "连接中"}…{" "}
+              {Math.round(taskState.progress * 100)}%
             </span>
             {onCancel && (
-              <Button variant="ghost" className="px-2 py-1 text-danger" onClick={onCancel}>
+              <Button
+                variant="ghost"
+                className="px-2 py-1 text-danger"
+                onClick={onCancel}
+              >
                 取消
               </Button>
             )}
@@ -279,7 +318,12 @@ function AnalysisJobPanel({
           <div className="flex flex-wrap items-center gap-3">
             <span>{panelError}</span>
             {onRetry && (
-              <Button variant="ghost" className="px-2 py-1" disabled={jobBusy} onClick={onRetry}>
+              <Button
+                variant="ghost"
+                className="px-2 py-1"
+                disabled={jobBusy}
+                onClick={onRetry}
+              >
                 重试
               </Button>
             )}
@@ -289,9 +333,15 @@ function AnalysisJobPanel({
       {listError && (
         <Alert variant="danger" className="mt-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span>无法加载{title}结果：{listError}</span>
+            <span>
+              无法加载{title}结果：{listError}
+            </span>
             {onReloadList && (
-              <Button variant="ghost" className="px-2 py-1" onClick={onReloadList}>
+              <Button
+                variant="ghost"
+                className="px-2 py-1"
+                onClick={onReloadList}
+              >
                 重新加载
               </Button>
             )}
@@ -299,7 +349,7 @@ function AnalysisJobPanel({
         </Alert>
       )}
       {latest?.result_stale && <StaleBanner />}
-      {latest?.status === "succeeded" && report && (
+      {latest?.status === "complete" && report && (
         <div className="mt-4 space-y-3 text-sm">
           {typeof report.baseline_success_probability === "number" && (
             <p>
@@ -335,16 +385,26 @@ function AnalysisJobPanel({
                       >
                         <td className="py-1 pr-3 font-medium">
                           {String(s.scenario_name ?? s.scenario_id)}
-                          {isWorst && <span className="ml-1 text-danger">（最差）</span>}
+                          {isWorst && (
+                            <span className="ml-1 text-danger">（最差）</span>
+                          )}
                         </td>
-                        <td className="py-1 pr-3">{formatPercent((s.success_probability as number) ?? 0)}</td>
-                        <td className="py-1 pr-3">{formatPercent((s.baseline_delta as number) ?? 0)}</td>
+                        <td className="py-1 pr-3">
+                          {formatPercent(
+                            (s.success_probability as number) ?? 0,
+                          )}
+                        </td>
+                        <td className="py-1 pr-3">
+                          {formatPercent((s.baseline_delta as number) ?? 0)}
+                        </td>
                         <td className="py-1 pr-3">
                           {formatMoney((s.terminal_p25_minor as number) ?? 0)} /{" "}
                           {formatMoney((s.terminal_p50_minor as number) ?? 0)} /{" "}
                           {formatMoney((s.terminal_p95_minor as number) ?? 0)}
                         </td>
-                        <td className="py-1 pr-3">{formatPercent((s.max_drawdown_p95 as number) ?? 0)}</td>
+                        <td className="py-1 pr-3">
+                          {formatPercent((s.max_drawdown_p95 as number) ?? 0)}
+                        </td>
                         <td className="py-1 pr-3">
                           {s.failure_age_p50 != null
                             ? formatFailureAge(s.failure_age_p50)
@@ -359,8 +419,12 @@ function AnalysisJobPanel({
                               ? `${String(s.recovery_month_p50)} 月`
                               : "—"}
                         </td>
-                        <td className="py-1 pr-3 max-w-xs">{String(s.description ?? "")}</td>
-                        <td className="py-1 pr-3 max-w-xs text-warning">{String(s.risk_hint ?? "")}</td>
+                        <td className="py-1 pr-3 max-w-xs">
+                          {String(s.description ?? "")}
+                        </td>
+                        <td className="py-1 pr-3 max-w-xs text-warning">
+                          {String(s.risk_hint ?? "")}
+                        </td>
                       </tr>
                     );
                   })}
@@ -381,7 +445,9 @@ function AnalysisJobPanel({
             <ParameterCurvesChart
               curves={curves.map((c) => ({
                 parameter_name: String(c.parameter_name),
-                points: ((c.points as Array<Record<string, unknown>>) ?? []).map((p) => ({
+                points: (
+                  (c.points as Array<Record<string, unknown>>) ?? []
+                ).map((p) => ({
                   label: String(p.label ?? ""),
                   success_probability: (p.success_probability as number) ?? 0,
                 })),
@@ -394,7 +460,8 @@ function AnalysisJobPanel({
                 row.map((cell) => ({
                   spending_label: String(cell.spending_label ?? ""),
                   return_label: String(cell.return_label ?? ""),
-                  success_probability: (cell.success_probability as number) ?? 0,
+                  success_probability:
+                    (cell.success_probability as number) ?? 0,
                 })),
               )}
             />
@@ -402,13 +469,17 @@ function AnalysisJobPanel({
           {typeof report.monte_carlo_std_error === "number" && (
             <p className="text-xs text-ink-muted">
               MC 标准误 ±{formatPercent(report.monte_carlo_std_error as number)}
-              {report.std_error_hint ? ` · ${String(report.std_error_hint)}` : ""}
+              {report.std_error_hint
+                ? ` · ${String(report.std_error_hint)}`
+                : ""}
             </p>
           )}
         </div>
       )}
-      {!latest && !activeJobId && !listError && (
-        <p className="mt-3 text-sm text-ink-muted">尚无结果，点击上方按钮运行。</p>
+      {!latest && !activeTaskId && !listError && (
+        <p className="mt-3 text-sm text-ink-muted">
+          尚无结果，点击上方按钮运行。
+        </p>
       )}
     </section>
   );
@@ -420,9 +491,13 @@ export function AnalysisContent() {
   const qc = useQueryClient();
   // Each job kind tracks its own busy state; running Monte Carlo no longer
   // disables the stress/sensitivity buttons (and vice versa).
-  const [activeJobs, setActiveJobs] = useState<Partial<Record<JobKind, string>>>({});
+  const [activeTasks, setActiveTasks] = useState<
+    Partial<Record<JobKind, string>>
+  >({});
   const [runsDraft, setRunsDraft] = useState<string | null>(null);
-  const [jobErrors, setJobErrors] = useState<Partial<Record<JobKind, string>>>({});
+  const [taskErrors, setTaskErrors] = useState<
+    Partial<Record<JobKind, string>>
+  >({});
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [caliber, setCaliber] = useState<"nominal" | "real">("nominal");
 
@@ -436,7 +511,8 @@ export function AnalysisContent() {
   });
 
   const serverRuns = paramsQ.data?.parameters.simulation_runs;
-  const runsText = runsDraft ?? String(serverRuns && serverRuns >= 1000 ? serverRuns : 10000);
+  const runsText =
+    runsDraft ?? String(serverRuns && serverRuns >= 1000 ? serverRuns : 10000);
   const runs = /^\d+$/.test(runsText) ? Number(runsText) : 0;
   const runsValid = Number.isInteger(runs) && runs >= 1000 && runs <= 100000;
 
@@ -491,106 +567,111 @@ export function AnalysisContent() {
   };
 
   const clearJobError = (kind: JobKind) => {
-    setJobErrors((prev) => {
+    setTaskErrors((prev) => {
       const next = { ...prev };
       delete next[kind];
       return next;
     });
   };
 
-  // Jobs that already reached a terminal state in this session. The rebuild
+  // Tasks that already reached a terminal state in this session. The rebuild
   // effect below must skip them, otherwise a failed run in the list would be
   // re-adopted after every refetch and loop forever.
-  const settledJobsRef = useRef<Set<string>>(new Set());
+  const settledTasksRef = useRef<Set<string>>(new Set());
 
   const finishJob = (kind: JobKind, message?: string) => {
-    setActiveJobs((prev) => {
-      const jobId = prev[kind];
-      if (jobId) {
-        settledJobsRef.current.add(jobId);
+    setActiveTasks((prev) => {
+      const taskId = prev[kind];
+      if (taskId) {
+        settledTasksRef.current.add(taskId);
       }
       const next = { ...prev };
       delete next[kind];
       return next;
     });
     if (message) {
-      setJobErrors((prev) => ({ ...prev, [kind]: message }));
+      setTaskErrors((prev) => ({ ...prev, [kind]: message }));
     }
     invalidateAll();
   };
 
-  // Rebuild activeJobs from persisted records so that a page refresh does not
-  // lose the progress bar and cancel button of jobs still running on the
-  // backend. Jobs the user just started take precedence: a persisted job is
+  // Rebuild activeTasks from persisted records so that a page refresh does not
+  // lose the progress bar and cancel button of tasks still running on the
+  // backend. Tasks the user just started take precedence: a persisted job is
   // only adopted when no job of that kind is currently tracked.
   const simsData = simsQ.data;
   const stressData = stressQ.data;
   const sensData = sensQ.data;
   useEffect(() => {
-    setActiveJobs((prev) => {
+    setActiveTasks((prev) => {
       const next = { ...prev };
       let changed = false;
-      const adopt = (kind: JobKind, jobId: string | undefined) => {
-        if (!jobId || next[kind] || settledJobsRef.current.has(jobId)) return;
-        next[kind] = jobId;
+      const adopt = (kind: JobKind, taskId: string | undefined) => {
+        if (!taskId || next[kind] || settledTasksRef.current.has(taskId))
+          return;
+        next[kind] = taskId;
         changed = true;
       };
-      // Only live persisted jobs are adopted after refresh. Failed/canceled
+      // Only live persisted tasks are adopted after refresh. Failed/canceled
       // runs are terminal records and render their stored error directly.
       const newestSim = simsData?.simulations?.[0];
       adopt(
         "sim",
-        newestSim?.job_id &&
-		  (newestSim.job_status === "queued" || newestSim.job_status === "running")
-          ? newestSim.job_id
+        newestSim?.task_id &&
+          (newestSim.task_status === "pending" ||
+            newestSim.task_status === "running")
+          ? newestSim.task_id
           : undefined,
       );
       adopt(
         "stress",
         (stressData?.stress_tests ?? []).find(
-          (t) => t.job_id && (t.status === "queued" || t.status === "running"),
-        )?.job_id,
+          (t) =>
+            t.task_id && (t.status === "pending" || t.status === "running"),
+        )?.task_id,
       );
       adopt(
         "sensitivity",
         (sensData?.sensitivity_tests ?? []).find(
-          (t) => t.job_id && (t.status === "queued" || t.status === "running"),
-        )?.job_id,
+          (t) =>
+            t.task_id && (t.status === "pending" || t.status === "running"),
+        )?.task_id,
       );
       return changed ? next : prev;
     });
   }, [simsData, stressData, sensData]);
 
-  const simJobState = useJobStatus(activeJobs.sim ?? null, {
+  const simTaskState = useTaskStatus(activeTasks.sim ?? null, {
     onComplete: () => {
       clearJobError("sim");
       finishJob("sim");
     },
-    onFailed: (msg) => finishJob("sim", msg),
+    onFailed: (task) => finishJob("sim", task.error_message || "任务失败"),
     onCanceled: () => finishJob("sim"),
   });
 
-  const stressJobState = useJobStatus(activeJobs.stress ?? null, {
+  const stressTaskState = useTaskStatus(activeTasks.stress ?? null, {
     onComplete: async () => {
       clearJobError("stress");
-      if (activeJobs.stress) {
-        await getStressTest(activeJobs.stress).catch(() => null);
+      if (activeTasks.stress) {
+        await getStressTest(activeTasks.stress).catch(() => null);
       }
       finishJob("stress");
     },
-    onFailed: (msg) => finishJob("stress", msg),
+    onFailed: (task) => finishJob("stress", task.error_message || "任务失败"),
     onCanceled: () => finishJob("stress"),
   });
 
-  const sensJobState = useJobStatus(activeJobs.sensitivity ?? null, {
+  const sensTaskState = useTaskStatus(activeTasks.sensitivity ?? null, {
     onComplete: async () => {
       clearJobError("sensitivity");
-      if (activeJobs.sensitivity) {
-        await getSensitivityTest(activeJobs.sensitivity).catch(() => null);
+      if (activeTasks.sensitivity) {
+        await getSensitivityTest(activeTasks.sensitivity).catch(() => null);
       }
       finishJob("sensitivity");
     },
-    onFailed: (msg) => finishJob("sensitivity", msg),
+    onFailed: (task) =>
+      finishJob("sensitivity", task.error_message || "任务失败"),
     onCanceled: () => finishJob("sensitivity"),
   });
 
@@ -598,14 +679,14 @@ export function AnalysisContent() {
     mutationFn: () => createSimulation(planId, { runs }),
     onSuccess: (res) => {
       clearJobError("sim");
-      setActiveJobs((prev) => ({ ...prev, sim: res.job_id }));
+      setActiveTasks((prev) => ({ ...prev, sim: res.task_id }));
       // Surface the new run immediately as a pending entry and select it, so the
       // page tracks this run from the start. The list is refetched on terminal
       // (handleJobTerminal -> invalidateAll), replacing it with the stored run.
       if (res.run_id) {
         const pendingRun: SimulationRun = {
           id: res.run_id,
-          job_id: res.job_id,
+          task_id: res.task_id,
           plan_id: planId,
           input_hash: "",
           current_config_hash: "",
@@ -619,7 +700,7 @@ export function AnalysisContent() {
           failure_count: 0,
           summary_json: {},
           created_at: Date.now(),
-		  job_status: "queued",
+          task_status: "pending",
         };
         qc.setQueryData<{ simulations: SimulationRun[] }>(
           ["simulations", planId],
@@ -635,7 +716,7 @@ export function AnalysisContent() {
       }
     },
     onError: (e) =>
-      setJobErrors((prev) => ({
+      setTaskErrors((prev) => ({
         ...prev,
         sim: e instanceof Error ? e.message : "启动失败",
       })),
@@ -644,14 +725,17 @@ export function AnalysisContent() {
   const stressMut = useMutation({
     mutationFn: () => {
       if (!selectedRun) throw new Error("请先运行 Monte Carlo 模拟");
-      return createStressTest(planId, { runs, simulation_run_id: selectedRun.id });
+      return createStressTest(planId, {
+        runs,
+        simulation_run_id: selectedRun.id,
+      });
     },
     onSuccess: (res) => {
       clearJobError("stress");
-      setActiveJobs((prev) => ({ ...prev, stress: res.job_id }));
+      setActiveTasks((prev) => ({ ...prev, stress: res.task_id }));
     },
     onError: (e) =>
-      setJobErrors((prev) => ({
+      setTaskErrors((prev) => ({
         ...prev,
         stress: e instanceof Error ? e.message : "启动失败",
       })),
@@ -660,14 +744,17 @@ export function AnalysisContent() {
   const sensMut = useMutation({
     mutationFn: () => {
       if (!selectedRun) throw new Error("请先运行 Monte Carlo 模拟");
-      return createSensitivityTest(planId, { runs, simulation_run_id: selectedRun.id });
+      return createSensitivityTest(planId, {
+        runs,
+        simulation_run_id: selectedRun.id,
+      });
     },
     onSuccess: (res) => {
       clearJobError("sensitivity");
-      setActiveJobs((prev) => ({ ...prev, sensitivity: res.job_id }));
+      setActiveTasks((prev) => ({ ...prev, sensitivity: res.task_id }));
     },
     onError: (e) =>
-      setJobErrors((prev) => ({
+      setTaskErrors((prev) => ({
         ...prev,
         sensitivity: e instanceof Error ? e.message : "启动失败",
       })),
@@ -694,9 +781,9 @@ export function AnalysisContent() {
       ? latest?.summary_json?.real_monthly_wealth_quantiles
       : latest?.summary_json?.monthly_wealth_quantiles;
 
-  const simBusy = !!activeJobs.sim;
+  const simBusy = !!activeTasks.sim;
 
-  const simPanelError = jobErrors.sim ?? simJobState.error;
+  const simPanelError = taskErrors.sim ?? simTaskState.error;
 
   const snapshotWarningLabels = (() => {
     const labels: string[] = [];
@@ -713,7 +800,9 @@ export function AnalysisContent() {
         h.snapshot_history_depth === "one_year" &&
         (h.snapshot_warnings ?? []).length === 0
       ) {
-        labels.push(`${name}（${code}）· ${historyDepthLabel(h.snapshot_history_depth)}`);
+        labels.push(
+          `${name}（${code}）· ${historyDepthLabel(h.snapshot_history_depth)}`,
+        );
       }
     }
     return labels;
@@ -737,7 +826,12 @@ export function AnalysisContent() {
     );
   }
 
-  if (paramsQ.isLoading || holdingsQ.isLoading || !paramsQ.data || !holdingsQ.data) {
+  if (
+    paramsQ.isLoading ||
+    holdingsQ.isLoading ||
+    !paramsQ.data ||
+    !holdingsQ.data
+  ) {
     return <PageSkeleton label="加载分析数据…" />;
   }
 
@@ -747,7 +841,8 @@ export function AnalysisContent() {
         <h2 className="font-medium text-ink">Monte Carlo 模拟</h2>
         {snapshotWarningLabels.length > 0 && (
           <Alert variant="warning" className="mt-2">
-            以下持仓历史样本有限，模拟结果长期不确定性较高：{snapshotWarningLabels.join("；")}
+            以下持仓历史样本有限，模拟结果长期不确定性较高：
+            {snapshotWarningLabels.join("；")}
           </Alert>
         )}
         <SimulationReadinessPanel planId={planId} />
@@ -783,7 +878,9 @@ export function AnalysisContent() {
             />
           </div>
           <Button
-            disabled={startMut.isPending || simBusy || !readinessReady || !runsValid}
+            disabled={
+              startMut.isPending || simBusy || !readinessReady || !runsValid
+            }
             title={
               !runsValid
                 ? "模拟次数必须是 1000 至 100000 之间的整数"
@@ -799,15 +896,16 @@ export function AnalysisContent() {
           >
             运行模拟
           </Button>
-          {activeJobs.sim && (
+          {activeTasks.sim && (
             <>
               <span className="text-sm text-ink-muted">
-                {simJobState.job?.status ?? "连接中"}… {Math.round(simJobState.progress * 100)}%
+                {simTaskState.task?.status ?? "连接中"}…{" "}
+                {Math.round(simTaskState.progress * 100)}%
               </span>
               <Button
                 variant="ghost"
                 className="px-2 py-1 text-danger"
-                onClick={() => void cancelJob(activeJobs.sim!)}
+                onClick={() => void cancelTask(activeTasks.sim!)}
               >
                 取消
               </Button>
@@ -837,19 +935,30 @@ export function AnalysisContent() {
             </div>
           </Alert>
         )}
-		{!simPanelError && selectedRun?.job_status === "failed" && (
-		  <Alert variant="danger" className="mt-3">
-			模拟失败：{selectedRun.job_error_message || selectedRun.job_error_code || "未知错误"}
-		  </Alert>
-		)}
-		{selectedRun?.job_status === "canceled" && (
-		  <Alert variant="warning" className="mt-3">该次模拟已取消。</Alert>
-		)}
+        {!simPanelError && selectedRun?.task_status === "failed" && (
+          <Alert variant="danger" className="mt-3">
+            模拟失败：
+            {selectedRun.task_error_message ||
+              selectedRun.task_error_code ||
+              "未知错误"}
+          </Alert>
+        )}
+        {selectedRun?.task_status === "canceled" && (
+          <Alert variant="warning" className="mt-3">
+            该次模拟已取消。
+          </Alert>
+        )}
         {simsQ.isError && !simsQ.data && (
           <Alert variant="danger" className="mt-3">
             <div className="flex flex-wrap items-center gap-3">
-              <span>无法加载历史模拟结果：{queryErrorMessage(simsQ.error)}</span>
-              <Button variant="ghost" className="px-2 py-1" onClick={() => void simsQ.refetch()}>
+              <span>
+                无法加载历史模拟结果：{queryErrorMessage(simsQ.error)}
+              </span>
+              <Button
+                variant="ghost"
+                className="px-2 py-1"
+                onClick={() => void simsQ.refetch()}
+              >
                 重新加载
               </Button>
             </div>
@@ -871,9 +980,15 @@ export function AnalysisContent() {
             </p>
           )}
 
-          {latest.assumption && <RunAssumptionCard assumption={latest.assumption} />}
+          {latest.assumption && (
+            <RunAssumptionCard assumption={latest.assumption} />
+          )}
 
-          <CaliberToggle value={caliber} onChange={setCaliber} hasReal={hasReal} />
+          <CaliberToggle
+            value={caliber}
+            onChange={setCaliber}
+            hasReal={hasReal}
+          />
 
           {chartSeries && (
             <div className="mt-4">
@@ -883,7 +998,8 @@ export function AnalysisContent() {
               <WealthPathChart series={chartSeries} />
             </div>
           )}
-          {((latest.summary_json?.model_warnings as string[] | undefined) ?? []).length > 0 && (
+          {((latest.summary_json?.model_warnings as string[] | undefined) ?? [])
+            .length > 0 && (
             <Alert variant="warning" title="模型提示" className="mt-4">
               <ul className="list-disc pl-5">
                 {(latest.summary_json?.model_warnings as string[]).map((w) => (
@@ -919,16 +1035,20 @@ export function AnalysisContent() {
             </div>
           )}
 
-          <ScenarioComparisonCard planId={planId} runId={latest.id} inputHash={latest.input_hash} />
+          <ScenarioComparisonCard
+            planId={planId}
+            runId={latest.id}
+            inputHash={latest.input_hash}
+          />
         </section>
       )}
 
       <AnalysisJobPanel
         title="压力测试"
         termKey="stress_test"
-        activeJobId={activeJobs.stress ?? null}
-        jobState={stressJobState}
-        panelError={jobErrors.stress ?? stressJobState.error}
+        activeTaskId={activeTasks.stress ?? null}
+        taskState={stressTaskState}
+        panelError={taskErrors.stress ?? stressTaskState.error}
         onRetry={() => {
           clearJobError("stress");
           stressMut.mutate();
@@ -938,19 +1058,25 @@ export function AnalysisContent() {
         runDisabled={attachDisabled}
         runDisabledHint={attachHint}
         onCancel={
-          activeJobs.stress ? () => void cancelJob(activeJobs.stress!) : undefined
+          activeTasks.stress
+            ? () => void cancelTask(activeTasks.stress!)
+            : undefined
         }
         latest={latestStress}
-        listError={stressQ.isError && !stressQ.data ? queryErrorMessage(stressQ.error) : null}
+        listError={
+          stressQ.isError && !stressQ.data
+            ? queryErrorMessage(stressQ.error)
+            : null
+        }
         onReloadList={() => void stressQ.refetch()}
       />
 
       <AnalysisJobPanel
         title="敏感性测试"
         termKey="sensitivity_test"
-        activeJobId={activeJobs.sensitivity ?? null}
-        jobState={sensJobState}
-        panelError={jobErrors.sensitivity ?? sensJobState.error}
+        activeTaskId={activeTasks.sensitivity ?? null}
+        taskState={sensTaskState}
+        panelError={taskErrors.sensitivity ?? sensTaskState.error}
         onRetry={() => {
           clearJobError("sensitivity");
           sensMut.mutate();
@@ -960,12 +1086,14 @@ export function AnalysisContent() {
         runDisabled={attachDisabled}
         runDisabledHint={attachHint}
         onCancel={
-          activeJobs.sensitivity
-            ? () => void cancelJob(activeJobs.sensitivity!)
+          activeTasks.sensitivity
+            ? () => void cancelTask(activeTasks.sensitivity!)
             : undefined
         }
         latest={latestSens}
-        listError={sensQ.isError && !sensQ.data ? queryErrorMessage(sensQ.error) : null}
+        listError={
+          sensQ.isError && !sensQ.data ? queryErrorMessage(sensQ.error) : null
+        }
         onReloadList={() => void sensQ.refetch()}
       />
     </div>

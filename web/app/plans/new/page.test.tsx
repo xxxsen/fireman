@@ -189,7 +189,7 @@ describe("NewPlanWizardPage", () => {
     searchPool = defaultAssets;
     listMarketAssets.mockImplementation((params: ListParams) => filterSearchPool(params));
     createPlanWizard.mockResolvedValue({ id: "plan_new", config_version: 1 });
-    createSimulation.mockResolvedValue({ job_id: "job_1", run_id: "run_1", status: "queued" });
+    createSimulation.mockResolvedValue({ task_id: "job_1", run_id: "run_1", status: "pending" });
     window.sessionStorage.clear();
     window.history.replaceState({}, "", "/plans/new");
   });
@@ -388,7 +388,7 @@ describe("NewPlanWizardPage", () => {
     await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(1));
     expect(createSimulation).toHaveBeenCalledWith("plan_new", { runs: 10000 });
     expect(routerPush).toHaveBeenCalledWith(
-      "/plans/plan_new/overview?job_id=job_1",
+      "/plans/plan_new/overview?task_id=job_1",
     );
   });
 

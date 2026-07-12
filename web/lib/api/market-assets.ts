@@ -1,20 +1,11 @@
 import { apiGet, apiPost, apiPut } from "./client";
+import type { Task } from "@/types/api";
 
 /** Worker task status enum for market data sync tasks. */
 export type WorkerTaskStatus =
   "pending" | "running" | "pre_complete" | "complete" | "failed" | "canceled";
 
-export interface WorkerTask {
-  id: string;
-  type: string;
-  status: WorkerTaskStatus;
-  error_code?: string;
-  error_message?: string;
-  created_at: number;
-  started_at?: number | null;
-  finished_at?: number | null;
-  heartbeat_at?: number | null;
-}
+export type WorkerTask = Task;
 
 /** Active statuses keep polling; terminal statuses stop it. */
 export function isTaskActive(status: WorkerTaskStatus | undefined): boolean {
@@ -154,10 +145,6 @@ export function syncMarketAssets(
     | { sync_key: string; force?: boolean },
 ): Promise<DirectorySyncResult> {
   return apiPost("/api/v1/market-assets/sync", body);
-}
-
-export function getTask(id: string): Promise<WorkerTask> {
-  return apiGet(`/api/v1/tasks/${encodeURIComponent(id)}`);
 }
 
 export interface MarketAssetHistoryView {

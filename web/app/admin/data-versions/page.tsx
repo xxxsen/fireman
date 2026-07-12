@@ -20,7 +20,10 @@ import { SyncHealthPanel } from "@/components/admin/SyncHealthPanel";
 import { Alert } from "@/components/ui/Alert";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { getAdminOverview, listAdminDataVersions } from "@/lib/api/admin";
-import { ADMIN_PAGE_SIZE, useAdminListParams } from "@/hooks/useAdminListParams";
+import {
+  ADMIN_PAGE_SIZE,
+  useAdminListParams,
+} from "@/hooks/useAdminListParams";
 import { queryErrorMessage } from "@/lib/query-error";
 
 const FILTER_KEYS = ["prefix"] as const;
@@ -98,7 +101,8 @@ function DataVersionsBoard() {
 
         {stalePollError && (
           <Alert variant="warning" className="mb-3">
-            刷新失败，正在展示上次数据：{queryErrorMessage(query.error, "请求失败")}
+            刷新失败，正在展示上次数据：
+            {queryErrorMessage(query.error, "请求失败")}
           </Alert>
         )}
 

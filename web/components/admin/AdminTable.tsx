@@ -24,7 +24,11 @@ export interface AdminTableProps {
   error?: string | null;
   onRetry?: () => void;
   isEmpty?: boolean;
-  empty?: { title: string; description?: string; action?: { label: string; href: string } };
+  empty?: {
+    title: string;
+    description?: string;
+    action?: { label: string; href: string };
+  };
   className?: string;
 }
 
@@ -59,14 +63,20 @@ export function AdminTable({
   }
   return (
     <div
-      className={cn("overflow-x-auto rounded-lg border border-line bg-surface", className)}
+      className={cn(
+        "overflow-x-auto rounded-lg border border-line bg-surface",
+        className,
+      )}
       data-testid="admin-table"
     >
       <table className="w-full min-w-160 border-collapse text-sm">
         <thead className="sticky top-0 z-10 bg-surface/95 backdrop-blur">
           <tr className="border-b border-line text-left">
             {headers.map((h, i) => (
-              <th key={i} className="whitespace-nowrap px-3 py-2 text-xs font-medium text-ink-muted">
+              <th
+                key={i}
+                className="whitespace-nowrap px-3 py-2 text-xs font-medium text-ink-muted"
+              >
                 {h}
               </th>
             ))}
@@ -86,7 +96,12 @@ export interface AdminPaginationProps {
 }
 
 /** Shared pagination footer: 共 N 条 · 上一页 / 第 x / y 页 / 下一页. */
-export function AdminPagination({ total, limit, offset, onOffsetChange }: AdminPaginationProps) {
+export function AdminPagination({
+  total,
+  limit,
+  offset,
+  onOffsetChange,
+}: AdminPaginationProps) {
   if (total <= 0) return null;
   const pageCount = Math.max(1, Math.ceil(total / limit));
   const page = Math.min(pageCount, Math.floor(offset / limit) + 1);

@@ -57,7 +57,7 @@ export function RunCompareDialog({
   const candidates = useMemo(
     () =>
       (runsQuery.data?.runs ?? []).filter(
-        (r) => r.id !== baseRun.id && r.status === "succeeded",
+        (r) => r.id !== baseRun.id && r.status === "complete",
       ),
     [runsQuery.data, baseRun.id],
   );

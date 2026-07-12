@@ -32,7 +32,12 @@ export default function AdminOverviewPage() {
     );
   }
 
-  const { worker_tasks: tasks, jobs, callbacks, sync_health: health, storage } = overview.data;
+  const {
+    worker_tasks: tasks,
+    finalizations,
+    sync_health: health,
+    storage,
+  } = overview.data;
 
   const activeBreakdown = Object.entries(tasks.by_status)
     .filter(([, count]) => count > 0)
@@ -41,11 +46,11 @@ export default function AdminOverviewPage() {
 
   return (
     <div className="space-y-6" data-testid="admin-overview">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard
           label="活跃任务"
           value={tasks.active}
-          hint={activeBreakdown || "无进行中的市场数据任务"}
+          hint={activeBreakdown || "无进行中的任务"}
           tone={tasks.stale_running > 0 ? "warning" : "normal"}
           href="/admin/worker-tasks?status=active"
         />
@@ -57,41 +62,49 @@ export default function AdminOverviewPage() {
               ? `另有 ${tasks.stale_running} 个任务心跳滞留`
               : `24h 完成 ${tasks.completed_last_24h}`
           }
-          tone={tasks.failed_last_24h > 0 ? "danger" : tasks.stale_running > 0 ? "warning" : "normal"}
+          tone={
+            tasks.failed_last_24h > 0
+              ? "danger"
+              : tasks.stale_running > 0
+                ? "warning"
+                : "normal"
+          }
           href="/admin/worker-tasks?status=failed"
         />
         <StatCard
-          label="作业队列（排队 / 运行）"
-          value={`${jobs.queued} / ${jobs.running}`}
-          hint={`24h 失败 ${jobs.failed_last_24h} · 成功 ${jobs.succeeded_last_24h}`}
-          tone={jobs.failed_last_24h > 0 ? "danger" : "normal"}
-          href={jobs.failed_last_24h > 0 ? "/admin/jobs?status=failed" : "/admin/jobs"}
-        />
-        <StatCard
-          label="24h 回调"
-          value={callbacks.total_last_24h}
+          label="24h 终结"
+          value={finalizations.total_last_24h}
           hint={
-            callbacks.failed_last_24h > 0
-              ? `${callbacks.failed_last_24h} 次失败`
+            finalizations.failed_last_24h > 0
+              ? `${finalizations.failed_last_24h} 次失败`
               : "全部成功"
           }
-          tone={callbacks.failed_last_24h > 0 ? "danger" : "normal"}
-          href="/admin/callbacks"
+          tone={finalizations.failed_last_24h > 0 ? "danger" : "normal"}
+          href="/admin/finalizations"
         />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
         <SyncHealthPanel health={health} />
-        <div className="rounded-lg border border-line bg-surface p-4" data-testid="storage-panel">
+        <div
+          className="rounded-lg border border-line bg-surface p-4"
+          data-testid="storage-panel"
+        >
           <h2 className="text-sm font-medium text-ink">存储</h2>
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex items-center justify-between">
               <dt className="text-ink-muted">主库</dt>
-              <dd className="tabular-nums text-ink">{formatBytes(storage.main_db_bytes)}</dd>
+              <dd className="tabular-nums text-ink">
+                {formatBytes(storage.main_db_bytes)}
+              </dd>
             </div>
             <div className="flex items-center justify-between">
-              <dt className="text-ink-muted">资源库（{storage.resource_count} 条）</dt>
-              <dd className="tabular-nums text-ink">{formatBytes(storage.resource_db_bytes)}</dd>
+              <dt className="text-ink-muted">
+                资源库（{storage.resource_count} 条）
+              </dt>
+              <dd className="tabular-nums text-ink">
+                {formatBytes(storage.resource_db_bytes)}
+              </dd>
             </div>
           </dl>
           <p className="mt-3 border-t border-line pt-3 text-xs text-ink-muted">

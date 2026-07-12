@@ -11,6 +11,7 @@ import (
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/simulation"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 // CreateStressTestRequest starts a stress analysis job against a Monte Carlo run.
@@ -24,13 +25,13 @@ type CreateStressTestRequest struct {
 
 // CreateStressTestResponse returns the enqueued job.
 type CreateStressTestResponse struct {
-	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
 	Status string `json:"status"`
 }
 
 // StressTestView is the API view of a stress test job.
 type StressTestView struct {
-	JobID             string          `json:"job_id"`
+	TaskID            string          `json:"task_id"`
 	PlanID            string          `json:"plan_id"`
 	SimulationRunID   string          `json:"simulation_run_id"`
 	Status            string          `json:"status"`
@@ -41,26 +42,29 @@ type StressTestView struct {
 	CreatedAt         int64           `json:"created_at"`
 }
 
-// StressService orchestrates stress test jobs.
+// StressService orchestrates stress test tasks.
 type StressService struct {
-	sql      *sql.DB
-	plans    *repository.PlanRepo
-	jobs     *repository.JobRepo
-	analysis *repository.AnalysisRepo
-	sims     *SimulationService
-	hash     *ConfigHashService
+	sql         *sql.DB
+	plans       *repository.PlanRepo
+	tasks       *repository.WorkerTaskRepo
+	coordinator *taskcore.Coordinator
+	analysis    *repository.AnalysisRepo
+	sims        *SimulationService
+	hash        *ConfigHashService
 }
 
 func NewStressService(
 	sqlDB *sql.DB,
 	plans *repository.PlanRepo,
-	jobs *repository.JobRepo,
+	tasks *repository.WorkerTaskRepo,
+	coordinator *taskcore.Coordinator,
 	analysis *repository.AnalysisRepo,
 	sims *SimulationService,
 	hash *ConfigHashService,
 ) *StressService {
 	return &StressService{
-		sql: sqlDB, plans: plans, jobs: jobs, analysis: analysis, sims: sims, hash: hash,
+		sql: sqlDB, plans: plans, tasks: tasks, coordinator: coordinator,
+		analysis: analysis, sims: sims, hash: hash,
 	}
 }
 
@@ -72,19 +76,20 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 	inputHash := runCtx.InputHash
 
 	if req.IdempotencyKey != "" {
-		existing, found, err := findExistingIdempotentJob(
-			ctx, s.jobs, req.PlanID, repository.JobTypeStress, req.IdempotencyKey, inputHash,
+		existing, found, err := findExistingIdempotentTask(
+			ctx, s.tasks, "plan", req.PlanID, repository.WorkerTaskTypeStress,
+			req.IdempotencyKey, inputHash,
 			"find stress idempotency",
 		)
 		if err != nil {
 			return CreateStressTestResponse{}, err
 		}
 		if found {
-			return CreateStressTestResponse{JobID: existing.ID, Status: existing.Status}, nil
+			return CreateStressTestResponse{TaskID: existing.ID, Status: existing.Status}, nil
 		}
 	}
 
-	jobID := "job_" + uuid.New().String()
+	taskID := "task_" + uuid.New().String()
 	pending, err := marshalPendingSnapshot(runCtx.Snapshot)
 	if err != nil {
 		return CreateStressTestResponse{}, err
@@ -94,32 +99,40 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 		// Each Monte Carlo run keeps only the latest stress result; cancel any
 		// in-flight prior stress job before dropping its record.
 		if err := supersedePriorAnalysis(
-			ctx, tx, s.jobs, s.analysis, runCtx.RunID, repository.AnalysisTypeStress,
+			ctx, tx, s.coordinator, s.analysis, runCtx.RunID, repository.AnalysisTypeStress,
 		); err != nil {
 			return err
 		}
-		if err := s.jobs.Create(ctx, tx, repository.Job{
-			ID: jobID, PlanID: req.PlanID, Type: repository.JobTypeStress,
-			Status: repository.JobStatusQueued, InputHash: inputHash,
-			ProgressTotal: 8,
+		payload, marshalErr := json.Marshal(map[string]string{
+			"simulation_run_id": runCtx.RunID, "analysis_type": repository.AnalysisTypeStress,
+		})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if err := s.coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+			ID: taskID, WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeStress,
+			Status: repository.WorkerTaskStatusPending, ScopeType: "plan", ScopeID: req.PlanID,
+			DedupeKey: repository.WorkerTaskTypeStress + "|simulation_run:" + runCtx.RunID,
+			InputHash: inputHash, PayloadJSON: string(payload), ProgressTotal: 8,
 		}); err != nil {
-			return wrapRepo("create stress job", err)
+			return wrapRepo("create stress task", err)
 		}
 		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
-			JobID: jobID, PlanID: req.PlanID, Type: repository.AnalysisTypeStress,
+			TaskID: taskID, PlanID: req.PlanID, Type: repository.AnalysisTypeStress,
 			InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
 		}); err != nil {
 			return wrapRepo("create stress analysis pending", err)
 		}
 		if req.IdempotencyKey != "" {
-			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeStress, req.IdempotencyKey, jobID, inputHash)
+			return s.tasks.SaveIdempotency(ctx, tx, "plan", req.PlanID,
+				repository.WorkerTaskTypeStress, req.IdempotencyKey, taskID, inputHash)
 		}
 		return nil
 	})
 	if err != nil {
 		return CreateStressTestResponse{}, wrapRepo("create stress tx", err)
 	}
-	return CreateStressTestResponse{JobID: jobID, Status: repository.JobStatusQueued}, nil
+	return CreateStressTestResponse{TaskID: taskID, Status: repository.WorkerTaskStatusPending}, nil
 }
 
 func (s *StressService) ListByPlan(ctx context.Context, planID string) ([]StressTestView, error) {
@@ -164,8 +177,8 @@ func (s *StressService) ListByRun(ctx context.Context, planID, runID string) ([]
 	return out, nil
 }
 
-func (s *StressService) GetByJobID(ctx context.Context, jobID string) (StressTestView, error) {
-	rec, err := s.analysis.GetByJobID(ctx, jobID)
+func (s *StressService) GetByTaskID(ctx context.Context, taskID string) (StressTestView, error) {
+	rec, err := s.analysis.GetByTaskID(ctx, taskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrAnalysisNotFound) {
 			return StressTestView{}, newErr("stress_test_not_found", "stress test not found", nil)
@@ -180,12 +193,12 @@ func (s *StressService) GetByJobID(ctx context.Context, jobID string) (StressTes
 }
 
 func (s *StressService) toView(ctx context.Context, rec repository.AnalysisResult, currentHash string) StressTestView {
-	job, _ := s.jobs.GetByID(ctx, rec.JobID)
+	task, _ := s.tasks.GetByID(ctx, rec.TaskID)
 	stale := analysisResultStale(ctx, s.sims, rec.SimulationRunID, currentHash)
 	view := StressTestView{
-		JobID: rec.JobID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
+		TaskID: rec.TaskID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
 		CurrentConfigHash: currentHash, ResultStale: stale, CreatedAt: rec.CreatedAt,
-		Status: job.Status,
+		Status: task.Status,
 	}
 	if !isPendingResult(rec.ResultJSON) {
 		view.Result = json.RawMessage(rec.ResultJSON)

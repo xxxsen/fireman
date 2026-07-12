@@ -10,14 +10,15 @@ class TaskFailure(Exception):
     credentials); it flows to worker_tasks.error_message and to the frontend.
     """
 
-    def __init__(self, error_code: str, message: str) -> None:
+    def __init__(self, error_code: str, message: str, retryable: bool = False) -> None:
         super().__init__(f"{error_code}: {message}")
         self.error_code = error_code
         self.message = message
+        self.retryable = retryable
 
 
 class SourceUnavailable(TaskFailure):
     """The pinned data source failed or is not applicable to the asset."""
 
     def __init__(self, message: str) -> None:
-        super().__init__("source_unavailable", message)
+        super().__init__("source_unavailable", message, retryable=True)

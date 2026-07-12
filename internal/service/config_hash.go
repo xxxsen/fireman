@@ -2,10 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/repository"
+)
+
+var errAssumptionRepositoryNotConfigured = errors.New(
+	"resolve effective assumption identity: repository is not configured",
 )
 
 // ConfigHashService computes configuration hashes for change detection.
@@ -47,7 +52,7 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 	if params.ReturnAssumptionMode == repository.ModeBlendedPrior ||
 		params.ReturnAssumptionMode == repository.ModeCustom {
 		if s.assumptions == nil {
-			return "", fmt.Errorf("resolve effective assumption identity: repository is not configured")
+			return "", errAssumptionRepositoryNotConfigured
 		}
 		if err := s.assumptions.EnsureSystemDefault(ctx); err != nil {
 			return "", fmt.Errorf("ensure system assumption profile: %w", err)

@@ -1,5 +1,5 @@
 import type {
-  JobEvent,
+  TaskEvent,
   PathDetail,
   PathIndexRow,
   ReturnOverride,
@@ -11,7 +11,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 export function createSimulation(
   planId: string,
   body?: { runs?: number; seed?: string },
-): Promise<{ job_id: string; run_id: string; status: string }> {
+): Promise<{ task_id: string; run_id: string; status: string }> {
   return apiPost(
     `/api/v1/plans/${planId}/simulations`,
     body ?? {},
@@ -127,32 +127,32 @@ export function syncMissingAssetHistory(planId: string): Promise<SyncMissingHist
   return apiPost(`/api/v1/plans/${planId}/sync-missing-asset-history`, {});
 }
 
-export function getJob(jobId: string) {
-  return apiGet<import("@/types/api").Job>(`/api/v1/jobs/${jobId}`);
+export function getTask(taskId: string) {
+	return apiGet<import("@/types/api").Task>(`/api/v1/tasks/${taskId}`);
 }
 
-export function cancelJob(jobId: string) {
-  return apiPost(`/api/v1/jobs/${jobId}/cancel`);
+export function cancelTask(taskId: string) {
+	return apiPost(`/api/v1/tasks/${taskId}/cancel`);
 }
 
-export interface JobEventHandlers {
-  onEvent?: (data: JobEvent) => void;
-  onTerminal?: (data: JobEvent) => void;
+export interface TaskEventHandlers {
+	onEvent?: (data: TaskEvent) => void;
+	onTerminal?: (data: TaskEvent) => void;
   onError?: () => void;
 }
 
 /** Subscribe to job progress through generic SSE data frames. */
-export function subscribeJobEvents(jobId: string, handlers: JobEventHandlers): EventSource | null {
+export function subscribeTaskEvents(taskId: string, handlers: TaskEventHandlers): EventSource | null {
   if (typeof EventSource === "undefined") return null;
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
-  const es = new EventSource(`${API_BASE}/api/v1/jobs/${jobId}/events`);
+	const es = new EventSource(`${API_BASE}/api/v1/tasks/${taskId}/events`);
 
   es.onmessage = (e) => {
     try {
-      const data = JSON.parse(e.data) as JobEvent;
+		const data = JSON.parse(e.data) as TaskEvent;
       handlers.onEvent?.(data);
       if (
-        data.status === "succeeded" ||
+        data.status === "complete" ||
         data.status === "failed" ||
         data.status === "canceled"
       ) {

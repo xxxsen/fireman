@@ -4,7 +4,11 @@ import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { AdminWorkerTaskItem } from "@/lib/api/admin";
 import { workerTaskTypeLabel } from "@/lib/api/admin";
-import { formatDurationMs, formatRelativeTime, middleTruncate } from "@/lib/admin-format";
+import {
+  formatDurationMs,
+  formatRelativeTime,
+  middleTruncate,
+} from "@/lib/admin-format";
 import { formatDateTimeFromMs } from "@/lib/format";
 
 export interface WorkerTaskTableRowsProps {
@@ -16,7 +20,10 @@ export interface WorkerTaskTableRowsProps {
  * Body rows of the worker task listing. Rows are keyboard reachable: Tab
  * focuses a row, Enter/Space opens its detail drawer.
  */
-export function WorkerTaskTableRows({ items, onSelect }: WorkerTaskTableRowsProps) {
+export function WorkerTaskTableRows({
+  items,
+  onSelect,
+}: WorkerTaskTableRowsProps) {
   return (
     <>
       {items.map((task) => (
@@ -37,16 +44,73 @@ export function WorkerTaskTableRows({ items, onSelect }: WorkerTaskTableRowsProp
           <td className="px-3 py-2">
             <TaskStatusBadge status={task.status} />
           </td>
-          <td className="whitespace-nowrap px-3 py-2 text-ink">{workerTaskTypeLabel(task.type)}</td>
+          <td className="whitespace-nowrap px-3 py-2 text-ink">
+            {workerTaskTypeLabel(task.type)}
+          </td>
+          <td className="whitespace-nowrap px-3 py-2 text-xs text-ink-muted">
+            {task.worker_type === "go_worker" ? "Go" : "Sidecar"}
+          </td>
+          <td className="whitespace-nowrap px-3 py-2 text-xs text-ink-muted">
+            {task.scope_type && task.scope_id
+              ? `${task.scope_type} / ${middleTruncate(task.scope_id, 18)}`
+              : "—"}
+          </td>
           <td className="max-w-72 px-3 py-2">
             <Tooltip
-              content={<span className="break-all font-mono text-xs">{task.dedupe_key || task.id}</span>}
+              content={
+                <span className="break-all font-mono text-xs">
+                  {task.dedupe_key || task.id}
+                </span>
+              }
               className="max-w-full"
             >
               <span className="block truncate font-mono text-xs text-ink-muted">
                 {middleTruncate(task.dedupe_key || task.id, 44)}
               </span>
             </Tooltip>
+          </td>
+          <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink-muted">
+            {task.attempt_count}/{task.max_attempts}
+          </td>
+          <td className="max-w-56 px-3 py-2 text-xs text-ink-muted">
+            <span className="block truncate text-ink">{task.phase || "—"}</span>
+            <span className="block truncate font-mono">
+              {task.progress_total > 0
+                ? `${task.progress_current}/${task.progress_total}`
+                : "无进度总量"}
+              {task.claimed_by
+                ? ` · ${middleTruncate(task.claimed_by, 20)}`
+                : ""}
+            </span>
+            {task.heartbeat_at && (
+              <span
+                className="block"
+                title={
+                  task.lease_expires_at
+                    ? `lease ${formatDateTimeFromMs(task.lease_expires_at)}`
+                    : undefined
+                }
+              >
+                心跳 {formatRelativeTime(task.heartbeat_at)}
+              </span>
+            )}
+          </td>
+          <td className="max-w-48 px-3 py-2 text-xs">
+            {task.error_code || task.error_message ? (
+              <Tooltip
+                content={
+                  <span className="break-all">
+                    {task.error_message || task.error_code}
+                  </span>
+                }
+              >
+                <span className="block truncate text-danger">
+                  {task.error_code || task.error_message}
+                </span>
+              </Tooltip>
+            ) : (
+              <span className="text-ink-muted">—</span>
+            )}
           </td>
           <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink-muted">
             {formatDurationMs(task.duration_ms)}
@@ -62,4 +126,15 @@ export function WorkerTaskTableRows({ items, onSelect }: WorkerTaskTableRowsProp
   );
 }
 
-export const WORKER_TASK_TABLE_HEADERS = ["状态", "类型", "dedupe_key / id", "耗时", "创建时间"];
+export const WORKER_TASK_TABLE_HEADERS = [
+  "状态",
+  "类型",
+  "Worker",
+  "范围",
+  "dedupe_key / id",
+  "Attempt",
+  "执行",
+  "错误",
+  "耗时",
+  "创建时间",
+];

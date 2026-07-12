@@ -32,13 +32,12 @@ const (
 	adminStatsWindow = 24 * time.Hour
 )
 
-// AdminService serves the read-only observation API: task/job listings,
-// callback records, data versions and the overview aggregation. It only
+// AdminService serves the read-only observation API: task listings,
+// finalization records, data versions and the overview aggregation. It only
 // projects existing state — no business rules, no second copy of any state.
 type AdminService struct {
 	tasks        *repository.WorkerTaskRepo
-	jobs         *repository.JobRepo
-	records      *repository.PostProcessRecordRepo
+	records      *repository.WorkerTaskFinalizeRecordRepo
 	assets       *repository.MarketAssetRepo
 	marketAssets *MarketAssetService
 	resources    *resourcedb.DB
@@ -48,15 +47,14 @@ type AdminService struct {
 
 func NewAdminService(
 	tasks *repository.WorkerTaskRepo,
-	jobs *repository.JobRepo,
-	records *repository.PostProcessRecordRepo,
+	records *repository.WorkerTaskFinalizeRecordRepo,
 	assets *repository.MarketAssetRepo,
 	marketAssets *MarketAssetService,
 	resources *resourcedb.DB,
 	dbPath string,
 ) *AdminService {
 	return &AdminService{
-		tasks: tasks, jobs: jobs, records: records, assets: assets,
+		tasks: tasks, records: records, assets: assets,
 		marketAssets: marketAssets, resources: resources, dbPath: dbPath,
 		now: time.Now,
 	}
@@ -66,11 +64,10 @@ func NewAdminService(
 
 // AdminOverview is the single-request payload behind GET /admin/overview.
 type AdminOverview struct {
-	WorkerTasks AdminWorkerTaskStats `json:"worker_tasks"`
-	Jobs        AdminJobStats        `json:"jobs"`
-	Callbacks   AdminCallbackStats   `json:"callbacks"`
-	SyncHealth  AdminSyncHealth      `json:"sync_health"`
-	Storage     AdminStorageStats    `json:"storage"`
+	WorkerTasks   AdminWorkerTaskStats `json:"worker_tasks"`
+	Finalizations AdminFinalizeStats   `json:"finalizations"`
+	SyncHealth    AdminSyncHealth      `json:"sync_health"`
+	Storage       AdminStorageStats    `json:"storage"`
 }
 
 type AdminWorkerTaskStats struct {
@@ -81,14 +78,7 @@ type AdminWorkerTaskStats struct {
 	StaleRunning     int            `json:"stale_running"`
 }
 
-type AdminJobStats struct {
-	Queued           int `json:"queued"`
-	Running          int `json:"running"`
-	FailedLast24h    int `json:"failed_last_24h"`
-	SucceededLast24h int `json:"succeeded_last_24h"`
-}
-
-type AdminCallbackStats struct {
+type AdminFinalizeStats struct {
 	TotalLast24h  int `json:"total_last_24h"`
 	FailedLast24h int `json:"failed_last_24h"`
 }
@@ -156,36 +146,25 @@ func (s *AdminService) Overview(ctx context.Context) (AdminOverview, error) {
 		out.WorkerTasks.Active += n
 	}
 	if out.WorkerTasks.FailedLast24h, err = s.tasks.CountFinishedSince(
-		ctx, repository.WorkerTaskStatusFailed, since); err != nil {
+		ctx, repository.WorkerTaskStatusFailed, since,
+	); err != nil {
 		return AdminOverview{}, wrapRepo("count failed worker tasks", err)
 	}
 	if out.WorkerTasks.CompletedLast24h, err = s.tasks.CountFinishedSince(
-		ctx, repository.WorkerTaskStatusComplete, since); err != nil {
+		ctx, repository.WorkerTaskStatusComplete, since,
+	); err != nil {
 		return AdminOverview{}, wrapRepo("count completed worker tasks", err)
 	}
 	if out.WorkerTasks.StaleRunning, err = s.tasks.CountStaleRunning(
-		ctx, now.Add(-adminStaleHeartbeat).UnixMilli()); err != nil {
+		ctx, now.UnixMilli(),
+	); err != nil {
 		return AdminOverview{}, wrapRepo("count stale running worker tasks", err)
 	}
 
-	jobsByStatus, err := s.jobs.CountByStatus(ctx)
-	if err != nil {
-		return AdminOverview{}, wrapRepo("count jobs", err)
-	}
-	out.Jobs.Queued = jobsByStatus[repository.JobStatusQueued]
-	out.Jobs.Running = jobsByStatus[repository.JobStatusRunning]
-	if out.Jobs.FailedLast24h, err = s.jobs.CountFinishedSince(
-		ctx, repository.JobStatusFailed, since); err != nil {
-		return AdminOverview{}, wrapRepo("count failed jobs", err)
-	}
-	if out.Jobs.SucceededLast24h, err = s.jobs.CountFinishedSince(
-		ctx, repository.JobStatusSucceeded, since); err != nil {
-		return AdminOverview{}, wrapRepo("count succeeded jobs", err)
-	}
-
-	if out.Callbacks.TotalLast24h, out.Callbacks.FailedLast24h, err = s.records.CountSince(
-		ctx, since); err != nil {
-		return AdminOverview{}, wrapRepo("count post process records", err)
+	if out.Finalizations.TotalLast24h, out.Finalizations.FailedLast24h, err = s.records.CountSince(
+		ctx, since,
+	); err != nil {
+		return AdminOverview{}, wrapRepo("count finalization records", err)
 	}
 
 	if out.SyncHealth, err = s.syncHealth(ctx, now); err != nil {
@@ -304,33 +283,58 @@ func (s *AdminService) storageStats(ctx context.Context) AdminStorageStats {
 
 // AdminWorkerTaskListParams filters GET /admin/worker-tasks.
 type AdminWorkerTaskListParams struct {
-	Type   string
-	Status string
-	Query  string
-	Limit  int
-	Offset int
+	WorkerType string
+	Type       string
+	Status     string
+	ScopeType  string
+	ScopeID    string
+	Query      string
+	Limit      int
+	Offset     int
 }
 
 // AdminWorkerTaskItem is the slim listing projection: payload_json and
 // result_data never travel in list responses.
 type AdminWorkerTaskItem struct {
-	ID                  string `json:"id"`
-	Type                string `json:"type"`
-	Status              string `json:"status"`
-	DedupeKey           string `json:"dedupe_key"`
-	ErrorCode           string `json:"error_code"`
-	ErrorMessage        string `json:"error_message"`
-	PostProcessAttempts int    `json:"post_process_attempts"`
-	CreatedAt           int64  `json:"created_at"`
-	StartedAt           *int64 `json:"started_at"`
-	FinishedAt          *int64 `json:"finished_at"`
-	DurationMs          *int64 `json:"duration_ms"`
+	ID               string `json:"id"`
+	WorkerType       string `json:"worker_type"`
+	Type             string `json:"type"`
+	Status           string `json:"status"`
+	ScopeType        string `json:"scope_type"`
+	ScopeID          string `json:"scope_id"`
+	DedupeKey        string `json:"dedupe_key"`
+	ClaimedBy        string `json:"claimed_by,omitempty"`
+	AttemptCount     int    `json:"attempt_count"`
+	MaxAttempts      int    `json:"max_attempts"`
+	ProgressCurrent  int    `json:"progress_current"`
+	ProgressTotal    int    `json:"progress_total"`
+	Phase            string `json:"phase"`
+	HeartbeatAt      *int64 `json:"heartbeat_at,omitempty"`
+	LeaseExpiresAt   *int64 `json:"lease_expires_at,omitempty"`
+	ErrorCode        string `json:"error_code"`
+	ErrorMessage     string `json:"error_message"`
+	FinalizeAttempts int    `json:"finalize_attempts"`
+	CreatedAt        int64  `json:"created_at"`
+	StartedAt        *int64 `json:"started_at"`
+	FinishedAt       *int64 `json:"finished_at"`
+	DurationMs       *int64 `json:"duration_ms"`
 }
 
 var adminWorkerTaskTypes = map[string]bool{
-	repository.WorkerTaskTypeAssetDirectorySync: true,
-	repository.WorkerTaskTypeAssetHistorySync:   true,
-	repository.WorkerTaskTypeFXRateSync:         true,
+	repository.WorkerTaskTypeSimulation:           true,
+	repository.WorkerTaskTypeStress:               true,
+	repository.WorkerTaskTypeSensitivity:          true,
+	repository.WorkerTaskTypeResearchBacktest:     true,
+	repository.WorkerTaskTypeResearchOptimization: true,
+	repository.WorkerTaskTypeAutoUpdateScan:       true,
+	repository.WorkerTaskTypeAssetDirectorySync:   true,
+	repository.WorkerTaskTypeAssetHistorySync:     true,
+	repository.WorkerTaskTypeFXRateSync:           true,
+}
+
+var adminWorkerTypes = map[string]bool{
+	repository.WorkerTypeGo:      true,
+	repository.WorkerTypeSidecar: true,
 }
 
 var adminWorkerTaskStatuses = map[string]bool{
@@ -364,8 +368,10 @@ func (s *AdminService) ListWorkerTasks(
 ) (Page[AdminWorkerTaskItem], error) {
 	var zero Page[AdminWorkerTaskItem]
 	if params.Type != "" && !adminWorkerTaskTypes[params.Type] {
-		return zero, newErr("invalid_request",
-			"type must be one of asset_directory_sync, asset_history_sync, fx_rate_sync", nil)
+		return zero, newErr("invalid_request", "unsupported task type", nil)
+	}
+	if params.WorkerType != "" && !adminWorkerTypes[params.WorkerType] {
+		return zero, newErr("invalid_request", "unsupported worker type", nil)
 	}
 	var statuses []string
 	switch {
@@ -381,7 +387,8 @@ func (s *AdminService) ListWorkerTasks(
 
 	limit, offset := normalizePage(params.Limit, params.Offset)
 	tasks, total, err := s.tasks.List(ctx, repository.WorkerTaskFilter{
-		Type: params.Type, Statuses: statuses, Query: params.Query,
+		WorkerType: params.WorkerType, Type: params.Type, Statuses: statuses,
+		ScopeType: params.ScopeType, ScopeID: params.ScopeID, Query: params.Query,
 		Limit: limit, Offset: offset,
 	})
 	if err != nil {
@@ -390,17 +397,28 @@ func (s *AdminService) ListWorkerTasks(
 	items := make([]AdminWorkerTaskItem, 0, len(tasks))
 	for _, t := range tasks {
 		items = append(items, AdminWorkerTaskItem{
-			ID:                  t.ID,
-			Type:                t.Type,
-			Status:              t.Status,
-			DedupeKey:           t.DedupeKey,
-			ErrorCode:           t.ErrorCode,
-			ErrorMessage:        t.ErrorMessage,
-			PostProcessAttempts: t.PostProcessAttempts,
-			CreatedAt:           t.CreatedAt,
-			StartedAt:           t.StartedAt,
-			FinishedAt:          t.FinishedAt,
-			DurationMs:          durationMs(t.StartedAt, t.FinishedAt),
+			ID:               t.ID,
+			WorkerType:       t.WorkerType,
+			Type:             t.Type,
+			Status:           t.Status,
+			ScopeType:        t.ScopeType,
+			ScopeID:          t.ScopeID,
+			DedupeKey:        t.DedupeKey,
+			ClaimedBy:        t.ClaimedBy,
+			AttemptCount:     t.AttemptCount,
+			MaxAttempts:      t.MaxAttempts,
+			ProgressCurrent:  t.ProgressCurrent,
+			ProgressTotal:    t.ProgressTotal,
+			Phase:            t.Phase,
+			HeartbeatAt:      t.HeartbeatAt,
+			LeaseExpiresAt:   t.LeaseExpiresAt,
+			ErrorCode:        t.ErrorCode,
+			ErrorMessage:     t.ErrorMessage,
+			FinalizeAttempts: t.FinalizeAttempts,
+			CreatedAt:        t.CreatedAt,
+			StartedAt:        t.StartedAt,
+			FinishedAt:       t.FinishedAt,
+			DurationMs:       durationMs(t.StartedAt, t.FinishedAt),
 		})
 	}
 	return Page[AdminWorkerTaskItem]{Items: items, Total: total, Limit: limit, Offset: offset}, nil
@@ -423,12 +441,13 @@ type AdminTaskHeartbeat struct {
 }
 
 // AdminWorkerTaskDetail is the full task detail: raw row (payload/result as
-// opaque strings), derived timeline, heartbeat and callback records.
+// opaque strings), derived timeline, heartbeat and finalization records.
 type AdminWorkerTaskDetail struct {
-	Task               repository.WorkerTask          `json:"task"`
-	Timeline           []AdminTaskTimelinePhase       `json:"timeline"`
-	Heartbeat          *AdminTaskHeartbeat            `json:"heartbeat,omitempty"`
-	PostProcessRecords []repository.PostProcessRecord `json:"post_process_records"`
+	Task            repository.WorkerTask                 `json:"task"`
+	Timeline        []AdminTaskTimelinePhase              `json:"timeline"`
+	Heartbeat       *AdminTaskHeartbeat                   `json:"heartbeat,omitempty"`
+	FinalizeRecords []repository.WorkerTaskFinalizeRecord `json:"finalize_records"`
+	Attempts        []repository.WorkerTaskAttempt        `json:"attempts"`
 }
 
 // taskTimeline derives the execution timeline from the row's timestamps.
@@ -448,7 +467,7 @@ func taskTimeline(t repository.WorkerTask) []AdminTaskTimelinePhase {
 	return timeline
 }
 
-// GetWorkerTaskDetail loads one task with its timeline and callback records.
+// GetWorkerTaskDetail loads one task with its timeline and finalization records.
 func (s *AdminService) GetWorkerTaskDetail(
 	ctx context.Context, taskID string,
 ) (AdminWorkerTaskDetail, error) {
@@ -461,15 +480,20 @@ func (s *AdminService) GetWorkerTaskDetail(
 	}
 	records, err := s.records.ListByTask(ctx, taskID)
 	if err != nil {
-		return AdminWorkerTaskDetail{}, wrapRepo("list post process records", err)
+		return AdminWorkerTaskDetail{}, wrapRepo("list finalization records", err)
 	}
 	if records == nil {
-		records = []repository.PostProcessRecord{}
+		records = []repository.WorkerTaskFinalizeRecord{}
+	}
+	attempts, err := s.tasks.ListAttempts(ctx, taskID)
+	if err != nil {
+		return AdminWorkerTaskDetail{}, wrapRepo("list worker task attempts", err)
 	}
 	detail := AdminWorkerTaskDetail{
-		Task:               task,
-		Timeline:           taskTimeline(task),
-		PostProcessRecords: records,
+		Task:            task,
+		Timeline:        taskTimeline(task),
+		FinalizeRecords: records,
+		Attempts:        attempts,
 	}
 	if task.HeartbeatAt != nil {
 		detail.Heartbeat = &AdminTaskHeartbeat{
@@ -481,106 +505,10 @@ func (s *AdminService) GetWorkerTaskDetail(
 	return detail, nil
 }
 
-// --- jobs ---
+// --- finalization records ---
 
-// AdminJobListParams filters GET /admin/jobs.
-type AdminJobListParams struct {
-	Type   string
-	Status string
-	PlanID string
-	Limit  int
-	Offset int
-}
-
-// AdminJobItem is one computed job listing row. The list already carries
-// progress and error facts; deep-diving a single job reuses GET /jobs/{id}.
-type AdminJobItem struct {
-	ID              string `json:"id"`
-	PlanID          string `json:"plan_id"`
-	PlanName        string `json:"plan_name"`
-	Type            string `json:"type"`
-	Status          string `json:"status"`
-	Phase           string `json:"phase"`
-	ProgressCurrent int    `json:"progress_current"`
-	ProgressTotal   int    `json:"progress_total"`
-	ErrorCode       string `json:"error_code"`
-	ErrorMessage    string `json:"error_message"`
-	CreatedAt       int64  `json:"created_at"`
-	StartedAt       *int64 `json:"started_at"`
-	FinishedAt      *int64 `json:"finished_at"`
-	DurationMs      *int64 `json:"duration_ms"`
-}
-
-var adminJobTypes = map[string]bool{
-	repository.JobTypeSimulation:           true,
-	repository.JobTypeStress:               true,
-	repository.JobTypeSensitivity:          true,
-	repository.JobTypeResearchBacktest:     true,
-	repository.JobTypeResearchOptimization: true,
-}
-
-var adminJobStatuses = map[string]bool{
-	repository.JobStatusQueued:    true,
-	repository.JobStatusRunning:   true,
-	repository.JobStatusSucceeded: true,
-	repository.JobStatusFailed:    true,
-	repository.JobStatusCanceled:  true,
-}
-
-// ListJobs returns one filtered job page ordered by created_at DESC.
-func (s *AdminService) ListJobs(
-	ctx context.Context, params AdminJobListParams,
-) (Page[AdminJobItem], error) {
-	var zero Page[AdminJobItem]
-	if params.Type != "" && !adminJobTypes[params.Type] {
-		return zero, newErr("invalid_request",
-			"type must be one of simulation, stress, sensitivity, research_backtest, research_optimization_backtest", nil)
-	}
-	var statuses []string
-	switch {
-	case params.Status == "":
-	case params.Status == "active":
-		statuses = []string{repository.JobStatusQueued, repository.JobStatusRunning}
-	case adminJobStatuses[params.Status]:
-		statuses = []string{params.Status}
-	default:
-		return zero, newErr("invalid_request", "status must be a job status or active", nil)
-	}
-
-	limit, offset := normalizePage(params.Limit, params.Offset)
-	jobs, total, err := s.jobs.List(ctx, repository.JobFilter{
-		Type: params.Type, Statuses: statuses, PlanID: params.PlanID,
-		Limit: limit, Offset: offset,
-	})
-	if err != nil {
-		return zero, wrapRepo("list jobs", err)
-	}
-	items := make([]AdminJobItem, 0, len(jobs))
-	for _, j := range jobs {
-		items = append(items, AdminJobItem{
-			ID:              j.ID,
-			PlanID:          j.PlanID,
-			PlanName:        j.PlanName,
-			Type:            j.Type,
-			Status:          j.Status,
-			Phase:           j.Phase,
-			ProgressCurrent: j.ProgressCurrent,
-			ProgressTotal:   j.ProgressTotal,
-			ErrorCode:       j.ErrorCode,
-			ErrorMessage:    j.ErrorMessage,
-			CreatedAt:       j.CreatedAt,
-			StartedAt:       j.StartedAt,
-			FinishedAt:      j.FinishedAt,
-			DurationMs:      durationMs(j.StartedAt, j.FinishedAt),
-		})
-	}
-	return Page[AdminJobItem]{Items: items, Total: total, Limit: limit, Offset: offset}, nil
-}
-
-// --- post process records ---
-
-// AdminPostProcessRecordParams filters GET /admin/post-process-records.
-type AdminPostProcessRecordParams struct {
+// AdminFinalizeRecordParams filters GET /admin/finalization-records.
+type AdminFinalizeRecordParams struct {
 	TaskID   string
 	Result   string
 	TaskType string
@@ -588,18 +516,18 @@ type AdminPostProcessRecordParams struct {
 	Offset   int
 }
 
-var adminCallbackResults = map[string]bool{
-	PostProcessSuccess:        true,
-	PostProcessRetryableError: true,
-	PostProcessPermanentError: true,
+var adminFinalizeResults = map[string]bool{
+	TaskFinalizeSuccess:        true,
+	TaskFinalizeRetryableError: true,
+	TaskFinalizePermanentError: true,
 }
 
-// ListPostProcessRecords returns one filtered callback record page.
-func (s *AdminService) ListPostProcessRecords(
-	ctx context.Context, params AdminPostProcessRecordParams,
-) (Page[repository.PostProcessRecord], error) {
-	var zero Page[repository.PostProcessRecord]
-	if params.Result != "" && !adminCallbackResults[params.Result] {
+// ListFinalizeRecords returns one filtered finalization record page.
+func (s *AdminService) ListFinalizeRecords(
+	ctx context.Context, params AdminFinalizeRecordParams,
+) (Page[repository.WorkerTaskFinalizeRecord], error) {
+	var zero Page[repository.WorkerTaskFinalizeRecord]
+	if params.Result != "" && !adminFinalizeResults[params.Result] {
 		return zero, newErr("invalid_request",
 			"result must be one of success, retryable_error, permanent_error", nil)
 	}
@@ -608,17 +536,17 @@ func (s *AdminService) ListPostProcessRecords(
 			"task_type must be one of asset_directory_sync, asset_history_sync, fx_rate_sync", nil)
 	}
 	limit, offset := normalizePage(params.Limit, params.Offset)
-	items, total, err := s.records.List(ctx, repository.PostProcessRecordFilter{
+	items, total, err := s.records.List(ctx, repository.WorkerTaskFinalizeRecordFilter{
 		TaskID: params.TaskID, Result: params.Result, TaskType: params.TaskType,
 		Limit: limit, Offset: offset,
 	})
 	if err != nil {
-		return zero, wrapRepo("list post process records", err)
+		return zero, wrapRepo("list finalization records", err)
 	}
 	if items == nil {
-		items = []repository.PostProcessRecord{}
+		items = []repository.WorkerTaskFinalizeRecord{}
 	}
-	return Page[repository.PostProcessRecord]{
+	return Page[repository.WorkerTaskFinalizeRecord]{
 		Items: items, Total: total, Limit: limit, Offset: offset,
 	}, nil
 }

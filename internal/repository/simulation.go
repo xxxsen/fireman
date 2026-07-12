@@ -11,7 +11,7 @@ import (
 // SimulationRun is a persisted Monte Carlo result.
 type SimulationRun struct {
 	ID                 string          `json:"id"`
-	JobID              string          `json:"job_id"`
+	TaskID             string          `json:"task_id"`
 	PlanID             string          `json:"plan_id"`
 	InputHash          string          `json:"input_hash"`
 	InputSnapshotJSON  string          `json:"input_snapshot_json"`
@@ -24,9 +24,9 @@ type SimulationRun struct {
 	FailureCount       int             `json:"failure_count"`
 	SummaryJSON        json.RawMessage `json:"summary_json"`
 	CreatedAt          int64           `json:"created_at"`
-	JobStatus          string          `json:"job_status"`
-	JobErrorCode       string          `json:"job_error_code,omitempty"`
-	JobErrorMessage    string          `json:"job_error_message,omitempty"`
+	TaskStatus         string          `json:"task_status"`
+	TaskErrorCode      string          `json:"task_error_code,omitempty"`
+	TaskErrorMessage   string          `json:"task_error_message,omitempty"`
 }
 
 // PathIndexRow is one path summary in simulation_path_index.
@@ -73,11 +73,11 @@ func (r *SimulationRepo) CreatePending(ctx context.Context, tx *sql.Tx, run Simu
 	}
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO simulation_runs (
-			id, job_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
+			id, task_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
 			engine_version, runs, seed, horizon_months, success_count, failure_count,
 			summary_json, created_at
 		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		run.ID, run.JobID, run.PlanID, run.InputHash, run.InputSnapshotJSON, run.MarketSnapshotHash,
+		run.ID, run.TaskID, run.PlanID, run.InputHash, run.InputSnapshotJSON, run.MarketSnapshotHash,
 		run.EngineVersion, run.Runs, run.Seed, run.HorizonMonths, run.SuccessCount, run.FailureCount,
 		string(run.SummaryJSON), run.CreatedAt)
 	return wrapSQL("create pending simulation run", err)
@@ -93,8 +93,8 @@ func (r *SimulationRepo) Complete(ctx context.Context, tx *sql.Tx, runID string,
 	return wrapSQL("complete simulation run", err)
 }
 
-func (r *SimulationRepo) GetByJobID(ctx context.Context, jobID string) (SimulationRun, error) {
-	row := r.db.QueryRowContext(ctx, simulationRunSelect+` WHERE sr.job_id=?`, jobID)
+func (r *SimulationRepo) GetByTaskID(ctx context.Context, taskID string) (SimulationRun, error) {
+	row := r.db.QueryRowContext(ctx, simulationRunSelect+` WHERE sr.task_id=?`, taskID)
 	return scanSimulationRun(row)
 }
 
@@ -125,13 +125,13 @@ func (r *SimulationRepo) ListByPlan(ctx context.Context, planID string, limit in
 }
 
 const simulationRunSelect = `
-	SELECT sr.id, sr.job_id, sr.plan_id, sr.input_hash, sr.input_snapshot_json,
+	SELECT sr.id, sr.task_id, sr.plan_id, sr.input_hash, sr.input_snapshot_json,
 		sr.market_snapshot_hash, sr.engine_version, sr.runs, sr.seed,
 		sr.horizon_months, sr.success_count, sr.failure_count, sr.summary_json,
-		sr.created_at, COALESCE(j.status, 'unknown'), COALESCE(j.error_code, ''),
-		COALESCE(j.error_message, '')
+		sr.created_at, COALESCE(t.status, 'unknown'), COALESCE(t.error_code, ''),
+		COALESCE(t.error_message, '')
 	FROM simulation_runs sr
-	LEFT JOIN jobs j ON j.id=sr.job_id`
+	LEFT JOIN worker_tasks t ON t.id=sr.task_id`
 
 // PruneByPlan keeps the newest `keep` simulation runs of a plan and deletes the
 // rest, returning the deleted run IDs. Path index and quantile series rows are
@@ -335,9 +335,9 @@ func scanSimulationRun(row *sql.Row) (SimulationRun, error) {
 	var run SimulationRun
 	var summary string
 	err := row.Scan(
-		&run.ID, &run.JobID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
+		&run.ID, &run.TaskID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
 		&run.EngineVersion, &run.Runs, &run.Seed, &run.HorizonMonths, &run.SuccessCount, &run.FailureCount,
-		&summary, &run.CreatedAt, &run.JobStatus, &run.JobErrorCode, &run.JobErrorMessage,
+		&summary, &run.CreatedAt, &run.TaskStatus, &run.TaskErrorCode, &run.TaskErrorMessage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SimulationRun{}, ErrSimulationNotFound
@@ -353,9 +353,9 @@ func scanSimulationRunRows(rows *sql.Rows) (SimulationRun, error) {
 	var run SimulationRun
 	var summary string
 	err := rows.Scan(
-		&run.ID, &run.JobID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
+		&run.ID, &run.TaskID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
 		&run.EngineVersion, &run.Runs, &run.Seed, &run.HorizonMonths, &run.SuccessCount, &run.FailureCount,
-		&summary, &run.CreatedAt, &run.JobStatus, &run.JobErrorCode, &run.JobErrorMessage,
+		&summary, &run.CreatedAt, &run.TaskStatus, &run.TaskErrorCode, &run.TaskErrorMessage,
 	)
 	if err != nil {
 		return SimulationRun{}, wrapSQL("scan simulation run row", err)

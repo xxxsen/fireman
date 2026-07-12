@@ -358,7 +358,7 @@ func (r *MarketAssetRepo) SetSyncLastTaskTx(
 	return wrapSQL("set sync state last task", err)
 }
 
-// SetSyncSuccessTx records a successful directory post-process for one unit.
+// SetSyncSuccessTx records a successful directory finalization for one unit.
 func (r *MarketAssetRepo) SetSyncSuccessTx(
 	ctx context.Context, tx *sql.Tx, syncKey, scope, taskID string, successAt int64,
 ) error {
@@ -465,7 +465,7 @@ func (r *MarketAssetRepo) ListPointsTx(
 }
 
 // PointsSummaryTx aggregates coverage facts (count, min/max date, distinct
-// sources) for validation inside a post-process transaction.
+// sources) for validation inside a finalization transaction.
 func (r *MarketAssetRepo) PointsSummaryTx(
 	ctx context.Context, tx *sql.Tx, assetKey, adjustPolicy, pointType string,
 ) (MarketAssetPointsSummary, error) {
@@ -638,7 +638,7 @@ func (r *MarketAssetRepo) SetHistoryLastTaskTx(
 	return wrapSQL("set history state last task", err)
 }
 
-// SetHistorySuccessTx records a successful history post-process outcome.
+// SetHistorySuccessTx records a successful history finalization outcome.
 func (r *MarketAssetRepo) SetHistorySuccessTx(
 	ctx context.Context, tx *sql.Tx, st MarketAssetHistoryState,
 ) error {
@@ -710,9 +710,9 @@ func (r *MarketAssetRepo) GetDetailProjection(
 	return p, true, nil
 }
 
-// --- market data versions (post-process re-entrancy) ---
+// --- market data versions (finalization re-entrancy) ---
 
-// MarketDataVersion mirrors one market_data_versions row: the post-process
+// MarketDataVersion mirrors one market_data_versions row: the finalization
 // idempotency version key for one business impact scope.
 type MarketDataVersion struct {
 	VersionKey string `json:"version_key"`

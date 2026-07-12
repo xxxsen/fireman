@@ -312,7 +312,7 @@ func TestAutoUpdateFailedFilterOnlyReturnsUnrecoveredFailures(t *testing.T) {
 }
 
 func TestAutoUpdateSchedulerRunsImmediatelyAndStops(t *testing.T) {
-	svc, tasks, _ := newAutoUpdateServiceForTest(t)
+	svc, _, _ := newAutoUpdateServiceForTest(t)
 	now := time.Date(2026, 1, 1, 0, 5, 0, 0, cst)
 	svc.now = func() time.Time { return now }
 	if _, err := svc.CreateDirectory(context.Background(), "hk_etf", 1); err != nil {
@@ -320,20 +320,19 @@ func TestAutoUpdateSchedulerRunsImmediatelyAndStops(t *testing.T) {
 	}
 	now = time.Date(2026, 1, 1, 1, 10, 0, 0, cst)
 	scheduler := NewAutoUpdateScheduler(svc, 60)
+	enqueued := make(chan int64, 1)
+	scheduler.SetTaskEnqueuer(func(_ context.Context, slot int64) error {
+		enqueued <- slot
+		return nil
+	})
 	scheduler.Start(context.Background())
-	deadline := time.Now().Add(time.Second)
-	for {
-		_, total, err := tasks.List(context.Background(), repository.WorkerTaskFilter{Limit: 10})
-		if err != nil {
-			t.Fatal(err)
+	select {
+	case slot := <-enqueued:
+		if slot == 0 {
+			t.Fatal("scheduler produced an empty slot")
 		}
-		if total == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("scheduler did not run immediately")
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not enqueue immediately")
 	}
 	scheduler.Stop()
 }
@@ -465,6 +464,23 @@ func TestNextScanTimeDSTWallClock(t *testing.T) {
 	// the next valid local instant without switching to elapsed-time cadence.
 	if !got.After(now) || got.Location() != loc || got.Minute() != 10 {
 		t.Fatalf("DST next slot=%v", got)
+	}
+}
+
+func TestCurrentScanSlotSeparatesStartupCatchupFromScheduledScan(t *testing.T) {
+	startup := time.Date(2026, 7, 13, 0, 2, 0, 0, cst)
+	scheduled := time.Date(2026, 7, 13, 0, 10, 0, 0, cst)
+
+	startupSlot := currentScanSlot(startup, 60, cst)
+	scheduledSlot := currentScanSlot(scheduled, 60, cst)
+	if want := time.Date(2026, 7, 12, 23, 10, 0, 0, cst); !startupSlot.Equal(want) {
+		t.Fatalf("startup slot=%v, want %v", startupSlot, want)
+	}
+	if !scheduledSlot.Equal(scheduled) {
+		t.Fatalf("scheduled slot=%v, want %v", scheduledSlot, scheduled)
+	}
+	if startupSlot.Equal(scheduledSlot) {
+		t.Fatal("startup catch-up and scheduled scan must not share an idempotency slot")
 	}
 }
 

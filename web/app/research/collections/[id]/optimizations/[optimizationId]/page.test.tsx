@@ -88,8 +88,8 @@ function optimization(): ResearchOptimizationRun {
   return {
     id: "opt_1",
     collection_id: "rc_1",
-    job_id: "job_1",
-    status: "succeeded",
+    task_id: "job_1",
+    status: "complete",
     config: {
       weight_step: 0.05,
       top_k: 20,
@@ -114,9 +114,27 @@ function optimization(): ResearchOptimizationRun {
           objective: "max_cagr",
           score: 0.08,
           weights: [
-            { item_id: "a", asset_key: "CN|fund|sh|a", name: "资产a", weight: 0.6, locked: false },
-            { item_id: "b", asset_key: "CN|fund|sh|b", name: "资产b", weight: 0.4, locked: false },
-            { item_id: "c", asset_key: "CN|fund|sh|c", name: "资产c", weight: 0, locked: false },
+            {
+              item_id: "a",
+              asset_key: "CN|fund|sh|a",
+              name: "资产a",
+              weight: 0.6,
+              locked: false,
+            },
+            {
+              item_id: "b",
+              asset_key: "CN|fund|sh|b",
+              name: "资产b",
+              weight: 0.4,
+              locked: false,
+            },
+            {
+              item_id: "c",
+              asset_key: "CN|fund|sh|c",
+              name: "资产c",
+              weight: 0,
+              locked: false,
+            },
           ],
           summary: {
             cumulative_return: 0.9,
@@ -141,9 +159,27 @@ function optimization(): ResearchOptimizationRun {
           objective: "min_cvar",
           score: -0.07,
           weights: [
-            { item_id: "a", asset_key: "CN|fund|sh|a", name: "资产a", weight: 0.6, locked: false },
-            { item_id: "b", asset_key: "CN|fund|sh|b", name: "资产b", weight: 0.4, locked: false },
-            { item_id: "c", asset_key: "CN|fund|sh|c", name: "资产c", weight: 0, locked: false },
+            {
+              item_id: "a",
+              asset_key: "CN|fund|sh|a",
+              name: "资产a",
+              weight: 0.6,
+              locked: false,
+            },
+            {
+              item_id: "b",
+              asset_key: "CN|fund|sh|b",
+              name: "资产b",
+              weight: 0.4,
+              locked: false,
+            },
+            {
+              item_id: "c",
+              asset_key: "CN|fund|sh|c",
+              name: "资产c",
+              weight: 0,
+              locked: false,
+            },
           ],
           summary: {
             cumulative_return: 0.7,
@@ -174,7 +210,9 @@ function optimization(): ResearchOptimizationRun {
 }
 
 function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <OptimizationDetailPage />
@@ -213,7 +251,11 @@ describe("OptimizationDetailPage", () => {
     renderPage();
     fireEvent.click(await screen.findByTestId("apply-result-cagr-1"));
     expect(await screen.findByText("目标组合：测试组合")).toBeInTheDocument();
-    expect(screen.getByText("应用后会同步当前组合的启用、锁定、权重、回测区间和尾部风险口径。")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "应用后会同步当前组合的启用、锁定、权重、回测区间和尾部风险口径。",
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
 
@@ -224,7 +266,9 @@ describe("OptimizationDetailPage", () => {
       expected_collection_updated_at: 1234,
     });
     await waitFor(() =>
-      expect(routerPushMock).toHaveBeenCalledWith("/research/collections/rc_1?optimized_applied=1"),
+      expect(routerPushMock).toHaveBeenCalledWith(
+        "/research/collections/rc_1?optimized_applied=1",
+      ),
     );
   });
 
@@ -232,7 +276,9 @@ describe("OptimizationDetailPage", () => {
     renderPage();
     expect(await screen.findByText("20 日 / 95%")).toBeInTheDocument();
     fireEvent.mouseEnter(screen.getByLabelText("最低尾部损失说明"));
-    expect(await screen.findByText(/最差 5% 场景的平均损失/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/最差 5% 场景的平均损失/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/不保证年化收益更高/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("tab-cvar"));
     expect(await screen.findByTestId("result-table-cvar")).toBeInTheDocument();
@@ -240,7 +286,11 @@ describe("OptimizationDetailPage", () => {
     expect(screen.getByText("VaR loss")).toBeInTheDocument();
     expect(screen.getByText("CVaR loss")).toBeInTheDocument();
     expect(screen.getByText("-5%").closest("td")).toHaveClass("text-positive");
-    expect(screen.getAllByText("7%").some((cell) => cell.closest("td")?.classList.contains("text-danger"))).toBe(true);
+    expect(
+      screen
+        .getAllByText("7%")
+        .some((cell) => cell.closest("td")?.classList.contains("text-danger")),
+    ).toBe(true);
     fireEvent.mouseEnter(screen.getByText("-5%"));
     expect(await screen.findByText(/981 个场景/)).toBeInTheDocument();
   });
@@ -248,21 +298,23 @@ describe("OptimizationDetailPage", () => {
   it("shows an interrupted optimization retry", async () => {
     getOptimizationMock.mockResolvedValue({
       ...optimization(),
-      status: "queued",
+      status: "pending",
       result: undefined,
       evaluated_count: 0,
-      job: {
-        status: "queued",
+      task: {
+        status: "pending",
         phase: "retrying",
         progress_current: 0,
         progress_total: 10,
-        retry_count: 1,
+        attempt_count: 1,
       },
     });
 
     renderPage();
 
-    expect(await screen.findByText("任务中断后自动重试（1/1），等待执行…")).toBeInTheDocument();
+    expect(
+      await screen.findByText("任务中断后自动重试（1/1），等待执行…"),
+    ).toBeInTheDocument();
   });
 
   it("explains a worker interruption terminal failure", async () => {
@@ -272,12 +324,12 @@ describe("OptimizationDetailPage", () => {
       result: undefined,
       error_code: "worker_interrupted",
       error_message: "执行进程中断，自动重试次数已用尽，请重新运行",
-      job: {
+      task: {
         status: "failed",
         phase: "",
         progress_current: 0,
         progress_total: 10,
-        retry_count: 1,
+        attempt_count: 1,
         error_code: "worker_interrupted",
       },
     });
@@ -285,7 +337,8 @@ describe("OptimizationDetailPage", () => {
     renderPage();
 
     expect(await screen.findByText("调优失败")).toBeInTheDocument();
-    expect(screen.getByText("执行进程中断，自动重试仍未完成。请重新发起调优。")).toBeInTheDocument();
+    expect(
+      screen.getByText("执行进程中断，自动重试仍未完成。请重新发起调优。"),
+    ).toBeInTheDocument();
   });
-
 });

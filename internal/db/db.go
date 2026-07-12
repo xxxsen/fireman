@@ -49,7 +49,7 @@ func Open(ctx context.Context, dbPath string) (*sql.DB, error) {
 
 	// Single writer connection: SQLite serializes writers anyway, and one
 	// pooled connection removes SQLITE_BUSY races between Go-side writers
-	// (directory post-process vs. task creation vs. sync-state updates).
+	// (directory finalization vs. task creation vs. sync-state updates).
 	pool.SetMaxOpenConns(1)
 	pool.SetMaxIdleConns(1)
 

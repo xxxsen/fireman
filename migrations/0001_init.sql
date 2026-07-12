@@ -231,35 +231,94 @@ CREATE TABLE portfolio_snapshot_items (
 );
 
 ------------------------------------------------------------
--- Jobs and simulation results
+-- Unified worker tasks and simulation results
 ------------------------------------------------------------
 
-CREATE TABLE jobs (
+CREATE TABLE worker_task_versions (
+  version_no INTEGER PRIMARY KEY AUTOINCREMENT
+);
+
+CREATE TABLE worker_tasks (
   id                  TEXT    PRIMARY KEY,
-  plan_id             TEXT,
-  type                TEXT    NOT NULL,                 -- simulation | stress | sensitivity | market_sync
-  status              TEXT    NOT NULL,                 -- queued | running | succeeded | failed | canceled
-  input_hash          TEXT    NOT NULL,
+  version_no          INTEGER NOT NULL UNIQUE,
+  worker_type         TEXT    NOT NULL,
+  type                TEXT    NOT NULL,
+  status              TEXT    NOT NULL,
+  priority            INTEGER NOT NULL DEFAULT 100,
+  scope_type          TEXT    NOT NULL DEFAULT '',
+  scope_id            TEXT    NOT NULL DEFAULT '',
+  dedupe_key          TEXT    NOT NULL DEFAULT '',
+  input_hash          TEXT    NOT NULL DEFAULT '',
+  payload_json        TEXT    NOT NULL DEFAULT '{}',
+  result_key          TEXT    NOT NULL DEFAULT '',
+  result_meta_json    TEXT    NOT NULL DEFAULT '{}',
   progress_current    INTEGER NOT NULL DEFAULT 0,
   progress_total      INTEGER NOT NULL DEFAULT 0,
   phase               TEXT    NOT NULL DEFAULT '',
   cancel_requested    INTEGER NOT NULL DEFAULT 0,
-  retry_count         INTEGER NOT NULL DEFAULT 0,
+  attempt_count       INTEGER NOT NULL DEFAULT 0,
+  max_attempts        INTEGER NOT NULL DEFAULT 2,
+  available_at        INTEGER NOT NULL,
+  claimed_by          TEXT    NOT NULL DEFAULT '',
+  claim_token_hash    TEXT    NOT NULL DEFAULT '',
+  attempt_started_at  INTEGER,
   heartbeat_at        INTEGER,
+  lease_expires_at    INTEGER,
+  finalize_attempts   INTEGER NOT NULL DEFAULT 0,
+  next_finalize_at    INTEGER,
   error_code          TEXT    NOT NULL DEFAULT '',
   error_message       TEXT    NOT NULL DEFAULT '',
   created_at          INTEGER NOT NULL,
   started_at          INTEGER,
+  result_reported_at  INTEGER,
+  pre_completed_at    INTEGER,
   finished_at         INTEGER,
-  FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+  updated_at          INTEGER NOT NULL
 );
 
-CREATE INDEX idx_jobs_claim
-ON jobs(status, created_at);
+CREATE INDEX idx_worker_tasks_claim
+ON worker_tasks(worker_type, status, available_at, priority DESC, created_at, id);
+
+CREATE INDEX idx_worker_tasks_filter
+ON worker_tasks(worker_type, status, created_at DESC, id DESC);
+
+CREATE INDEX idx_worker_tasks_scope
+ON worker_tasks(scope_type, scope_id, created_at DESC);
+
+CREATE INDEX idx_worker_tasks_lease
+ON worker_tasks(status, lease_expires_at);
+
+CREATE INDEX idx_worker_tasks_finalize
+ON worker_tasks(status, next_finalize_at);
+
+CREATE UNIQUE INDEX uq_worker_tasks_active_dedupe
+ON worker_tasks(worker_type, type, dedupe_key)
+WHERE status IN ('pending', 'running', 'pre_complete') AND dedupe_key <> '';
+
+CREATE TABLE worker_task_attempts (
+  task_id             TEXT    NOT NULL,
+  attempt_no          INTEGER NOT NULL,
+  worker_type         TEXT    NOT NULL,
+  worker_id           TEXT    NOT NULL,
+  claim_token_hash    TEXT    NOT NULL DEFAULT '',
+  claimed_at          INTEGER NOT NULL,
+  last_heartbeat_at   INTEGER,
+  released_at         INTEGER,
+  outcome             TEXT    NOT NULL DEFAULT '',
+  report_outcome      TEXT    NOT NULL DEFAULT '',
+  result_key          TEXT    NOT NULL DEFAULT '',
+  error_code          TEXT    NOT NULL DEFAULT '',
+  error_message       TEXT    NOT NULL DEFAULT '',
+  PRIMARY KEY(task_id, attempt_no),
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_worker_task_attempts_task
+ON worker_task_attempts(task_id, attempt_no DESC);
 
 CREATE TABLE simulation_runs (
   id                    TEXT    PRIMARY KEY,
-  job_id                TEXT    NOT NULL UNIQUE,
+  task_id               TEXT    NOT NULL UNIQUE,
   plan_id               TEXT    NOT NULL,
   input_hash            TEXT    NOT NULL,
   input_snapshot_json   TEXT    NOT NULL,
@@ -272,7 +331,7 @@ CREATE TABLE simulation_runs (
   failure_count         INTEGER NOT NULL,
   summary_json          TEXT    NOT NULL,
   created_at            INTEGER NOT NULL,
-  FOREIGN KEY(job_id)  REFERENCES jobs(id)  ON DELETE CASCADE,
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT,
   FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
 );
 
@@ -303,13 +362,13 @@ CREATE TABLE simulation_quantile_series (
 );
 
 CREATE TABLE analysis_results (
-  job_id      TEXT    PRIMARY KEY,
+  task_id     TEXT    PRIMARY KEY,
   plan_id     TEXT    NOT NULL,
   type        TEXT    NOT NULL,
   input_hash  TEXT    NOT NULL,
   result_json TEXT    NOT NULL,
   created_at  INTEGER NOT NULL,
-  FOREIGN KEY(job_id)  REFERENCES jobs(id)  ON DELETE CASCADE,
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT,
   FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
 );
 

@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  act,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 
-const useJobStatusMock = vi.hoisted(() => vi.fn());
+const useTaskStatusMock = vi.hoisted(() => vi.fn());
 const createSimulation = vi.hoisted(() => vi.fn());
 const createStressTest = vi.hoisted(() => vi.fn());
 const createSensitivityTest = vi.hoisted(() => vi.fn());
@@ -15,7 +21,7 @@ const getSimulationReadinessMock = vi.hoisted(() => vi.fn());
 
 let jobStatusCallbacks: {
   onComplete?: () => void;
-  onFailed?: (message: string) => void;
+  onFailed?: (task: { error_message?: string }) => void;
   onCanceled?: () => void;
 } = {};
 
@@ -58,7 +64,9 @@ const defaultHoldings = {
       current_amount_minor: 1_000_000_00,
       simulation_snapshot_id: "snap_1",
       snapshot_history_depth: "one_year",
-      snapshot_warnings: ["仅有 1 个完整自然年度，收益与风险估计的不确定性较高"],
+      snapshot_warnings: [
+        "仅有 1 个完整自然年度，收益与风险估计的不确定性较高",
+      ],
       instrument_code: "SHORT01",
       instrument_name: "短历史基金",
       sort_order: 1,
@@ -74,7 +82,7 @@ const defaultSimulations = {
   simulations: [
     {
       id: "run_1",
-      job_id: "job_1",
+      task_id: "job_1",
       plan_id: "plan_1",
       success_count: 0,
       failure_count: 100,
@@ -100,12 +108,13 @@ const defaultSimulations = {
 };
 
 vi.mock("@/lib/api/simulations", () => ({
-	getSimulationReadiness: (...args: unknown[]) => getSimulationReadinessMock(...args),
+  getSimulationReadiness: (...args: unknown[]) =>
+    getSimulationReadinessMock(...args),
   listSimulations: (...args: unknown[]) => listSimulationsMock(...args),
-  getJob: () =>
+  getTask: () =>
     Promise.resolve({
       id: "job_1",
-      status: "succeeded",
+      status: "complete",
       progress_current: 100,
       progress_total: 100,
       created_at: 0,
@@ -134,27 +143,31 @@ vi.mock("@/lib/api/simulations", () => ({
       ],
     }),
   createSimulation,
-  cancelJob: vi.fn(),
+  cancelTask: vi.fn(),
 }));
 
 vi.mock("@/lib/api/analysis", () => ({
   listStressTests: (...args: unknown[]) => listStressTestsMock(...args),
-  listSensitivityTests: (...args: unknown[]) => listSensitivityTestsMock(...args),
+  listSensitivityTests: (...args: unknown[]) =>
+    listSensitivityTestsMock(...args),
   createStressTest,
   createSensitivityTest,
   getStressTest: vi.fn(),
   getSensitivityTest: vi.fn(),
 }));
 
-vi.mock("@/hooks/useJobStatus", () => ({
-  // The page runs one useJobStatus hook per job kind (sim/stress/sensitivity).
+vi.mock("@/hooks/useTaskStatus", () => ({
+  // The page runs one useTaskStatus hook per job kind (sim/stress/sensitivity).
   // Only the hook that currently holds a job id gets its callbacks captured, so
   // tests fire terminal callbacks against the panel that actually started a job.
-  useJobStatus: (jobId: string | null, options?: typeof jobStatusCallbacks) => {
+  useTaskStatus: (
+    jobId: string | null,
+    options?: typeof jobStatusCallbacks,
+  ) => {
     if (jobId) {
       jobStatusCallbacks = options ?? {};
     }
-    return useJobStatusMock(jobId, options);
+    return useTaskStatusMock(jobId, options);
   },
 }));
 
@@ -178,7 +191,7 @@ describe("AnalysisPage zero success", () => {
   beforeEach(() => {
     getHoldingsMock.mockReset();
     getHoldingsMock.mockResolvedValue(defaultHoldings);
-    useJobStatusMock.mockReset();
+    useTaskStatusMock.mockReset();
     createSimulation.mockReset();
     createStressTest.mockReset();
     createSensitivityTest.mockReset();
@@ -190,26 +203,42 @@ describe("AnalysisPage zero success", () => {
     listStressTestsMock.mockResolvedValue({ stress_tests: [] });
     listSensitivityTestsMock.mockReset();
     listSensitivityTestsMock.mockResolvedValue({ sensitivity_tests: [] });
-		getSimulationReadinessMock.mockReset();
-		getSimulationReadinessMock.mockResolvedValue({ ready: true, blocking_assets: [], active_tasks: [] });
-    useJobStatusMock.mockImplementation((jobId) => {
+    getSimulationReadinessMock.mockReset();
+    getSimulationReadinessMock.mockResolvedValue({
+      ready: true,
+      blocking_assets: [],
+      active_tasks: [],
+    });
+    useTaskStatusMock.mockImplementation((jobId) => {
       if (!jobId) {
-        return { job: null, progress: 0, error: null };
+        return { task: null, progress: 0, error: null };
       }
       return {
-        job: { status: "running", progress_current: 40, progress_total: 100 },
+        task: { status: "running", progress_current: 40, progress_total: 100 },
         progress: 0.4,
         error: null,
       };
     });
-    createSimulation.mockResolvedValue({ job_id: "job_sim_busy", run_id: "run_busy", status: "queued" });
-    createStressTest.mockResolvedValue({ job_id: "job_stress", status: "queued" });
-    createSensitivityTest.mockResolvedValue({ job_id: "job_sens", status: "queued" });
+    createSimulation.mockResolvedValue({
+      task_id: "job_sim_busy",
+      run_id: "run_busy",
+      status: "pending",
+    });
+    createStressTest.mockResolvedValue({
+      task_id: "job_stress",
+      status: "pending",
+    });
+    createSensitivityTest.mockResolvedValue({
+      task_id: "job_sens",
+      status: "pending",
+    });
   });
 
   it("shows 0% success and representative paths", async () => {
     renderAnalysis();
-    expect((await screen.findAllByText(/成功率 0%/)).length).toBeGreaterThanOrEqual(1);
+    expect(
+      (await screen.findAllByText(/成功率 0%/)).length,
+    ).toBeGreaterThanOrEqual(1);
     expect(await screen.findByText(/P00/)).toBeInTheDocument();
     expect(screen.getByTestId("wealth-chart")).toBeInTheDocument();
   });
@@ -259,11 +288,17 @@ describe("AnalysisPage zero success", () => {
     getSimulationReadinessMock.mockReset();
     getSimulationReadinessMock.mockImplementation(() => new Promise(() => {}));
     const first = renderAnalysis();
-    expect(await screen.findByRole("button", { name: "运行模拟" })).toBeDisabled();
+    expect(
+      await screen.findByRole("button", { name: "运行模拟" }),
+    ).toBeDisabled();
     first.view.unmount();
 
     getSimulationReadinessMock.mockReset();
-    getSimulationReadinessMock.mockResolvedValue({ ready: true, blocking_assets: [], active_tasks: [] });
+    getSimulationReadinessMock.mockResolvedValue({
+      ready: true,
+      blocking_assets: [],
+      active_tasks: [],
+    });
     renderAnalysis();
     const input = await screen.findByLabelText("模拟次数");
     const button = screen.getByRole("button", { name: "运行模拟" });
@@ -277,7 +312,9 @@ describe("AnalysisPage zero success", () => {
     expect(button).not.toBeDisabled();
     fireEvent.change(input, { target: { value: "1000" } });
     fireEvent.click(button);
-    await waitFor(() => expect(createSimulation).toHaveBeenCalledWith("plan_1", { runs: 1000 }));
+    await waitFor(() =>
+      expect(createSimulation).toHaveBeenCalledWith("plan_1", { runs: 1000 }),
+    );
   });
 
   it("disables stress and sensitivity while simulation job is busy", async () => {
@@ -286,19 +323,25 @@ describe("AnalysisPage zero success", () => {
     await waitFor(() => expect(createSimulation).toHaveBeenCalled());
 
     expect(screen.getByRole("button", { name: "运行压力测试" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "运行敏感性测试" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "运行敏感性测试" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "运行模拟" })).toBeDisabled();
   });
 
   it("clears active job and keeps error after failed terminal state", async () => {
-    useJobStatusMock.mockImplementation((jobId, options) => {
+    useTaskStatusMock.mockImplementation((jobId, options) => {
       if (jobId) {
         jobStatusCallbacks = options ?? {};
       }
       if (jobId === "job_sim_busy") {
-        return { job: { status: "failed" }, progress: 0, error: "模拟引擎错误" };
+        return {
+          task: { status: "failed" },
+          progress: 0,
+          error: "模拟引擎错误",
+        };
       }
-      return { job: null, progress: 0, error: null };
+      return { task: null, progress: 0, error: null };
     });
 
     renderAnalysis();
@@ -306,12 +349,14 @@ describe("AnalysisPage zero success", () => {
     await waitFor(() => expect(createSimulation).toHaveBeenCalled());
 
     await act(async () => {
-      jobStatusCallbacks.onFailed?.("模拟引擎错误");
+      jobStatusCallbacks.onFailed?.({ error_message: "模拟引擎错误" });
     });
 
     expect(screen.getByText("模拟引擎错误")).toBeInTheDocument();
     expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "运行压力测试" })).not.toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "运行压力测试" }),
+    ).not.toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(createSimulation).toHaveBeenCalledTimes(2));
@@ -320,28 +365,36 @@ describe("AnalysisPage zero success", () => {
   });
 
   it("shows stress failure only in stress panel and retries stress test", async () => {
-    useJobStatusMock.mockImplementation((jobId, options) => {
+    useTaskStatusMock.mockImplementation((jobId, options) => {
       if (jobId) {
         jobStatusCallbacks = options ?? {};
       }
       if (jobId === "job_stress") {
-        return { job: { status: "failed" }, progress: 0, error: "压力测试失败" };
+        return {
+          task: { status: "failed" },
+          progress: 0,
+          error: "压力测试失败",
+        };
       }
-      return { job: null, progress: 0, error: null };
+      return { task: null, progress: 0, error: null };
     });
 
     renderAnalysis();
-    const stressBtn = await screen.findByRole("button", { name: "运行压力测试" });
+    const stressBtn = await screen.findByRole("button", {
+      name: "运行压力测试",
+    });
     await waitFor(() => expect(stressBtn).not.toBeDisabled());
     fireEvent.click(stressBtn);
     await waitFor(() => expect(createStressTest).toHaveBeenCalled());
 
     await act(async () => {
-      jobStatusCallbacks.onFailed?.("压力测试失败");
+      jobStatusCallbacks.onFailed?.({ error_message: "压力测试失败" });
     });
 
     expect(screen.getByText("压力测试失败")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "运行模拟" }),
+    ).not.toBeDisabled();
 
     const retryButtons = screen.getAllByRole("button", { name: "重试" });
     fireEvent.click(retryButtons[retryButtons.length - 1]!);
@@ -351,28 +404,36 @@ describe("AnalysisPage zero success", () => {
   });
 
   it("shows sensitivity failure only in sensitivity panel and retries sensitivity test", async () => {
-    useJobStatusMock.mockImplementation((jobId, options) => {
+    useTaskStatusMock.mockImplementation((jobId, options) => {
       if (jobId) {
         jobStatusCallbacks = options ?? {};
       }
       if (jobId === "job_sens") {
-        return { job: { status: "failed" }, progress: 0, error: "敏感性测试失败" };
+        return {
+          task: { status: "failed" },
+          progress: 0,
+          error: "敏感性测试失败",
+        };
       }
-      return { job: null, progress: 0, error: null };
+      return { task: null, progress: 0, error: null };
     });
 
     renderAnalysis();
-    const sensBtn = await screen.findByRole("button", { name: "运行敏感性测试" });
+    const sensBtn = await screen.findByRole("button", {
+      name: "运行敏感性测试",
+    });
     await waitFor(() => expect(sensBtn).not.toBeDisabled());
     fireEvent.click(sensBtn);
     await waitFor(() => expect(createSensitivityTest).toHaveBeenCalled());
 
     await act(async () => {
-      jobStatusCallbacks.onFailed?.("敏感性测试失败");
+      jobStatusCallbacks.onFailed?.({ error_message: "敏感性测试失败" });
     });
 
     expect(screen.getByText("敏感性测试失败")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "运行模拟" }),
+    ).not.toBeDisabled();
 
     const retryButtons = screen.getAllByRole("button", { name: "重试" });
     fireEvent.click(retryButtons[retryButtons.length - 1]!);
@@ -390,11 +451,13 @@ describe("AnalysisPage zero success", () => {
 
   it("shows short-history warning before running simulation", async () => {
     renderAnalysis();
+    expect(await screen.findByText(/以下持仓历史样本有限/)).toBeInTheDocument();
     expect(
-      await screen.findByText(/以下持仓历史样本有限/),
-    ).toBeInTheDocument();
-    expect(
-      (await screen.findAllByText(/仅有 1 个完整自然年度，收益与风险估计的不确定性较高/)).length,
+      (
+        await screen.findAllByText(
+          /仅有 1 个完整自然年度，收益与风险估计的不确定性较高/,
+        )
+      ).length,
     ).toBeGreaterThanOrEqual(1);
   });
 
@@ -441,7 +504,9 @@ describe("AnalysisPage zero success", () => {
 
     expect(screen.queryByText(/连接中/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
-    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重试" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides run button until parameters load and uses configured runs", async () => {
@@ -455,7 +520,9 @@ describe("AnalysisPage zero success", () => {
 
     renderAnalysis();
 
-    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "运行模拟" }),
+    ).not.toBeInTheDocument();
 
     await act(async () => {
       resolveParams(defaultParameters);
@@ -473,7 +540,9 @@ describe("AnalysisPage zero success", () => {
 
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
     expect(screen.getByTestId("error-state-retry")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "运行模拟" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows page-level error state when holdings load fails", async () => {
@@ -482,7 +551,9 @@ describe("AnalysisPage zero success", () => {
     renderAnalysis();
 
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "运行模拟" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "运行模拟" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows module error (not silent empty) when simulations list fails", async () => {
@@ -491,7 +562,9 @@ describe("AnalysisPage zero success", () => {
     renderAnalysis();
 
     expect(await screen.findByText(/无法加载历史模拟结果/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "运行模拟" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "运行模拟" }),
+    ).toBeInTheDocument();
   });
 
   it("shows module error when stress list fails", async () => {
@@ -507,7 +580,9 @@ describe("AnalysisPage zero success", () => {
     listSensitivityTestsMock.mockRejectedValue(new Error("sens boom"));
     renderAnalysis();
 
-    expect(await screen.findByText(/无法加载敏感性测试结果/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/无法加载敏感性测试结果/),
+    ).toBeInTheDocument();
   });
 
   it("defaults to the latest run and queries attached analysis by run id", async () => {
@@ -527,7 +602,7 @@ describe("AnalysisPage zero success", () => {
         {
           ...defaultSimulations.simulations[0],
           id: "run_0",
-          job_id: "job_0",
+          task_id: "job_0",
           created_at: -1000,
         },
       ],
@@ -545,9 +620,15 @@ describe("AnalysisPage zero success", () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({ simulations: [] });
     renderAnalysis();
-    expect(await screen.findByRole("button", { name: "运行压力测试" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "运行敏感性测试" })).toBeDisabled();
-    expect(screen.getAllByText("请先运行 Monte Carlo 模拟").length).toBeGreaterThanOrEqual(1);
+    expect(
+      await screen.findByRole("button", { name: "运行压力测试" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "运行敏感性测试" }),
+    ).toBeDisabled();
+    expect(
+      screen.getAllByText("请先运行 Monte Carlo 模拟").length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("disables attached analysis when the selected run is not completed", async () => {
@@ -561,15 +642,23 @@ describe("AnalysisPage zero success", () => {
       ],
     });
     renderAnalysis();
-    expect(await screen.findByRole("button", { name: "运行压力测试" })).toBeDisabled();
-    expect(screen.getAllByText(/当前模拟尚未完成/).length).toBeGreaterThanOrEqual(1);
+    expect(
+      await screen.findByRole("button", { name: "运行压力测试" }),
+    ).toBeDisabled();
+    expect(
+      screen.getAllByText(/当前模拟尚未完成/).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("first run shows results after the job completes without manual refresh", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({ simulations: [] });
     createSimulation.mockReset();
-    createSimulation.mockResolvedValue({ job_id: "job_new", run_id: "run_new", status: "queued" });
+    createSimulation.mockResolvedValue({
+      task_id: "job_new",
+      run_id: "run_new",
+      status: "pending",
+    });
 
     renderAnalysis();
 
@@ -585,8 +674,11 @@ describe("AnalysisPage zero success", () => {
         {
           ...defaultSimulations.simulations[0],
           id: "run_new",
-          job_id: "job_new",
-          summary_json: { success_probability: 0.9, terminal_quantiles: { p50: 100 } },
+          task_id: "job_new",
+          summary_json: {
+            success_probability: 0.9,
+            terminal_quantiles: { p50: 100 },
+          },
         },
       ],
     });
@@ -606,8 +698,8 @@ describe("AnalysisPage zero success", () => {
         {
           ...defaultSimulations.simulations[0],
           id: "run_pending",
-          job_id: "job_resume",
-          job_status: "running",
+          task_id: "job_resume",
+          task_status: "running",
           summary_json: {},
         },
       ],
@@ -617,7 +709,10 @@ describe("AnalysisPage zero success", () => {
 
     // The page adopts the persisted job and shows progress + cancel again.
     await waitFor(() =>
-      expect(useJobStatusMock).toHaveBeenCalledWith("job_resume", expect.anything()),
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
+        "job_resume",
+        expect.anything(),
+      ),
     );
     expect(await screen.findByText(/running… 40%/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
@@ -634,8 +729,8 @@ describe("AnalysisPage zero success", () => {
         {
           ...defaultSimulations.simulations[0],
           id: "run_old_failed",
-          job_id: "job_old_failed",
-          job_status: "failed",
+          task_id: "job_old_failed",
+          task_status: "failed",
           summary_json: {},
           created_at: -1000,
         },
@@ -645,32 +740,41 @@ describe("AnalysisPage zero success", () => {
     renderAnalysis();
     await screen.findAllByText(/成功率 0%/);
 
-    expect(useJobStatusMock).not.toHaveBeenCalledWith(
+    expect(useTaskStatusMock).not.toHaveBeenCalledWith(
       "job_old_failed",
       expect.anything(),
     );
     expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
-    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重试" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders a persisted failed simulation as a terminal error", async () => {
     listSimulationsMock.mockReset();
     listSimulationsMock.mockResolvedValue({
-      simulations: [{
-        ...defaultSimulations.simulations[0],
-        id: "run_failed",
-        job_id: "job_failed_persisted",
-        job_status: "failed",
-        job_error_code: "simulation_failed",
-        job_error_message: "输入快照不可用",
-        summary_json: {},
-      }],
+      simulations: [
+        {
+          ...defaultSimulations.simulations[0],
+          id: "run_failed",
+          task_id: "job_failed_persisted",
+          task_status: "failed",
+          task_error_code: "simulation_failed",
+          task_error_message: "输入快照不可用",
+          summary_json: {},
+        },
+      ],
     });
 
     renderAnalysis();
-    expect(await screen.findByText("模拟失败：输入快照不可用")).toBeInTheDocument();
+    expect(
+      await screen.findByText("模拟失败：输入快照不可用"),
+    ).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /失败/ })).toBeInTheDocument();
-    expect(useJobStatusMock).not.toHaveBeenCalledWith("job_failed_persisted", expect.anything());
+    expect(useTaskStatusMock).not.toHaveBeenCalledWith(
+      "job_failed_persisted",
+      expect.anything(),
+    );
   });
 
   it("re-attaches running stress and sensitivity jobs from persisted lists", async () => {
@@ -685,28 +789,33 @@ describe("AnalysisPage zero success", () => {
     listStressTestsMock.mockReset();
     listStressTestsMock.mockResolvedValue({
       stress_tests: [
-        { ...baseView, job_id: "job_stress_done", status: "succeeded" },
-        { ...baseView, job_id: "job_stress_running", status: "running" },
+        { ...baseView, task_id: "job_stress_done", status: "complete" },
+        { ...baseView, task_id: "job_stress_running", status: "running" },
       ],
     });
     listSensitivityTestsMock.mockReset();
     listSensitivityTestsMock.mockResolvedValue({
-      sensitivity_tests: [{ ...baseView, job_id: "job_sens_queued", status: "queued" }],
+      sensitivity_tests: [
+        { ...baseView, task_id: "job_sens_queued", status: "pending" },
+      ],
     });
 
     renderAnalysis();
 
     await waitFor(() =>
-      expect(useJobStatusMock).toHaveBeenCalledWith(
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
         "job_stress_running",
         expect.anything(),
       ),
     );
     await waitFor(() =>
-      expect(useJobStatusMock).toHaveBeenCalledWith("job_sens_queued", expect.anything()),
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
+        "job_sens_queued",
+        expect.anything(),
+      ),
     );
     // Terminal records are never adopted.
-    expect(useJobStatusMock).not.toHaveBeenCalledWith(
+    expect(useTaskStatusMock).not.toHaveBeenCalledWith(
       "job_stress_done",
       expect.anything(),
     );
@@ -717,9 +826,9 @@ describe("AnalysisPage zero success", () => {
     listSimulationsMock.mockResolvedValue({ simulations: [] });
     createSimulation.mockReset();
     createSimulation.mockResolvedValue({
-      job_id: "job_new",
+      task_id: "job_new",
       run_id: "run_new",
-      status: "queued",
+      status: "pending",
     });
 
     const { qc } = renderAnalysis();
@@ -727,7 +836,10 @@ describe("AnalysisPage zero success", () => {
     fireEvent.click(await screen.findByRole("button", { name: "运行模拟" }));
     await waitFor(() => expect(createSimulation).toHaveBeenCalled());
     await waitFor(() =>
-      expect(useJobStatusMock).toHaveBeenCalledWith("job_new", expect.anything()),
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
+        "job_new",
+        expect.anything(),
+      ),
     );
 
     // A stale refetch still lists an older unfinished run; it must not steal
@@ -737,7 +849,7 @@ describe("AnalysisPage zero success", () => {
         {
           ...defaultSimulations.simulations[0],
           id: "run_old",
-          job_id: "job_old",
+          task_id: "job_old",
           summary_json: {},
         },
       ],
@@ -746,8 +858,13 @@ describe("AnalysisPage zero success", () => {
       await qc.invalidateQueries({ queryKey: ["simulations", "plan_1"] });
     });
 
-    expect(useJobStatusMock).not.toHaveBeenCalledWith("job_old", expect.anything());
-    const lastRenderJobIds = useJobStatusMock.mock.calls.slice(-3).map((c) => c[0]);
+    expect(useTaskStatusMock).not.toHaveBeenCalledWith(
+      "job_old",
+      expect.anything(),
+    );
+    const lastRenderJobIds = useTaskStatusMock.mock.calls
+      .slice(-3)
+      .map((c) => c[0]);
     expect(lastRenderJobIds).toContain("job_new");
   });
 });

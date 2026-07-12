@@ -3,7 +3,10 @@
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import type { AdminSyncHealth } from "@/lib/api/admin";
-import { directoryScopeLabel, directoryScopeStatusLabel } from "@/lib/api/admin";
+import {
+  directoryScopeLabel,
+  directoryScopeStatusLabel,
+} from "@/lib/api/admin";
 import type { WorkerTaskStatus } from "@/lib/api/market-assets";
 import { formatRelativeTime } from "@/lib/admin-format";
 import { formatDateTimeFromMs } from "@/lib/format";
@@ -32,11 +35,17 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
         {health.directory_scopes.map((scope) => (
           <li key={scope.scope} data-testid="sync-health-scope">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-ink">{scope.label || directoryScopeLabel(scope.scope)}</span>
-              <span className="font-mono text-xs text-ink-muted">{scope.scope}</span>
+              <span className="text-ink">
+                {scope.label || directoryScopeLabel(scope.scope)}
+              </span>
+              <span className="font-mono text-xs text-ink-muted">
+                {scope.scope}
+              </span>
               <span className="ml-auto flex items-center gap-2">
                 {scope.status && (
-                  <Badge variant={SCOPE_STATUS_VARIANTS[scope.status] ?? "neutral"}>
+                  <Badge
+                    variant={SCOPE_STATUS_VARIANTS[scope.status] ?? "neutral"}
+                  >
                     <span data-testid={`scope-health-status-${scope.scope}`}>
                       {directoryScopeStatusLabel(scope.status)}
                     </span>
@@ -45,7 +54,11 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
                 {scope.stale && <Badge variant="warning">超 7 天未成功</Badge>}
                 <span
                   className="text-xs text-ink-muted"
-                  title={scope.last_success_at ? formatDateTimeFromMs(scope.last_success_at) : undefined}
+                  title={
+                    scope.last_success_at
+                      ? formatDateTimeFromMs(scope.last_success_at)
+                      : undefined
+                  }
                 >
                   {scope.last_success_at
                     ? `全量成功于 ${formatRelativeTime(scope.last_success_at)}`
@@ -61,18 +74,32 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
                   data-testid={`sync-health-unit-${unit.sync_key}`}
                 >
                   <span className="text-xs text-ink">{unit.label}</span>
-                  <span className="font-mono text-xs text-ink-muted">{unit.sync_key}</span>
+                  <span className="font-mono text-xs text-ink-muted">
+                    {unit.sync_key}
+                  </span>
                   <span className="ml-auto flex items-center gap-2">
                     {unit.active_task_status && (
-                      <TaskStatusBadge status={unit.active_task_status as WorkerTaskStatus} />
+                      <TaskStatusBadge
+                        status={unit.active_task_status as WorkerTaskStatus}
+                      />
                     )}
-                    {unit.latest_task_failed && <Badge variant="danger">最近失败</Badge>}
-                    {unit.stale && <Badge variant="warning">超 7 天未成功</Badge>}
+                    {unit.latest_task_failed && (
+                      <Badge variant="danger">最近失败</Badge>
+                    )}
+                    {unit.stale && (
+                      <Badge variant="warning">超 7 天未成功</Badge>
+                    )}
                     <span
                       className="text-xs text-ink-muted"
-                      title={unit.last_success_at ? formatDateTimeFromMs(unit.last_success_at) : undefined}
+                      title={
+                        unit.last_success_at
+                          ? formatDateTimeFromMs(unit.last_success_at)
+                          : undefined
+                      }
                     >
-                      {unit.last_success_at ? formatRelativeTime(unit.last_success_at) : "从未成功"}
+                      {unit.last_success_at
+                        ? formatRelativeTime(unit.last_success_at)
+                        : "从未成功"}
                     </span>
                   </span>
                 </li>
@@ -87,26 +114,44 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
             data-testid="sync-health-fx"
           >
             <span className="text-ink">汇率</span>
-            <span className="font-mono text-xs text-ink-muted">{pair.pair}</span>
+            <span className="font-mono text-xs text-ink-muted">
+              {pair.pair}
+            </span>
             <span
               className="ml-auto text-xs text-ink-muted"
-              title={pair.last_success_at ? formatDateTimeFromMs(pair.last_success_at) : undefined}
+              title={
+                pair.last_success_at
+                  ? formatDateTimeFromMs(pair.last_success_at)
+                  : undefined
+              }
             >
-              {pair.last_success_at ? formatRelativeTime(pair.last_success_at) : "从未成功"}
+              {pair.last_success_at
+                ? formatRelativeTime(pair.last_success_at)
+                : "从未成功"}
             </span>
           </li>
         ))}
-        {health.directory_scopes.length === 0 && health.fx_pairs.length === 0 && (
-          <li className="text-xs text-ink-muted">尚无同步记录。</li>
-        )}
+        {health.directory_scopes.length === 0 &&
+          health.fx_pairs.length === 0 && (
+            <li className="text-xs text-ink-muted">尚无同步记录。</li>
+          )}
       </ul>
-      <p className="mt-3 border-t border-line pt-3 text-xs text-ink-muted" data-testid="history-dimensions">
+      <p
+        className="mt-3 border-t border-line pt-3 text-xs text-ink-muted"
+        data-testid="history-dimensions"
+      >
         历史维度 {health.history_dimensions.total} 个
         {health.history_dimensions.stale_over_7d > 0 && (
-          <span className="text-warning"> · {health.history_dimensions.stale_over_7d} 个超 7 天未更新</span>
+          <span className="text-warning">
+            {" "}
+            · {health.history_dimensions.stale_over_7d} 个超 7 天未更新
+          </span>
         )}
         {health.history_dimensions.never_synced > 0 && (
-          <span className="text-warning"> · {health.history_dimensions.never_synced} 个从未同步</span>
+          <span className="text-warning">
+            {" "}
+            · {health.history_dimensions.never_synced} 个从未同步
+          </span>
         )}
       </p>
     </div>

@@ -13,11 +13,11 @@ import (
 func (s Services) registerAnalysisRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans/:plan_id/stress-tests", s.createStressTest)
 	rg.GET("/plans/:plan_id/stress-tests", s.listStressTests)
-	rg.GET("/stress-tests/:job_id", s.getStressTest)
+	rg.GET("/stress-tests/:task_id", s.getStressTest)
 
 	rg.POST("/plans/:plan_id/sensitivity-tests", s.createSensitivityTest)
 	rg.GET("/plans/:plan_id/sensitivity-tests", s.listSensitivityTests)
-	rg.GET("/sensitivity-tests/:job_id", s.getSensitivityTest)
+	rg.GET("/sensitivity-tests/:task_id", s.getSensitivityTest)
 }
 
 func (s Services) createStressTest(c *gin.Context) {
@@ -56,7 +56,7 @@ func (s Services) listStressTests(c *gin.Context) {
 }
 
 func (s Services) getStressTest(c *gin.Context) {
-	out, err := s.Stress.GetByJobID(c.Request.Context(), c.Param("job_id"))
+	out, err := s.Stress.GetByTaskID(c.Request.Context(), c.Param("task_id"))
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -100,7 +100,7 @@ func (s Services) listSensitivityTests(c *gin.Context) {
 }
 
 func (s Services) getSensitivityTest(c *gin.Context) {
-	out, err := s.Sensitivity.GetByJobID(c.Request.Context(), c.Param("job_id"))
+	out, err := s.Sensitivity.GetByTaskID(c.Request.Context(), c.Param("task_id"))
 	if err != nil {
 		FailErr(c, err)
 		return

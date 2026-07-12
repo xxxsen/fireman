@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,8 +19,7 @@ func newAdminStack(t *testing.T) (*AdminService, *sql.DB) {
 	assets := repository.NewMarketAssetRepo(db)
 	svc := NewAdminService(
 		tasks,
-		repository.NewJobRepo(db),
-		repository.NewPostProcessRecordRepo(db),
+		repository.NewWorkerTaskFinalizeRecordRepo(db),
 		assets,
 		NewMarketAssetService(db, tasks, assets),
 		nil, // resource db absent: storage degrades to zero
@@ -40,18 +40,26 @@ type adminTaskSeed struct {
 	HeartbeatAt    *int64
 }
 
+var adminTaskVersion atomic.Int64
+
 func seedAdminTask(t *testing.T, db *sql.DB, s adminTaskSeed) {
 	t.Helper()
 	if s.Type == "" {
 		s.Type = repository.WorkerTaskTypeAssetHistorySync
 	}
+	var leaseExpiresAt *int64
+	if s.HeartbeatAt != nil {
+		lease := *s.HeartbeatAt + adminStaleHeartbeat.Milliseconds()
+		leaseExpiresAt = &lease
+	}
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO worker_tasks
-			(id, version_no, type, status, dedupe_key, payload_json, result_data,
-			 heartbeat_at, created_at, started_at, pre_completed_at, finished_at)
-		VALUES (?,?,?,?,?,'{"k":1}','',?,?,?,?,?)`,
-		s.ID, 1, s.Type, s.Status, s.DedupeKey,
-		s.HeartbeatAt, s.CreatedAt, s.StartedAt, s.PreCompletedAt, s.FinishedAt); err != nil {
+			(id, version_no, worker_type, type, status, dedupe_key, payload_json,
+			 available_at, heartbeat_at, lease_expires_at, created_at, started_at, pre_completed_at, finished_at, updated_at)
+		VALUES (?,?, 'sidecar_worker', ?,?,?,'{"k":1}',?,?,?,?,?,?,?,?)`,
+		s.ID, adminTaskVersion.Add(1), s.Type, s.Status, s.DedupeKey,
+		s.CreatedAt, s.HeartbeatAt, leaseExpiresAt, s.CreatedAt, s.StartedAt, s.PreCompletedAt,
+		s.FinishedAt, s.CreatedAt); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
 }
@@ -89,22 +97,9 @@ func TestAdminOverview_Aggregation(t *testing.T) {
 		ID: "t_done", Status: "complete", CreatedAt: now - 100, FinishedAt: ptr(now - 50),
 	})
 
-	// Jobs.
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO jobs (id, type, status, input_hash, progress_current, progress_total,
-			phase, cancel_requested, retry_count, created_at, finished_at)
-		VALUES
-			('j_q','simulation','queued','',0,0,'',0,0,?,NULL),
-			('j_r','simulation','running','',1,10,'mc',0,0,?,NULL),
-			('j_f','stress','failed','',0,0,'',0,0,?,?),
-			('j_s','simulation','succeeded','',0,0,'',0,0,?,?)`,
-		now, now, now-7200_000, now-3600_000, now-7200_000, now-3600_000); err != nil {
-		t.Fatal(err)
-	}
-
-	// Callbacks.
-	records := repository.NewPostProcessRecordRepo(db)
-	for _, rec := range []repository.PostProcessRecord{
+	// Finalizations.
+	records := repository.NewWorkerTaskFinalizeRecordRepo(db)
+	for _, rec := range []repository.WorkerTaskFinalizeRecord{
 		{TaskID: "t_done", Result: "success", CreatedAt: now - 1000},
 		{TaskID: "t_fail_in", Result: "permanent_error", CreatedAt: now - 2000},
 		{TaskID: "t_old", Result: "retryable_error", CreatedAt: dayAgo - 1},
@@ -154,13 +149,8 @@ func TestAdminOverview_Aggregation(t *testing.T) {
 		t.Fatalf("stale_running=%d, want strict 60s boundary", out.WorkerTasks.StaleRunning)
 	}
 
-	if out.Jobs.Queued != 1 || out.Jobs.Running != 1 ||
-		out.Jobs.FailedLast24h != 1 || out.Jobs.SucceededLast24h != 1 {
-		t.Fatalf("job stats=%+v", out.Jobs)
-	}
-
-	if out.Callbacks.TotalLast24h != 2 || out.Callbacks.FailedLast24h != 1 {
-		t.Fatalf("callback stats=%+v", out.Callbacks)
+	if out.Finalizations.TotalLast24h != 2 || out.Finalizations.FailedLast24h != 1 {
+		t.Fatalf("finalization stats=%+v", out.Finalizations)
 	}
 
 	if len(out.SyncHealth.DirectoryScopes) != 3 {
@@ -322,7 +312,7 @@ func TestAdminWorkerTaskDetail_TimelineShapes(t *testing.T) {
 	if detail.Heartbeat != nil {
 		t.Fatalf("pending heartbeat=%+v", detail.Heartbeat)
 	}
-	if detail.PostProcessRecords == nil {
+	if detail.FinalizeRecords == nil {
 		t.Fatal("records must be non-nil for JSON shape")
 	}
 
@@ -377,73 +367,25 @@ func TestAdminWorkerTaskDetail_TimelineShapes(t *testing.T) {
 	}
 }
 
-func TestAdminListJobs_Validation(t *testing.T) {
+func TestAdminListFinalizeRecords_Validation(t *testing.T) {
 	svc, db := newAdminStack(t)
 	ctx := context.Background()
 
-	if _, err := svc.ListJobs(ctx, AdminJobListParams{Type: "bogus"}); err == nil {
-		t.Fatal("expected invalid type error")
-	}
-	if _, err := svc.ListJobs(ctx, AdminJobListParams{Status: "bogus"}); err == nil {
-		t.Fatal("expected invalid status error")
-	}
-
-	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO jobs (id, type, status, input_hash, progress_current, progress_total,
-			phase, cancel_requested, retry_count, created_at)
-		VALUES ('j1','simulation','queued','',0,0,'',0,0,?),
-		       ('j2','simulation','succeeded','',0,0,'',0,0,?)`, now, now); err != nil {
-		t.Fatal(err)
-	}
-	page, err := svc.ListJobs(ctx, AdminJobListParams{Status: "active"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.Total != 1 || page.Items[0].ID != "j1" {
-		t.Fatalf("active jobs=%+v", page)
-	}
-}
-
-func TestAdminListJobs_ResearchOptimizationType(t *testing.T) {
-	svc, db := newAdminStack(t)
-	ctx := context.Background()
-
-	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO jobs (id, type, status, input_hash, progress_current, progress_total,
-			phase, cancel_requested, retry_count, created_at)
-		VALUES ('j_opt','research_optimization_backtest','queued','',0,0,'',0,0,?)`, now); err != nil {
-		t.Fatal(err)
-	}
-	page, err := svc.ListJobs(ctx, AdminJobListParams{Type: "research_optimization_backtest"})
-	if err != nil {
-		t.Fatalf("expected research_optimization_backtest to be valid type: %v", err)
-	}
-	if page.Total != 1 || page.Items[0].ID != "j_opt" {
-		t.Fatalf("expected 1 optimization job, got %+v", page)
-	}
-}
-
-func TestAdminListPostProcessRecords_Validation(t *testing.T) {
-	svc, db := newAdminStack(t)
-	ctx := context.Background()
-
-	if _, err := svc.ListPostProcessRecords(ctx, AdminPostProcessRecordParams{Result: "bogus"}); err == nil {
+	if _, err := svc.ListFinalizeRecords(ctx, AdminFinalizeRecordParams{Result: "bogus"}); err == nil {
 		t.Fatal("expected invalid result error")
 	}
-	if _, err := svc.ListPostProcessRecords(ctx, AdminPostProcessRecordParams{TaskType: "bogus"}); err == nil {
+	if _, err := svc.ListFinalizeRecords(ctx, AdminFinalizeRecordParams{TaskType: "bogus"}); err == nil {
 		t.Fatal("expected invalid task_type error")
 	}
 
-	records := repository.NewPostProcessRecordRepo(db)
-	if err := records.Insert(ctx, repository.PostProcessRecord{
+	records := repository.NewWorkerTaskFinalizeRecordRepo(db)
+	if err := records.Insert(ctx, repository.WorkerTaskFinalizeRecord{
 		TaskID: "t1", TaskType: repository.WorkerTaskTypeFXRateSync,
 		Result: "success", CreatedAt: 100,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	page, err := svc.ListPostProcessRecords(ctx, AdminPostProcessRecordParams{Result: "success"})
+	page, err := svc.ListFinalizeRecords(ctx, AdminFinalizeRecordParams{Result: "success"})
 	if err != nil {
 		t.Fatal(err)
 	}

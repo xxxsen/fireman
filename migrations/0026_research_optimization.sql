@@ -4,8 +4,7 @@
 CREATE TABLE research_optimization_runs (
   id                    TEXT PRIMARY KEY,
   collection_id         TEXT NOT NULL,
-  job_id                TEXT NOT NULL UNIQUE,
-  status                TEXT NOT NULL DEFAULT 'queued',
+  task_id               TEXT NOT NULL UNIQUE,
   input_hash            TEXT NOT NULL,
   source_hash           TEXT NOT NULL,
   engine_version        TEXT NOT NULL,
@@ -18,12 +17,10 @@ CREATE TABLE research_optimization_runs (
   candidate_count       INTEGER NOT NULL DEFAULT 0,
   evaluated_count       INTEGER NOT NULL DEFAULT 0,
   result_json           TEXT NOT NULL DEFAULT '{}',
-  error_code            TEXT NOT NULL DEFAULT '',
-  error_message         TEXT NOT NULL DEFAULT '',
   created_at            INTEGER NOT NULL,
   completed_at          INTEGER,
   FOREIGN KEY(collection_id) REFERENCES research_collections(id) ON DELETE CASCADE,
-  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_research_optimization_runs_collection

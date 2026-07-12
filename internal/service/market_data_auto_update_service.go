@@ -130,6 +130,31 @@ func nextScanTime(now time.Time, intervalMinutes int, loc *time.Location) time.T
 	return time.Date(local.Year(), local.Month(), local.Day()+1, 0, autoUpdateScanMinute, 0, 0, loc)
 }
 
+// currentScanSlot returns the latest configured wall-clock scan slot at or
+// before now. Startup catch-up before 00:10 therefore belongs to yesterday's
+// last slot, while the scheduled 00:10 scan gets a distinct idempotency key.
+func currentScanSlot(now time.Time, intervalMinutes int, loc *time.Location) time.Time {
+	local := now.In(loc)
+	var latest time.Time
+	for dayOffset := -2; dayOffset <= 0; dayOffset++ {
+		date := time.Date(
+			local.Year(), local.Month(), local.Day()+dayOffset, 0, 0, 0, 0, loc,
+		)
+		for minuteOffset := autoUpdateScanMinute; minuteOffset < 24*60; minuteOffset += intervalMinutes {
+			candidate := time.Date(
+				date.Year(), date.Month(), date.Day(), minuteOffset/60, minuteOffset%60, 0, 0, loc,
+			)
+			if !candidate.After(now) && (latest.IsZero() || candidate.After(latest)) {
+				latest = candidate
+			}
+		}
+	}
+	if latest.IsZero() {
+		return now
+	}
+	return latest
+}
+
 func (s *AutoUpdateService) DirectoryUnits() []AutoUpdateDirectoryUnitView {
 	items := make([]AutoUpdateDirectoryUnitView, 0, len(directorySyncUnits))
 	for _, unit := range directorySyncUnits {
@@ -439,24 +464,29 @@ func (s *AutoUpdateService) HistoryRule(
 	return view, true, nil
 }
 
-type autoUpdateScanCounts struct {
-	candidates int
-	created    int
-	reused     int
-	failed     int
+type AutoUpdateScanSummary struct {
+	Candidates int `json:"candidates"`
+	Created    int `json:"created"`
+	Reused     int `json:"reused"`
+	Failed     int `json:"failed"`
 }
 
 func (s *AutoUpdateService) RunOnce(ctx context.Context) error {
+	_, err := s.RunOnceSummary(ctx)
+	return err
+}
+
+func (s *AutoUpdateService) RunOnceSummary(ctx context.Context) (AutoUpdateScanSummary, error) {
 	startedAt := s.now()
 	now := startedAt.UnixMilli()
 	if err := s.repo.Reconcile(ctx, now); err != nil {
-		return wrapRepo("reconcile automatic update tasks", err)
+		return AutoUpdateScanSummary{}, wrapRepo("reconcile automatic update tasks", err)
 	}
-	counts := autoUpdateScanCounts{}
+	counts := AutoUpdateScanSummary{}
 	for {
 		done, err := s.runBatch(ctx, now, &counts)
 		if err != nil {
-			return err
+			return counts, err
 		}
 		if done {
 			break
@@ -465,19 +495,19 @@ func (s *AutoUpdateService) RunOnce(ctx context.Context) error {
 	slog.InfoContext(
 		ctx,
 		"auto update scan complete",
-		"candidates", counts.candidates,
-		"created", counts.created,
-		"reused", counts.reused,
-		"failed", counts.failed,
+		"candidates", counts.Candidates,
+		"created", counts.Created,
+		"reused", counts.Reused,
+		"failed", counts.Failed,
 		"duration_ms", s.now().Sub(startedAt).Milliseconds(),
 	)
-	return nil
+	return counts, nil
 }
 
 func (s *AutoUpdateService) runBatch(
 	ctx context.Context,
 	now int64,
-	counts *autoUpdateScanCounts,
+	counts *AutoUpdateScanSummary,
 ) (bool, error) {
 	rules, err := s.repo.Due(ctx, now, autoUpdateBatchSize)
 	if err != nil {
@@ -486,7 +516,7 @@ func (s *AutoUpdateService) runBatch(
 	if len(rules) == 0 {
 		return true, nil
 	}
-	counts.candidates += len(rules)
+	counts.Candidates += len(rules)
 	for _, rule := range rules {
 		s.scheduleRule(ctx, rule, now, counts)
 	}
@@ -497,7 +527,7 @@ func (s *AutoUpdateService) scheduleRule(
 	ctx context.Context,
 	rule repository.MarketDataAutoUpdateRule,
 	now int64,
-	counts *autoUpdateScanCounts,
+	counts *AutoUpdateScanSummary,
 ) {
 	task, err := s.enqueueRule(ctx, rule, now)
 	if errors.Is(err, repository.ErrAutoUpdateRuleNotFound) {
@@ -505,14 +535,14 @@ func (s *AutoUpdateService) scheduleRule(
 	}
 	if err != nil {
 		s.markScanFailure(ctx, rule, err)
-		counts.failed++
+		counts.Failed++
 		return
 	}
 	if task.Existed {
-		counts.reused++
+		counts.Reused++
 		return
 	}
-	counts.created++
+	counts.Created++
 }
 
 func (s *AutoUpdateService) enqueueRule(
@@ -593,9 +623,14 @@ type AutoUpdateScheduler struct {
 	now             func() time.Time
 	after           func(time.Duration) <-chan time.Time
 	scan            func(context.Context)
+	enqueue         func(context.Context, int64) error
 	cancel          context.CancelFunc
 	done            chan struct{}
 	once            sync.Once
+}
+
+func (s *AutoUpdateScheduler) SetTaskEnqueuer(enqueue func(context.Context, int64) error) {
+	s.enqueue = enqueue
 }
 
 func NewAutoUpdateScheduler(service *AutoUpdateService, intervalMinutes int) *AutoUpdateScheduler {
@@ -634,11 +669,14 @@ func (s *AutoUpdateScheduler) run(ctx context.Context) {
 }
 
 func (s *AutoUpdateScheduler) runOnce(ctx context.Context) {
-	scanCtx, cancel := context.WithTimeout(ctx, autoUpdateScanTimeout)
-	defer cancel()
-	slog.InfoContext(scanCtx, "auto update scan starting")
-	if err := s.svc.RunOnce(scanCtx); err != nil {
-		slog.ErrorContext(scanCtx, "auto update scan failed", "error", err)
+	if s.enqueue == nil {
+		slog.ErrorContext(ctx, "auto update scan task enqueuer is not configured")
+		return
+	}
+	now := s.now()
+	slot := currentScanSlot(now, s.intervalMinutes, s.loc).UnixMilli()
+	if err := s.enqueue(ctx, slot); err != nil {
+		slog.ErrorContext(ctx, "enqueue auto update scan task failed", "error", err, "slot", slot)
 	}
 }
 

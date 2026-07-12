@@ -6,17 +6,25 @@ import type { WorkerTask } from "@/lib/api/market-assets";
 import { DataStatusPanel, syncFailureSuggestion } from "./DataStatusPanel";
 
 const syncCollectionHistoryMock = vi.hoisted(() => vi.fn());
+const getCollectionSyncStatusMock = vi.hoisted(() => vi.fn());
 const getTaskMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/research", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/research")>()),
   syncCollectionHistory: (...args: unknown[]) =>
     syncCollectionHistoryMock(...args),
+  getCollectionSyncStatus: (...args: unknown[]) =>
+    getCollectionSyncStatusMock(...args),
 }));
 
 vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/market-assets")>()),
+}));
+
+vi.mock("@/lib/api/simulations", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/simulations")>()),
   getTask: (...args: unknown[]) => getTaskMock(...args),
+  subscribeTaskEvents: () => null,
 }));
 
 function task(overrides: Partial<WorkerTask> = {}): WorkerTask {
@@ -84,7 +92,35 @@ describe("syncFailureSuggestion", () => {
 describe("DataStatusPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getCollectionSyncStatusMock.mockResolvedValue({
+      assets: [],
+      fx: [],
+      blocked: [],
+    });
     getTaskMock.mockResolvedValue(task({ status: "complete" }));
+  });
+
+  it("restores active sync tasks after remount and blocks duplicate submission", async () => {
+    getCollectionSyncStatusMock.mockResolvedValue({
+      assets: [
+        {
+          asset_key: "CN|a",
+          status: "existed",
+          task: task({ id: "wt_restored", status: "running" }),
+        },
+      ],
+      fx: [],
+      blocked: [],
+    });
+    getTaskMock.mockResolvedValue(
+      task({ id: "wt_restored", status: "running" }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByText("已有同步任务，复用中")).toBeInTheDocument();
+    expect(screen.getByTestId("sync-collection")).toBeDisabled();
+    expect(syncCollectionHistoryMock).not.toHaveBeenCalled();
   });
 
   it("shows ready badge and dependency facts", () => {
@@ -167,7 +203,9 @@ describe("DataStatusPanel", () => {
       ],
     });
     renderPanel();
-    fireEvent.click(screen.getByTestId("sync-collection"));
+    const syncButton = screen.getByTestId("sync-collection");
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    fireEvent.click(syncButton);
     expect(await screen.findByTestId("sync-task-panel")).toBeInTheDocument();
     expect(syncCollectionHistoryMock).toHaveBeenCalledWith("rc_1", undefined);
     expect(screen.getByText("已有同步任务，复用中")).toBeInTheDocument();
@@ -188,7 +226,9 @@ describe("DataStatusPanel", () => {
     getTaskMock.mockResolvedValue(task({ id: "wt_a", status: "complete" }));
     const { client } = renderPanel();
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
-    fireEvent.click(screen.getByTestId("sync-collection"));
+    const syncButton = screen.getByTestId("sync-collection");
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    fireEvent.click(syncButton);
     await screen.findByTestId("sync-task-panel");
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({
@@ -221,7 +261,9 @@ describe("DataStatusPanel", () => {
     const { client } = renderPanel();
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
 
-    fireEvent.click(screen.getByTestId("sync-collection"));
+    const syncButton = screen.getByTestId("sync-collection");
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    fireEvent.click(syncButton);
     await screen.findByTestId("sync-task-panel");
 
     await waitFor(() => {
@@ -247,7 +289,9 @@ describe("DataStatusPanel", () => {
     });
     getTaskMock.mockResolvedValue(failedTask);
     renderPanel();
-    fireEvent.click(screen.getByTestId("sync-collection"));
+    const syncButton = screen.getByTestId("sync-collection");
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    fireEvent.click(syncButton);
     await screen.findByTestId("sync-task-panel");
     expect(await screen.findByText("sidecar unreachable")).toBeInTheDocument();
     expect(screen.getByText(/sidecar 已启动后重试/)).toBeInTheDocument();

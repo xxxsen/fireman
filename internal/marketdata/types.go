@@ -7,7 +7,7 @@ type HistoricalPoint struct {
 }
 
 // FetchData is the normalized history payload produced by the sidecar worker
-// (uploaded as a resource and consumed by Go post-process; formerly
+// (uploaded as a resource and consumed by Go finalization; formerly
 // the synchronous /v1/instruments/fetch response body).
 type FetchData struct {
 	Provider               string            `json:"provider"`

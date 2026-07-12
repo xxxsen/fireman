@@ -71,7 +71,7 @@ func TestMaxSeedRoundTripIntegration(t *testing.T) {
 	}
 	simEnv := decodeEnvelope(t, readBody(t, simResp))
 	runID := simEnv["data"].(map[string]any)["run_id"].(string)
-	jobID := simEnv["data"].(map[string]any)["job_id"].(string)
+	jobID := simEnv["data"].(map[string]any)["task_id"].(string)
 	waitJobSucceeded(t, srv, jobID)
 
 	runResp, err := client.Get(srv.URL + "/api/v1/simulations/" + runID)

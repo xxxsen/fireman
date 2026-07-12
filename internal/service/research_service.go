@@ -20,18 +20,19 @@ import (
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 // ResearchService orchestrates the portfolio research module (td/099):
 // screener, collections, readiness, batch history sync, backtest runs and
 // plan interop. Market data always flows through MarketAssetService tasks;
-// backtests run on the local jobs queue.
+// backtests run on the local task queue.
 type ResearchService struct {
 	sql                     *sql.DB
 	research                *repository.ResearchRepo
 	assets                  *repository.MarketAssetRepo
 	tasks                   *repository.WorkerTaskRepo
-	jobs                    *repository.JobRepo
+	coordinator             *taskcore.Coordinator
 	instruments             *repository.InstrumentRepo
 	marketData              *repository.MarketDataRepo
 	plans                   *repository.PlanRepo
@@ -51,7 +52,7 @@ func NewResearchService(
 	research *repository.ResearchRepo,
 	assets *repository.MarketAssetRepo,
 	tasks *repository.WorkerTaskRepo,
-	jobs *repository.JobRepo,
+	coordinator *taskcore.Coordinator,
 	instruments *repository.InstrumentRepo,
 	marketData *repository.MarketDataRepo,
 	plans *repository.PlanRepo,
@@ -64,7 +65,7 @@ func NewResearchService(
 		research:                research,
 		assets:                  assets,
 		tasks:                   tasks,
-		jobs:                    jobs,
+		coordinator:             coordinator,
 		instruments:             instruments,
 		marketData:              marketData,
 		plans:                   plans,
@@ -1424,6 +1425,61 @@ type ResearchSyncResult struct {
 	Blocked []ResearchSyncBlocked     `json:"blocked"`
 }
 
+// GetCollectionSyncStatus returns only currently active sync tasks. It is a
+// read-only counterpart to SyncCollectionHistory, used to restore UI state
+// after navigation or a browser reload without creating another batch.
+func (s *ResearchService) GetCollectionSyncStatus(
+	ctx context.Context, collectionID string,
+) (ResearchSyncResult, error) {
+	out := ResearchSyncResult{
+		Assets:  []ResearchSyncAssetResult{},
+		FX:      []ResearchSyncFXResult{},
+		Blocked: []ResearchSyncBlocked{},
+	}
+	collection, err := s.research.GetCollection(ctx, collectionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrResearchCollectionNotFound) {
+			return out, newErr(
+				"research_collection_not_found", "research collection not found", nil,
+			)
+		}
+		return out, wrapRepo("load research collection", err)
+	}
+	ds, err := s.loadResearchDataset(ctx, collection)
+	if err != nil {
+		return out, err
+	}
+	for _, asset := range ds.Enabled {
+		if asset.IsCash || asset.Task == nil ||
+			!repository.IsActiveWorkerTaskStatus(asset.Task.Status) {
+			continue
+		}
+		task := taskToView(*asset.Task)
+		out.Assets = append(out.Assets, ResearchSyncAssetResult{
+			AssetKey: asset.Item.AssetKey,
+			Status:   "existed",
+			Task:     &task,
+		})
+	}
+	if len(ds.FXPairs) == 0 {
+		return out, nil
+	}
+	fxTask, hasFXTask, err := s.fxSyncTask(ctx)
+	if err != nil {
+		return out, err
+	}
+	if !hasFXTask || !repository.IsActiveWorkerTaskStatus(fxTask.Status) {
+		return out, nil
+	}
+	task := taskToView(fxTask)
+	for _, pair := range ds.FXPairs {
+		out.FX = append(out.FX, ResearchSyncFXResult{
+			Pair: pair, Status: "existed", Task: &task,
+		})
+	}
+	return out, nil
+}
+
 // SyncCollectionHistory batch-creates (or reuses) asset_history_sync tasks
 // for enabled assets that need data, plus fx_rate_sync for cross-currency
 // collections (td/099 §3.5).
@@ -1673,7 +1729,7 @@ type researchSnapshotSeries struct {
 }
 
 // CreateBacktest gates on readiness, freezes the input snapshot, computes
-// source/input hashes and either reuses an existing run or creates job+run
+// source/input hashes and either reuses an existing run or creates task+run
 // in one transaction (td/099 §5.5).
 func (s *ResearchService) CreateBacktest(
 	ctx context.Context, collectionID string,
@@ -1715,17 +1771,17 @@ func (s *ResearchService) CreateBacktest(
 
 	now := s.now().UnixMilli()
 	runID := "rbr_" + uuid.New().String()
-	jobID := "job_" + uuid.New().String()
+	taskID := "task_" + uuid.New().String()
 	payloadJSON, err := json.Marshal(map[string]string{
 		"run_id": runID, "collection_id": collectionID,
 	})
 	if err != nil {
-		return zero, fmt.Errorf("marshal job payload: %w", err)
+		return zero, fmt.Errorf("marshal task payload: %w", err)
 	}
 	run := repository.ResearchBacktestRun{
 		ID:                runID,
 		CollectionID:      collectionID,
-		JobID:             jobID,
+		TaskID:            taskID,
 		InputHash:         inputHash,
 		InputSnapshotJSON: string(snapshotJSON),
 		SourceHash:        snapshot.SourceHash,
@@ -1734,7 +1790,7 @@ func (s *ResearchService) CreateBacktest(
 		RebalancePolicy:   collection.RebalancePolicy,
 		WindowStart:       snapshot.WindowStart,
 		WindowEnd:         snapshot.WindowEnd,
-		Status:            repository.ResearchRunStatusQueued,
+		Status:            repository.WorkerTaskStatusPending,
 		SummaryJSON:       "{}",
 		DataQualityJSON:   "{}",
 		CreatedAt:         now,
@@ -1771,12 +1827,16 @@ func (s *ResearchService) persistQueuedResearchRun(
 	inputHash, payloadJSON string,
 	now int64,
 ) error {
-	job := repository.Job{
-		ID: run.JobID, Type: repository.JobTypeResearchBacktest,
-		Status: repository.JobStatusQueued, InputHash: inputHash,
-		PayloadJSON: payloadJSON, CreatedAt: now,
+	task := repository.WorkerTask{
+		ID: run.TaskID, WorkerType: repository.WorkerTypeGo,
+		Type:      repository.WorkerTaskTypeResearchBacktest,
+		Status:    repository.WorkerTaskStatusPending,
+		ScopeType: "research_collection", ScopeID: run.CollectionID,
+		DedupeKey: repository.WorkerTaskTypeResearchBacktest + "|collection:" + run.CollectionID + "|input:" + inputHash,
+		InputHash: inputHash, PayloadJSON: payloadJSON, ProgressTotal: researchJobPhases,
+		CreatedAt: now,
 	}
-	return s.persistQueuedResearchJob(ctx, job, "create research backtest", func(tx *sql.Tx) error {
+	return s.persistQueuedResearchTask(ctx, task, "create research backtest", func(tx *sql.Tx) error {
 		if err := s.research.CreateRunTx(ctx, tx, run); err != nil {
 			return fmt.Errorf("create research backtest run: %w", err)
 		}
@@ -1784,15 +1844,15 @@ func (s *ResearchService) persistQueuedResearchRun(
 	})
 }
 
-func (s *ResearchService) persistQueuedResearchJob(
+func (s *ResearchService) persistQueuedResearchTask(
 	ctx context.Context,
-	job repository.Job,
+	task repository.WorkerTask,
 	operation string,
 	createRun func(*sql.Tx) error,
 ) error {
 	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.jobs.Create(ctx, tx, job); err != nil {
-			return fmt.Errorf("create research job: %w", err)
+		if err := s.coordinator.CreateTx(ctx, tx, &task); err != nil {
+			return fmt.Errorf("create research task: %w", err)
 		}
 		return createRun(tx)
 	})
@@ -2041,58 +2101,54 @@ type ResearchRunSummaryView = BacktestSummary
 
 // ResearchRunView is the API shape of one run.
 type ResearchRunView struct {
-	ID              string           `json:"id"`
-	CollectionID    string           `json:"collection_id"`
-	JobID           string           `json:"job_id"`
-	InputHash       string           `json:"input_hash"`
-	SourceHash      string           `json:"source_hash"`
-	EngineVersion   string           `json:"engine_version"`
-	BaseCurrency    string           `json:"base_currency"`
-	RebalancePolicy string           `json:"rebalance_policy"`
-	WindowStart     string           `json:"window_start"`
-	WindowEnd       string           `json:"window_end"`
-	Status          string           `json:"status"`
-	Summary         json.RawMessage  `json:"summary,omitempty"`
-	DataQuality     json.RawMessage  `json:"data_quality,omitempty"`
-	CreatedAt       int64            `json:"created_at"`
-	CompletedAt     *int64           `json:"completed_at,omitempty"`
-	Job             *ResearchJobView `json:"job,omitempty"`
+	ID              string            `json:"id"`
+	CollectionID    string            `json:"collection_id"`
+	TaskID          string            `json:"task_id"`
+	InputHash       string            `json:"input_hash"`
+	SourceHash      string            `json:"source_hash"`
+	EngineVersion   string            `json:"engine_version"`
+	BaseCurrency    string            `json:"base_currency"`
+	RebalancePolicy string            `json:"rebalance_policy"`
+	WindowStart     string            `json:"window_start"`
+	WindowEnd       string            `json:"window_end"`
+	Status          string            `json:"status"`
+	Summary         json.RawMessage   `json:"summary,omitempty"`
+	DataQuality     json.RawMessage   `json:"data_quality,omitempty"`
+	CreatedAt       int64             `json:"created_at"`
+	CompletedAt     *int64            `json:"completed_at,omitempty"`
+	Task            *ResearchTaskView `json:"task,omitempty"`
 }
 
-// ResearchJobView is the embedded job progress block.
-type ResearchJobView struct {
+// ResearchTaskView is the embedded task progress block.
+type ResearchTaskView struct {
 	Status          string `json:"status"`
 	Phase           string `json:"phase"`
 	ProgressCurrent int    `json:"progress_current"`
 	ProgressTotal   int    `json:"progress_total"`
-	RetryCount      int    `json:"retry_count"`
+	AttemptCount    int    `json:"attempt_count"`
 	HeartbeatAt     *int64 `json:"heartbeat_at,omitempty"`
 	ErrorCode       string `json:"error_code,omitempty"`
 	ErrorMessage    string `json:"error_message,omitempty"`
 }
 
-func buildResearchJobView(job repository.Job) *ResearchJobView {
-	return &ResearchJobView{
-		Status:          job.Status,
-		Phase:           job.Phase,
-		ProgressCurrent: job.ProgressCurrent,
-		ProgressTotal:   job.ProgressTotal,
-		RetryCount:      job.RetryCount,
-		HeartbeatAt:     job.HeartbeatAt,
-		ErrorCode:       job.ErrorCode,
-		ErrorMessage:    job.ErrorMessage,
+func buildResearchTaskView(task repository.WorkerTask) *ResearchTaskView {
+	return &ResearchTaskView{
+		Status:          task.Status,
+		Phase:           task.Phase,
+		ProgressCurrent: task.ProgressCurrent,
+		ProgressTotal:   task.ProgressTotal,
+		AttemptCount:    task.AttemptCount,
+		HeartbeatAt:     task.HeartbeatAt,
+		ErrorCode:       task.ErrorCode,
+		ErrorMessage:    task.ErrorMessage,
 	}
 }
 
-func applyBacktestJobState(view *ResearchRunView, job repository.Job) {
-	view.Job = buildResearchJobView(job)
-	if view.Status != repository.ResearchRunStatusQueued &&
-		view.Status != repository.ResearchRunStatusRunning {
-		return
-	}
-	view.Status = job.Status
-	if job.FinishedAt != nil {
-		view.CompletedAt = job.FinishedAt
+func applyBacktestTaskState(view *ResearchRunView, task repository.WorkerTask) {
+	view.Task = buildResearchTaskView(task)
+	view.Status = task.Status
+	if task.FinishedAt != nil {
+		view.CompletedAt = task.FinishedAt
 	}
 }
 
@@ -2100,7 +2156,7 @@ func buildRunView(run repository.ResearchBacktestRun) ResearchRunView {
 	view := ResearchRunView{
 		ID:              run.ID,
 		CollectionID:    run.CollectionID,
-		JobID:           run.JobID,
+		TaskID:          run.TaskID,
 		InputHash:       run.InputHash,
 		SourceHash:      run.SourceHash,
 		EngineVersion:   run.EngineVersion,
@@ -2154,8 +2210,8 @@ func (s *ResearchService) GetRun(ctx context.Context, runID string) (ResearchRun
 	if run.InputSnapshotJSON != "" {
 		detail.InputSnapshot = json.RawMessage(run.InputSnapshotJSON)
 	}
-	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-		applyBacktestJobState(&detail.ResearchRunView, job)
+	if task, err := s.tasks.GetByID(ctx, run.TaskID); err == nil {
+		applyBacktestTaskState(&detail.ResearchRunView, task)
 	}
 	years, err := s.research.ListYears(ctx, runID)
 	if err != nil {
@@ -2176,7 +2232,7 @@ func (s *ResearchService) GetRun(ctx context.Context, runID string) (ResearchRun
 	return detail, nil
 }
 
-// ListRuns returns runs of one collection with embedded job progress for
+// ListRuns returns runs of one collection with embedded task progress for
 // active runs.
 func (s *ResearchService) ListRuns(
 	ctx context.Context, collectionID string, limit int,
@@ -2194,11 +2250,8 @@ func (s *ResearchService) ListRuns(
 	out := make([]ResearchRunView, 0, len(runs))
 	for _, run := range runs {
 		view := buildRunView(run)
-		if run.Status == repository.ResearchRunStatusQueued ||
-			run.Status == repository.ResearchRunStatusRunning {
-			if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-				applyBacktestJobState(&view, job)
-			}
+		if task, err := s.tasks.GetByID(ctx, run.TaskID); err == nil {
+			applyBacktestTaskState(&view, task)
 		}
 		out = append(out, view)
 	}
@@ -2573,7 +2626,8 @@ func (s *ResearchService) buildResearchPlanReplacement(
 			return researchPlanReplacement{}, newErr(
 				"holding_duplicate", "research collection contains duplicate asset", map[string]any{
 					"asset_key": item.AssetKey,
-				})
+				},
+			)
 		}
 		seenAssets[item.AssetKey] = struct{}{}
 		if item.Weight <= researchPlanWeightTolerance {
@@ -2619,7 +2673,8 @@ func (s *ResearchService) buildResearchPlanReplacement(
 			return researchPlanReplacement{}, newErr(
 				"market_asset_not_found", "research asset is not in the market directory", map[string]any{
 					"asset_key": item.AssetKey,
-				})
+				},
+			)
 		}
 		if !asset.Active {
 			return researchPlanReplacement{}, newErr("market_asset_inactive", "research asset is inactive", map[string]any{

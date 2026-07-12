@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
+	"github.com/fireman/fireman/internal/worker"
 
 	fdb "github.com/fireman/fireman/internal/db"
 )
@@ -26,12 +26,7 @@ func setupFullStackIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.C
 	t.Helper()
 	db, dbPath := testutil.OpenTestDBPath(t)
 	services := NewServices(db, dbPath, nil, nil, time.UTC)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(
-		db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
-		runner, analysisRunner, services.Research, services.EventHub, nil, nil,
-	)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go worker.Start(ctx, 1)
@@ -88,7 +83,7 @@ func TestSimulationJobPathAndStaleIntegration(t *testing.T) {
 	}
 	env := decodeEnvelope(t, readBody(t, resp))
 	runID := env["data"].(map[string]any)["run_id"].(string)
-	jobID := env["data"].(map[string]any)["job_id"].(string)
+	jobID := env["data"].(map[string]any)["task_id"].(string)
 	waitJobSucceeded(t, srv, jobID)
 
 	runResp, err := client.Get(srv.URL + "/api/v1/simulations/" + runID)
@@ -232,8 +227,8 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 		t.Fatalf("stress create status=%d body=%s", stressResp.StatusCode, readBody(t, stressResp))
 	}
 	stressEnv := decodeEnvelope(t, readBody(t, stressResp))
-	stressJobID := stressEnv["data"].(map[string]any)["job_id"].(string)
-	waitJobSucceeded(t, srv, stressJobID)
+	stressTaskID := stressEnv["data"].(map[string]any)["task_id"].(string)
+	waitJobSucceeded(t, srv, stressTaskID)
 
 	sensBody, _ := json.Marshal(map[string]any{"simulation_run_id": runID})
 	sensReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/plans/"+planID+"/sensitivity-tests",
@@ -247,8 +242,8 @@ func TestStressSensitivityChainIntegration(t *testing.T) {
 		t.Fatalf("sensitivity create status=%d", sensResp.StatusCode)
 	}
 	sensEnv := decodeEnvelope(t, readBody(t, sensResp))
-	sensJobID := sensEnv["data"].(map[string]any)["job_id"].(string)
-	waitJobSucceeded(t, srv, sensJobID)
+	sensTaskID := sensEnv["data"].(map[string]any)["task_id"].(string)
+	waitJobSucceeded(t, srv, sensTaskID)
 
 	listResp, err := client.Get(srv.URL + "/api/v1/plans/" + planID + "/stress-tests")
 	if err != nil {

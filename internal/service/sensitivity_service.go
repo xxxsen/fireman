@@ -10,6 +10,7 @@ import (
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/repository"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 // CreateSensitivityTestRequest starts a sensitivity analysis job against a run.
@@ -23,13 +24,13 @@ type CreateSensitivityTestRequest struct {
 
 // CreateSensitivityTestResponse returns the enqueued job.
 type CreateSensitivityTestResponse struct {
-	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
 	Status string `json:"status"`
 }
 
 // SensitivityTestView is the API view of a sensitivity test job.
 type SensitivityTestView struct {
-	JobID             string          `json:"job_id"`
+	TaskID            string          `json:"task_id"`
 	PlanID            string          `json:"plan_id"`
 	SimulationRunID   string          `json:"simulation_run_id"`
 	Status            string          `json:"status"`
@@ -40,26 +41,29 @@ type SensitivityTestView struct {
 	CreatedAt         int64           `json:"created_at"`
 }
 
-// SensitivityService orchestrates sensitivity test jobs.
+// SensitivityService orchestrates sensitivity test tasks.
 type SensitivityService struct {
-	sql      *sql.DB
-	plans    *repository.PlanRepo
-	jobs     *repository.JobRepo
-	analysis *repository.AnalysisRepo
-	sims     *SimulationService
-	hash     *ConfigHashService
+	sql         *sql.DB
+	plans       *repository.PlanRepo
+	tasks       *repository.WorkerTaskRepo
+	coordinator *taskcore.Coordinator
+	analysis    *repository.AnalysisRepo
+	sims        *SimulationService
+	hash        *ConfigHashService
 }
 
 func NewSensitivityService(
 	sqlDB *sql.DB,
 	plans *repository.PlanRepo,
-	jobs *repository.JobRepo,
+	tasks *repository.WorkerTaskRepo,
+	coordinator *taskcore.Coordinator,
 	analysis *repository.AnalysisRepo,
 	sims *SimulationService,
 	hash *ConfigHashService,
 ) *SensitivityService {
 	return &SensitivityService{
-		sql: sqlDB, plans: plans, jobs: jobs, analysis: analysis, sims: sims, hash: hash,
+		sql: sqlDB, plans: plans, tasks: tasks, coordinator: coordinator,
+		analysis: analysis, sims: sims, hash: hash,
 	}
 }
 
@@ -73,19 +77,20 @@ func (s *SensitivityService) Create(ctx context.Context,
 	inputHash := runCtx.InputHash
 
 	if req.IdempotencyKey != "" {
-		existing, found, err := findExistingIdempotentJob(
-			ctx, s.jobs, req.PlanID, repository.JobTypeSensitivity, req.IdempotencyKey, inputHash,
+		existing, found, err := findExistingIdempotentTask(
+			ctx, s.tasks, "plan", req.PlanID, repository.WorkerTaskTypeSensitivity,
+			req.IdempotencyKey, inputHash,
 			"find sensitivity idempotency",
 		)
 		if err != nil {
 			return CreateSensitivityTestResponse{}, err
 		}
 		if found {
-			return CreateSensitivityTestResponse{JobID: existing.ID, Status: existing.Status}, nil
+			return CreateSensitivityTestResponse{TaskID: existing.ID, Status: existing.Status}, nil
 		}
 	}
 
-	jobID := "job_" + uuid.New().String()
+	taskID := "task_" + uuid.New().String()
 	pending, err := marshalPendingSnapshot(runCtx.Snapshot)
 	if err != nil {
 		return CreateSensitivityTestResponse{}, err
@@ -95,25 +100,33 @@ func (s *SensitivityService) Create(ctx context.Context,
 		// Each Monte Carlo run keeps only the latest sensitivity result; cancel
 		// any in-flight prior sensitivity job before dropping its record.
 		if err := supersedePriorAnalysis(
-			ctx, tx, s.jobs, s.analysis, runCtx.RunID, repository.AnalysisTypeSensitivity,
+			ctx, tx, s.coordinator, s.analysis, runCtx.RunID, repository.AnalysisTypeSensitivity,
 		); err != nil {
 			return err
 		}
-		if err := s.jobs.Create(ctx, tx, repository.Job{
-			ID: jobID, PlanID: req.PlanID, Type: repository.JobTypeSensitivity,
-			Status: repository.JobStatusQueued, InputHash: inputHash,
-			ProgressTotal: 50,
+		payload, marshalErr := json.Marshal(map[string]string{
+			"simulation_run_id": runCtx.RunID, "analysis_type": repository.AnalysisTypeSensitivity,
+		})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if err := s.coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+			ID: taskID, WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeSensitivity,
+			Status: repository.WorkerTaskStatusPending, ScopeType: "plan", ScopeID: req.PlanID,
+			DedupeKey: repository.WorkerTaskTypeSensitivity + "|simulation_run:" + runCtx.RunID,
+			InputHash: inputHash, PayloadJSON: string(payload), ProgressTotal: 50,
 		}); err != nil {
-			return wrapRepo("create sensitivity job", err)
+			return wrapRepo("create sensitivity task", err)
 		}
 		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
-			JobID: jobID, PlanID: req.PlanID, Type: repository.AnalysisTypeSensitivity,
+			TaskID: taskID, PlanID: req.PlanID, Type: repository.AnalysisTypeSensitivity,
 			InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
 		}); err != nil {
 			return wrapRepo("create sensitivity analysis pending", err)
 		}
 		if req.IdempotencyKey != "" {
-			return s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSensitivity, req.IdempotencyKey, jobID,
+			return s.tasks.SaveIdempotency(ctx, tx, "plan", req.PlanID,
+				repository.WorkerTaskTypeSensitivity, req.IdempotencyKey, taskID,
 				inputHash)
 		}
 		return nil
@@ -121,7 +134,7 @@ func (s *SensitivityService) Create(ctx context.Context,
 	if err != nil {
 		return CreateSensitivityTestResponse{}, wrapRepo("create sensitivity tx", err)
 	}
-	return CreateSensitivityTestResponse{JobID: jobID, Status: repository.JobStatusQueued}, nil
+	return CreateSensitivityTestResponse{TaskID: taskID, Status: repository.WorkerTaskStatusPending}, nil
 }
 
 func (s *SensitivityService) ListByPlan(ctx context.Context, planID string) ([]SensitivityTestView, error) {
@@ -166,8 +179,8 @@ func (s *SensitivityService) ListByRun(ctx context.Context, planID, runID string
 	return out, nil
 }
 
-func (s *SensitivityService) GetByJobID(ctx context.Context, jobID string) (SensitivityTestView, error) {
-	rec, err := s.analysis.GetByJobID(ctx, jobID)
+func (s *SensitivityService) GetByTaskID(ctx context.Context, taskID string) (SensitivityTestView, error) {
+	rec, err := s.analysis.GetByTaskID(ctx, taskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrAnalysisNotFound) {
 			return SensitivityTestView{}, newErr("sensitivity_test_not_found", "sensitivity test not found", nil)
@@ -184,12 +197,12 @@ func (s *SensitivityService) GetByJobID(ctx context.Context, jobID string) (Sens
 func (s *SensitivityService) toView(ctx context.Context, rec repository.AnalysisResult,
 	currentHash string,
 ) SensitivityTestView {
-	job, _ := s.jobs.GetByID(ctx, rec.JobID)
+	task, _ := s.tasks.GetByID(ctx, rec.TaskID)
 	stale := analysisResultStale(ctx, s.sims, rec.SimulationRunID, currentHash)
 	view := SensitivityTestView{
-		JobID: rec.JobID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
+		TaskID: rec.TaskID, PlanID: rec.PlanID, SimulationRunID: rec.SimulationRunID, InputHash: rec.InputHash,
 		CurrentConfigHash: currentHash, ResultStale: stale, CreatedAt: rec.CreatedAt,
-		Status: job.Status,
+		Status: task.Status,
 	}
 	if !isPendingResult(rec.ResultJSON) {
 		view.Result = json.RawMessage(rec.ResultJSON)

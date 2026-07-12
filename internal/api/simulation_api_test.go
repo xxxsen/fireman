@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	fdb "github.com/fireman/fireman/internal/db"
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/simulation"
@@ -261,9 +259,7 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 	planID := seedOneYearSimulationPlan(t, db)
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.Research, services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -284,27 +280,27 @@ func TestOneCompleteYearSimulationJobFlow(t *testing.T) {
 	}
 	env := decodeEnvelope(t, mustRead(t, resp))
 	data := env["data"].(map[string]any)
-	jobID := data["job_id"].(string)
+	taskID := data["task_id"].(string)
 	runID := data["run_id"].(string)
 
 	deadline := time.Now().Add(15 * time.Second)
-	jobSucceeded := false
+	taskComplete := false
 	for time.Now().Before(deadline) {
-		job, err := repository.NewJobRepo(db).GetByID(context.Background(), jobID)
+		task, err := repository.NewWorkerTaskRepo(db).GetByID(context.Background(), taskID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if job.Status == repository.JobStatusSucceeded {
-			jobSucceeded = true
+		if task.Status == repository.WorkerTaskStatusComplete {
+			taskComplete = true
 			break
 		}
-		if job.Status == repository.JobStatusFailed {
-			t.Fatalf("job failed: %s %s", job.ErrorCode, job.ErrorMessage)
+		if task.Status == repository.WorkerTaskStatusFailed {
+			t.Fatalf("task failed: %s %s", task.ErrorCode, task.ErrorMessage)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !jobSucceeded {
-		t.Fatal("simulation job did not complete")
+	if !taskComplete {
+		t.Fatal("simulation task did not complete")
 	}
 
 	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/simulations/" + runID)
@@ -377,9 +373,7 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 	}
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.Research, services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -435,13 +429,19 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 		t.Fatalf("current plan edit changed frozen comparison\nfirst=%+v\nsecond=%+v", data, repeated)
 	}
 
-	oldJobID, oldRunID := "job_old_compare", "run_old_compare"
-	if _, err := db.Exec(`INSERT INTO jobs (id, plan_id, type, status, input_hash, created_at)
-		VALUES (?, ?, 'simulation', 'succeeded', 'old', 1)`, oldJobID, planID); err != nil {
+	oldTaskID, oldRunID := "task_old_compare", "run_old_compare"
+	if err := fdb.WithTx(context.Background(), db, func(tx *sql.Tx) error {
+		return services.TaskCoordinator.CreateTx(context.Background(), tx, &repository.WorkerTask{
+			ID: oldTaskID, WorkerType: repository.WorkerTypeGo,
+			Type:   repository.WorkerTaskTypeSimulation,
+			Status: repository.WorkerTaskStatusComplete, ScopeType: "plan", ScopeID: planID,
+			InputHash: "old", PayloadJSON: `{}`, CreatedAt: 1,
+		})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.NewSimulationRepo(db).CreatePending(context.Background(), nil, repository.SimulationRun{
-		ID: oldRunID, JobID: oldJobID, PlanID: planID, InputHash: "old", InputSnapshotJSON: `{}`,
+		ID: oldRunID, TaskID: oldTaskID, PlanID: planID, InputHash: "old", InputSnapshotJSON: `{}`,
 		MarketSnapshotHash: "old", EngineVersion: "3.3.0", Runs: 1, Seed: 1, HorizonMonths: 1,
 	}); err != nil {
 		t.Fatal(err)
@@ -579,9 +579,7 @@ func TestSimulationJobFlow(t *testing.T) {
 	planID := seedSimulationReadyPlan(t, db)
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.Research, services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -602,7 +600,7 @@ func TestSimulationJobFlow(t *testing.T) {
 	}
 	env := decodeEnvelope(t, mustRead(t, resp))
 	data := env["data"].(map[string]any)
-	jobID := data["job_id"].(string)
+	jobID := data["task_id"].(string)
 	runID := data["run_id"].(string)
 
 	// idempotency
@@ -612,19 +610,19 @@ func TestSimulationJobFlow(t *testing.T) {
 	}
 	env2 := decodeEnvelope(t, mustRead(t, resp2))
 	data2 := env2["data"].(map[string]any)
-	if data2["job_id"].(string) != jobID {
+	if data2["task_id"].(string) != jobID {
 		t.Fatalf("idempotency should return same job")
 	}
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/jobs/" + jobID)
+		resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/tasks/" + jobID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		env = decodeEnvelope(t, mustRead(t, resp))
 		job := env["data"].(map[string]any)
-		if job["status"].(string) == "succeeded" {
+		if job["status"].(string) == "complete" {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -666,7 +664,8 @@ func TestSimulationJobFlow(t *testing.T) {
 	}
 
 	resp, err = http.DefaultClient.Get(
-		srv.URL + "/api/v1/simulations/" + runID + "/paths/" + strconv.Itoa(fullHorizonPathNo))
+		srv.URL + "/api/v1/simulations/" + runID + "/paths/" + strconv.Itoa(fullHorizonPathNo),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,15 +762,8 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 
-	jobsRepo := repository.NewJobRepo(db)
+	tasksRepo := repository.NewWorkerTaskRepo(db)
 	simsRepo := repository.NewSimulationRepo(db)
-	runner := persistFailingRunner{db: db, sims: simsRepo}
-	worker := jobs.NewWorker(db, jobsRepo, simsRepo, runner, jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), nil,
-		jobs.NewEventHub(), nil, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go worker.Start(ctx, 1)
-
 	services := buildServices(db)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
@@ -788,20 +780,27 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	}
 	env := decodeEnvelope(t, mustRead(t, resp))
 	data := env["data"].(map[string]any)
-	jobID := data["job_id"].(string)
+	taskID := data["task_id"].(string)
 	runID := data["run_id"].(string)
+	if _, err := db.Exec(`UPDATE simulation_runs SET input_snapshot_json='{' WHERE id=?`, runID); err != nil {
+		t.Fatal(err)
+	}
+	worker := newTestTaskWorker(db, services)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Start(ctx, 1)
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		job, err := jobsRepo.GetByID(context.Background(), jobID)
+		task, err := tasksRepo.GetByID(context.Background(), taskID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if job.Status == repository.JobStatusFailed {
+		if task.Status == repository.WorkerTaskStatusFailed {
 			break
 		}
-		if job.Status == repository.JobStatusSucceeded {
-			t.Fatal("expected job to fail when simulation persist is injected")
+		if task.Status == repository.WorkerTaskStatusComplete {
+			t.Fatal("expected task to fail with an invalid frozen snapshot")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -823,41 +822,18 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	if int(runView["success_count"].(float64)) != 0 || int(runView["failure_count"].(float64)) != 0 {
 		t.Fatalf("API must not expose successful run counts: %+v", runView)
 	}
-	if runView["job_status"] != "failed" {
-		t.Fatalf("simulation run must expose failed job status: %+v", runView)
+	if runView["task_status"] != "failed" {
+		t.Fatalf("simulation run must expose failed task status: %+v", runView)
 	}
 
-	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/jobs/" + jobID)
+	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/tasks/" + taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobEnv := decodeEnvelope(t, mustRead(t, resp))
-	if jobEnv["data"].(map[string]any)["status"].(string) != "failed" {
-		t.Fatalf("expected failed job status, got %+v", jobEnv["data"])
+	taskEnv := decodeEnvelope(t, mustRead(t, resp))
+	if taskEnv["data"].(map[string]any)["status"].(string) != "failed" {
+		t.Fatalf("expected failed task status, got %+v", taskEnv["data"])
 	}
-}
-
-type persistFailingRunner struct {
-	db   *sql.DB
-	sims *repository.SimulationRepo
-}
-
-func (r persistFailingRunner) RunSimulation(ctx context.Context, _, runID string, snap *simulation.InputSnapshot,
-	cancelCheck func() bool, progress func(done, total int, phase string),
-) error {
-	result := simulation.Run(snap, simulation.RunOptions{
-		Runs: snap.Parameters.SimulationRuns, Progress: progress, CancelCheck: cancelCheck,
-	})
-	summaryJSON, err := json.Marshal(result.Summary)
-	if err != nil {
-		return err
-	}
-	return fdb.WithTx(ctx, r.db, func(tx *sql.Tx) error {
-		if err := r.sims.Complete(ctx, tx, runID, result.SuccessCount, result.FailureCount, summaryJSON); err != nil {
-			return err
-		}
-		return errors.New("injected persist failure")
-	})
 }
 
 func TestInputSnapshotHashStable(t *testing.T) {

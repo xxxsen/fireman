@@ -266,38 +266,43 @@ export interface ActiveRebalanceExecution {
   line_count: number;
 }
 
-export interface Job {
+export interface Task {
   id: string;
-  plan_id: string;
+  worker_type: "go_worker" | "sidecar_worker";
   type: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "canceled";
-  input_hash: string;
+  status:
+    "pending" | "running" | "pre_complete" | "complete" | "failed" | "canceled";
+  scope_type: string;
+  scope_id: string;
   progress_current: number;
   progress_total: number;
   phase: string;
   cancel_requested: boolean;
-  retry_count: number;
+  attempt_count: number;
+  max_attempts: number;
   error_code?: string;
   error_message?: string;
   created_at: number;
   started_at?: number | null;
+  heartbeat_at?: number | null;
   finished_at?: number | null;
 }
 
-export interface JobEvent {
-  job_id: string;
+export interface TaskEvent {
+  task_id: string;
   status: string;
   phase?: string;
   progress_current: number;
   progress_total: number;
   error_code?: string;
   error_message?: string;
-  run_id?: string;
+  attempt_count: number;
+  result_key?: string;
 }
 
 export interface SimulationRun {
   id: string;
-  job_id: string;
+  task_id: string;
   plan_id: string;
   input_hash: string;
   current_config_hash: string;
@@ -311,9 +316,16 @@ export interface SimulationRun {
   failure_count: number;
   summary_json: SimulationSummary;
   created_at: number;
-  job_status?: "queued" | "running" | "succeeded" | "failed" | "canceled" | "unknown";
-  job_error_code?: string;
-  job_error_message?: string;
+  task_status?:
+    | "pending"
+    | "running"
+    | "pre_complete"
+    | "complete"
+    | "failed"
+    | "canceled"
+    | "unknown";
+  task_error_code?: string;
+  task_error_message?: string;
   asset_participation?: {
     holding_id: string;
     asset_key: string;
@@ -407,7 +419,8 @@ export interface AssumptionProfileSummary {
   // eligible.
   eligible_for_global_default: boolean;
   global_ineligibility_reasons?: string[];
-  evidence_kind?: "internal_policy" | "derived_external_background" | "user_reviewed";
+  evidence_kind?:
+    "internal_policy" | "derived_external_background" | "user_reviewed";
   evidence_hash?: string;
 }
 
@@ -585,7 +598,7 @@ export interface PathDetail {
 
 export interface DashboardAnalysisSummary {
   available: boolean;
-  job_id?: string;
+  task_id?: string;
   result_stale?: boolean;
   baseline_success_probability?: number;
   worst_scenario_id?: string;

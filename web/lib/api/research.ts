@@ -240,14 +240,14 @@ export interface ResearchDataQuality {
 }
 
 export type ResearchRunStatus =
-  "queued" | "running" | "succeeded" | "failed" | "canceled";
+  "pending" | "running" | "complete" | "failed" | "canceled";
 
-export interface ResearchJobView {
+export interface ResearchTaskView {
   status: string;
   phase: string;
   progress_current: number;
   progress_total: number;
-  retry_count?: number;
+  attempt_count?: number;
   heartbeat_at?: number;
   error_code?: string;
   error_message?: string;
@@ -256,7 +256,7 @@ export interface ResearchJobView {
 export interface ResearchRunView {
   id: string;
   collection_id: string;
-  job_id: string;
+  task_id: string;
   input_hash: string;
   source_hash: string;
   engine_version: string;
@@ -269,7 +269,7 @@ export interface ResearchRunView {
   data_quality?: ResearchDataQuality;
   created_at: number;
   completed_at?: number | null;
-  job?: ResearchJobView | null;
+  task?: ResearchTaskView | null;
 }
 
 export interface ResearchCollectionListItem extends ResearchCollection {
@@ -535,6 +535,14 @@ export function syncCollectionHistory(
   );
 }
 
+export function getCollectionSyncStatus(
+  collectionId: string,
+): Promise<ResearchSyncResult> {
+  return apiGet(
+    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/sync-history`,
+  );
+}
+
 // --- backtests & runs ---
 
 export interface ResearchBacktestResult {
@@ -749,7 +757,7 @@ export interface ResearchOptimizationResult {
 export interface ResearchOptimizationRun {
   id: string;
   collection_id: string;
-  job_id: string;
+  task_id: string;
   status: ResearchRunStatus;
   config: ResearchOptimizationConfig;
   candidate_count: number;
@@ -764,7 +772,7 @@ export interface ResearchOptimizationRun {
   engine_version: string;
   created_at: number;
   completed_at?: number | null;
-  job?: ResearchJobView | null;
+  task?: ResearchTaskView | null;
 }
 
 export interface ResearchOptimizationReadiness {

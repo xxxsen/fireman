@@ -6,12 +6,16 @@ export const metadata: Metadata = {
   title: "管理后台 · Fireman",
 };
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <div className="content-enter">
       <PageHeader
         title="管理后台"
-        description="任务执行、回调与数据版本的系统观测。"
+        description="任务执行、结果终结与数据版本的系统观测。"
         className="mb-4"
       />
       <AdminNav />

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fireman/fireman/internal/jobs"
+	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/testutil"
@@ -21,10 +21,7 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 	planID := seedSimulationReadyPlan(t, db)
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, services.Research,
-		services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -47,16 +44,16 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 		t.Fatalf("create stress status=%d body=%s", stressResp.StatusCode, string(mustRead(t, stressResp)))
 	}
 	stressEnv := decodeEnvelope(t, mustRead(t, stressResp))
-	stressJobID := stressEnv["data"].(map[string]any)["job_id"].(string)
+	stressTaskID := stressEnv["data"].(map[string]any)["task_id"].(string)
 
-	waitJobSucceeded(t, srv, stressJobID)
+	waitJobSucceeded(t, srv, stressTaskID)
 
-	stressGet, err := http.Get(srv.URL + "/api/v1/stress-tests/" + stressJobID)
+	stressGet, err := http.Get(srv.URL + "/api/v1/stress-tests/" + stressTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stressView := decodeEnvelope(t, mustRead(t, stressGet))["data"].(map[string]any)
-	if stressView["status"] != "succeeded" {
+	if stressView["status"] != "complete" {
 		t.Fatalf("stress job not succeeded: %+v", stressView)
 	}
 	if stressView["simulation_run_id"].(string) != runID {
@@ -84,10 +81,10 @@ func TestStressAndSensitivityJobFlow(t *testing.T) {
 		t.Fatalf("create sensitivity status=%d", sensResp.StatusCode)
 	}
 	sensEnv := decodeEnvelope(t, mustRead(t, sensResp))
-	sensJobID := sensEnv["data"].(map[string]any)["job_id"].(string)
-	waitJobSucceeded(t, srv, sensJobID)
+	sensTaskID := sensEnv["data"].(map[string]any)["task_id"].(string)
+	waitJobSucceeded(t, srv, sensTaskID)
 
-	sensGet, err := http.Get(srv.URL + "/api/v1/sensitivity-tests/" + sensJobID)
+	sensGet, err := http.Get(srv.URL + "/api/v1/sensitivity-tests/" + sensTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,10 +122,7 @@ func TestAttachedAnalysisListByRunRejectsForeignRun(t *testing.T) {
 	planB := seedSimulationReadyPlan(t, db)
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner, analysisRunner, services.Research,
-		services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -144,8 +138,8 @@ func TestAttachedAnalysisListByRunRejectsForeignRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stressJobID := decodeEnvelope(t, mustRead(t, stressResp))["data"].(map[string]any)["job_id"].(string)
-	waitJobSucceeded(t, srv, stressJobID)
+	stressTaskID := decodeEnvelope(t, mustRead(t, stressResp))["data"].(map[string]any)["task_id"].(string)
+	waitJobSucceeded(t, srv, stressTaskID)
 
 	// Plan A asking for plan B's run must NOT receive plan B's results.
 	for _, kind := range []string{"stress-tests", "sensitivity-tests"} {
@@ -172,23 +166,26 @@ func underscoreKey(kind string) string {
 	return "sensitivity_tests"
 }
 
-// seedSimulationRun inserts a completed Monte Carlo run (and its job) directly so
-// supersede tests can attach prior analysis jobs without running a worker.
+// seedSimulationRun inserts a completed Monte Carlo task and run directly.
 func seedSimulationRun(t *testing.T, db *sql.DB, planID string) string {
 	t.Helper()
 	ctx := context.Background()
-	jobsRepo := repository.NewJobRepo(db)
+	tasksRepo := repository.NewWorkerTaskRepo(db)
 	simsRepo := repository.NewSimulationRepo(db)
-	runJobID := "job_run_" + planID
-	if err := jobsRepo.Create(ctx, nil, repository.Job{
-		ID: runJobID, PlanID: planID, Type: repository.JobTypeSimulation,
-		Status: repository.JobStatusSucceeded, InputHash: "run_ih",
+	runTaskID := "task_run_" + planID
+	if err := fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+		return tasksRepo.CreateTx(ctx, tx, &repository.WorkerTask{
+			ID: runTaskID, WorkerType: repository.WorkerTypeGo,
+			Type:   repository.WorkerTaskTypeSimulation,
+			Status: repository.WorkerTaskStatusComplete, ScopeType: "plan", ScopeID: planID,
+			InputHash: "run_ih", PayloadJSON: `{}`,
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
 	runID := "simrun_" + planID
 	if err := simsRepo.CreatePending(ctx, nil, repository.SimulationRun{
-		ID: runID, JobID: runJobID, PlanID: planID, InputHash: "run_ih",
+		ID: runID, TaskID: runTaskID, PlanID: planID, InputHash: "run_ih",
 		InputSnapshotJSON: "{}", MarketSnapshotHash: "msh", EngineVersion: "v1",
 		Runs: 1000, Seed: 1, HorizonMonths: 12, SuccessCount: 1, FailureCount: 0,
 		SummaryJSON: json.RawMessage(`{"success_probability":1}`),
@@ -207,17 +204,21 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	services := buildServices(db)
 	ctx := context.Background()
 
-	jobsRepo := repository.NewJobRepo(db)
+	tasksRepo := repository.NewWorkerTaskRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
-	priorJobID := "job_prior_stress"
-	if err := jobsRepo.Create(ctx, nil, repository.Job{
-		ID: priorJobID, PlanID: planID, Type: repository.JobTypeStress,
-		Status: repository.JobStatusQueued, InputHash: "run_ih", ProgressTotal: 8,
+	priorTaskID := "task_prior_stress"
+	if err := fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+		return tasksRepo.CreateTx(ctx, tx, &repository.WorkerTask{
+			ID: priorTaskID, WorkerType: repository.WorkerTypeGo,
+			Type: repository.WorkerTaskTypeStress, Status: repository.WorkerTaskStatusPending,
+			ScopeType: "plan", ScopeID: planID, InputHash: "run_ih", PayloadJSON: `{}`,
+			ProgressTotal: 8,
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := analysisRepo.CreatePending(ctx, nil, repository.AnalysisResult{
-		JobID: priorJobID, PlanID: planID, Type: repository.AnalysisTypeStress,
+		TaskID: priorTaskID, PlanID: planID, Type: repository.AnalysisTypeStress,
 		InputHash: "run_ih", SimulationRunID: runID, ResultJSON: `{"pending":true}`,
 	}); err != nil {
 		t.Fatal(err)
@@ -227,15 +228,15 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create stress: %v", err)
 	}
-	if resp.JobID == priorJobID {
+	if resp.TaskID == priorTaskID {
 		t.Fatalf("expected a new job id, got the prior one")
 	}
 
-	prior, err := jobsRepo.GetByID(ctx, priorJobID)
+	prior, err := tasksRepo.GetByID(ctx, priorTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prior.Status != repository.JobStatusCanceled {
+	if prior.Status != repository.WorkerTaskStatusCanceled {
 		t.Fatalf("prior queued job should be canceled, got %s", prior.Status)
 	}
 	if prior.ErrorCode != "superseded_by_newer_analysis" {
@@ -246,7 +247,7 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recs) != 1 || recs[0].JobID != resp.JobID {
+	if len(recs) != 1 || recs[0].TaskID != resp.TaskID {
 		t.Fatalf("expected only the new analysis record, got %+v", recs)
 	}
 }
@@ -261,17 +262,21 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 	services := buildServices(db)
 	ctx := context.Background()
 
-	jobsRepo := repository.NewJobRepo(db)
+	tasksRepo := repository.NewWorkerTaskRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
-	priorJobID := "job_prior_sens"
-	if err := jobsRepo.Create(ctx, nil, repository.Job{
-		ID: priorJobID, PlanID: planID, Type: repository.JobTypeSensitivity,
-		Status: repository.JobStatusRunning, InputHash: "run_ih", ProgressTotal: 50,
+	priorTaskID := "task_prior_sens"
+	if err := fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+		return tasksRepo.CreateTx(ctx, tx, &repository.WorkerTask{
+			ID: priorTaskID, WorkerType: repository.WorkerTypeGo,
+			Type: repository.WorkerTaskTypeSensitivity, Status: repository.WorkerTaskStatusRunning,
+			ScopeType: "plan", ScopeID: planID, InputHash: "run_ih", PayloadJSON: `{}`,
+			ProgressTotal: 50,
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := analysisRepo.CreatePending(ctx, nil, repository.AnalysisResult{
-		JobID: priorJobID, PlanID: planID, Type: repository.AnalysisTypeSensitivity,
+		TaskID: priorTaskID, PlanID: planID, Type: repository.AnalysisTypeSensitivity,
 		InputHash: "run_ih", SimulationRunID: runID, ResultJSON: `{"pending":true}`,
 	}); err != nil {
 		t.Fatal(err)
@@ -283,7 +288,7 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 		t.Fatalf("create sensitivity: %v", err)
 	}
 
-	prior, err := jobsRepo.GetByID(ctx, priorJobID)
+	prior, err := tasksRepo.GetByID(ctx, priorTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +303,7 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recs) != 1 || recs[0].JobID != resp.JobID {
+	if len(recs) != 1 || recs[0].TaskID != resp.TaskID {
 		t.Fatalf("expected only the new analysis record, got %+v", recs)
 	}
 }
@@ -335,7 +340,7 @@ func createSimulationAndWait(t *testing.T, srv *httptest.Server, planID, seed st
 	}
 	env := decodeEnvelope(t, mustRead(t, resp))
 	data := env["data"].(map[string]any)
-	waitJobSucceeded(t, srv, data["job_id"].(string))
+	waitJobSucceeded(t, srv, data["task_id"].(string))
 	return data["run_id"].(string)
 }
 
@@ -343,12 +348,12 @@ func waitJobSucceeded(t *testing.T, srv *httptest.Server, jobID string) {
 	t.Helper()
 	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(srv.URL + "/api/v1/jobs/" + jobID)
+		resp, err := http.Get(srv.URL + "/api/v1/tasks/" + jobID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		env := decodeEnvelope(t, mustRead(t, resp))
-		if env["data"].(map[string]any)["status"].(string) == "succeeded" {
+		if env["data"].(map[string]any)["status"].(string) == "complete" {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)

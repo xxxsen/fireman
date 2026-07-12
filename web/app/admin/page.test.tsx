@@ -20,8 +20,7 @@ function makeOverview(overrides: Partial<AdminOverview> = {}): AdminOverview {
       completed_last_24h: 12,
       stale_running: 0,
     },
-    jobs: { queued: 0, running: 1, failed_last_24h: 0, succeeded_last_24h: 4 },
-    callbacks: { total_last_24h: 15, failed_last_24h: 2 },
+    finalizations: { total_last_24h: 15, failed_last_24h: 2 },
     sync_health: {
       directory_scopes: [
         {
@@ -82,7 +81,9 @@ function makeOverview(overrides: Partial<AdminOverview> = {}): AdminOverview {
 }
 
 function renderPage() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <AdminOverviewPage />
@@ -101,24 +102,22 @@ describe("AdminOverviewPage", () => {
     await screen.findByTestId("admin-overview");
 
     const cards = screen.getAllByTestId("stat-card");
-    expect(cards).toHaveLength(4);
+    expect(cards).toHaveLength(3);
 
     const links = screen.getAllByTestId("stat-card-link");
     const hrefs = links.map((l) => l.getAttribute("href"));
     expect(hrefs).toContain("/admin/worker-tasks?status=active");
     expect(hrefs).toContain("/admin/worker-tasks?status=failed");
-    expect(hrefs).toContain("/admin/jobs");
-    expect(hrefs).toContain("/admin/callbacks");
+    expect(hrefs).toContain("/admin/finalizations");
 
     expect(screen.getByText("活跃任务")).toBeInTheDocument();
     expect(screen.getByText("24h 任务失败")).toBeInTheDocument();
-    expect(screen.getByText("0 / 1")).toBeInTheDocument();
     expect(screen.getByText("2 次失败")).toBeInTheDocument();
   });
 
-  it("links the jobs card to the failed filter when jobs failed recently", async () => {
+  it("links the finalization card to the finalization board", async () => {
     const overview = makeOverview();
-    overview.jobs.failed_last_24h = 2;
+    overview.finalizations.failed_last_24h = 2;
     getAdminOverviewMock.mockResolvedValue(overview);
     renderPage();
     await screen.findByTestId("admin-overview");
@@ -126,7 +125,7 @@ describe("AdminOverviewPage", () => {
     const hrefs = screen
       .getAllByTestId("stat-card-link")
       .map((l) => l.getAttribute("href"));
-    expect(hrefs).toContain("/admin/jobs?status=failed");
+    expect(hrefs).toContain("/admin/finalizations");
   });
 
   it("shows sync health rows with stale warning and storage sizes", async () => {
@@ -137,13 +136,15 @@ describe("AdminOverviewPage", () => {
     const scopes = within(panel).getAllByTestId("sync-health-scope");
     expect(scopes).toHaveLength(2);
     expect(within(scopes[0]).getByText("中国市场目录")).toBeInTheDocument();
-    expect(within(scopes[0]).getByTestId("scope-health-status-cn_all")).toHaveTextContent(
-      "已同步",
-    );
-    expect(within(scopes[1]).getByTestId("scope-health-status-us_all")).toHaveTextContent(
-      "同步中",
-    );
-    expect(within(scopes[1]).getAllByText("超 7 天未成功").length).toBeGreaterThan(0);
+    expect(
+      within(scopes[0]).getByTestId("scope-health-status-cn_all"),
+    ).toHaveTextContent("已同步");
+    expect(
+      within(scopes[1]).getByTestId("scope-health-status-us_all"),
+    ).toHaveTextContent("同步中");
+    expect(
+      within(scopes[1]).getAllByText("超 7 天未成功").length,
+    ).toBeGreaterThan(0);
 
     // Unit-level details render under the scope.
     const usStock = within(scopes[1]).getByTestId("sync-health-unit-us_stock");

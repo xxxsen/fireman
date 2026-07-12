@@ -9,11 +9,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/resourcedb"
 	"github.com/fireman/fireman/internal/service"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 // Services groups business services.
@@ -32,18 +32,21 @@ type Services struct {
 	Assumptions         *service.AssumptionService
 	Stress              *service.StressService
 	Sensitivity         *service.SensitivityService
-	Jobs                *service.JobService
+	Tasks               *service.TaskService
+	TaskCoordinator     *taskcore.Coordinator
 	Research            *service.ResearchService
 	Dashboard           *service.DashboardService
 	System              *service.SystemService
 	Admin               *service.AdminService
 	AutoUpdates         *service.AutoUpdateService
-	EventHub            *jobs.EventHub
+	EventHub            *taskcore.EventHub
 	Maintenance         *service.MaintenanceGate
 }
 
 // NewServices wires the business service graph. resources may be nil (tests,
 // router fallback); the admin overview then reports zero resource storage.
+//
+//nolint:funlen,lll // Service wiring stays centralized so every API shares one dependency graph.
 func NewServices(
 	db *sql.DB, dbPath string, maintenance *service.MaintenanceGate, resources *resourcedb.DB, loc *time.Location,
 ) Services {
@@ -56,16 +59,17 @@ func NewServices(
 	marketRepo := repository.NewMarketDataRepo(db)
 	snapRepo := repository.NewSnapshotRepo(db)
 	workerTaskRepo := repository.NewWorkerTaskRepo(db)
+	taskRegistry := taskcore.DefaultRegistry()
+	taskEventHub := taskcore.NewEventHub()
+	taskCoordinator := taskcore.NewCoordinator(db, workerTaskRepo, taskRegistry, taskEventHub)
 	marketAssetRepo := repository.NewMarketAssetRepo(db)
 	assumptionRepo := repository.NewAssumptionProfileRepo(db)
 	hash := service.NewConfigHashService(
 		plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db), assumptionRepo,
 	)
 	snapSvc := marketdata.NewSnapshotService(snapRepo, marketAssetRepo)
-	jobRepo := repository.NewJobRepo(db)
 	simRepo := repository.NewSimulationRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
-	eventHub := jobs.NewEventHub()
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
 	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, marketAssetRepo)
@@ -73,16 +77,18 @@ func NewServices(
 	rebalanceExecutionSvc := service.NewRebalanceExecutionService(
 		db, plans, executionRepo, holdings, holdingsSvc, rebalanceSvc,
 	)
-	marketAssetSvc := service.NewMarketAssetService(db, workerTaskRepo, marketAssetRepo)
+	marketAssetSvc := service.NewMarketAssetService(
+		db, workerTaskRepo, marketAssetRepo, taskCoordinator,
+	)
 	readinessSvc := service.NewSimulationReadinessService(
 		db, plans, holdings, marketAssetRepo, workerTaskRepo, snapSvc, marketAssetSvc,
 	)
 	simSvc := service.NewSimulationService(
 		db, plans, params, alloc, holdings, snapRepo, marketAssetRepo, instRepo, marketRepo,
-		jobRepo, simRepo, analysisRepo, hash, readinessSvc,
+		workerTaskRepo, taskCoordinator, simRepo, analysisRepo, hash, readinessSvc,
 	)
-	stressSvc := service.NewStressService(db, plans, jobRepo, analysisRepo, simSvc, hash)
-	sensitivitySvc := service.NewSensitivityService(db, plans, jobRepo, analysisRepo, simSvc, hash)
+	stressSvc := service.NewStressService(db, plans, workerTaskRepo, taskCoordinator, analysisRepo, simSvc, hash)
+	sensitivitySvc := service.NewSensitivityService(db, plans, workerTaskRepo, taskCoordinator, analysisRepo, simSvc, hash)
 	dashboardSvc := service.NewDashboardService(
 		plans, params, alloc, scenario, holdings, simRepo, analysisRepo, hash,
 		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc, executionRepo,
@@ -90,11 +96,11 @@ func NewServices(
 
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, marketAssetRepo, hash, snapSvc)
 	researchSvc := service.NewResearchService(
-		db, repository.NewResearchRepo(db), marketAssetRepo, workerTaskRepo, jobRepo,
+		db, repository.NewResearchRepo(db), marketAssetRepo, workerTaskRepo, taskCoordinator,
 		instRepo, marketRepo, plans, holdings, marketAssetSvc,
 	)
 	adminSvc := service.NewAdminService(
-		workerTaskRepo, jobRepo, repository.NewPostProcessRecordRepo(db),
+		workerTaskRepo, repository.NewWorkerTaskFinalizeRecordRepo(db),
 		marketAssetRepo, marketAssetSvc, resources, dbPath,
 	)
 	autoUpdates := service.NewAutoUpdateService(
@@ -117,13 +123,14 @@ func NewServices(
 		Assumptions:         service.NewAssumptionService(db),
 		Stress:              stressSvc,
 		Sensitivity:         sensitivitySvc,
-		Jobs:                service.NewJobService(db, jobRepo, instRepo, simRepo, eventHub),
+		Tasks:               service.NewTaskService(taskCoordinator),
+		TaskCoordinator:     taskCoordinator,
 		Research:            researchSvc,
 		Dashboard:           dashboardSvc,
 		System:              service.NewSystemService(db, dbPath, planSvc, targetSvc, rebalanceSvc, maintenance),
 		Admin:               adminSvc,
 		AutoUpdates:         autoUpdates,
-		EventHub:            eventHub,
+		EventHub:            taskEventHub,
 		Maintenance:         maintenance,
 	}
 }

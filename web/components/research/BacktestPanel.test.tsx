@@ -111,7 +111,7 @@ function run(overrides: Partial<ResearchRunView> = {}): ResearchRunView {
   return {
     id: "rbr_1",
     collection_id: "rc_1",
-    job_id: "job_1",
+    task_id: "job_1",
     input_hash: "h",
     source_hash: "s",
     engine_version: "research_backtest_v1",
@@ -119,7 +119,7 @@ function run(overrides: Partial<ResearchRunView> = {}): ResearchRunView {
     rebalance_policy: "monthly",
     window_start: "2018-01-01",
     window_end: "2026-07-01",
-    status: "succeeded",
+    status: "complete",
     created_at: 1750000000000,
     summary: {
       cumulative_return: 0.8,
@@ -339,7 +339,7 @@ describe("BacktestPanel", () => {
 
   it("runs a backtest and navigates to the run page", async () => {
     createBacktestMock.mockResolvedValue({
-      run: run({ status: "queued" }),
+      run: run({ status: "pending" }),
       reused: false,
     });
     renderPanel(readiness());

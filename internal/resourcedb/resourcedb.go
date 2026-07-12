@@ -26,7 +26,7 @@ import (
 // resource database. Larger payloads are rejected before any business write.
 const MaxDecompressedBytes = 256 << 20 // 256 MiB
 
-// Schema errors surfaced to the post-process layer. They map to
+// Schema errors surfaced to the finalization layer. They map to
 // permanent_error responses because retrying cannot fix them.
 var (
 	ErrResourceNotFound   = errors.New("resourcedb: resource not found")
@@ -37,7 +37,7 @@ var (
 	ErrSchemaVersion      = errors.New("resourcedb: unsupported schema_version")
 )
 
-// SupportedSchemaVersion is the resource payload schema the Go post-process
+// SupportedSchemaVersion is the resource payload schema the Go finalization
 // understands.
 const SupportedSchemaVersion = 1
 
@@ -104,6 +104,37 @@ type storedResource struct {
 	sha256Hex       string
 	sizeBytes       int64
 	payload         []byte
+}
+
+// EnvelopeByKey returns the authoritative metadata stored with a resource.
+// Worker task finalization uses this instead of trusting a client-provided
+// envelope persisted in the task row.
+func (d *DB) EnvelopeByKey(ctx context.Context, resourceKey string) (Envelope, error) {
+	var env Envelope
+	err := d.pool.QueryRowContext(ctx, `
+		SELECT resource_key,content_type,content_encoding,schema_version,sha256,size_bytes,expires_at
+		FROM resource_tab WHERE resource_key=?`, resourceKey).Scan(
+		&env.ResourceKey, &env.ContentType, &env.ContentEncoding, &env.SchemaVersion,
+		&env.SHA256, &env.SizeBytes, &env.ExpiresAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Envelope{}, ErrResourceNotFound
+	}
+	if err != nil {
+		return Envelope{}, fmt.Errorf("resourcedb: load envelope: %w", err)
+	}
+	return env, nil
+}
+
+// ReadByKey resolves the stored envelope and performs the same integrity
+// checks as Read.
+func (d *DB) ReadByKey(ctx context.Context, resourceKey string) ([]byte, Envelope, error) {
+	env, err := d.EnvelopeByKey(ctx, resourceKey)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+	raw, err := d.Read(ctx, env)
+	return raw, env, err
 }
 
 // Read loads the resource referenced by env, validates the envelope against

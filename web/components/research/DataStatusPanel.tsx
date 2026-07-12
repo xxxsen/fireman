@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  getCollectionSyncStatus,
   syncCollectionHistory,
   type ResearchReadiness,
   type ResearchSyncResult,
 } from "@/lib/api/research";
 import { isTaskActive, type WorkerTask } from "@/lib/api/market-assets";
-import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 import { queryErrorMessage } from "@/lib/query-error";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -60,18 +61,21 @@ function SyncTaskRow({
   task?: WorkerTask | null;
   existed: boolean;
   skippedReason?: string;
-  onSettled: () => void;
+  onSettled: (task: WorkerTask) => void;
   onRetry?: () => void;
 }) {
   const settledRef = useRef(false);
-  const settle = useCallback(() => {
-    if (!settledRef.current) {
-      settledRef.current = true;
-      onSettled();
-    }
-  }, [onSettled]);
+  const settle = useCallback(
+    (settledTask: WorkerTask) => {
+      if (!settledRef.current) {
+        settledRef.current = true;
+        onSettled(settledTask);
+      }
+    },
+    [onSettled],
+  );
 
-  const polling = useWorkerTaskPolling(task?.id, {
+  const polling = useTaskStatus(task?.id, {
     initialTask: task ?? null,
     onComplete: settle,
     onFailed: settle,
@@ -141,6 +145,10 @@ export function DataStatusPanel({
 }: DataStatusPanelProps) {
   const queryClient = useQueryClient();
   const [syncResult, setSyncResult] = useState<ResearchSyncResult | null>(null);
+  const persistedSync = useQuery({
+    queryKey: ["research", "sync-status", collectionId],
+    queryFn: () => getCollectionSyncStatus(collectionId),
+  });
 
   const refreshCollectionData = useCallback(() => {
     void Promise.all([
@@ -152,6 +160,9 @@ export function DataStatusPanel({
       }),
       queryClient.invalidateQueries({
         queryKey: ["research", "optimization-readiness", collectionId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["research", "sync-status", collectionId],
       }),
     ]);
   }, [collectionId, queryClient]);
@@ -184,17 +195,43 @@ export function DataStatusPanel({
     },
   });
 
-  const handleSettled = useCallback(() => {
-    // Refresh each asset independently. A slow or failed sibling task must
-    // not hide the history range/status already persisted by this task.
-    refreshCollectionData();
-  }, [refreshCollectionData]);
+  const handleSettled = useCallback(
+    (settledTask: WorkerTask) => {
+      // Refresh each asset independently. A slow or failed sibling task must
+      // not hide the history range/status already persisted by this task.
+      setSyncResult((previous) => {
+        if (!previous) return previous;
+        const updateTask = (task?: WorkerTask | null) =>
+          task?.id === settledTask.id ? settledTask : task;
+        return {
+          assets: previous.assets.map((row) => ({
+            ...row,
+            task: updateTask(row.task),
+          })),
+          fx: previous.fx.map((row) => ({
+            ...row,
+            task: updateTask(row.task),
+          })),
+          blocked: previous.blocked,
+        };
+      });
+      refreshCollectionData();
+    },
+    [refreshCollectionData],
+  );
 
   const rawBlocking = readiness?.blocking_reasons ?? [];
   const blocking = rawBlocking.filter(
     (issue) => issue.reason !== "weight_sum_invalid",
   );
   const warnings = readiness?.warnings ?? [];
+  const visibleSyncResult = syncResult ?? persistedSync.data ?? null;
+  const hasActiveSync = Boolean(
+    visibleSyncResult &&
+    [...visibleSyncResult.assets, ...visibleSyncResult.fx].some(
+      (row) => row.task && isTaskActive(row.task.status),
+    ),
+  );
 
   const readinessBadge = useMemo(() => {
     if (readinessLoading) return <Badge variant="neutral">检查中…</Badge>;
@@ -225,6 +262,7 @@ export function DataStatusPanel({
           </Button>
           <Button
             pending={syncMutation.isPending}
+            disabled={persistedSync.isLoading || hasActiveSync}
             onClick={() => syncMutation.mutate(undefined)}
             data-testid="sync-collection"
           >
@@ -328,62 +366,65 @@ export function DataStatusPanel({
         </dl>
       )}
 
-      {syncResult && (
-        <div data-testid="sync-task-panel">
-          <h3 className="mb-2 text-sm font-semibold text-ink">同步任务</h3>
-          <ul className="space-y-1.5">
-            {syncResult.assets.map((row) => (
-              <SyncTaskRow
-                key={`asset-${row.asset_key}`}
-                label={row.asset_key}
-                task={row.task}
-                existed={row.status === "existed"}
-                skippedReason={
-                  row.status === "skipped"
-                    ? (row.reason ?? "无需同步")
-                    : undefined
-                }
-                onSettled={handleSettled}
-                onRetry={() =>
-                  syncMutation.mutate({
-                    asset_keys: [row.asset_key],
-                    force: true,
-                  })
-                }
-              />
-            ))}
-            {syncResult.fx.map((row) => (
-              <SyncTaskRow
-                key={`fx-${row.pair}`}
-                label={`汇率 ${row.pair}`}
-                task={row.task}
-                existed={row.status === "existed"}
-                skippedReason={
-                  row.status === "skipped" ? "无需同步" : undefined
-                }
-                onSettled={handleSettled}
-                onRetry={() => syncMutation.mutate({ force: true })}
-              />
-            ))}
-            {syncResult.blocked.map((row) => (
-              <li
-                key={`blocked-${row.asset_key}`}
-                className="flex items-start justify-between gap-3 rounded-md border border-danger/25 bg-danger/5 px-3 py-2 text-sm"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-ink">
-                    {row.asset_key}
+      {visibleSyncResult &&
+        (visibleSyncResult.assets.length > 0 ||
+          visibleSyncResult.fx.length > 0 ||
+          visibleSyncResult.blocked.length > 0) && (
+          <div data-testid="sync-task-panel">
+            <h3 className="mb-2 text-sm font-semibold text-ink">同步任务</h3>
+            <ul className="space-y-1.5">
+              {visibleSyncResult.assets.map((row) => (
+                <SyncTaskRow
+                  key={`asset-${row.asset_key}`}
+                  label={row.asset_key}
+                  task={row.task}
+                  existed={row.status === "existed"}
+                  skippedReason={
+                    row.status === "skipped"
+                      ? (row.reason ?? "无需同步")
+                      : undefined
+                  }
+                  onSettled={handleSettled}
+                  onRetry={() =>
+                    syncMutation.mutate({
+                      asset_keys: [row.asset_key],
+                      force: true,
+                    })
+                  }
+                />
+              ))}
+              {visibleSyncResult.fx.map((row) => (
+                <SyncTaskRow
+                  key={`fx-${row.pair}`}
+                  label={`汇率 ${row.pair}`}
+                  task={row.task}
+                  existed={row.status === "existed"}
+                  skippedReason={
+                    row.status === "skipped" ? "无需同步" : undefined
+                  }
+                  onSettled={handleSettled}
+                  onRetry={() => syncMutation.mutate({ force: true })}
+                />
+              ))}
+              {visibleSyncResult.blocked.map((row) => (
+                <li
+                  key={`blocked-${row.asset_key}`}
+                  className="flex items-start justify-between gap-3 rounded-md border border-danger/25 bg-danger/5 px-3 py-2 text-sm"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-ink">
+                      {row.asset_key}
+                    </span>
+                    <span className="block text-xs text-danger">
+                      {row.message}
+                    </span>
                   </span>
-                  <span className="block text-xs text-danger">
-                    {row.message}
-                  </span>
-                </span>
-                <Badge variant="danger">无法同步</Badge>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+                  <Badge variant="danger">无法同步</Badge>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
     </section>
   );
 }

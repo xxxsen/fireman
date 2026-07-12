@@ -20,14 +20,18 @@ func seedPlanRow(t *testing.T, db *sql.DB, planID string) {
 
 func seedRunRow(t *testing.T, db *sql.DB, sims *SimulationRepo, planID, runID string, createdAt int64) {
 	t.Helper()
-	jobID := "job_" + runID
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO jobs (id, plan_id, type, status, input_hash, created_at)
-		VALUES (?, ?, 'simulation', 'succeeded', 'h', ?)`, jobID, planID, createdAt); err != nil {
-		t.Fatalf("seed job for %s: %v", runID, err)
+	taskID := "task_" + runID
+	if err := fdb.WithTx(context.Background(), db, func(tx *sql.Tx) error {
+		return NewWorkerTaskRepo(db).CreateTx(context.Background(), tx, &WorkerTask{
+			ID: taskID, WorkerType: WorkerTypeGo, Type: WorkerTaskTypeSimulation,
+			Status: WorkerTaskStatusComplete, ScopeType: "plan", ScopeID: planID,
+			InputHash: "h", PayloadJSON: `{}`, CreatedAt: createdAt,
+		})
+	}); err != nil {
+		t.Fatalf("seed task for %s: %v", runID, err)
 	}
 	if err := sims.CreatePending(context.Background(), nil, SimulationRun{
-		ID: runID, JobID: jobID, PlanID: planID, InputHash: "h",
+		ID: runID, TaskID: taskID, PlanID: planID, InputHash: "h",
 		InputSnapshotJSON: "{}", MarketSnapshotHash: "m", EngineVersion: "v1",
 		Runs: 1, Seed: 1, HorizonMonths: 12, CreatedAt: createdAt,
 	}); err != nil {
@@ -37,17 +41,25 @@ func seedRunRow(t *testing.T, db *sql.DB, sims *SimulationRepo, planID, runID st
 
 func seedAnalysisRow(t *testing.T, db *sql.DB, analysis *AnalysisRepo, planID, runID, jobSuffix, typ string) {
 	t.Helper()
-	jobID := "ajob_" + jobSuffix
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO jobs (id, plan_id, type, status, input_hash, created_at)
-		VALUES (?, ?, ?, 'succeeded', 'h', 0)`, jobID, planID, typ); err != nil {
-		t.Fatalf("seed analysis job %s: %v", jobID, err)
+	taskID := "atask_" + jobSuffix
+	taskType := WorkerTaskTypeStress
+	if typ == AnalysisTypeSensitivity {
+		taskType = WorkerTaskTypeSensitivity
+	}
+	if err := fdb.WithTx(context.Background(), db, func(tx *sql.Tx) error {
+		return NewWorkerTaskRepo(db).CreateTx(context.Background(), tx, &WorkerTask{
+			ID: taskID, WorkerType: WorkerTypeGo, Type: taskType,
+			Status: WorkerTaskStatusComplete, ScopeType: "plan", ScopeID: planID,
+			InputHash: "h", PayloadJSON: `{}`,
+		})
+	}); err != nil {
+		t.Fatalf("seed analysis task %s: %v", taskID, err)
 	}
 	if err := analysis.CreatePending(context.Background(), nil, AnalysisResult{
-		JobID: jobID, PlanID: planID, Type: typ, InputHash: "h",
+		TaskID: taskID, PlanID: planID, Type: typ, InputHash: "h",
 		SimulationRunID: runID, ResultJSON: "{}",
 	}); err != nil {
-		t.Fatalf("seed analysis %s: %v", jobID, err)
+		t.Fatalf("seed analysis %s: %v", taskID, err)
 	}
 }
 
@@ -103,25 +115,30 @@ func TestSimulationRepoPruneByPlanKeepsNewest(t *testing.T) {
 	}
 }
 
-func TestSimulationRepoReadsJoinedJobTerminalState(t *testing.T) {
+func TestSimulationRepoReadsJoinedTaskTerminalState(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	repo := NewSimulationRepo(db)
 	ctx := context.Background()
 	planID := "plan_run_states"
 	seedPlanRow(t, db, planID)
 	statuses := []string{
-		JobStatusQueued, JobStatusRunning, JobStatusSucceeded, JobStatusFailed, JobStatusCanceled,
+		WorkerTaskStatusPending, WorkerTaskStatusRunning, WorkerTaskStatusComplete,
+		WorkerTaskStatusFailed, WorkerTaskStatusCanceled,
 	}
 	for i, status := range statuses {
-		jobID := "job_state_" + status
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO jobs (id, plan_id, type, status, input_hash, error_code, error_message, created_at)
-			VALUES (?, ?, 'simulation', ?, 'h', ?, ?, ?)`,
-			jobID, planID, status, "code_"+status, "message_"+status, i); err != nil {
+		taskID := "task_state_" + status
+		if err := fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+			return NewWorkerTaskRepo(db).CreateTx(ctx, tx, &WorkerTask{
+				ID: taskID, WorkerType: WorkerTypeGo, Type: WorkerTaskTypeSimulation,
+				Status: status, ScopeType: "plan", ScopeID: planID, InputHash: "h",
+				PayloadJSON: `{}`, ErrorCode: "code_" + status,
+				ErrorMessage: "message_" + status, CreatedAt: int64(i + 1),
+			})
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if err := repo.CreatePending(ctx, nil, SimulationRun{
-			ID: "run_state_" + status, JobID: jobID, PlanID: planID, InputHash: "h",
+			ID: "run_state_" + status, TaskID: taskID, PlanID: planID, InputHash: "h",
 			InputSnapshotJSON: "{}", MarketSnapshotHash: "m", EngineVersion: "v1",
 			Runs: 1, Seed: 1, HorizonMonths: 12, CreatedAt: int64(i),
 		}); err != nil {
@@ -137,8 +154,8 @@ func TestSimulationRepoReadsJoinedJobTerminalState(t *testing.T) {
 	}
 	for _, run := range runs {
 		wantStatus := run.ID[len("run_state_"):]
-		if run.JobStatus != wantStatus || run.JobErrorCode != "code_"+wantStatus ||
-			run.JobErrorMessage != "message_"+wantStatus {
+		if run.TaskStatus != wantStatus || run.TaskErrorCode != "code_"+wantStatus ||
+			run.TaskErrorMessage != "message_"+wantStatus {
 			t.Fatalf("joined state = %+v", run)
 		}
 	}
@@ -163,7 +180,7 @@ func TestAnalysisRepoListAndDeleteBySimulationRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].JobID != "ajob_b_stress" {
+	if len(got) != 1 || got[0].TaskID != "atask_b_stress" {
 		t.Fatalf("expected only run b stress, got %+v", got)
 	}
 

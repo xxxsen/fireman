@@ -18,6 +18,7 @@ import (
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/simulation"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 // CreateSimulationRequest starts a Monte Carlo job.
@@ -31,7 +32,7 @@ type CreateSimulationRequest struct {
 
 // CreateSimulationResponse returns the enqueued job.
 type CreateSimulationResponse struct {
-	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
 	RunID  string `json:"run_id"`
 	Status string `json:"status"`
 }
@@ -40,7 +41,7 @@ type CreateSimulationResponse struct {
 // runs (and their attached analysis results) are pruned on each new run.
 const SimulationRetentionLimit = 7
 
-// SimulationService orchestrates simulation jobs and results.
+// SimulationService orchestrates simulation tasks and results.
 type SimulationService struct {
 	sql         *sql.DB
 	plans       *repository.PlanRepo
@@ -50,7 +51,8 @@ type SimulationService struct {
 	snapRepo    *repository.SnapshotRepo
 	assetRepo   *repository.MarketAssetRepo
 	fx          *marketdata.FXResolver
-	jobs        *repository.JobRepo
+	tasks       *repository.WorkerTaskRepo
+	coordinator *taskcore.Coordinator
 	sims        *repository.SimulationRepo
 	analysis    *repository.AnalysisRepo
 	hash        *ConfigHashService
@@ -69,7 +71,8 @@ func NewSimulationService(
 	assetRepo *repository.MarketAssetRepo,
 	inst *repository.InstrumentRepo,
 	market *repository.MarketDataRepo,
-	jobs *repository.JobRepo,
+	tasks *repository.WorkerTaskRepo,
+	coordinator *taskcore.Coordinator,
 	sims *repository.SimulationRepo,
 	analysis *repository.AnalysisRepo,
 	hash *ConfigHashService,
@@ -80,7 +83,7 @@ func NewSimulationService(
 		snapRepo:  snapRepo,
 		assetRepo: assetRepo,
 		fx:        marketdata.NewFXResolver(inst, market),
-		jobs:      jobs, sims: sims, analysis: analysis, hash: hash,
+		tasks:     tasks, coordinator: coordinator, sims: sims, analysis: analysis, hash: hash,
 		assumptions: repository.NewAssumptionProfileRepo(sqlDB),
 		overrides:   repository.NewReturnOverrideRepo(sqlDB),
 		readiness:   readiness,
@@ -242,7 +245,7 @@ func (s *SimulationService) createSimulationRun(
 	snap *simulation.InputSnapshot,
 	inputHash string,
 ) (CreateSimulationResponse, error) {
-	jobID := "job_" + uuid.New().String()
+	taskID := "task_" + uuid.New().String()
 	runID := "simrun_" + uuid.New().String()
 	snapJSON, err := json.Marshal(snap)
 	if err != nil {
@@ -250,15 +253,20 @@ func (s *SimulationService) createSimulationRun(
 	}
 
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.jobs.Create(ctx, tx, repository.Job{
-			ID: jobID, PlanID: req.PlanID, Type: repository.JobTypeSimulation,
-			Status: repository.JobStatusQueued, InputHash: inputHash,
+		payloadJSON, marshalErr := json.Marshal(map[string]string{"run_id": runID})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if err := s.coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+			ID: taskID, WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeSimulation,
+			Status: repository.WorkerTaskStatusPending, ScopeType: "plan", ScopeID: req.PlanID,
+			InputHash: inputHash, PayloadJSON: string(payloadJSON),
 			ProgressTotal: snap.Parameters.SimulationRuns,
 		}); err != nil {
-			return wrapRepo("create simulation job", err)
+			return wrapRepo("create simulation task", err)
 		}
 		if err := s.sims.CreatePending(ctx, tx, repository.SimulationRun{
-			ID: runID, JobID: jobID, PlanID: req.PlanID, InputHash: inputHash,
+			ID: runID, TaskID: taskID, PlanID: req.PlanID, InputHash: inputHash,
 			InputSnapshotJSON: string(snapJSON), MarketSnapshotHash: snap.MarketSnapshotHash,
 			EngineVersion: snap.EngineVersion, Runs: snap.Parameters.SimulationRuns,
 			Seed: snap.RootSeed(), HorizonMonths: snap.HorizonMonths(),
@@ -266,8 +274,8 @@ func (s *SimulationService) createSimulationRun(
 			return wrapRepo("create pending simulation run", err)
 		}
 		if req.IdempotencyKey != "" {
-			if err := s.jobs.SaveIdempotency(ctx, tx, req.PlanID, repository.JobTypeSimulation,
-				req.IdempotencyKey, jobID, inputHash); err != nil {
+			if err := s.tasks.SaveIdempotency(ctx, tx, "plan", req.PlanID,
+				repository.WorkerTaskTypeSimulation, req.IdempotencyKey, taskID, inputHash); err != nil {
 				return wrapRepo("save simulation idempotency", err)
 			}
 		}
@@ -276,7 +284,7 @@ func (s *SimulationService) createSimulationRun(
 	if err != nil {
 		return CreateSimulationResponse{}, wrapRepo("create simulation tx", err)
 	}
-	return CreateSimulationResponse{JobID: jobID, RunID: runID, Status: repository.JobStatusQueued}, nil
+	return CreateSimulationResponse{TaskID: taskID, RunID: runID, Status: repository.WorkerTaskStatusPending}, nil
 }
 
 func (s *SimulationService) idempotentSimulation(
@@ -285,8 +293,9 @@ func (s *SimulationService) idempotentSimulation(
 	if req.IdempotencyKey == "" {
 		return CreateSimulationResponse{}, false, nil
 	}
-	existing, found, err := findExistingIdempotentJob(
-		ctx, s.jobs, req.PlanID, repository.JobTypeSimulation, req.IdempotencyKey, inputHash,
+	existing, found, err := findExistingIdempotentTask(
+		ctx, s.tasks, "plan", req.PlanID, repository.WorkerTaskTypeSimulation,
+		req.IdempotencyKey, inputHash,
 		"find simulation idempotency",
 	)
 	if err != nil {
@@ -295,8 +304,8 @@ func (s *SimulationService) idempotentSimulation(
 	if !found {
 		return CreateSimulationResponse{}, false, nil
 	}
-	run, _ := s.sims.GetByJobID(ctx, existing.ID)
-	return CreateSimulationResponse{JobID: existing.ID, RunID: run.ID, Status: existing.Status}, true, nil
+	run, _ := s.sims.GetByTaskID(ctx, existing.ID)
+	return CreateSimulationResponse{TaskID: existing.ID, RunID: run.ID, Status: existing.Status}, true, nil
 }
 
 // pruneOldRuns keeps only the newest N runs per plan and removes analysis results
@@ -445,7 +454,7 @@ type AssetParticipationView struct {
 // SimulationRunView is the API view of a simulation run.
 type SimulationRunView struct {
 	ID                 string                   `json:"id"`
-	JobID              string                   `json:"job_id"`
+	TaskID             string                   `json:"task_id"`
 	PlanID             string                   `json:"plan_id"`
 	InputHash          string                   `json:"input_hash"`
 	CurrentConfigHash  string                   `json:"current_config_hash"`
@@ -461,9 +470,9 @@ type SimulationRunView struct {
 	AssetParticipation []AssetParticipationView `json:"asset_participation,omitempty"`
 	Assumption         *RunAssumptionView       `json:"assumption,omitempty"`
 	CreatedAt          int64                    `json:"created_at"`
-	JobStatus          string                   `json:"job_status"`
-	JobErrorCode       string                   `json:"job_error_code,omitempty"`
-	JobErrorMessage    string                   `json:"job_error_message,omitempty"`
+	TaskStatus         string                   `json:"task_status"`
+	TaskErrorCode      string                   `json:"task_error_code,omitempty"`
+	TaskErrorMessage   string                   `json:"task_error_message,omitempty"`
 }
 
 // RunAssumptionView exposes the frozen return-calibration and risk-model audit of
@@ -590,14 +599,14 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 		assumption = buildRunAssumptionView(snap)
 	}
 	return SimulationRunView{
-		ID: r.ID, JobID: r.JobID, PlanID: r.PlanID, InputHash: r.InputHash,
+		ID: r.ID, TaskID: r.TaskID, PlanID: r.PlanID, InputHash: r.InputHash,
 		CurrentConfigHash: currentHash, ResultStale: stale,
 		MarketSnapshotHash: r.MarketSnapshotHash, EngineVersion: r.EngineVersion,
 		Runs: r.Runs, Seed: strconv.FormatInt(r.Seed, 10), HorizonMonths: r.HorizonMonths,
 		SuccessCount: r.SuccessCount, FailureCount: r.FailureCount,
 		Summary: r.SummaryJSON, AssetParticipation: participation,
 		Assumption: assumption, CreatedAt: r.CreatedAt,
-		JobStatus: r.JobStatus, JobErrorCode: r.JobErrorCode, JobErrorMessage: r.JobErrorMessage,
+		TaskStatus: r.TaskStatus, TaskErrorCode: r.TaskErrorCode, TaskErrorMessage: r.TaskErrorMessage,
 	}
 }
 
@@ -652,6 +661,7 @@ func (s *SimulationService) resolveAndBuildAssets(
 	return assets, resolved, nil
 }
 
+//nolint:gocyclo // Snapshot construction validates every frozen dependency at one boundary.
 func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan repository.Plan,
 	req CreateSimulationRequest, scenarioOverride string,
 ) (*simulation.InputSnapshot, string, error) {

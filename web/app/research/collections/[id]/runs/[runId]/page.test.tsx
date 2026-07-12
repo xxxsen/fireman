@@ -42,11 +42,13 @@ function points(): ResearchRunPoint[] {
   return out;
 }
 
-function runDetail(overrides: Partial<ResearchRunDetail> = {}): ResearchRunDetail {
+function runDetail(
+  overrides: Partial<ResearchRunDetail> = {},
+): ResearchRunDetail {
   return {
     id: "rbr_1",
     collection_id: "rc_1",
-    job_id: "job_1",
+    task_id: "job_1",
     input_hash: "a".repeat(64),
     source_hash: "b".repeat(64),
     engine_version: "research_backtest_v1",
@@ -54,7 +56,7 @@ function runDetail(overrides: Partial<ResearchRunDetail> = {}): ResearchRunDetai
     rebalance_policy: "monthly",
     window_start: "2024-01-01",
     window_end: "2024-01-30",
-    status: "succeeded",
+    status: "complete",
     created_at: 1750000000000,
     completed_at: 1750000050000,
     summary: {
@@ -125,7 +127,9 @@ function runDetail(overrides: Partial<ResearchRunDetail> = {}): ResearchRunDetai
 }
 
 function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <ResearchRunDetailPage />
@@ -136,7 +140,12 @@ function renderPage() {
 describe("ResearchRunDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getCollectionMock.mockResolvedValue({ id: "rc_1", name: "测试集合", items: [], tags: [] });
+    getCollectionMock.mockResolvedValue({
+      id: "rc_1",
+      name: "测试集合",
+      items: [],
+      tags: [],
+    });
     getRunPointsMock.mockResolvedValue({ points: points(), total: 30 });
     listRunsMock.mockResolvedValue({ runs: [] });
   });
@@ -147,7 +156,7 @@ describe("ResearchRunDetailPage", () => {
         runDetail({
           status: "running",
           summary: undefined,
-          job: {
+          task: {
             status: "running",
             phase: "computing",
             progress_current: 2,
@@ -176,7 +185,9 @@ describe("ResearchRunDetailPage", () => {
     expect(screen.getByText("1.20")).toBeInTheDocument();
     expect(screen.getByText("该历史回测版本未计算 CVaR")).toBeInTheDocument();
 
-    await waitFor(() => expect(screen.getAllByTestId("echarts").length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("echarts").length).toBeGreaterThan(0),
+    );
 
     expect(screen.getByText("年度收益表")).toBeInTheDocument();
     expect(screen.getByText("月度收益热力图")).toBeInTheDocument();
@@ -198,7 +209,10 @@ describe("ResearchRunDetailPage", () => {
     expect(screen.getByText("数据质量")).toBeInTheDocument();
 
     const csv = screen.getByTestId("export-csv");
-    expect(csv).toHaveAttribute("href", expect.stringContaining("/runs/rbr_1/export.csv"));
+    expect(csv).toHaveAttribute(
+      "href",
+      expect.stringContaining("/runs/rbr_1/export.csv"),
+    );
     expect(screen.getByTestId("export-json")).toBeInTheDocument();
     expect(screen.getByTestId("compare-run")).toBeInTheDocument();
     expect(screen.getByTestId("clone-params")).toBeInTheDocument();
@@ -206,27 +220,31 @@ describe("ResearchRunDetailPage", () => {
 
   it("renders frozen VaR and CVaR metrics from a v3 summary", async () => {
     const detail = runDetail();
-    getRunMock.mockResolvedValue(runDetail({
-      engine_version: "research_backtest_v3",
-      summary: {
-        ...detail.summary!,
-        tail_risk: {
-          algorithm_version: "empirical_cvar_v1",
-          confidence: 0.95,
-          horizon_days: 20,
-          scenario_count: 233,
-          tail_count: 12,
-          var_loss: 0.05,
-          cvar_loss: 0.08,
-          worst_loss: 0.13,
+    getRunMock.mockResolvedValue(
+      runDetail({
+        engine_version: "research_backtest_v3",
+        summary: {
+          ...detail.summary!,
+          tail_risk: {
+            algorithm_version: "empirical_cvar_v1",
+            confidence: 0.95,
+            horizon_days: 20,
+            scenario_count: 233,
+            tail_count: 12,
+            var_loss: 0.05,
+            cvar_loss: 0.08,
+            worst_loss: 0.13,
+          },
         },
-      },
-    }));
+      }),
+    );
     renderPage();
     expect(await screen.findByText("20 日 95% VaR")).toBeInTheDocument();
     expect(screen.getByText("20 日 95% CVaR")).toBeInTheDocument();
     expect(screen.getByText("最差 20 日损失")).toBeInTheDocument();
-    expect(screen.queryByText("该历史回测版本未计算 CVaR")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("该历史回测版本未计算 CVaR"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders data quality when historical run stores fx as null", async () => {
@@ -271,7 +289,7 @@ describe("ResearchRunDetailPage", () => {
       runDetail({
         status: "failed",
         summary: undefined,
-        job: {
+        task: {
           status: "failed",
           phase: "",
           progress_current: 0,
@@ -291,12 +309,12 @@ describe("ResearchRunDetailPage", () => {
       runDetail({
         status: "failed",
         summary: undefined,
-        job: {
+        task: {
           status: "failed",
           phase: "",
           progress_current: 0,
           progress_total: 0,
-          retry_count: 1,
+          attempt_count: 1,
           error_code: "worker_interrupted",
           error_message: "执行进程中断，自动重试次数已用尽，请重新运行",
         },
@@ -306,6 +324,8 @@ describe("ResearchRunDetailPage", () => {
     renderPage();
 
     expect(await screen.findByText("回测失败")).toBeInTheDocument();
-    expect(screen.getByText("执行进程中断，自动重试仍未完成。请重新发起回测。")).toBeInTheDocument();
+    expect(
+      screen.getByText("执行进程中断，自动重试仍未完成。请重新发起回测。"),
+    ).toBeInTheDocument();
   });
 });

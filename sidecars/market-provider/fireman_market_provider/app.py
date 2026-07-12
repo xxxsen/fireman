@@ -1,8 +1,8 @@
 """FastAPI application for the Fireman market data worker sidecar.
 
-The sidecar is a pure task worker: it claims worker_tasks from
-the shared SQLite DB, executes market data fetches, uploads results through
-the Go internal API and drives task terminal states. The old synchronous
+The sidecar is a pure task worker: it claims tasks through the Go internal
+API, executes market data fetches and uploads results. Go owns task lifecycle
+and finalization. The old synchronous
 resolve/fetch/metadata HTTP endpoints are gone; HTTP only serves /healthz
 for container health checks.
 """

@@ -14,9 +14,14 @@ export interface AdminFilterSearch {
   onChange: (value: string) => void;
 }
 
+export interface AdminFilterInput extends AdminFilterSearch {
+  id: string;
+}
+
 export interface AdminFilterBarProps {
   selects?: AdminFilterSelect[];
   search?: AdminFilterSearch;
+  inputs?: AdminFilterInput[];
   onReset: () => void;
   /** Whether any filter deviates from its default (enables 重置). */
   dirty: boolean;
@@ -26,7 +31,13 @@ export interface AdminFilterBarProps {
  * Shared admin filter row: selects + optional search + reset. Values are
  * fully controlled by the page, which mirrors them into the URL query.
  */
-export function AdminFilterBar({ selects, search, onReset, dirty }: AdminFilterBarProps) {
+export function AdminFilterBar({
+  selects,
+  search,
+  inputs,
+  onReset,
+  dirty,
+}: AdminFilterBarProps) {
   return (
     <div
       className="mb-4 flex flex-wrap items-center gap-2"
@@ -34,7 +45,10 @@ export function AdminFilterBar({ selects, search, onReset, dirty }: AdminFilterB
       role="search"
     >
       {selects?.map((sel) => (
-        <label key={sel.id} className="flex items-center gap-1.5 text-xs text-ink-muted">
+        <label
+          key={sel.id}
+          className="flex items-center gap-1.5 text-xs text-ink-muted"
+        >
           {sel.label}
           <select
             value={sel.value}
@@ -60,6 +74,17 @@ export function AdminFilterBar({ selects, search, onReset, dirty }: AdminFilterB
           className="min-w-52 flex-1 rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-ink-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 sm:max-w-xs"
         />
       )}
+      {inputs?.map((input) => (
+        <input
+          key={input.id}
+          type="search"
+          value={input.value}
+          placeholder={input.placeholder}
+          onChange={(e) => input.onChange(e.target.value)}
+          data-testid={`admin-filter-${input.id}`}
+          className="min-w-44 rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-ink-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
+        />
+      ))}
       {dirty && (
         <button
           type="button"

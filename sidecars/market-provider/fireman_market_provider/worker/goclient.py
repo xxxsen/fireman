@@ -1,11 +1,4 @@
-"""HTTP client for the Go internal API (resource upload + post-process).
-
-resource_db is owned by the Go layer. The worker gzips its result JSON,
-computes the sha256 of the compressed bytes, and uploads it through
-POST /internal/resources. The sha256 doubles as the resource key, so retried
-uploads are idempotent. The returned envelope is stored verbatim in
-worker_tasks.result_data.
-"""
+"""Client for the Go-owned worker task control plane."""
 
 from __future__ import annotations
 
@@ -13,26 +6,47 @@ import gzip
 import hashlib
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from ..logutil import get_logger
-
-logger = get_logger(__name__)
-
 RESULT_SCHEMA_VERSION = 1
+WORKER_TYPE = "sidecar_worker"
 
 
 class GoAPIError(Exception):
-    """Transport or protocol failure talking to the Go internal API."""
+    def __init__(self, message: str, status: int = 0, code: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
 
 
 @dataclass(frozen=True)
-class PostProcessOutcome:
-    result: str  # success | retryable_error | permanent_error
-    error_code: str = ""
-    error_message: str = ""
+class WorkerTask:
+    id: str
+    version_no: int
+    type: str
+    status: str
+    payload_json: str
+    progress_current: int = 0
+    progress_total: int = 0
+    phase: str = ""
+    cancel_requested: bool = False
+
+    @staticmethod
+    def from_json(value: dict[str, Any]) -> "WorkerTask":
+        return WorkerTask(
+            id=str(value["id"]),
+            version_no=int(value["version_no"]),
+            type=str(value["type"]),
+            status=str(value["status"]),
+            payload_json=str(value.get("payload_json", "{}")),
+            progress_current=int(value.get("progress_current", 0)),
+            progress_total=int(value.get("progress_total", 0)),
+            phase=str(value.get("phase", "")),
+            cancel_requested=bool(value.get("cancel_requested", False)),
+        )
 
 
 class GoInternalClient:
@@ -40,65 +54,123 @@ class GoInternalClient:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
 
-    def _post(self, path: str, body: bytes, headers: dict[str, str]) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         req = urllib.request.Request(
-            self._base_url + path, data=body, headers=headers, method="POST"
+            self._base_url + path, data=body, headers=headers or {}, method=method
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                raw = resp.read()
+            with urllib.request.urlopen(req, timeout=self._timeout) as response:
+                raw = response.read()
         except urllib.error.HTTPError as exc:
-            detail = ""
+            raw = exc.read()
+            code = ""
             try:
-                detail = exc.read().decode("utf-8", errors="replace")[:500]
-            except Exception:  # noqa: BLE001
+                code = str(json.loads(raw).get("code", ""))
+            except (json.JSONDecodeError, AttributeError):
                 pass
-            raise GoAPIError(f"{path} returned HTTP {exc.code}: {detail}") from exc
+            raise GoAPIError(
+                f"{path} returned HTTP {exc.code}: {raw.decode(errors='replace')[:500]}",
+                exc.code,
+                code,
+            ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise GoAPIError(f"{path} unreachable: {exc}") from exc
         try:
-            return json.loads(raw)
+            payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise GoAPIError(f"{path} returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise GoAPIError(f"{path} returned invalid response envelope")
+        return payload
 
-    def upload_result(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Gzip + upload a task result; returns the resource envelope dict."""
-        raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    def _post_json(self, path: str, value: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST", path, json.dumps(value, separators=(",", ":")).encode(),
+            {"Content-Type": "application/json"},
+        )
+
+    def list_pending(self, task_types: list[str], limit: int = 20) -> list[WorkerTask]:
+        query = urllib.parse.urlencode(
+            {
+                "worker_type": WORKER_TYPE,
+                "status": "pending",
+                "types": ",".join(task_types),
+                "limit": str(limit),
+            }
+        )
+        payload = self._request("GET", f"/internal/worker-tasks?{query}")
+        data = payload.get("data", {})
+        items = data.get("items", []) if isinstance(data, dict) else []
+        return [WorkerTask.from_json(item) for item in items if isinstance(item, dict)]
+
+    def claim(self, task_id: str, worker_id: str, claim_token: str) -> WorkerTask:
+        payload = self._post_json(
+            f"/internal/worker-tasks/{task_id}/claim",
+            {"worker_type": WORKER_TYPE, "worker_id": worker_id, "claim_token": claim_token},
+        )
+        return WorkerTask.from_json(payload["data"])
+
+    def heartbeat(
+        self, task_id: str, worker_id: str, claim_token: str,
+        current: int, total: int, phase: str,
+    ) -> WorkerTask:
+        payload = self._post_json(
+            f"/internal/worker-tasks/{task_id}/heartbeat",
+            {
+                "worker_type": WORKER_TYPE, "worker_id": worker_id,
+                "claim_token": claim_token, "progress_current": current,
+                "progress_total": total, "phase": phase,
+            },
+        )
+        return WorkerTask.from_json(payload["data"])
+
+    def release(self, task_id: str, worker_id: str, claim_token: str) -> WorkerTask:
+        payload = self._post_json(
+            f"/internal/worker-tasks/{task_id}/release",
+            {"worker_type": WORKER_TYPE, "worker_id": worker_id, "claim_token": claim_token},
+        )
+        return WorkerTask.from_json(payload["data"])
+
+    def upload_result(
+        self, task_id: str, worker_id: str, claim_token: str, result: dict[str, Any]
+    ) -> str:
+        raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
         compressed = gzip.compress(raw, mtime=0)
         digest = hashlib.sha256(compressed).hexdigest()
-        body = self._post(
-            "/internal/resources",
-            compressed,
+        payload = self._request(
+            "POST", f"/internal/worker-tasks/{task_id}/resources", compressed,
             {
                 "Content-Type": "application/octet-stream",
+                "X-Fireman-Worker-Type": WORKER_TYPE,
+                "X-Fireman-Worker-ID": worker_id,
+                "X-Fireman-Claim-Token": claim_token,
                 "X-Fireman-Content-Type": "application/json",
                 "X-Fireman-Content-Encoding": "gzip",
                 "X-Fireman-Schema-Version": str(RESULT_SCHEMA_VERSION),
                 "X-Fireman-Content-SHA256": digest,
             },
         )
-        envelope = body.get("data")
-        if not isinstance(envelope, dict) or not envelope.get("resource_key"):
-            raise GoAPIError("/internal/resources returned no resource envelope")
-        if envelope["resource_key"] != digest:
-            raise GoAPIError(
-                "resource key mismatch: expected sha256 "
-                f"{digest}, got {envelope['resource_key']}"
-            )
-        return envelope
+        data = payload.get("data", {})
+        result_key = str(data.get("result_key", "")) if isinstance(data, dict) else ""
+        if result_key != f"resource:{digest}":
+            raise GoAPIError("resource upload returned an unexpected result key")
+        return result_key
 
-    def notify_post_process(self, task_id: str, version_no: int) -> PostProcessOutcome:
-        body = json.dumps({"task_id": task_id, "version_no": version_no}).encode("utf-8")
-        payload = self._post(
-            f"/internal/tasks/{task_id}/post-process",
-            body,
-            {"Content-Type": "application/json"},
+    def report(
+        self, task_id: str, worker_id: str, claim_token: str, outcome: str,
+        *, result_key: str = "", retryable: bool = False,
+        error_code: str = "", error_message: str = "",
+    ) -> WorkerTask:
+        payload = self._post_json(
+            f"/internal/worker-tasks/{task_id}/result",
+            {
+                "worker_type": WORKER_TYPE, "worker_id": worker_id,
+                "claim_token": claim_token, "outcome": outcome,
+                "result_key": result_key, "retryable": retryable,
+                "error_code": error_code, "error_message": error_message,
+            },
         )
-        data = payload.get("data")
-        if not isinstance(data, dict) or "result" not in data:
-            raise GoAPIError("post-process response missing result classification")
-        return PostProcessOutcome(
-            result=str(data.get("result", "")),
-            error_code=str(data.get("error_code", "") or ""),
-            error_message=str(data.get("error_message", "") or ""),
-        )
+        return WorkerTask.from_json(payload["data"])

@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/fireman/fireman/internal/assumptions"
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/simulation"
 	"github.com/fireman/fireman/internal/testutil"
+	"github.com/fireman/fireman/internal/worker"
 )
 
 // Fixed regression inputs. Any engine, profile, calibration, sampling or
@@ -66,7 +66,7 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 	configureRegressionPlan(t, db, planID)
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
+	runner := worker.NewSimulationRunner(db, repository.NewSimulationRepo(db))
 	simRepo := repository.NewSimulationRepo(db)
 
 	// --- v3 default run (follow_global) ---
@@ -157,7 +157,7 @@ func registryHash(t *testing.T, id string, version int) string {
 
 func runRegression(
 	ctx context.Context, t *testing.T, svc Services,
-	runner *jobs.SimulationRunner, simRepo *repository.SimulationRepo, planID string,
+	runner *worker.SimulationRunner, simRepo *repository.SimulationRepo, planID string,
 ) regressionResult {
 	t.Helper()
 	runs := regressionRuns
@@ -176,7 +176,7 @@ func runRegression(
 	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
 		t.Fatalf("decode input snapshot: %v", err)
 	}
-	if err := runner.RunSimulation(ctx, run.JobID, run.ID, &snap,
+	if err := runner.RunSimulation(ctx, run.TaskID, run.ID, &snap,
 		func() bool { return false }, func(int, int, string) {}); err != nil {
 		t.Fatalf("run simulation: %v", err)
 	}

@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { annualCompletenessLabel, compressYears, dataSourceLabel, formatAnnualPeriod, formatDateFromMs, formatMoneyScaled, formatMoneyUnitHint, formatMoneyWan, representativePercentileRank, sortRepresentativePaths } from "./format";
+import {
+  annualCompletenessLabel,
+  compressYears,
+  dataSourceLabel,
+  formatAnnualPeriod,
+  formatDateFromMs,
+  formatDateTimeFromMsInTimeZone,
+  formatMoneyScaled,
+  formatMoneyUnitHint,
+  formatMoneyWan,
+  representativePercentileRank,
+  sortRepresentativePaths,
+} from "./format";
 
 describe("formatMoneyWan", () => {
   it("converts minor to 万元 with two decimals and no separators", () => {
@@ -20,7 +32,9 @@ describe("formatMoneyWan", () => {
 
 describe("representative path ordering", () => {
   it("ranks percentiles p00<p25<p50<p75<p95, unknown last", () => {
-    expect(representativePercentileRank("p00")).toBeLessThan(representativePercentileRank("p95"));
+    expect(representativePercentileRank("p00")).toBeLessThan(
+      representativePercentileRank("p95"),
+    );
     expect(representativePercentileRank("p50")).toBe(2);
     expect(representativePercentileRank("weird")).toBe(5);
     expect(representativePercentileRank(undefined)).toBe(5);
@@ -47,19 +61,27 @@ describe("representative path ordering", () => {
 describe("annualCompletenessLabel", () => {
   it("marks current year as in-year stats", () => {
     const year = new Date().getFullYear();
-    expect(annualCompletenessLabel({ year, is_partial: false, end_date: `${year}-06-09` })).toBe(
-      "年内统计",
-    );
+    expect(
+      annualCompletenessLabel({
+        year,
+        is_partial: false,
+        end_date: `${year}-06-09`,
+      }),
+    ).toBe("年内统计");
   });
 
   it("marks missing anchor as incomplete", () => {
-    expect(annualCompletenessLabel({ year: 2010, is_partial: true })).toBe("不完整");
+    expect(annualCompletenessLabel({ year: 2010, is_partial: true })).toBe(
+      "不完整",
+    );
   });
 });
 
 describe("formatAnnualPeriod", () => {
   it("shows full cross-year range", () => {
-    expect(formatAnnualPeriod("2024-12-30", "2025-12-29")).toBe("2024-12-30 ~ 2025-12-29");
+    expect(formatAnnualPeriod("2024-12-30", "2025-12-29")).toBe(
+      "2024-12-30 ~ 2025-12-29",
+    );
   });
 });
 
@@ -110,13 +132,24 @@ describe("formatDateFromMs", () => {
   });
 });
 
+describe("formatDateTimeFromMsInTimeZone", () => {
+  it("formats scheduler timestamps in Asia/Shanghai independently of browser timezone", () => {
+    const ts = Date.UTC(2026, 6, 12, 16, 10);
+    expect(formatDateTimeFromMsInTimeZone(ts, "Asia/Shanghai")).toContain(
+      "00:10",
+    );
+  });
+});
+
 describe("compressYears", () => {
   it("compresses a single continuous range", () => {
     expect(compressYears([2006, 2007, 2008, 2009])).toBe("2006-2009");
   });
 
   it("splits non-contiguous years into multiple ranges", () => {
-    expect(compressYears([2006, 2007, 2008, 2010, 2011])).toBe("2006-2008、2010-2011");
+    expect(compressYears([2006, 2007, 2008, 2010, 2011])).toBe(
+      "2006-2008、2010-2011",
+    );
   });
 
   it("keeps single years standalone and handles unordered input", () => {
@@ -144,7 +177,9 @@ describe("dataSourceLabel", () => {
   });
 
   it("maps known id without a suffix", () => {
-    expect(dataSourceLabel("ak.fund_open_fund_info_em")).toBe("东方财富 · 公募基金");
+    expect(dataSourceLabel("ak.fund_open_fund_info_em")).toBe(
+      "东方财富 · 公募基金",
+    );
   });
 
   it("maps the TickFlow daily kline source", () => {
@@ -153,7 +188,9 @@ describe("dataSourceLabel", () => {
 
   it("never exposes raw adapter ids for unknown sources", () => {
     expect(dataSourceLabel("ak.custom_source")).toBe("行情数据");
-    expect(dataSourceLabel("ak.custom_source:某字段")).toBe("行情数据 · 某字段");
+    expect(dataSourceLabel("ak.custom_source:某字段")).toBe(
+      "行情数据 · 某字段",
+    );
     expect(dataSourceLabel("ak.custom_source")).not.toContain("ak.");
   });
 

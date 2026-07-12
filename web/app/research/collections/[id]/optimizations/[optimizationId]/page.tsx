@@ -210,11 +210,11 @@ function WeightBar({
 }
 
 function progressLabel(opt: ResearchOptimizationRun): string {
-  if (!opt.job) return "排队中…";
-  const { phase, progress_current, progress_total } = opt.job;
-  const retry_count = opt.job.retry_count ?? 0;
-  const retryPrefix = retry_count > 0 ? `任务中断后自动重试（${retry_count}/1）：` : "";
-  if (phase === "retrying") return `任务中断后自动重试（${retry_count}/1），等待执行…`;
+  if (!opt.task) return "排队中…";
+  const { phase, progress_current, progress_total } = opt.task;
+  const attempt_count = opt.task.attempt_count ?? 0;
+  const retryPrefix = attempt_count > 0 ? `任务中断后自动重试（${attempt_count}/1）：` : "";
+  if (phase === "retrying") return `任务中断后自动重试（${attempt_count}/1），等待执行…`;
   if (phase === "loading") return `${retryPrefix}加载数据中…`;
   if (phase === "evaluating" && progress_total > 0)
     return `${retryPrefix}评估中 ${progress_current}/${progress_total}`;
@@ -244,7 +244,7 @@ export default function OptimizationDetailPage() {
     queryFn: () => getOptimization(optimizationId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "queued" || status === "running" ? 2000 : false;
+      return status === "pending" || status === "running" ? 2000 : false;
     },
   });
 
@@ -389,7 +389,7 @@ export default function OptimizationDetailPage() {
         </p>
       )}
 
-      {(opt.status === "queued" || opt.status === "running") && (
+      {(opt.status === "pending" || opt.status === "running") && (
         <div
           className="rounded-lg border border-info/25 bg-info/5 px-4 py-6 text-center"
           role="status"
@@ -429,7 +429,7 @@ export default function OptimizationDetailPage() {
         </p>
       )}
 
-      {opt.status === "succeeded" && opt.result && (
+      {opt.status === "complete" && opt.result && (
         <div className="space-y-4">
           {opt.result.skipped_count > 0 && (
             <p className="text-xs text-warning">

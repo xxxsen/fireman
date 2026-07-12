@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
+	"github.com/fireman/fireman/internal/worker"
 )
 
 func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {
@@ -56,9 +56,7 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 	}
 
 	services := buildServices(db)
-	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.Research, services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -74,7 +72,7 @@ func TestHKSimulationSnapshotWithHKDCNYIntegration(t *testing.T) {
 		t.Fatalf("create simulation status=%d body=%s", resp.StatusCode, readBody(t, resp))
 	}
 	data := decodeEnvelope(t, readBody(t, resp))["data"].(map[string]any)
-	jobID := data["job_id"].(string)
+	jobID := data["task_id"].(string)
 	runID := data["run_id"].(string)
 	waitJobSucceeded(t, srv, jobID)
 

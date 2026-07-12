@@ -78,6 +78,7 @@ func (s *SimulationService) buildSnapshotAssets(
 	return assets, nil
 }
 
+//nolint:gocyclo // Asset snapshot branching mirrors the supported return and FX treatments.
 func (s *SimulationService) buildOneSnapshotAsset(
 	ctx context.Context,
 	plan repository.Plan,
@@ -390,7 +391,7 @@ func parseSnapshotWarnings(raw string) []string {
 	return out
 }
 
-//nolint:funlen // Snapshot assembly is kept contiguous so every frozen field is auditable at one boundary.
+//nolint:funlen,nestif // Snapshot assembly stays contiguous so every frozen field is auditable at one boundary.
 func buildInputSnapshotStruct(
 	plan repository.Plan,
 	params repository.PlanParameters,

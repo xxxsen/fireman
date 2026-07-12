@@ -16,25 +16,52 @@ import { WorkerTaskDetailDrawer } from "@/components/admin/WorkerTaskDetailDrawe
 import { Alert } from "@/components/ui/Alert";
 import { listAdminWorkerTasks, WORKER_TASK_TYPE_LABELS } from "@/lib/api/admin";
 import { isTaskActive } from "@/lib/api/market-assets";
-import { ADMIN_PAGE_SIZE, useAdminListParams } from "@/hooks/useAdminListParams";
+import {
+  ADMIN_PAGE_SIZE,
+  useAdminListParams,
+} from "@/hooks/useAdminListParams";
 import { queryErrorMessage } from "@/lib/query-error";
 
-const FILTER_KEYS = ["type", "status", "q"] as const;
+const FILTER_KEYS = [
+  "worker_type",
+  "type",
+  "status",
+  "scope_type",
+  "scope_id",
+  "q",
+] as const;
+
+const WORKER_OPTIONS = [
+  { value: "", label: "全部 Worker" },
+  { value: "go_worker", label: "Go Worker" },
+  { value: "sidecar_worker", label: "Sidecar Worker" },
+];
 
 const TYPE_OPTIONS = [
   { value: "", label: "全部类型" },
-  ...Object.entries(WORKER_TASK_TYPE_LABELS).map(([value, label]) => ({ value, label })),
+  ...Object.entries(WORKER_TASK_TYPE_LABELS).map(([value, label]) => ({
+    value,
+    label,
+  })),
 ];
 
 const STATUS_OPTIONS = [
   { value: "", label: "全部状态" },
   { value: "active", label: "活跃（含排队）" },
-  { value: "pending", label: "等待同步" },
-  { value: "running", label: "同步中" },
-  { value: "pre_complete", label: "处理中" },
-  { value: "complete", label: "同步成功" },
-  { value: "failed", label: "同步失败" },
+  { value: "pending", label: "等待执行" },
+  { value: "running", label: "执行中" },
+  { value: "pre_complete", label: "等待终结" },
+  { value: "complete", label: "已完成" },
+  { value: "failed", label: "执行失败" },
   { value: "canceled", label: "已取消" },
+];
+
+const SCOPE_OPTIONS = [
+  { value: "", label: "全部范围" },
+  { value: "plan", label: "FIRE 计划" },
+  { value: "research_collection", label: "研究组合" },
+  { value: "market_asset", label: "市场资产" },
+  { value: "system", label: "系统" },
 ];
 
 const SEARCH_DEBOUNCE_MS = 300;
@@ -53,7 +80,10 @@ export default function AdminWorkerTasksPage() {
 function WorkerTasksBoard() {
   const params = useAdminListParams(FILTER_KEYS);
   const type = params.get("type");
+  const workerType = params.get("worker_type");
   const status = params.get("status");
+  const scopeType = params.get("scope_type");
+  const scopeId = params.get("scope_id");
   const q = params.get("q");
   const selectedTaskId = params.get("task_id") || null;
 
@@ -75,11 +105,26 @@ function WorkerTasksBoard() {
   }, [searchInput, q, params]);
 
   const query = useQuery({
-    queryKey: ["admin", "worker-tasks", { type, status, q, offset: params.offset }],
+    queryKey: [
+      "admin",
+      "worker-tasks",
+      {
+        workerType,
+        type,
+        status,
+        scopeType,
+        scopeId,
+        q,
+        offset: params.offset,
+      },
+    ],
     queryFn: () =>
       listAdminWorkerTasks({
+        workerType: workerType || undefined,
         type: type || undefined,
         status: status || undefined,
+        scopeType: scopeType || undefined,
+        scopeId: scopeId || undefined,
         q: q || undefined,
         limit: ADMIN_PAGE_SIZE,
         offset: params.offset,
@@ -99,6 +144,13 @@ function WorkerTasksBoard() {
       <AdminFilterBar
         selects={[
           {
+            id: "worker-type",
+            label: "Worker",
+            value: workerType,
+            options: WORKER_OPTIONS,
+            onChange: (v) => params.setFilter("worker_type", v),
+          },
+          {
             id: "type",
             label: "类型",
             value: type,
@@ -112,19 +164,35 @@ function WorkerTasksBoard() {
             options: STATUS_OPTIONS,
             onChange: (v) => params.setFilter("status", v),
           },
+          {
+            id: "scope-type",
+            label: "范围",
+            value: scopeType,
+            options: SCOPE_OPTIONS,
+            onChange: (v) => params.setFilter("scope_type", v),
+          },
         ]}
         search={{
           value: searchInput,
           placeholder: "搜索 task id 前缀或 dedupe_key…",
           onChange: setSearchInput,
         }}
+        inputs={[
+          {
+            id: "scope-id",
+            value: scopeId,
+            placeholder: "精确筛选 scope id…",
+            onChange: (value) => params.setFilter("scope_id", value.trim()),
+          },
+        ]}
         onReset={params.reset}
         dirty={params.dirty}
       />
 
       {stalePollError && (
         <Alert variant="warning" className="mb-3">
-          刷新失败，正在展示上次数据：{queryErrorMessage(query.error, "请求失败")}
+          刷新失败，正在展示上次数据：
+          {queryErrorMessage(query.error, "请求失败")}
         </Alert>
       )}
 
@@ -139,10 +207,10 @@ function WorkerTasksBoard() {
         onRetry={() => void query.refetch()}
         isEmpty={page !== undefined && page.items.length === 0}
         empty={{
-          title: "没有匹配的市场数据任务",
+          title: "没有匹配的任务",
           description: params.dirty
             ? "尝试调整筛选条件。"
-            : "发起一次目录或历史同步后，任务会出现在这里。",
+            : "发起模拟、研究或市场数据更新后，任务会出现在这里。",
         }}
       >
         {page && (

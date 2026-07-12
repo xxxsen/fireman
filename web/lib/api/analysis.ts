@@ -1,7 +1,7 @@
 import { apiGet, apiPost } from "./client";
 
-export interface AnalysisJobView {
-  job_id: string;
+export interface AnalysisTaskView {
+  task_id: string;
   plan_id: string;
   status: string;
   input_hash: string;
@@ -25,35 +25,35 @@ function listQuery(simulationRunId?: string): string {
 }
 
 export function createStressTest(planId: string, body?: CreateAnalysisBody) {
-  return apiPost<{ job_id: string; status: string }>(
+	return apiPost<{ task_id: string; status: string }>(
     `/api/v1/plans/${planId}/stress-tests`,
     body ?? {},
   );
 }
 
 export function listStressTests(planId: string, simulationRunId?: string) {
-  return apiGet<{ stress_tests: AnalysisJobView[] }>(
+	return apiGet<{ stress_tests: AnalysisTaskView[] }>(
     `/api/v1/plans/${planId}/stress-tests${listQuery(simulationRunId)}`,
   );
 }
 
-export function getStressTest(jobId: string) {
-  return apiGet<AnalysisJobView>(`/api/v1/stress-tests/${jobId}`);
+export function getStressTest(taskId: string) {
+	return apiGet<AnalysisTaskView>(`/api/v1/stress-tests/${taskId}`);
 }
 
 export function createSensitivityTest(planId: string, body?: CreateAnalysisBody) {
-  return apiPost<{ job_id: string; status: string }>(
+  return apiPost<{ task_id: string; status: string }>(
     `/api/v1/plans/${planId}/sensitivity-tests`,
     body ?? {},
   );
 }
 
 export function listSensitivityTests(planId: string, simulationRunId?: string) {
-  return apiGet<{ sensitivity_tests: AnalysisJobView[] }>(
+	return apiGet<{ sensitivity_tests: AnalysisTaskView[] }>(
     `/api/v1/plans/${planId}/sensitivity-tests${listQuery(simulationRunId)}`,
   );
 }
 
-export function getSensitivityTest(jobId: string) {
-  return apiGet<AnalysisJobView>(`/api/v1/sensitivity-tests/${jobId}`);
+export function getSensitivityTest(taskId: string) {
+	return apiGet<AnalysisTaskView>(`/api/v1/sensitivity-tests/${taskId}`);
 }

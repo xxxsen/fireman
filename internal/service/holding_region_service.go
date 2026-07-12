@@ -63,7 +63,10 @@ func (s *HoldingsService) PreviewRegionChange(
 		preview, err = s.buildRegionChangePreviewTx(ctx, tx, planID, req)
 		return err
 	})
-	return preview, err
+	if err != nil {
+		return HoldingRegionChangePreview{}, fmt.Errorf("preview holding region change: %w", err)
+	}
+	return preview, nil
 }
 
 func (s *HoldingsService) ApplyRegionChange(
@@ -110,11 +113,12 @@ func (s *HoldingsService) ApplyRegionChange(
 		return nil
 	})
 	if err != nil {
-		return HoldingRegionChangeResult{}, err
+		return HoldingRegionChangeResult{}, fmt.Errorf("apply holding region change: %w", err)
 	}
 	return result, nil
 }
 
+//nolint:gocyclo,lll // Preview validation stays in one transaction to prevent an incomplete write-set.
 func (s *HoldingsService) buildRegionChangePreviewTx(
 	ctx context.Context, tx *sql.Tx, planID string, req HoldingRegionChangeRequest,
 ) (HoldingRegionChangePreview, error) {
