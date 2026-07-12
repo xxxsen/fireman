@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fireman/fireman/internal/api"
+	"github.com/fireman/fireman/internal/bootstrap"
 	"github.com/fireman/fireman/internal/config"
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/repository"
@@ -58,6 +59,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err := fdb.Migrate(ctx, pool, cfg.DBPath, logger); err != nil {
 		closePoolAfterStartupFailure(pool, logger, "migrate")
 		return fmt.Errorf("migrate: %w", err)
+	}
+	if err := bootstrap.EnsureBuiltinData(ctx, pool); err != nil {
+		closePoolAfterStartupFailure(pool, logger, "bootstrap builtin data")
+		return fmt.Errorf("bootstrap builtin data: %w", err)
 	}
 
 	if err := ensureDataDir(cfg.ResourceDBPath); err != nil {

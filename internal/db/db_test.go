@@ -2,12 +2,11 @@ package db
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -19,49 +18,51 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func applyMigrationsThrough(t *testing.T, pool *sql.DB, _ string, maxVersion int) {
-	t.Helper()
-	SetMigrations(migrations.FS)
-	ctx := context.Background()
-	if _, err := pool.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER PRIMARY KEY,
-		filename TEXT NOT NULL,
-		applied_at INTEGER NOT NULL
-	)`); err != nil {
-		t.Fatalf("ensure schema_migrations: %v", err)
+func TestValidateMigrationDDLRejectsDataStatements(t *testing.T) {
+	for _, statement := range []string{
+		"INSERT INTO example VALUES (1);",
+		"UPDATE example SET value=1;",
+		"DELETE FROM example;",
+		"REPLACE INTO example VALUES (1);",
+		"SELECT * FROM example;",
+	} {
+		if err := validateMigrationDDL("test.sql", statement); !errors.Is(err, errMigrationNotDDL) {
+			t.Fatalf("statement %q error=%v, want errMigrationNotDDL", statement, err)
+		}
 	}
+	if err := validateMigrationDDL(
+		"test.sql",
+		"CREATE TABLE child (id INTEGER, parent_id INTEGER REFERENCES parent(id) ON DELETE CASCADE);",
+	); err != nil {
+		t.Fatalf("valid DDL rejected: %v", err)
+	}
+}
+
+func TestMigrationsAreSingleDDLOnlyBaseline(t *testing.T) {
 	entries, err := fs.ReadDir(migrations.FS, ".")
 	if err != nil {
-		t.Fatalf("read migrations: %v", err)
+		t.Fatal(err)
 	}
-	type mig struct {
-		version int
-		name    string
+	var sqlFiles []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			sqlFiles = append(sqlFiles, entry.Name())
+		}
 	}
-	var files []mig
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		idx := strings.IndexByte(e.Name(), '_')
-		v, err := strconv.Atoi(e.Name()[:idx])
-		if err != nil {
-			t.Fatalf("parse version %s: %v", e.Name(), err)
-		}
-		if v > maxVersion {
-			continue
-		}
-		files = append(files, mig{version: v, name: e.Name()})
+	if len(sqlFiles) != 1 || sqlFiles[0] != "0001_init.sql" {
+		t.Fatalf("migration files=%v, want only 0001_init.sql", sqlFiles)
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].version < files[j].version })
-	for _, f := range files {
-		body, err := fs.ReadFile(migrations.FS, f.name)
-		if err != nil {
-			t.Fatalf("read %s: %v", f.name, err)
-		}
-		if err := applyMigration(ctx, pool, migrationFile{version: f.version, filename: f.name}, body); err != nil {
-			t.Fatalf("apply %s: %v", f.name, err)
-		}
+	body, err := fs.ReadFile(migrations.FS, sqlFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	dml := regexp.MustCompile(`(?im)^\s*(insert|update|delete|replace|merge)\b`)
+	if match := dml.Find(body); match != nil {
+		t.Fatalf("migration contains prohibited DML statement %q", match)
+	}
+	historicalDDL := regexp.MustCompile(`(?im)^\s*(alter|drop)\b`)
+	if match := historicalDDL.Find(body); match != nil {
+		t.Fatalf("consolidated baseline contains historical DDL statement %q", match)
 	}
 }
 
@@ -126,45 +127,16 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		t.Errorf("expected idx_worker_tasks_claim index: %v", err)
 	}
 
-	var scenarioCount int
-	if err := pool.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM allocation_scenarios WHERE is_builtin=1").Scan(&scenarioCount); err != nil {
-		t.Fatalf("count builtin scenarios: %v", err)
+	var businessRows int
+	if err := pool.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM allocation_scenarios) +
+		(SELECT COUNT(*) FROM instruments) +
+		(SELECT COUNT(*) FROM market_assets) +
+		(SELECT COUNT(*) FROM market_asset_simulation_snapshots)`).Scan(&businessRows); err != nil {
+		t.Fatalf("count migration-created business rows: %v", err)
 	}
-	if scenarioCount != 4 {
-		t.Errorf("expected 4 builtin scenarios, got %d", scenarioCount)
-	}
-
-	var systemCash string
-	if err := pool.QueryRowContext(ctx,
-		"SELECT asset_key FROM market_assets WHERE asset_key='SYS|cash||CNY'").Scan(&systemCash); err != nil {
-		t.Fatalf("expected SYS|cash||CNY market asset: %v", err)
-	}
-
-	var snapID string
-	var completeYearCount int
-	var sourceMode string
-	if err := pool.QueryRowContext(ctx,
-		`SELECT id, complete_year_count, source_mode FROM market_asset_simulation_snapshots
-		 WHERE asset_key='SYS|cash||CNY'`).Scan(&snapID, &completeYearCount, &sourceMode); err != nil {
-		t.Fatalf("expected system cash snapshot: %v", err)
-	}
-	if completeYearCount != 0 {
-		t.Errorf("expected complete_year_count=0, got %d", completeYearCount)
-	}
-	if sourceMode != "system_cash" {
-		t.Errorf("expected source_mode=system_cash, got %q", sourceMode)
-	}
-
-	var fxCount int
-	if err := pool.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM instruments WHERE is_system=1 AND asset_class='fx' AND code IN ('USDCNY','HKDCNY')`,
-	).Scan(&fxCount); err != nil {
-		t.Fatalf("count system fx instruments: %v", err)
-	}
-	if fxCount != 2 {
-		t.Errorf("expected 2 system FX instruments, got %d", fxCount)
+	if businessRows != 0 {
+		t.Fatalf("DDL migration created %d business rows", businessRows)
 	}
 
 	var confidenceDefault, horizonDefault string
@@ -193,69 +165,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 30 {
-		t.Errorf("expected 30 migration records after idempotent re-run, got %d", migrationCount)
-	}
-}
-
-// Migration 0024 retires the rebalance draft feature: it must drop the draft
-// tables even when they still hold historical draft data, without touching
-// unrelated tables.
-func TestMigrate_0024_DropsRebalanceDraftTablesWithData(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "fireman.db")
-	pool, err := Open(context.Background(), dbPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer pool.Close()
-
-	applyMigrationsThrough(t, pool, dbPath, 23)
-
-	ctx := context.Background()
-	now := int64(1_750_000_000_000)
-	if _, err := pool.ExecContext(ctx, `
-		INSERT INTO plans (id, name, valuation_date, created_at, updated_at)
-		VALUES ('plan_legacy', '遗留计划', '2026-01-01', ?, ?)`, now, now); err != nil {
-		t.Fatalf("seed legacy plan: %v", err)
-	}
-	if _, err := pool.ExecContext(ctx, `
-		INSERT INTO rebalance_drafts (
-			id, plan_id, status, config_version, baseline_holdings_total_minor, created_at, updated_at
-		) VALUES ('rbd_legacy', 'plan_legacy', 'draft', 1, 100000, ?, ?)`, now, now); err != nil {
-		t.Fatalf("seed legacy draft: %v", err)
-	}
-	if _, err := pool.ExecContext(
-		ctx, `
-		INSERT INTO rebalance_draft_lines (
-			id, draft_id, holding_id, asset_key, baseline_current_minor, planned_current_minor,
-			frozen_target_minor, frozen_gap_minor, frozen_gap_weight, frozen_action,
-			frozen_suggested_trade_minor
-		) VALUES ('rbdl_legacy', 'rbd_legacy', 'hold_x', 'CN|x', 100000, 90000, 95000, -5000, -0.05, 'decrease', -5000)`,
-	); err != nil {
-		t.Fatalf("seed legacy draft line: %v", err)
-	}
-
-	if err := Migrate(ctx, pool, dbPath, nil); err != nil {
-		t.Fatalf("Migrate through 0024: %v", err)
-	}
-
-	var draftTableCount int
-	if err := pool.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM sqlite_master
-		WHERE type='table' AND name LIKE 'rebalance_draft%'`).Scan(&draftTableCount); err != nil {
-		t.Fatal(err)
-	}
-	if draftTableCount != 0 {
-		t.Fatalf("expected all rebalance_draft* tables dropped, %d remain", draftTableCount)
-	}
-
-	for _, keep := range []string{"asset_refresh_events", "plan_holdings", "rebalance_executions"} {
-		var name string
-		if err := pool.QueryRowContext(ctx,
-			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, keep).Scan(&name); err != nil {
-			t.Fatalf("expected table %s to survive 0024: %v", keep, err)
-		}
+	if migrationCount != 1 {
+		t.Errorf("expected 1 migration record after idempotent re-run, got %d", migrationCount)
 	}
 }
 

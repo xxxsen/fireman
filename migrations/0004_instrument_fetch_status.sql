@@ -1,1 +1,0 @@
--- No-op: the pre-release unified task baseline already includes payload_json.
