@@ -20,7 +20,21 @@ const (
 	JobStatusSucceeded          = "succeeded"
 	JobStatusFailed             = "failed"
 	JobStatusCanceled           = "canceled"
+	JobErrorWorkerInterrupted   = "worker_interrupted"
 )
+
+const (
+	InterruptedActionRequeued = "requeued"
+	InterruptedActionFailed   = "failed"
+	InterruptedActionCanceled = "canceled"
+)
+
+// InterruptedJobAction is the committed transition for one orphaned running
+// job. Job contains the row as it existed before reconciliation.
+type InterruptedJobAction struct {
+	Action string
+	Job    Job
+}
 
 // JobErrSupersededByNewerAnalysis marks an attached-analysis job canceled because
 // the same analysis type was re-run against the same Monte Carlo run. Shared by
@@ -53,6 +67,10 @@ type JobRepo struct {
 	db *sql.DB
 }
 
+type jobRowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func NewJobRepo(db *sql.DB) *JobRepo {
 	return &JobRepo{db: db}
 }
@@ -83,11 +101,15 @@ func (r *JobRepo) Create(ctx context.Context, tx *sql.Tx, job Job) error {
 }
 
 func (r *JobRepo) GetByID(ctx context.Context, id string) (Job, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, plan_id, type, status, input_hash, payload_json,
-			progress_current, progress_total, phase, cancel_requested, retry_count,
-			heartbeat_at, error_code, error_message, created_at, started_at, finished_at
-		FROM jobs WHERE id=?`, id)
+	return getJobByID(ctx, r.db, id)
+}
+
+func getJobByID(ctx context.Context, q jobRowQuerier, id string) (Job, error) {
+	row := q.QueryRowContext(ctx, `
+			SELECT id, plan_id, type, status, input_hash, payload_json,
+				progress_current, progress_total, phase, cancel_requested, retry_count,
+				heartbeat_at, error_code, error_message, created_at, started_at, finished_at
+			FROM jobs WHERE id=?`, id)
 	return scanJob(row)
 }
 
@@ -240,8 +262,44 @@ func (r *JobRepo) IsCancelRequested(ctx context.Context, id string) (bool, error
 	return v == 1, wrapSQL("query cancel_requested", err)
 }
 
-func (r *JobRepo) Finish(ctx context.Context, id, status, errCode, errMsg string) error {
-	return r.FinishTx(ctx, nil, id, status, errCode, errMsg)
+func (r *JobRepo) Finish(ctx context.Context, id, status, errCode, errMsg string) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, wrapSQL("begin finish job", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, err := getJobByID(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	if job.Status != JobStatusRunning {
+		return false, nil
+	}
+	if status == JobStatusSucceeded {
+		if err := requireDependentRunSucceededTx(ctx, tx, job); err != nil {
+			return false, err
+		}
+	}
+	now := time.Now().UnixMilli()
+	res, err := tx.ExecContext(ctx, `UPDATE jobs
+		SET status=?, finished_at=?, heartbeat_at=NULL, error_code=?, error_message=?, phase=''
+		WHERE id=? AND status=?`, status, now, errCode, errMsg, id, JobStatusRunning)
+	if err != nil {
+		return false, wrapSQL("finish job", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return false, nil
+	}
+	if status != JobStatusSucceeded {
+		if err := syncDependentJobStatusTx(ctx, tx, job, status, errCode, errMsg, now); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, wrapSQL("commit finish job", err)
+	}
+	return true, nil
 }
 
 func (r *JobRepo) FinishTx(ctx context.Context, tx *sql.Tx, id, status, errCode, errMsg string) error {
@@ -254,27 +312,198 @@ func (r *JobRepo) FinishTx(ctx context.Context, tx *sql.Tx, id, status, errCode,
 }
 
 func (r *JobRepo) RequeueIfRunning(ctx context.Context, id string) (bool, error) {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE jobs SET status=?, started_at=NULL, heartbeat_at=NULL, phase='', cancel_requested=0
-		WHERE id=? AND status=?`,
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, wrapSQL("begin graceful requeue", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
+			UPDATE jobs SET status=?, progress_current=0, started_at=NULL,
+				heartbeat_at=NULL, finished_at=NULL, phase='', cancel_requested=0,
+				error_code='', error_message=''
+			WHERE id=? AND status=?`,
 		JobStatusQueued, id, JobStatusRunning)
 	if err != nil {
 		return false, wrapSQL("requeue running job", err)
 	}
 	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if n == 0 {
+		return false, nil
+	}
+	job, err := getJobByID(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	if err := syncDependentJobStatusTx(ctx, tx, job, JobStatusQueued, "", "", 0); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, wrapSQL("commit graceful requeue", err)
+	}
+	return true, nil
 }
 
-func (r *JobRepo) RequeueStaleRunning(ctx context.Context, staleBefore int64, maxRetries int) (int, error) {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE jobs SET status=?, retry_count=retry_count+1, started_at=NULL, heartbeat_at=NULL, phase=''
-		WHERE status=? AND heartbeat_at IS NOT NULL AND heartbeat_at < ? AND retry_count < ?`,
-		JobStatusQueued, JobStatusRunning, staleBefore, maxRetries)
-	if err != nil {
-		return 0, wrapSQL("requeue stale running jobs", err)
+// ListRunningForReconcile lists every running job at startup, or only jobs with
+// a missing/stale heartbeat for periodic reconciliation.
+func (r *JobRepo) ListRunningForReconcile(ctx context.Context, staleBefore *int64) ([]Job, error) {
+	query := `SELECT id, plan_id, type, status, input_hash, payload_json,
+		progress_current, progress_total, phase, cancel_requested, retry_count,
+		heartbeat_at, error_code, error_message, created_at, started_at, finished_at
+		FROM jobs WHERE status=?`
+	args := []any{JobStatusRunning}
+	if staleBefore != nil {
+		query += ` AND (heartbeat_at IS NULL OR heartbeat_at < ?)`
+		args = append(args, *staleBefore)
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	query += ` ORDER BY created_at, id`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapSQL("list running jobs for reconcile", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Job
+	for rows.Next() {
+		job, err := scanJobRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, job)
+	}
+	return out, wrapSQL("iterate running jobs for reconcile", rows.Err())
+}
+
+// ConvergeInterrupted atomically requeues, fails, or cancels one orphaned job
+// and its dependent research run. periodicStaleBefore is nil during startup;
+// otherwise the heartbeat predicate is rechecked in the transaction so a live
+// worker heartbeat wins the race.
+func (r *JobRepo) ConvergeInterrupted(
+	ctx context.Context, id string, periodicStaleBefore *int64, maxRetries int, now int64,
+) (InterruptedJobAction, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InterruptedJobAction{}, false, wrapSQL("begin interrupted job convergence", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, err := getJobByID(ctx, tx, id)
+	if err != nil {
+		if errors.Is(err, ErrJobNotFound) {
+			return InterruptedJobAction{}, false, nil
+		}
+		return InterruptedJobAction{}, false, err
+	}
+	if job.Status != JobStatusRunning {
+		return InterruptedJobAction{}, false, nil
+	}
+	if periodicStaleBefore != nil && job.HeartbeatAt != nil && *job.HeartbeatAt >= *periodicStaleBefore {
+		return InterruptedJobAction{}, false, nil
+	}
+
+	action, targetStatus, code, message := InterruptedActionRequeued, JobStatusQueued, "", ""
+	if job.CancelRequested {
+		action, targetStatus = InterruptedActionCanceled, JobStatusCanceled
+		code, message = job.ErrorCode, job.ErrorMessage
+		if code == "" {
+			code, message = "canceled_by_user", "canceled by user"
+		}
+	} else if job.RetryCount >= maxRetries {
+		action, targetStatus = InterruptedActionFailed, JobStatusFailed
+		code = JobErrorWorkerInterrupted
+		message = "执行进程中断，自动重试次数已用尽，请重新运行"
+	}
+
+	var res sql.Result
+	if action == InterruptedActionRequeued {
+		res, err = tx.ExecContext(ctx, `UPDATE jobs
+			SET status=?, retry_count=retry_count+1, progress_current=0,
+				started_at=NULL, heartbeat_at=NULL, finished_at=NULL, phase='retrying',
+				cancel_requested=0, error_code='', error_message=''
+			WHERE id=? AND status=?`, JobStatusQueued, id, JobStatusRunning)
+	} else {
+		res, err = tx.ExecContext(ctx, `UPDATE jobs
+			SET status=?, finished_at=?, heartbeat_at=NULL, phase='',
+				error_code=?, error_message=?
+			WHERE id=? AND status=?`, targetStatus, now, code, message, id, JobStatusRunning)
+	}
+	if err != nil {
+		return InterruptedJobAction{}, false, wrapSQL("converge interrupted job", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return InterruptedJobAction{}, false, nil
+	}
+	if err := syncDependentJobStatusTx(ctx, tx, job, targetStatus, code, message, now); err != nil {
+		return InterruptedJobAction{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return InterruptedJobAction{}, false, wrapSQL("commit interrupted job convergence", err)
+	}
+	return InterruptedJobAction{Action: action, Job: job}, true, nil
+}
+
+func syncDependentJobStatusTx(
+	ctx context.Context, tx *sql.Tx, job Job, status, code, message string, completedAt int64,
+) error {
+	switch job.Type {
+	case JobTypeResearchOptimization:
+		if status == JobStatusQueued {
+			res, err := tx.ExecContext(ctx, `UPDATE research_optimization_runs
+				SET status=?, evaluated_count=0, result_json='{}', error_code='',
+					error_message='', completed_at=NULL WHERE job_id=?`, ResearchRunStatusQueued, job.ID)
+			return requireDependentUpdate("requeue optimization run", res, err)
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE research_optimization_runs
+			SET status=?, error_code=?, error_message=?, completed_at=? WHERE job_id=?`,
+			status, code, message, completedAt, job.ID)
+		return requireDependentUpdate("finish optimization run with job", res, err)
+	case JobTypeResearchBacktest:
+		if status == JobStatusQueued {
+			res, err := tx.ExecContext(ctx, `UPDATE research_backtest_runs
+				SET status=?, summary_json='{}', data_quality_json='{}', completed_at=NULL
+				WHERE job_id=?`, ResearchRunStatusQueued, job.ID)
+			return requireDependentUpdate("requeue research run", res, err)
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE research_backtest_runs
+			SET status=?, completed_at=? WHERE job_id=?`, status, completedAt, job.ID)
+		return requireDependentUpdate("finish research run with job", res, err)
+	default:
+		return nil
+	}
+}
+
+func requireDependentUpdate(operation string, result sql.Result, err error) error {
+	if err != nil {
+		return wrapSQL(operation, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return wrapSQL(operation+" rows affected", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("%s: dependent run count=%d", operation, affected)
+	}
+	return nil
+}
+
+func requireDependentRunSucceededTx(ctx context.Context, tx *sql.Tx, job Job) error {
+	var status string
+	var err error
+	switch job.Type {
+	case JobTypeResearchOptimization:
+		err = tx.QueryRowContext(ctx,
+			`SELECT status FROM research_optimization_runs WHERE job_id=?`, job.ID).Scan(&status)
+	case JobTypeResearchBacktest:
+		err = tx.QueryRowContext(ctx,
+			`SELECT status FROM research_backtest_runs WHERE job_id=?`, job.ID).Scan(&status)
+	default:
+		return nil
+	}
+	if err != nil {
+		return wrapSQL("load dependent run status", err)
+	}
+	if status != ResearchRunStatusSucceeded {
+		return fmt.Errorf("dependent run not completed: job=%s run_status=%s", job.ID, status)
+	}
+	return nil
 }
 
 func (r *JobRepo) FindIdempotency(ctx context.Context, planID, jobType, key string) (Job, string, error) {
@@ -469,7 +698,7 @@ func (r *JobRepo) CountFinishedSince(ctx context.Context, status string, since i
 	return n, wrapSQL("count finished jobs", err)
 }
 
-func scanJob(row *sql.Row) (Job, error) {
+func scanJob(row rowScanner) (Job, error) {
 	var j Job
 	var cancel int
 	var hb, started, finished sql.NullInt64

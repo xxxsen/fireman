@@ -18,6 +18,7 @@ import (
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
+	"github.com/fireman/fireman/internal/service"
 	"github.com/fireman/fireman/internal/simulation"
 	"github.com/fireman/fireman/internal/testutil"
 )
@@ -161,6 +162,98 @@ func seedOneYearSimulationPlan(t *testing.T, db *sql.DB) string {
 		t.Fatal(err)
 	}
 	return planID
+}
+
+func createSimulationSnapshotForTest(
+	t *testing.T,
+	db *sql.DB,
+	planID string,
+) (repository.SimulationRun, simulation.InputSnapshot) {
+	t.Helper()
+	seed := "118"
+	runs := 1000
+	resp, err := buildServices(db).Simulations.Create(context.Background(), service.CreateSimulationRequest{
+		PlanID: planID,
+		Runs:   &runs,
+		Seed:   &seed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repository.NewSimulationRepo(db).GetByID(context.Background(), resp.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap simulation.InputSnapshot
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
+		t.Fatal(err)
+	}
+	return run, snap
+}
+
+func TestSimulationSnapshotDoesNotDeductPersistedFundExpenseAgain(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+
+	beforeRun, before := createSimulationSnapshotForTest(t, db, planID)
+	if len(before.Assets) != 1 {
+		t.Fatalf("assets=%d want 1", len(before.Assets))
+	}
+	if before.Assets[0].ExpenseRatio != nil {
+		t.Fatalf("expense ratio must not be frozen for deduction: %+v", before.Assets[0].ExpenseRatio)
+	}
+	if before.Assets[0].FeeTreatment != "embedded" {
+		t.Fatalf("fee treatment=%q want embedded", before.Assets[0].FeeTreatment)
+	}
+
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE market_asset_simulation_snapshots
+		SET expense_ratio=0.0123, expense_ratio_status='available'
+		WHERE id='snap_sim_equity'`); err != nil {
+		t.Fatal(err)
+	}
+	afterRun, after := createSimulationSnapshotForTest(t, db, planID)
+	if after.Assets[0].ExpenseRatio != nil {
+		t.Fatalf("persisted expense ratio must remain audit-only: %+v", after.Assets[0].ExpenseRatio)
+	}
+	if afterRun.InputHash != beforeRun.InputHash {
+		t.Fatalf("expense metadata changed input hash: before=%s after=%s", beforeRun.InputHash, afterRun.InputHash)
+	}
+	if after.EngineVersion != "3.5.0" {
+		t.Fatalf("engine version=%q want 3.5.0", after.EngineVersion)
+	}
+}
+
+func TestSimulationFXTreatmentFollowsUserRegionWithoutNameInference(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE market_assets SET name='示例全球互联网QDII基金' WHERE asset_key='CN|test|sh|SIM001'`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, domestic := createSimulationSnapshotForTest(t, db, planID)
+	if got := domestic.Assets[0].FXTreatment; got != simulation.FXTreatmentNone {
+		t.Fatalf("domestic QDII-named holding fx treatment=%q want none", got)
+	}
+
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_holdings SET region='foreign' WHERE plan_id=?`, planID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE plan_region_targets
+		SET weight_within_class=CASE WHEN region='foreign' THEN 1.0 ELSE 0 END
+		WHERE plan_id=? AND asset_class='equity'`, planID); err != nil {
+		t.Fatal(err)
+	}
+	_, foreign := createSimulationSnapshotForTest(t, db, planID)
+	if got := foreign.Assets[0].FXTreatment; got != simulation.FXTreatmentEmbeddedInAssetNAV {
+		t.Fatalf("user-selected foreign CNY holding fx treatment=%q want embedded_in_asset_nav", got)
+	}
+	if foreign.Assets[0].FXSnapshotID != "" {
+		t.Fatalf("embedded FX must not add a separate FX snapshot: %q", foreign.Assets[0].FXSnapshotID)
+	}
 }
 
 func TestOneCompleteYearSimulationJobFlow(t *testing.T) {

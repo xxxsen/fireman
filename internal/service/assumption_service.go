@@ -27,6 +27,24 @@ func NewAssumptionService(db *sql.DB) *AssumptionService {
 	return &AssumptionService{repo: repository.NewAssumptionProfileRepo(db)}
 }
 
+// ResolveEffectiveIdentity exposes the same resolver used by simulation and
+// configuration hashing; callers never infer profile/scenario identity from the
+// plan's selection fields themselves.
+func (s *AssumptionService) ResolveEffectiveIdentity(
+	ctx context.Context, params repository.PlanParameters,
+) (EffectiveAssumptionIdentity, error) {
+	if err := s.repo.EnsureSystemDefault(ctx); err != nil {
+		return EffectiveAssumptionIdentity{}, wrapRepo("ensure system assumption profile", err)
+	}
+	p, scenario, hash, err := resolveProfileAndScenario(ctx, s.repo, params)
+	if err != nil {
+		return EffectiveAssumptionIdentity{}, err
+	}
+	return EffectiveAssumptionIdentity{
+		ProfileID: p.ID, ProfileVersion: p.Version, ContentHash: hash, Scenario: scenario,
+	}, nil
+}
+
 // AssumptionProfilesView is the list payload: every profile summary plus the
 // resolved global default selection so the UI can mark the active default.
 type AssumptionProfilesView struct {
@@ -55,6 +73,30 @@ func (s *AssumptionService) ListProfiles(ctx context.Context) (AssumptionProfile
 			return AssumptionProfilesView{}, err
 		}
 		profiles[i].EligibleForGlobalDefault = eligible
+		if !eligible {
+			if profiles[i].Status != assumptions.StatusActive {
+				profiles[i].GlobalIneligibilityReasons = append(
+					profiles[i].GlobalIneligibilityReasons, "profile_not_active",
+				)
+			} else {
+				profiles[i].GlobalIneligibilityReasons = append(
+					profiles[i].GlobalIneligibilityReasons, "current_publish_gate_failed",
+				)
+			}
+		}
+		profiles[i].EvidenceKind = "user_reviewed"
+		if profiles[i].OwnerScope == assumptions.OwnerSystem {
+			profiles[i].EvidenceKind = "derived_external_background"
+			if profiles[i].ID == assumptions.SystemProfileID &&
+				profiles[i].Version == assumptions.SystemProfileVersion {
+				profiles[i].EvidenceKind = "internal_policy"
+			}
+			if variant, ok := assumptions.LookupSystemContent(
+				profiles[i].ID, profiles[i].Version, profiles[i].ContentHash,
+			); ok {
+				profiles[i].EvidenceHash = variant.EvidenceHash
+			}
+		}
 	}
 	return AssumptionProfilesView{
 		Profiles:    profiles,
@@ -182,18 +224,19 @@ func (s *AssumptionService) SaveDraft(
 }
 
 // Activate promotes a draft to active and supersedes other active versions.
-func (s *AssumptionService) Activate(ctx context.Context, id string, version int) error {
+func (s *AssumptionService) Activate(ctx context.Context, id string, version int) (bool, error) {
 	p, err := s.GetProfile(ctx, id, version)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := s.assertActivatable(p); err != nil {
-		return err
+		return false, err
 	}
-	if err := s.repo.Activate(ctx, id, version); err != nil {
-		return wrapRepo("activate assumption profile", err)
+	migrated, err := s.repo.Activate(ctx, id, version)
+	if err != nil {
+		return false, wrapRepo("activate assumption profile", err)
 	}
-	return nil
+	return migrated, nil
 }
 
 // assertActivatable rejects a profile that cannot be safely saved or activated:
@@ -211,6 +254,9 @@ func (s *AssumptionService) assertActivatable(p assumptions.Profile) error {
 			"correlation matrix needs a heavy PSD repair (max_repair_delta=%.4f > %.4f, "+
 				"min_eigenvalue=%.4f); revise correlation priors",
 			v.MaxRepairDelta, simulation.PSDRepairWarnThreshold, v.MinEigenvalue), nil)
+	}
+	if err := p.ValidateSelfCorrelationCoverage(); err != nil {
+		return newErr("assumption_same_type_correlation_missing", err.Error(), nil)
 	}
 	return nil
 }
@@ -244,7 +290,7 @@ func (s *AssumptionService) SetPreferences(
 		return repository.AssumptionPreferences{}, err
 	}
 	if p.Status != assumptions.StatusActive {
-		return repository.AssumptionPreferences{}, newErr("assumption_profile_not_active",
+		return repository.AssumptionPreferences{}, newErr("assumption_profile_not_active_for_default",
 			"default profile must be an active version", nil)
 	}
 	// A frozen historical system profile (system_cma_v1@1 / v2@1) is active for
@@ -269,6 +315,10 @@ func (s *AssumptionService) SetPreferences(
 				map[string]any{"id": pref.DefaultProfileID, "version": pref.DefaultProfileVersion})
 		}
 		return repository.AssumptionPreferences{}, err
+	}
+	if _, ok := p.Scenarios[pref.DefaultScenario]; !ok {
+		return repository.AssumptionPreferences{}, newErr("assumption_scenario_not_found",
+			"default scenario is not defined by the selected profile", nil)
 	}
 	if err := s.repo.SetPreferences(ctx, pref); err != nil {
 		return repository.AssumptionPreferences{}, wrapRepo("set assumption preferences", err)
@@ -325,6 +375,9 @@ func correlationMatrixFromProfile(p assumptions.Profile) ([]string, [][]float64)
 	}
 	for _, c := range p.CorrelationPriors {
 		i, j := idx[c.FactorA], idx[c.FactorB]
+		if i == j {
+			continue
+		}
 		m[i][j] = c.Rho
 		m[j][i] = c.Rho
 	}

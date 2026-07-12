@@ -18,7 +18,13 @@ import (
 // fact-based failure states. 3.3.0 adds stable after-retirement net income.
 // 3.4.0 fixes retirement-income settlement, failed-path accounting, random
 // inflation initialization, and failure-age month precision.
-const EngineVersion = "3.4.0"
+const EngineVersion = "3.5.0"
+
+const (
+	FXTreatmentNone               = "none"
+	FXTreatmentEmbeddedInAssetNAV = "embedded_in_asset_nav"
+	FXTreatmentSeparateFactor     = "separate_factor"
+)
 
 // LegacyEngineVersion identifies snapshots created by the former independent
 // factor engine.
@@ -140,38 +146,42 @@ type SnapshotAsset struct {
 	// facts (HistoricalAnnualGeometricReturn) and the value actually fed to the
 	// engine (ForwardAnnualGeometricReturn == ModeledAnnualReturn) are kept
 	// separate and never mixed.
-	HistoricalAnnualGeometricReturn float64        `json:"historical_annual_geometric_return,omitempty"`
-	HistoricalAnnualVolatility      float64        `json:"historical_annual_volatility,omitempty"`
-	ForwardAnnualGeometricReturn    float64        `json:"forward_annual_geometric_return,omitempty"`
-	ForwardLogReturn                float64        `json:"forward_log_return,omitempty"`
-	AnnualVolatilityUsed            float64        `json:"annual_volatility_used,omitempty"`
-	ReturnAssumptionSource          string         `json:"return_assumption_source,omitempty"`
-	ReturnAssumptionSetID           string         `json:"return_assumption_set_id,omitempty"`
-	ReturnAssumptionSetVersion      int            `json:"return_assumption_set_version,omitempty"`
-	ReturnAssumptionScenario        string         `json:"return_assumption_scenario,omitempty"`
-	ReturnSampleYears               int            `json:"return_sample_years,omitempty"`
-	ReturnHistoricalWeight          float64        `json:"return_historical_weight,omitempty"`
-	ReturnWarnings                  []string       `json:"return_warnings,omitempty"`
-	OverrideForwardReturn           *float64       `json:"override_forward_return,omitempty"`
-	OverrideAnnualVolatility        *float64       `json:"override_annual_volatility,omitempty"`
-	OverrideReason                  string         `json:"override_reason,omitempty"`
-	FeeTreatment                    string         `json:"fee_treatment"`
-	ExpenseRatio                    *float64       `json:"expense_ratio,omitempty"`
-	SourceHash                      string         `json:"source_hash"`
-	Years                           []SnapshotYear `json:"years"`
-	CompleteYearCount               int            `json:"complete_year_count"`
-	MonthlyReturnCount              int            `json:"monthly_return_count"`
-	HistoryDepth                    string         `json:"history_depth"`
-	MetricsVersion                  string         `json:"metrics_version"`
-	DataWarnings                    []string       `json:"data_warnings,omitempty"`
-	FXSnapshotID                    string         `json:"fx_snapshot_id,omitempty"`
-	FXModeledReturn                 float64        `json:"fx_modeled_return,omitempty"`
-	FXAnnualVolatility              float64        `json:"fx_annual_volatility,omitempty"`
-	FXCompleteYearCount             int            `json:"fx_complete_year_count,omitempty"`
-	FXMonthlyReturnCount            int            `json:"fx_monthly_return_count,omitempty"`
-	FXHistoryDepth                  string         `json:"fx_history_depth,omitempty"`
-	FXMetricsVersion                string         `json:"fx_metrics_version,omitempty"`
-	FXDataWarnings                  []string       `json:"fx_data_warnings,omitempty"`
+	HistoricalAnnualGeometricReturn float64  `json:"historical_annual_geometric_return,omitempty"`
+	HistoricalAnnualVolatility      float64  `json:"historical_annual_volatility,omitempty"`
+	ForwardAnnualGeometricReturn    float64  `json:"forward_annual_geometric_return,omitempty"`
+	ForwardLogReturn                float64  `json:"forward_log_return,omitempty"`
+	AnnualVolatilityUsed            float64  `json:"annual_volatility_used,omitempty"`
+	ReturnAssumptionSource          string   `json:"return_assumption_source,omitempty"`
+	ReturnAssumptionSetID           string   `json:"return_assumption_set_id,omitempty"`
+	ReturnAssumptionSetVersion      int      `json:"return_assumption_set_version,omitempty"`
+	ReturnAssumptionScenario        string   `json:"return_assumption_scenario,omitempty"`
+	ReturnSampleYears               int      `json:"return_sample_years,omitempty"`
+	ReturnHistoricalWeight          float64  `json:"return_historical_weight,omitempty"`
+	ReturnWarnings                  []string `json:"return_warnings,omitempty"`
+	OverrideForwardReturn           *float64 `json:"override_forward_return,omitempty"`
+	OverrideAnnualVolatility        *float64 `json:"override_annual_volatility,omitempty"`
+	OverrideReason                  string   `json:"override_reason,omitempty"`
+	FeeTreatment                    string   `json:"fee_treatment"`
+	// ExpenseRatio is retained only to decode historical snapshots. New 3.5
+	// snapshots never populate it because ongoing fees are already embedded in
+	// fund NAV returns and profile priors.
+	ExpenseRatio         *float64       `json:"expense_ratio,omitempty"`
+	FXTreatment          string         `json:"fx_treatment,omitempty"`
+	SourceHash           string         `json:"source_hash"`
+	Years                []SnapshotYear `json:"years"`
+	CompleteYearCount    int            `json:"complete_year_count"`
+	MonthlyReturnCount   int            `json:"monthly_return_count"`
+	HistoryDepth         string         `json:"history_depth"`
+	MetricsVersion       string         `json:"metrics_version"`
+	DataWarnings         []string       `json:"data_warnings,omitempty"`
+	FXSnapshotID         string         `json:"fx_snapshot_id,omitempty"`
+	FXModeledReturn      float64        `json:"fx_modeled_return,omitempty"`
+	FXAnnualVolatility   float64        `json:"fx_annual_volatility,omitempty"`
+	FXCompleteYearCount  int            `json:"fx_complete_year_count,omitempty"`
+	FXMonthlyReturnCount int            `json:"fx_monthly_return_count,omitempty"`
+	FXHistoryDepth       string         `json:"fx_history_depth,omitempty"`
+	FXMetricsVersion     string         `json:"fx_metrics_version,omitempty"`
+	FXDataWarnings       []string       `json:"fx_data_warnings,omitempty"`
 	// Forward FX calibration audit. FXModeledReturn is the
 	// value the engine consumes (the forward FX drift for blended_prior/custom, or
 	// the raw historical drift for historical_cagr). The fields below explain how

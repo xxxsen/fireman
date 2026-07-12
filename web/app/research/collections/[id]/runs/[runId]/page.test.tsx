@@ -285,4 +285,27 @@ describe("ResearchRunDetailPage", () => {
     expect(await screen.findByText("回测失败")).toBeInTheDocument();
     expect(screen.getByText("数据已变化，请重新运行")).toBeInTheDocument();
   });
+
+  it("explains an interrupted backtest terminal failure", async () => {
+    getRunMock.mockResolvedValue(
+      runDetail({
+        status: "failed",
+        summary: undefined,
+        job: {
+          status: "failed",
+          phase: "",
+          progress_current: 0,
+          progress_total: 0,
+          retry_count: 1,
+          error_code: "worker_interrupted",
+          error_message: "执行进程中断，自动重试次数已用尽，请重新运行",
+        },
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("回测失败")).toBeInTheDocument();
+    expect(screen.getByText("执行进程中断，自动重试仍未完成。请重新发起回测。")).toBeInTheDocument();
+  });
 });

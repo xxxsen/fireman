@@ -40,7 +40,7 @@ export function validateAssumptionProfile(
 export function activateAssumptionProfile(
   id: string,
   version: number,
-): Promise<{ activated: boolean }> {
+): Promise<{ activated: boolean; default_migrated: boolean }> {
   return apiPost(`/api/v1/simulation-assumptions/profiles/${id}/${version}/activate`);
 }
 

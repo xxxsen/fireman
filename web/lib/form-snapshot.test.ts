@@ -38,7 +38,7 @@ const baseParams: PlanParameters = {
   assumption_selection_mode: "follow_global",
   return_assumption_set_id: "",
   return_assumption_set_version: 0,
-  return_assumption_scenario: "baseline",
+  return_assumption_scenario: "follow_global",
   seed: null,
   updated_at: 1,
 };

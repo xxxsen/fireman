@@ -138,7 +138,14 @@ export function AssetClassHoldingPicker({
 
   return (
     <section ref={rootRef} className={sectionClass} aria-label={sectionAriaLabel}>
-      {subTitle && <h4 className="text-sm font-medium text-ink">{subTitle}</h4>}
+      {subTitle && (
+        <div>
+          <h4 className="text-sm font-medium text-ink">{subTitle}</h4>
+          <p className="mt-0.5 text-xs text-ink-muted">
+            该分类用于选择模拟收益与相关性假设，不代表系统认定的底层持仓国别。
+          </p>
+        </div>
+      )}
       {selected.length > 0 && (
         <ul
           className={`${subTitle ? "mt-2" : nested ? "mt-3" : ""} space-y-2`}
@@ -170,6 +177,11 @@ export function AssetClassHoldingPicker({
           subTitle || selected.length > 0 ? "mt-2" : nested ? "mt-3" : ""
         }
       >
+        {open && (
+          <p className="mb-1 text-xs text-ink-muted">
+            本次添加将按{regionLabel(effectiveRegion)}假设模拟。
+          </p>
+        )}
         <MarketAssetSearchPicker
           active={open}
           resultsVisible={open}

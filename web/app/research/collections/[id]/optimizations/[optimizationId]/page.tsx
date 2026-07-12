@@ -212,11 +212,21 @@ function WeightBar({
 function progressLabel(opt: ResearchOptimizationRun): string {
   if (!opt.job) return "排队中…";
   const { phase, progress_current, progress_total } = opt.job;
-  if (phase === "loading") return "加载数据中…";
+  const retry_count = opt.job.retry_count ?? 0;
+  const retryPrefix = retry_count > 0 ? `任务中断后自动重试（${retry_count}/1）：` : "";
+  if (phase === "retrying") return `任务中断后自动重试（${retry_count}/1），等待执行…`;
+  if (phase === "loading") return `${retryPrefix}加载数据中…`;
   if (phase === "evaluating" && progress_total > 0)
-    return `评估中 ${progress_current}/${progress_total}`;
+    return `${retryPrefix}评估中 ${progress_current}/${progress_total}`;
   if (phase === "done") return "完成";
-  return "计算中…";
+  return `${retryPrefix}计算中…`;
+}
+
+function optimizationFailureMessage(opt: ResearchOptimizationRun): string {
+  if (opt.error_code === "worker_interrupted") {
+    return "执行进程中断，自动重试仍未完成。请重新发起调优。";
+  }
+  return opt.error_message || "自动调优失败。";
 }
 
 export default function OptimizationDetailPage() {
@@ -406,7 +416,7 @@ export default function OptimizationDetailPage() {
       {opt.status === "failed" && (
         <ErrorState
           title="调优失败"
-          message={opt.error_message || "自动调优失败。"}
+          message={optimizationFailureMessage(opt)}
           technicalDetail={opt.error_code}
           backHref={`/research/collections/${collectionId}`}
           backLabel="返回集合"

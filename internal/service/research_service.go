@@ -2065,8 +2065,35 @@ type ResearchJobView struct {
 	Phase           string `json:"phase"`
 	ProgressCurrent int    `json:"progress_current"`
 	ProgressTotal   int    `json:"progress_total"`
+	RetryCount      int    `json:"retry_count"`
+	HeartbeatAt     *int64 `json:"heartbeat_at,omitempty"`
 	ErrorCode       string `json:"error_code,omitempty"`
 	ErrorMessage    string `json:"error_message,omitempty"`
+}
+
+func buildResearchJobView(job repository.Job) *ResearchJobView {
+	return &ResearchJobView{
+		Status:          job.Status,
+		Phase:           job.Phase,
+		ProgressCurrent: job.ProgressCurrent,
+		ProgressTotal:   job.ProgressTotal,
+		RetryCount:      job.RetryCount,
+		HeartbeatAt:     job.HeartbeatAt,
+		ErrorCode:       job.ErrorCode,
+		ErrorMessage:    job.ErrorMessage,
+	}
+}
+
+func applyBacktestJobState(view *ResearchRunView, job repository.Job) {
+	view.Job = buildResearchJobView(job)
+	if view.Status != repository.ResearchRunStatusQueued &&
+		view.Status != repository.ResearchRunStatusRunning {
+		return
+	}
+	view.Status = job.Status
+	if job.FinishedAt != nil {
+		view.CompletedAt = job.FinishedAt
+	}
 }
 
 func buildRunView(run repository.ResearchBacktestRun) ResearchRunView {
@@ -2128,14 +2155,7 @@ func (s *ResearchService) GetRun(ctx context.Context, runID string) (ResearchRun
 		detail.InputSnapshot = json.RawMessage(run.InputSnapshotJSON)
 	}
 	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-		detail.Job = &ResearchJobView{
-			Status:          job.Status,
-			Phase:           job.Phase,
-			ProgressCurrent: job.ProgressCurrent,
-			ProgressTotal:   job.ProgressTotal,
-			ErrorCode:       job.ErrorCode,
-			ErrorMessage:    job.ErrorMessage,
-		}
+		applyBacktestJobState(&detail.ResearchRunView, job)
 	}
 	years, err := s.research.ListYears(ctx, runID)
 	if err != nil {
@@ -2177,14 +2197,7 @@ func (s *ResearchService) ListRuns(
 		if run.Status == repository.ResearchRunStatusQueued ||
 			run.Status == repository.ResearchRunStatusRunning {
 			if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-				view.Job = &ResearchJobView{
-					Status:          job.Status,
-					Phase:           job.Phase,
-					ProgressCurrent: job.ProgressCurrent,
-					ProgressTotal:   job.ProgressTotal,
-					ErrorCode:       job.ErrorCode,
-					ErrorMessage:    job.ErrorMessage,
-				}
+				applyBacktestJobState(&view, job)
 			}
 		}
 		out = append(out, view)

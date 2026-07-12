@@ -30,6 +30,7 @@ export default function AssumptionsPage() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<{ id: string; version: number } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditorState | null>(null);
 
   const listQ = useQuery({
@@ -58,6 +59,8 @@ export default function AssumptionsPage() {
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["assumption-profiles"] });
     void qc.invalidateQueries({ queryKey: ["assumption-profile"] });
+	void qc.invalidateQueries({ queryKey: ["parameters"] });
+	void qc.invalidateQueries({ queryKey: ["simulations"] });
   };
 
   // Copy a (system or user) profile into a fresh editable user draft. This does not save immediately; it opens the editor so the user can edit,
@@ -117,8 +120,9 @@ export default function AssumptionsPage() {
 
   const activateMut = useMutation({
     mutationFn: (p: { id: string; version: number }) => activateAssumptionProfile(p.id, p.version),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setActionError(null);
+	  setActionNotice(result.default_migrated ? "已激活；全局默认已迁移到新版本。" : "已激活新版本。")
       refresh();
     },
     onError: (e) => setActionError(e instanceof Error ? e.message : "激活失败"),
@@ -163,6 +167,7 @@ export default function AssumptionsPage() {
       {actionError && (
         <Alert variant="danger">{actionError}</Alert>
       )}
+      {actionNotice && <Alert variant="info">{actionNotice}</Alert>}
 
       <ProfileList
         profiles={profiles}
@@ -176,6 +181,7 @@ export default function AssumptionsPage() {
       />
 
       <PreferencesCard
+        key={`${preferences?.default_profile_id}@${preferences?.default_profile_version}/${preferences?.default_scenario}`}
         profiles={profiles}
         defaultId={preferences?.default_profile_id ?? ""}
         defaultVersion={preferences?.default_profile_version ?? 0}
@@ -209,6 +215,7 @@ export default function AssumptionsPage() {
           {profile && (
             <ProfileDetail
               profile={profile}
+              summary={profiles.find((item) => item.id === profile.id && item.version === profile.version)}
               onCopy={() => startCopy(profile)}
               onEdit={() => startEditNewVersion(profile)}
             />

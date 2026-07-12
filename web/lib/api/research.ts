@@ -247,6 +247,8 @@ export interface ResearchJobView {
   phase: string;
   progress_current: number;
   progress_total: number;
+  retry_count?: number;
+  heartbeat_at?: number;
   error_code?: string;
   error_message?: string;
 }

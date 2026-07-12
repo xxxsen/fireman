@@ -44,6 +44,7 @@ import {
   formatMoneyWan,
   formatPercent,
   historyDepthLabel,
+  regionLabel,
   sortRepresentativePaths,
 } from "@/lib/format";
 import type { SimulationRun } from "@/types/api";
@@ -138,9 +139,11 @@ function RunAssumptionCard({
             <thead>
               <tr className="text-ink-muted">
                 <th className="pr-3 py-1">资产</th>
+                <th className="pr-3 py-1">模拟地域</th>
                 <th className="pr-3 py-1">历史 CAGR</th>
                 <th className="pr-3 py-1">本地前瞻收益</th>
                 <th className="pr-3 py-1">FX 前瞻收益</th>
+                <th className="pr-3 py-1">费用 / FX 口径</th>
                 <th className="pr-3 py-1">基准币种合成收益</th>
                 <th className="pr-3 py-1">历史权重</th>
                 <th className="pr-3 py-1">样本年数</th>
@@ -154,12 +157,16 @@ function RunAssumptionCard({
                     {a.instrument_name || a.holding_id}
                     {a.instrument_code ? `（${a.instrument_code}）` : ""}
                   </td>
+                  <td className="py-1 pr-3">{a.region ? regionLabel(a.region) : "—"}</td>
                   <td className="py-1 pr-3">{formatPercent(a.historical_annual_geometric_return)}</td>
                   <td className="py-1 pr-3 font-medium">
                     {formatPercent(a.forward_annual_geometric_return)}
                   </td>
                   <td className="py-1 pr-3">
                     {a.has_fx ? formatPercent(a.fx_forward_return) : "—"}
+                  </td>
+                  <td className="py-1 pr-3 text-ink-muted">
+                    {a.fee_treatment === "embedded" ? "持续费用已内含" : "无持续费用处理"} / {a.fx_treatment === "embedded_in_asset_nav" ? "汇率已含于净值" : a.fx_treatment === "separate_factor" ? "独立汇率因子" : "无汇率因子"}
                   </td>
                   <td className="py-1 pr-3 font-medium">
                     {formatPercent(a.base_currency_forward_return)}
@@ -174,7 +181,7 @@ function RunAssumptionCard({
         </div>
       )}
       <p className="mt-2 text-xs text-ink-muted">
-        历史收益不代表未来；前瞻年化为历史与长期先验在对数空间的收缩结果，仅用于本次模拟。
+        历史收益不代表未来；前瞻年化为历史与长期先验在对数空间的收缩结果。基金净值已反映管理费、托管费等持续费用，系统不会按 expense ratio 重复扣除。
       </p>
     </section>
   );

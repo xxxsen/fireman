@@ -28,6 +28,16 @@ type resolvedAssumption struct {
 	ProfileContentHash string
 }
 
+// EffectiveAssumptionIdentity is the complete immutable identity that affects a
+// forward simulation. It is returned by APIs and included in configuration
+// hashes so global-default changes reliably make prior results stale.
+type EffectiveAssumptionIdentity struct {
+	ProfileID      string `json:"profile_id"`
+	ProfileVersion int    `json:"profile_version"`
+	ContentHash    string `json:"content_hash"`
+	Scenario       string `json:"scenario"`
+}
+
 // ResolveAssumptionProfile loads the profile + scenario a plan's parameters
 // select, falling back to the read-only system default when the user has not
 // configured a global profile.
@@ -42,12 +52,7 @@ func (s *SimulationService) ResolveAssumptionProfile(
 	if mode == "" {
 		mode = repository.DefaultReturnAssumptionMode
 	}
-	scenario := params.ReturnAssumptionScenario
-	if scenario == "" {
-		scenario = assumptions.ScenarioBaseline
-	}
-
-	profile, scenario, contentHash, err := s.resolveProfileAndScenario(ctx, params, scenario)
+	profile, scenario, contentHash, err := resolveProfileAndScenario(ctx, s.assumptions, params)
 	if err != nil {
 		return resolvedAssumption{}, err
 	}
@@ -56,48 +61,97 @@ func (s *SimulationService) ResolveAssumptionProfile(
 	}, nil
 }
 
-func (s *SimulationService) resolveProfileAndScenario(
-	ctx context.Context, params repository.PlanParameters, scenario string,
+func resolveProfileAndScenario(
+	ctx context.Context, repo *repository.AssumptionProfileRepo, params repository.PlanParameters,
 ) (assumptions.Profile, string, string, error) {
+	scenario := params.ReturnAssumptionScenario
+	if scenario == "" {
+		scenario = assumptions.ScenarioFollowGlobal
+	}
 	if params.AssumptionSelectionMode == SelectionPinnedProfile && params.ReturnAssumptionSetID != "" {
-		p, hash, err := s.assumptions.GetWithHash(ctx, params.ReturnAssumptionSetID, params.ReturnAssumptionSetVersion)
+		p, hash, err := repo.GetWithHash(ctx, params.ReturnAssumptionSetID, params.ReturnAssumptionSetVersion)
 		if err != nil {
 			return assumptions.Profile{}, "", "", newErr("assumption_profile_not_found",
 				"pinned assumption profile is unavailable", map[string]any{
 					"profile_id": params.ReturnAssumptionSetID, "version": params.ReturnAssumptionSetVersion,
 				})
 		}
-		// A pinned profile must reference an active version: a draft/superseded pin
-		// must never enter a run.
-		if p.Status != assumptions.StatusActive {
-			return assumptions.Profile{}, "", "", newErr("assumption_profile_not_active",
-				"pinned assumption profile must be an active version", map[string]any{
+		if p.Status == assumptions.StatusDraft {
+			return assumptions.Profile{}, "", "", newErr("assumption_profile_draft",
+				"draft assumption profiles cannot be used by a simulation", map[string]any{
 					"profile_id": params.ReturnAssumptionSetID, "version": params.ReturnAssumptionSetVersion,
 				})
 		}
-		return p, scenario, hash, nil
+		finalScenario, err := resolveEffectiveScenario(ctx, repo, scenario)
+		if err != nil {
+			return assumptions.Profile{}, "", "", err
+		}
+		if _, ok := p.Scenarios[finalScenario]; !ok {
+			return assumptions.Profile{}, "", "", scenarioNotFound(p, finalScenario)
+		}
+		return p, finalScenario, hash, nil
 	}
 
-	pref, err := s.assumptions.GetPreferences(ctx)
+	pref, err := repo.GetPreferences(ctx)
 	if err != nil {
 		return assumptions.Profile{}, "", "", wrapRepo("get assumption preferences", err)
 	}
-	if scenario == assumptions.ScenarioBaseline && pref.DefaultScenario != "" {
+	if scenario == assumptions.ScenarioFollowGlobal {
 		scenario = pref.DefaultScenario
 	}
-	p, hash, err := s.assumptions.GetWithHash(ctx, pref.DefaultProfileID, pref.DefaultProfileVersion)
-	if err == nil {
-		return p, scenario, hash, nil
+	p, hash, err := repo.GetWithHash(ctx, pref.DefaultProfileID, pref.DefaultProfileVersion)
+	if errors.Is(err, repository.ErrAssumptionProfileNotFound) {
+		return assumptions.Profile{}, "", "", newErr("assumption_profile_not_found",
+			"global default assumption profile is unavailable", map[string]any{
+				"profile_id": pref.DefaultProfileID, "version": pref.DefaultProfileVersion,
+			})
 	}
-	if !errors.Is(err, repository.ErrAssumptionProfileNotFound) {
+	if err != nil {
 		return assumptions.Profile{}, "", "", wrapRepo("get default assumption profile", err)
 	}
-	// The configured default version was removed; fall back to the system default.
-	sys, sysHash, sysErr := s.assumptions.GetWithHash(ctx, assumptions.SystemProfileID, assumptions.SystemProfileVersion)
-	if sysErr != nil {
-		return assumptions.Profile{}, "", "", wrapRepo("get system assumption profile", sysErr)
+	if p.Status != assumptions.StatusActive {
+		return assumptions.Profile{}, "", "", newErr("assumption_profile_not_active_for_default",
+			"global default must reference an active assumption profile", map[string]any{
+				"profile_id": p.ID, "version": p.Version, "status": p.Status,
+			})
 	}
-	return sys, scenario, sysHash, nil
+	if p.OwnerScope == assumptions.OwnerSystem &&
+		!assumptions.IsCurrentSystemDefaultIdentity(p.ID, p.Version) {
+		return assumptions.Profile{}, "", "", newErr("assumption_profile_not_active_for_default",
+			"historical system profiles cannot be used as the global default", nil)
+	}
+	if err := p.ValidateSelfCorrelationCoverage(); err != nil {
+		return assumptions.Profile{}, "", "", newErr("assumption_same_type_correlation_missing", err.Error(), nil)
+	}
+	if _, ok := p.Scenarios[scenario]; !ok {
+		return assumptions.Profile{}, "", "", scenarioNotFound(p, scenario)
+	}
+	return p, scenario, hash, nil
+}
+
+func resolveEffectiveScenario(
+	ctx context.Context, repo *repository.AssumptionProfileRepo, scenario string,
+) (string, error) {
+	if scenario != assumptions.ScenarioFollowGlobal {
+		return scenario, nil
+	}
+	pref, err := repo.GetPreferences(ctx)
+	if err != nil {
+		return "", wrapRepo("get assumption preferences", err)
+	}
+	return pref.DefaultScenario, nil
+}
+
+func scenarioNotFound(profile assumptions.Profile, scenario string) error {
+	return newErr("assumption_scenario_not_found", "scenario is not defined by the selected profile",
+		map[string]any{"profile_id": profile.ID, "version": profile.Version, "scenario": scenario})
+}
+
+func identityFromResolved(res resolvedAssumption) EffectiveAssumptionIdentity {
+	return EffectiveAssumptionIdentity{
+		ProfileID: res.Profile.ID, ProfileVersion: res.Profile.Version,
+		ContentHash: res.ProfileContentHash, Scenario: res.Scenario,
+	}
 }
 
 // calibrateAsset derives forward return + volatility for one asset using the

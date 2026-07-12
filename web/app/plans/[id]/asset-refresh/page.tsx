@@ -5,12 +5,19 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
 import { Stepper } from "@/components/ui/Stepper";
 import { PlanPageHeader } from "@/components/layout/PlanPageHeader";
 import { MarketAssetPickerDialog } from "@/components/plans/MarketAssetPickerDialog";
-import { getHoldings, getTargets } from "@/lib/api/holdings";
+import {
+  applyHoldingRegionChange,
+  getHoldings,
+  getTargets,
+  previewHoldingRegionChange,
+  type HoldingRegionChangePreview,
+} from "@/lib/api/holdings";
 import { getActiveRebalanceExecution } from "@/lib/api/rebalance-executions";
 import { submitAssetRefresh } from "@/lib/api/asset-refresh";
 import { type MarketAsset } from "@/lib/api/market-assets";
@@ -59,6 +66,7 @@ export default function AssetRefreshPage() {
   const [addAssetClass, setAddAssetClass] = useState("equity");
   const [addRegion, setAddRegion] = useState("domestic");
   const [error, setError] = useState<string | null>(null);
+  const [regionPreview, setRegionPreview] = useState<HoldingRegionChangePreview | null>(null);
 
   const plan = useQuery({ queryKey: ["plan", planId], queryFn: () => getPlan(planId) });
   const holdings = useQuery({
@@ -209,7 +217,7 @@ export default function AssetRefreshPage() {
         label: asset.name,
         code: asset.symbol,
         asset_class: addAssetClass,
-        region: addRegion,
+        region: addAssetClass === "cash" ? "domestic" : addRegion,
         current_amount_minor: 0,
         weight_within_group: defaultWeight,
         sort_order: draftHoldings.length * 10,
@@ -247,6 +255,48 @@ export default function AssetRefreshPage() {
     },
     onError: (err) =>
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "提交失败"),
+  });
+
+  const regionPreviewMutation = useMutation({
+    mutationFn: (holding: AssetRefreshHolding) =>
+      previewHoldingRegionChange(
+        planId,
+        holding.id,
+        holding.region === "domestic" ? "foreign" : "domestic",
+      ),
+    onSuccess: (preview) => {
+      setError(null);
+      setRegionPreview(preview);
+    },
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "无法预览模拟地域修改"),
+  });
+
+  const regionApplyMutation = useMutation({
+    mutationFn: (preview: HoldingRegionChangePreview) =>
+      applyHoldingRegionChange(planId, preview),
+    onSuccess: () => {
+      setError(null);
+      setRegionPreview(null);
+      setHoldingsDraft(null);
+      for (const key of [
+        "holdings",
+        "targets",
+        "allocation",
+        "readiness",
+        "plan",
+        "parameters",
+        "simulations",
+        "stress",
+        "sensitivity",
+        "dashboard",
+        "rebalance",
+      ]) {
+        void queryClient.invalidateQueries({ queryKey: [key, planId] });
+      }
+    },
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "修改模拟地域失败"),
   });
 
   if (
@@ -435,6 +485,9 @@ export default function AssetRefreshPage() {
                 <div key={`${assetClass}:${region}`} className="border-t border-line">
                   <h4 className="bg-surface-muted/80 px-3 py-1.5 text-xs font-medium text-ink-muted">
                     {regionLabel(region)}
+                    <span className="ml-2 font-normal">
+                      用于选择模拟收益与相关性假设，不代表系统认定的底层持仓国别
+                    </span>
                   </h4>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
@@ -476,13 +529,23 @@ export default function AssetRefreshPage() {
                             </td>
                             <td className="px-3 py-2">
                               {!row.is_system ? (
-                                <Button
-                                  variant="ghost"
-                                  className="px-2 py-1 text-xs text-danger"
-                                  onClick={() => removeHolding(row)}
-                                >
-                                  移除
-                                </Button>
+                                <div className="flex flex-wrap gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    className="px-2 py-1 text-xs"
+                                    disabled={hasChanges || regionPreviewMutation.isPending}
+                                    onClick={() => regionPreviewMutation.mutate(row)}
+                                  >
+                                    修改模拟地域
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    className="px-2 py-1 text-xs text-danger"
+                                    onClick={() => removeHolding(row)}
+                                  >
+                                    移除
+                                  </Button>
+                                </div>
                               ) : (
                                 <span className="text-xs text-ink-muted">—</span>
                               )}
@@ -624,19 +687,46 @@ export default function AssetRefreshPage() {
             国内 / 国外
             <select
               className="input-base text-sm"
-              value={addRegion}
+              value={addAssetClass === "cash" ? "domestic" : addRegion}
               onChange={(event) => setAddRegion(event.target.value)}
               data-testid="asset-refresh-add-region"
             >
               <option value="domestic">{regionLabel("domestic")}</option>
-              <option value="foreign">{regionLabel("foreign")}</option>
+              <option value="foreign" disabled={addAssetClass === "cash"}>
+                {regionLabel("foreign")}
+              </option>
             </select>
           </label>
         </div>
+        <p className="mt-2 text-xs text-ink-muted">
+          所选地域仅决定本计划使用哪组模拟收益与相关性假设；系统不会按基金名称、QDII 或市场覆盖你的选择。
+        </p>
         <Link href="/assets" className="mt-2 block text-sm underline">
           目录中不存在？前往资产页同步资产列表
         </Link>
       </MarketAssetPickerDialog>
+
+      <ConfirmDialog
+        open={regionPreview !== null}
+        title="修改模拟地域"
+        confirmLabel="应用修改"
+        pending={regionApplyMutation.isPending}
+        onClose={() => setRegionPreview(null)}
+        onConfirm={() => regionPreview && regionApplyMutation.mutate(regionPreview)}
+        description={
+          regionPreview ? (
+            <div className="space-y-2">
+              <p>
+                {regionLabel(regionPreview.from_region)} → {regionLabel(regionPreview.target_region)}。
+                修改后将使用目标地域的收益与相关性假设。
+              </p>
+              <p className="text-ink-muted">
+                系统会同步重算地域目标和组内配比；所有资产的全组合目标权重保持不变。
+              </p>
+            </div>
+          ) : undefined
+        }
+      />
     </div>
   );
 }

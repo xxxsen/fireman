@@ -115,7 +115,7 @@ describe("AssumptionsPage", () => {
     expect(await screen.findByText("系统默认（CMA v3）")).toBeInTheDocument();
     // detail: return prior + correlation matrix rendered
     await waitFor(() => expect(getAssumptionProfile).toHaveBeenCalled());
-    expect(await screen.findByText("收益先验（费用后·基准币种·名义几何）")).toBeInTheDocument();
+    expect(await screen.findByText("收益先验（持续费用已内含·基准币种·名义几何）")).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { name: "相关性先验矩阵" }),
     ).toBeInTheDocument();

@@ -10,7 +10,7 @@ func TestSystemDefaultProfileValidates(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatalf("system default profile invalid: %v", err)
 	}
-	if p.Ref() != "system_cma_v3@1" {
+	if p.Ref() != "system_cma_v4@1" {
 		t.Fatalf("unexpected ref %q", p.Ref())
 	}
 }

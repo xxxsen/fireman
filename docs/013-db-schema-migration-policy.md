@@ -5,6 +5,7 @@
 ## 原则
 
 - 业务 schema 的 DDL 只能放在 `migrations/`，包括 `CREATE TABLE`、`ALTER TABLE`、`CREATE INDEX`、`DROP` 等。
+- 新增 migration 文件只允许 DDL，禁止使用 `INSERT`、`UPDATE`、`DELETE` 修正、回填或初始化业务数据。
 - Go 运行时代码不得做业务表的 schema repair、动态 `ALTER TABLE` 或按列探测后补 schema。
 - 测试 fixture 可以写 DDL，但只能用于构造测试数据库状态。
 - 基础设施例外：迁移器初始化 `schema_migrations` 表、SQLite PRAGMA、备份/完整性检查等不属于业务 schema 演进。
@@ -14,6 +15,7 @@
 - `migrations/0001_init.sql` 描述新建库完整基线 schema。
 - 后续 schema 变更通过顺序 migration 文件表达，例如 `migrations/0014_xxx.sql`。
 - 当前未上线，不保留旧临时库兼容修补；遇到旧本地 DB 结构不一致时，删除旧 DB 并重新执行 migrations。
+- 当前 `.dev-data` 中的业务数据需要修正时，直接调整开发数据库或重建开发数据库，不为数据修正创建 migration。
 - `migrations/0012_snapshot_metrics_columns.sql` 是 no-op，用于保留历史迁移编号；相关列已经在 `0001_init.sql` 中声明。
 - `migrations/0015_instrument_library_metrics.sql` 创建的列表投影表属于历史结构，已在 `0021` 中删除；计划持仓现直接引用 `market_assets.asset_key`。
 

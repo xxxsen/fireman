@@ -1,4 +1,4 @@
-import type { PlanHolding } from "@/types/api";
+import type { Plan, PlanHolding, RegionTarget } from "@/types/api";
 import { apiGet, apiPost, apiPut } from "./client";
 
 export function getHoldings(planId: string): Promise<{ holdings: PlanHolding[] }> {
@@ -21,6 +21,57 @@ export function updateHoldings(
   },
 ): Promise<{ holdings: PlanHolding[] }> {
   return apiPut(`/api/v1/plans/${planId}/holdings`, body);
+}
+
+export interface HoldingRegionWeightView {
+  holding_id: string;
+  asset_key: string;
+  region: string;
+  portfolio_target_weight: number;
+}
+
+export interface HoldingRegionChangePreview {
+  preview_hash: string;
+  plan_config_version: number;
+  holding_id: string;
+  asset_key: string;
+  asset_class: string;
+  from_region: string;
+  target_region: string;
+  before_region_targets: RegionTarget[];
+  after_region_targets: RegionTarget[];
+  before_weights: HoldingRegionWeightView[];
+  after_weights: HoldingRegionWeightView[];
+}
+
+export function previewHoldingRegionChange(
+  planId: string,
+  holdingId: string,
+  targetRegion: "domestic" | "foreign",
+): Promise<HoldingRegionChangePreview> {
+  return apiPost(`/api/v1/plans/${planId}/holding-region-changes/preview`, {
+    holding_id: holdingId,
+    target_region: targetRegion,
+  });
+}
+
+export function applyHoldingRegionChange(
+  planId: string,
+  preview: HoldingRegionChangePreview,
+): Promise<{
+  preview: HoldingRegionChangePreview;
+  plan: Plan;
+  allocation: {
+    asset_class_targets: { asset_class: string; weight: number }[];
+    region_targets: RegionTarget[];
+  };
+  holdings: PlanHolding[];
+}> {
+  return apiPost(`/api/v1/plans/${planId}/holding-region-changes/apply`, {
+    holding_id: preview.holding_id,
+    target_region: preview.target_region,
+    preview_hash: preview.preview_hash,
+  });
 }
 
 export interface HoldingSimulationSnapshot {

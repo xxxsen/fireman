@@ -10,16 +10,14 @@ import (
 )
 
 // cmaEvidenceRaw is the immutable, committed CMA evidence artifact backing the
-// current system default profile (system_cma_v3@1). Each row records the specific
-// source, dated publication, raw real-return / inflation / fee inputs and the
-// exact geometric conversion to a CNY-nominal after-fee prior, so every published
-// number is auditable and independently reproducible rather than an unexplained
-// constant. The profile is BUILT from this artifact and
+// current system default profile (system_cma_v4@1). Each row records the internal
+// policy input and review metadata so every published number is auditable rather
+// than an unexplained constant. The profile is BUILT from this artifact and
 // its sha256 is pinned in the system profile registry; any change to a source,
 // input or conversion changes the hash and MUST be published as a NEW system
 // profile identity/version — editing it in place fails CI.
 //
-//go:embed cma_evidence_v3.json
+//go:embed cma_evidence_v4.json
 var cmaEvidenceRaw []byte
 
 // returnPriorEvidence documents the derivation of one asset return prior.
@@ -82,21 +80,26 @@ func (e fxPriorEvidence) ExactDrift() float64 {
 
 type cmaEvidence struct {
 	Version               string                `json:"version"`
+	EvidenceKind          string                `json:"evidence_kind"`
 	CalculationConvention string                `json:"calculation_convention"`
 	ReturnPriors          []returnPriorEvidence `json:"return_priors"`
 	FXPriors              []fxPriorEvidence     `json:"fx_priors"`
 }
 
-// cmaEvidenceV3 is the parsed artifact. A parse failure is a build-time
+// cmaEvidenceV4 is the parsed artifact. A parse failure is a build-time
 // (committed-data) error, so it panics rather than silently shipping a bad
 // default risk model.
-var cmaEvidenceV3 = mustParseCMAEvidence(cmaEvidenceRaw)
+var cmaEvidenceV4 = mustParseCMAEvidence(cmaEvidenceRaw)
+
+// cmaEvidenceV3 is kept as a package-local compatibility alias for older tests
+// and helpers; it now points at the current immutable evidence artifact.
+var cmaEvidenceV3 = cmaEvidenceV4
 
 // CMAEvidenceVersion identifies the evidence artifact version.
-var CMAEvidenceVersion = cmaEvidenceV3.Version
+var CMAEvidenceVersion = cmaEvidenceV4.Version
 
 // CMAEvidenceContentHash is the sha256 of the committed evidence artifact bytes.
-// It pins the exact source/input/conversion set behind system_cma_v3@1 and is
+// It pins the exact policy input set behind system_cma_v4@1 and is
 // asserted against the registry in tests.
 var CMAEvidenceContentHash = func() string {
 	sum := sha256.Sum256(cmaEvidenceRaw)
@@ -120,12 +123,12 @@ func round4(x float64) float64 {
 	return math.Round(x*1e4) / 1e4
 }
 
-// buildSystemReturnPriors materializes the v3 return priors from the evidence
+// buildSystemReturnPriors materializes the current return priors from the evidence
 // artifact: the value is the exact compounded return rounded to 4 decimals, and
 // each carries its specific dated source.
 func buildSystemReturnPriors() []ReturnPrior {
-	out := make([]ReturnPrior, 0, len(cmaEvidenceV3.ReturnPriors))
-	for _, e := range cmaEvidenceV3.ReturnPriors {
+	out := make([]ReturnPrior, 0, len(cmaEvidenceV4.ReturnPriors))
+	for _, e := range cmaEvidenceV4.ReturnPriors {
 		out = append(out, ReturnPrior{
 			AssetClass:              e.AssetClass,
 			Region:                  e.Region,
@@ -141,10 +144,10 @@ func buildSystemReturnPriors() []ReturnPrior {
 	return out
 }
 
-// buildSystemFXPriors materializes the v3 FX priors from the evidence artifact.
+// buildSystemFXPriors materializes the current FX priors from the evidence artifact.
 func buildSystemFXPriors() []FXPrior {
-	out := make([]FXPrior, 0, len(cmaEvidenceV3.FXPriors))
-	for _, e := range cmaEvidenceV3.FXPriors {
+	out := make([]FXPrior, 0, len(cmaEvidenceV4.FXPriors))
+	for _, e := range cmaEvidenceV4.FXPriors {
 		out = append(out, FXPrior{
 			FromCurrency:            e.FromCurrency,
 			BaseCurrency:            e.BaseCurrency,

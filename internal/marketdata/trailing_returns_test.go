@@ -174,17 +174,22 @@ func TestTrailingReturnsScalingIsSubQuadratic(t *testing.T) {
 	asOfSmall := small[len(small)-1].TradeDate
 	asOfLarge := large[len(large)-1].TradeDate
 
-	start := time.Now()
-	for i := 0; i < 50; i++ {
-		ComputeTrailingReturns(small, asOfSmall, "adjusted_close", "scale")
+	measureBest := func(points []DataPoint, asOf string) time.Duration {
+		const iterations = 200
+		best := time.Duration(1<<63 - 1)
+		for range 7 {
+			start := time.Now()
+			for range iterations {
+				ComputeTrailingReturns(points, asOf, "adjusted_close", "scale")
+			}
+			if elapsed := time.Since(start) / iterations; elapsed < best {
+				best = elapsed
+			}
+		}
+		return best
 	}
-	smallElapsed := time.Since(start)
-
-	start = time.Now()
-	for i := 0; i < 50; i++ {
-		ComputeTrailingReturns(large, asOfLarge, "adjusted_close", "scale")
-	}
-	largeElapsed := time.Since(start)
+	smallElapsed := measureBest(small, asOfSmall)
+	largeElapsed := measureBest(large, asOfLarge)
 
 	ratio := float64(largeElapsed) / float64(smallElapsed)
 	if ratio > 3.5 {

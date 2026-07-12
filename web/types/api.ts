@@ -65,6 +65,13 @@ export interface PlanParameters {
   updated_at: number;
 }
 
+export interface EffectiveAssumptionIdentity {
+  profile_id: string;
+  profile_version: number;
+  content_hash: string;
+  scenario: string;
+}
+
 export interface AssetClassTarget {
   asset_class: string;
   weight: number;
@@ -348,6 +355,9 @@ export interface RunAssetAssumption {
   instrument_name: string;
   instrument_code: string;
   is_cash: boolean;
+  region?: string;
+  fee_treatment?: string;
+  fx_treatment?: "none" | "embedded_in_asset_nav" | "separate_factor";
   historical_annual_geometric_return: number;
   forward_annual_geometric_return: number;
   base_currency_forward_return: number;
@@ -396,6 +406,9 @@ export interface AssumptionProfileSummary {
   // profiles (system_cma_v1@1 / v2@1) stay active for replay/pins but are not
   // eligible.
   eligible_for_global_default: boolean;
+  global_ineligibility_reasons?: string[];
+  evidence_kind?: "internal_policy" | "derived_external_background" | "user_reviewed";
+  evidence_hash?: string;
 }
 
 export interface AssumptionPreferences {

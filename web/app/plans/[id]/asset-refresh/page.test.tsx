@@ -135,11 +135,15 @@ const defaultAssetsResp = {
 };
 const getHoldingsMock = vi.hoisted(() => vi.fn());
 const getTargetsMock = vi.hoisted(() => vi.fn());
+const previewHoldingRegionChangeMock = vi.hoisted(() => vi.fn());
+const applyHoldingRegionChangeMock = vi.hoisted(() => vi.fn());
 const listMarketAssetsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/holdings", () => ({
   getHoldings: (...args: unknown[]) => getHoldingsMock(...args),
   getTargets: (...args: unknown[]) => getTargetsMock(...args),
+  previewHoldingRegionChange: (...args: unknown[]) => previewHoldingRegionChangeMock(...args),
+  applyHoldingRegionChange: (...args: unknown[]) => applyHoldingRegionChangeMock(...args),
 }));
 
 vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
@@ -189,6 +193,30 @@ describe("AssetRefreshPage", () => {
     getHoldingsMock.mockResolvedValue(defaultHoldingsResp);
     getTargetsMock.mockReset();
     getTargetsMock.mockResolvedValue(defaultTargets);
+    previewHoldingRegionChangeMock.mockReset();
+    previewHoldingRegionChangeMock.mockResolvedValue({
+      plan_id: "plan_1",
+      holding_id: "h1",
+      from_region: "domestic",
+      target_region: "foreign",
+      config_version: 1,
+      preview_hash: "preview_1",
+      holdings: [],
+      asset_class_targets: [],
+      region_targets: [],
+    });
+    applyHoldingRegionChangeMock.mockReset();
+    applyHoldingRegionChangeMock.mockResolvedValue({
+      plan_id: "plan_1",
+      holding_id: "h1",
+      from_region: "domestic",
+      target_region: "foreign",
+      config_version: 2,
+      config_hash: "config_2",
+      holdings: [],
+      asset_class_targets: [],
+      region_targets: [],
+    });
     listMarketAssetsMock.mockReset();
     listMarketAssetsMock.mockResolvedValue(defaultAssetsResp);
     getActiveRebalanceExecutionMock.mockReset();
@@ -276,6 +304,28 @@ describe("AssetRefreshPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /基金B/ }));
     expect(screen.getByText("FB")).toBeInTheDocument();
     expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+  });
+
+  it("previews and applies a user-selected simulation region", async () => {
+    await goToEntryStep();
+    fireEvent.click(screen.getAllByRole("button", { name: "修改模拟地域" })[0]!);
+
+    expect(await screen.findByRole("dialog", { name: "修改模拟地域" })).toBeInTheDocument();
+    expect(screen.getByText(/国内 → 国外/)).toBeInTheDocument();
+    expect(screen.getByText(/所有资产的全组合目标权重保持不变/)).toBeInTheDocument();
+    expect(previewHoldingRegionChangeMock).toHaveBeenCalledWith("plan_1", "h1", "foreign");
+
+    fireEvent.click(screen.getByRole("button", { name: "应用修改" }));
+    await waitFor(() => expect(applyHoldingRegionChangeMock).toHaveBeenCalledTimes(1));
+    expect(applyHoldingRegionChangeMock).toHaveBeenCalledWith(
+      "plan_1",
+      expect.objectContaining({
+        holding_id: "h1",
+        target_region: "foreign",
+        config_version: 1,
+        preview_hash: "preview_1",
+      }),
+    );
   });
 
   it("submits structure changes in a single asset refresh request", async () => {

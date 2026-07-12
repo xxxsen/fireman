@@ -181,3 +181,45 @@ func TestBuildFrozenFactorModelExactDuplicateIsPerfectlyCorrelated(t *testing.T)
 		t.Fatalf("exact duplicate must have rho=1, got %v", got)
 	}
 }
+
+func TestBuildFrozenFactorModelRequiresSelfPriorForVersionedProfile(t *testing.T) {
+	profile := assumptions.SystemDefaultProfile()
+	key := assumptions.AssetFactorKey("equity", "domestic")
+	filtered := profile.CorrelationPriors[:0]
+	for _, prior := range profile.CorrelationPriors {
+		if prior.FactorA == key && prior.FactorB == key {
+			continue
+		}
+		filtered = append(filtered, prior)
+	}
+	profile.CorrelationPriors = filtered
+	assets := []simulation.SnapshotAsset{
+		{HoldingID: "h1", AssetKey: "A", AssetClass: "equity", Region: "domestic", Currency: "CNY", ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18},
+		{HoldingID: "h2", AssetKey: "B", AssetClass: "equity", Region: "domestic", Currency: "CNY", ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18},
+	}
+	if _, _, err := buildFrozenFactorModel(assets, "CNY", profile); err == nil {
+		t.Fatal("versioned profile missing a same-type prior must fail")
+	}
+}
+
+func TestBuildFrozenFactorModelLegacyProfileKeepsImplicitSelfPrior(t *testing.T) {
+	profile := assumptions.SystemDefaultProfile()
+	filtered := profile.CorrelationPriors[:0]
+	for _, prior := range profile.CorrelationPriors {
+		if prior.FactorA != prior.FactorB {
+			filtered = append(filtered, prior)
+		}
+	}
+	profile.CorrelationPriors = filtered
+	assets := []simulation.SnapshotAsset{
+		{HoldingID: "h1", AssetKey: "A", AssetClass: "equity", Region: "domestic", Currency: "CNY", ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18},
+		{HoldingID: "h2", AssetKey: "B", AssetClass: "equity", Region: "domestic", Currency: "CNY", ModeledAnnualReturn: 0.06, AnnualVolatility: 0.18},
+	}
+	model, _, err := buildFrozenFactorModel(assets, "CNY", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Audit.RRaw[0][1] != 1 {
+		t.Fatalf("legacy implicit prior=%v", model.Audit.RRaw[0][1])
+	}
+}

@@ -107,11 +107,12 @@ func TestStaleReconcileSkipsActiveHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := repo.RequeueStaleRunning(ctx, time.Now().Add(-10*time.Minute).UnixMilli(), 1)
+	staleBefore := time.Now().Add(-10 * time.Minute).UnixMilli()
+	candidates, err := repo.ListRunningForReconcile(ctx, &staleBefore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 0 {
-		t.Fatalf("expected 0 requeued with fresh heartbeat, got %d", n)
+	if len(candidates) != 0 {
+		t.Fatalf("expected no candidates with fresh heartbeat, got %d", len(candidates))
 	}
 }

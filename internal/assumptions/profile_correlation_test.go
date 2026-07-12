@@ -10,12 +10,13 @@ func TestSystemProfileValidatesWithFullCorrelationUniverse(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatalf("system profile must be valid: %v", err)
 	}
-	// 4 non-cash asset factors + 2 FX factors (USD, HKD) = 6 factors => 15 pairs.
+	// 4 non-cash asset factors + 2 FX factors (USD, HKD) = 6 factors => 15
+	// cross-type pairs plus 4 versioned same-asset-type priors.
 	if got := len(p.FactorUniverse()); got != 6 {
 		t.Fatalf("factor universe size = %d, want 6 (%v)", got, p.FactorUniverse())
 	}
-	if got := len(p.CorrelationPriors); got != 15 {
-		t.Fatalf("correlation priors = %d, want 15", got)
+	if got := len(p.CorrelationPriors); got != 19 {
+		t.Fatalf("correlation priors = %d, want 19", got)
 	}
 }
 

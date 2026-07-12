@@ -51,7 +51,7 @@ var (
 		"assumption_selection_mode must be follow_global or pinned_profile",
 	)
 	errAssumptionScenarioInvalid = errors.New(
-		"return_assumption_scenario must be conservative, baseline or optimistic",
+		"return_assumption_scenario must be follow_global, conservative, baseline or optimistic",
 	)
 	errAssumptionPinMissing = errors.New(
 		"pinned_profile selection requires return_assumption_set_id and version >= 1",
@@ -124,7 +124,8 @@ func validateAssumptionSelection(p repository.PlanParameters) error {
 		return errAssumptionSelectionInvalid
 	}
 	switch p.ReturnAssumptionScenario {
-	case "", assumptions.ScenarioConservative, assumptions.ScenarioBaseline, assumptions.ScenarioOptimistic:
+	case "", assumptions.ScenarioFollowGlobal, assumptions.ScenarioConservative,
+		assumptions.ScenarioBaseline, assumptions.ScenarioOptimistic:
 	default:
 		return errAssumptionScenarioInvalid
 	}
@@ -142,10 +143,8 @@ func validateAssumptionSelection(p repository.PlanParameters) error {
 	return nil
 }
 
-// validatePinnedProfileActive enforces that a pinned profile selection references
-// an existing, active profile version. Plans pinning a
-// draft/superseded version are rejected at create/update/wizard time; already
-// frozen runs are unaffected because they snapshot the resolved profile.
+// validatePinnedProfileActive rejects drafts while retaining immutable
+// superseded versions as valid explicit pins.
 func validatePinnedProfileActive(
 	ctx context.Context, repo *repository.AssumptionProfileRepo, p repository.PlanParameters,
 ) error {
@@ -159,7 +158,7 @@ func validatePinnedProfileActive(
 		}
 		return fmt.Errorf("load pinned assumption profile: %w", err)
 	}
-	if prof.Status != assumptions.StatusActive {
+	if prof.Status == assumptions.StatusDraft {
 		return errAssumptionPinNotActive
 	}
 	return nil

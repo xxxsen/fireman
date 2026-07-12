@@ -40,7 +40,7 @@ export function PreferencesCard({
     <section className="rounded-lg border border-line bg-surface p-4">
       <h2 className="font-medium text-ink">全局默认</h2>
       <p className="mt-1 text-xs text-ink-muted">
-        新建计划默认使用此处选择的 profile 与假设情景；未配置时使用系统 system_cma_v3。
+        跟随全局的计划使用此处选择的 profile 与假设情景；未配置时使用系统 system_cma_v4。
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-4">
         <label className="text-sm text-ink">

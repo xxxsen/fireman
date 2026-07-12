@@ -60,12 +60,20 @@ func TestStaleJobRequeue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := repo.RequeueStaleRunning(ctx, time.Now().Add(-10*time.Minute).UnixMilli(), 1)
+	staleBefore := time.Now().Add(-10 * time.Minute).UnixMilli()
+	candidates, err := repo.ListRunningForReconcile(ctx, &staleBefore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 requeued, got %d", n)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 stale candidate, got %d", len(candidates))
+	}
+	_, changed, err := repo.ConvergeInterrupted(ctx, candidates[0].ID, &staleBefore, 1, time.Now().UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected stale job to be requeued")
 	}
 	job, err := repo.GetByID(ctx, "job_stale")
 	if err != nil {

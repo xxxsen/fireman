@@ -124,12 +124,21 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		SnapshotID: line.SimulationSnapshotID,
 		Currency:   currency, AssetClass: line.AssetClass, Region: region, IsCash: isCash,
 		InitialMinor: line.CurrentAmountMinor, TargetWeight: line.PortfolioTargetWeight,
-		MaxDrawdown: snap.MaxDrawdown, FeeTreatment: snap.FeeTreatment, ExpenseRatio: snap.ExpenseRatio,
+		MaxDrawdown: snap.MaxDrawdown, FeeTreatment: snap.FeeTreatment,
 		HistoricalAnnualVolatility: snap.AnnualVolatility,
 		SourceHash:                 snap.SourceHash, Years: years,
 		CompleteYearCount: snap.CompleteYearCount, MonthlyReturnCount: snap.MonthlyReturnCount,
 		HistoryDepth: snap.HistoryDepth, MetricsVersion: snap.MetricsVersion,
 		DataWarnings: parseSnapshotWarnings(snap.WarningsJSON),
+	}
+	if sa.FeeTreatment == "" {
+		sa.FeeTreatment = "embedded"
+	}
+	// Ongoing fund expenses are already reflected in NAV/profile returns. The
+	// directory expense ratio is intentionally not frozen or deducted again.
+	sa.FXTreatment = simulation.FXTreatmentNone
+	if !isCash && region == domain.RegionForeign && currency == plan.BaseCurrency {
+		sa.FXTreatment = simulation.FXTreatmentEmbeddedInAssetNAV
 	}
 	applyReturnCalibration(&sa, cal, resolved.Scenario)
 	if !isCash {
@@ -143,6 +152,7 @@ func (s *SimulationService) buildOneSnapshotAsset(
 	if currency == plan.BaseCurrency {
 		return sa, nil
 	}
+	sa.FXTreatment = simulation.FXTreatmentSeparateFactor
 	return s.enrichSnapshotAssetFX(ctx, plan, line, sa, currency, fxCache, resolved)
 }
 
@@ -474,6 +484,11 @@ func buildInputSnapshotStruct(
 		in.DeterministicCashReturn = true
 		freezeTailRiskParams(in, resolved.Profile)
 		if comparisonErr != nil {
+			if errors.Is(comparisonErr, errFactorSameTypeCorrelationMissing) {
+				return nil, newErr("assumption_same_type_correlation_missing",
+					"same-type correlation prior is missing from the selected profile",
+					map[string]any{"error": comparisonErr.Error()})
+			}
 			// The forward engine must block, never silently fall back to the
 			// independent 2.0.0 path.
 			return nil, newErr("assumption_unavailable",

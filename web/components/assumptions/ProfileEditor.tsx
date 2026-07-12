@@ -525,6 +525,13 @@ function CorrelationEditor({
       rows.map((r) => [r.factor_a, r.factor_b].sort().join("|")),
     );
     const next = [...rows];
+	for (const factor of universe.filter((item) => item.startsWith("asset:"))) {
+	  const key = `${factor}|${factor}`;
+	  if (!have.has(key)) {
+		next.push({ factor_a: factor, factor_b: factor, rho: 1 });
+		have.add(key);
+	  }
+	}
     for (let i = 0; i < universe.length; i++) {
       for (let j = i + 1; j < universe.length; j++) {
         const key = [universe[i], universe[j]].sort().join("|");
@@ -551,7 +558,7 @@ function CorrelationEditor({
         </div>
       </div>
       <p className="mt-1 text-xs text-ink-muted">
-        因子宇宙需两两配对：每个不同因子对必须恰有一个先验（{universe.map(factorLabel).join("、") || "暂无非现金因子"}）。
+        因子宇宙需两两配对，并为每个资产因子提供“同类型不同资产”先验（{universe.map(factorLabel).join("、") || "暂无非现金因子"}）。
       </p>
       <table className="mt-1 min-w-full text-left text-xs">
         <caption className="sr-only">相关性先验编辑</caption>

@@ -279,8 +279,10 @@ export default function ResearchRunDetailPage() {
         <div className="rounded-lg border border-info/25 bg-info/5 px-4 py-6 text-center" role="status">
           <LoadingState
             label={
-              run.job?.phase
-                ? `回测计算中（${run.job.phase}${
+              run.job?.phase === "retrying"
+                ? `执行进程中断，正在自动重试（${run.job.retry_count ?? 0}/1）…`
+                : run.job?.phase
+                ? `${(run.job.retry_count ?? 0) > 0 ? `中断后自动重试（${run.job.retry_count}/1），` : ""}回测计算中（${run.job.phase}${
                     run.job.progress_total > 0
                       ? ` ${run.job.progress_current}/${run.job.progress_total}`
                       : ""
@@ -295,7 +297,11 @@ export default function ResearchRunDetailPage() {
       {run.status === "failed" && (
         <ErrorState
           title="回测失败"
-          message={run.job?.error_message || "回测计算失败。"}
+          message={
+            run.job?.error_code === "worker_interrupted"
+              ? "执行进程中断，自动重试仍未完成。请重新发起回测。"
+              : run.job?.error_message || "回测计算失败。"
+          }
           technicalDetail={run.job?.error_code}
           backHref={`/research/collections/${collectionId}`}
           backLabel="返回集合"

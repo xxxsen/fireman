@@ -3,16 +3,17 @@
 import { useMemo } from "react";
 import { Button } from "@/components/ui/Button";
 import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
-import type { AssumptionProfile } from "@/types/api";
+import type { AssumptionProfile, AssumptionProfileSummary } from "@/types/api";
 import { buildCorrelationMatrix, factorLabel, scenarioLabel } from "./shared";
 
 export interface ProfileDetailProps {
   profile: AssumptionProfile;
+  summary?: AssumptionProfileSummary;
   onCopy: () => void;
   onEdit: () => void;
 }
 
-export function ProfileDetail({ profile, onCopy, onEdit }: ProfileDetailProps) {
+export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetailProps) {
   const correlation = useMemo(() => buildCorrelationMatrix(profile), [profile]);
   const isSystem = profile.owner_scope === "system";
 
@@ -28,6 +29,14 @@ export function ProfileDetail({ profile, onCopy, onEdit }: ProfileDetailProps) {
             {formatPercent(profile.return_floor)} ~ {formatPercent(profile.return_ceil)} · 先验等效年数{" "}
             {profile.prior_strength_years} · 相关性收缩等效月数 {profile.correlation_strength_months}
           </p>
+          {summary && (
+            <p className="mt-1 text-xs text-ink-muted">
+              来源类型：{summary.evidence_kind === "internal_policy" ? "内部政策假设" : summary.evidence_kind === "user_reviewed" ? "用户审核值" : "外部背景派生值"}
+              {summary.reviewed_by ? ` · 审核人 ${summary.reviewed_by}` : ""}
+              {summary.reviewed_at ? ` · ${summary.reviewed_at}` : ""}
+              {summary.evidence_hash ? ` · evidence ${summary.evidence_hash.slice(0, 12)}` : ""}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onCopy}>
@@ -67,7 +76,10 @@ export function ProfileDetail({ profile, onCopy, onEdit }: ProfileDetailProps) {
       </div>
 
       <div className="overflow-x-auto">
-        <h3 className="text-sm font-medium text-ink-muted">收益先验（费用后·基准币种·名义几何）</h3>
+        <h3 className="text-sm font-medium text-ink-muted">收益先验（持续费用已内含·基准币种·名义几何）</h3>
+        <p className="mt-1 text-xs text-ink-muted">
+          基金净值已反映管理费、托管费等持续费用；模拟不会按 expense ratio 再次扣除。
+        </p>
         <table className="mt-1 min-w-full text-left text-xs">
           <caption className="sr-only">收益先验列表</caption>
           <thead>
@@ -156,6 +168,15 @@ export function ProfileDetail({ profile, onCopy, onEdit }: ProfileDetailProps) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {(profile.correlation_priors ?? []).some((item) => item.factor_a === item.factor_b) && (
+        <div className="text-xs text-ink-muted">
+          同类型不同资产先验：
+          {(profile.correlation_priors ?? [])
+            .filter((item) => item.factor_a === item.factor_b)
+            .map((item) => `${factorLabel(item.factor_a)} ${item.rho.toFixed(2)}`)
+            .join("、")}。1.00 是当前保守政策，不代表历史相关性恒为 1。
         </div>
       )}
     </section>

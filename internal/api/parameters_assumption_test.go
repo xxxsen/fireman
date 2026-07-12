@@ -82,7 +82,7 @@ func TestPlanParametersAssumptionRoundTrip(t *testing.T) {
 	got := getPlanParams(t, srv.URL, planID)
 	if got["return_assumption_mode"] != "blended_prior" ||
 		got["assumption_selection_mode"] != "follow_global" ||
-		got["return_assumption_scenario"] != "baseline" {
+		got["return_assumption_scenario"] != "follow_global" {
 		t.Fatalf("new plan assumption selection wrong: %+v", got)
 	}
 

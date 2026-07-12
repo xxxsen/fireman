@@ -91,6 +91,10 @@ func (s *PlanService) validateWizardAssets(
 				"asset_class must be equity/bond/cash and region must be domestic/foreign",
 				map[string]any{"asset_key": item.AssetKey})
 		}
+		if repository.IsSystemCashAssetKey(item.AssetKey) && item.Region != domain.RegionDomestic {
+			return newErr("holding_region_invalid",
+				"system cash must use the domestic simulation region", nil)
+		}
 		if _, ok := seen[item.AssetKey]; ok {
 			return newErr("holding_duplicate",
 				"duplicate asset_key within the plan",

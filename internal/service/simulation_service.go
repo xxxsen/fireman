@@ -488,6 +488,9 @@ type RunAssetAssumptionView struct {
 	InstrumentName                  string   `json:"instrument_name"`
 	InstrumentCode                  string   `json:"instrument_code"`
 	IsCash                          bool     `json:"is_cash"`
+	Region                          string   `json:"region"`
+	FeeTreatment                    string   `json:"fee_treatment"`
+	FXTreatment                     string   `json:"fx_treatment"`
 	HistoricalAnnualGeometricReturn float64  `json:"historical_annual_geometric_return"`
 	ForwardAnnualGeometricReturn    float64  `json:"forward_annual_geometric_return"`
 	BaseCurrencyForwardReturn       float64  `json:"base_currency_forward_return"`
@@ -524,6 +527,9 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 		av := RunAssetAssumptionView{
 			HoldingID: a.HoldingID, InstrumentName: a.InstrumentName, InstrumentCode: a.InstrumentCode,
 			IsCash:                          a.IsCash,
+			Region:                          a.Region,
+			FeeTreatment:                    a.FeeTreatment,
+			FXTreatment:                     effectiveFXTreatment(a, snap.BaseCurrency),
 			HistoricalAnnualGeometricReturn: a.HistoricalAnnualGeometricReturn,
 			ForwardAnnualGeometricReturn:    a.ForwardAnnualGeometricReturn,
 			AnnualVolatilityUsed:            a.AnnualVolatilityUsed,
@@ -553,6 +559,16 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 		view.MaxRepairDelta = snap.FactorModel.Audit.MaxRepairDelta
 	}
 	return view
+}
+
+func effectiveFXTreatment(a simulation.SnapshotAsset, baseCurrency string) string {
+	if a.FXTreatment != "" {
+		return a.FXTreatment
+	}
+	if a.FXSnapshotID != "" && a.Currency != baseCurrency {
+		return simulation.FXTreatmentSeparateFactor
+	}
+	return simulation.FXTreatmentNone
 }
 
 func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView {
@@ -664,7 +680,12 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 		seed = &v
 	}
 
-	configHash, err := s.hash.Compute(ctx, plan.ID)
+	var effectiveIdentity *EffectiveAssumptionIdentity
+	if resolved.Mode != repository.ModeHistoricalCAGR {
+		identity := identityFromResolved(resolved)
+		effectiveIdentity = &identity
+	}
+	configHash, err := s.hash.ComputeWithIdentity(ctx, plan.ID, effectiveIdentity)
 	if err != nil {
 		return nil, "", err
 	}
@@ -672,6 +693,14 @@ func (s *SimulationService) buildInputSnapshot(ctx context.Context, plan reposit
 	in, err := buildInputSnapshotStruct(plan, params, *seed, configHash, assets, resolved)
 	if err != nil {
 		return nil, "", err
+	}
+	if effectiveIdentity != nil &&
+		(in.AssumptionProfileID != effectiveIdentity.ProfileID ||
+			in.AssumptionProfileVersion != effectiveIdentity.ProfileVersion ||
+			in.AssumptionProfileContentHash != effectiveIdentity.ContentHash ||
+			in.ReturnAssumptionScenario != effectiveIdentity.Scenario) {
+		return nil, "", newErr("assumption_identity_inconsistent",
+			"configuration hash and snapshot resolved different assumption identities", nil)
 	}
 	inputHash, err := simulation.HashInput(in)
 	if err != nil {

@@ -51,7 +51,10 @@ type ProfileSummary struct {
 	// gate (structure + coverage + PSD + tail). The legacy system_cma_v1@1 stays
 	// active for replay/pins but is NOT eligible. Computed by the
 	// service, not stored.
-	EligibleForGlobalDefault bool `json:"eligible_for_global_default"`
+	EligibleForGlobalDefault   bool     `json:"eligible_for_global_default"`
+	GlobalIneligibilityReasons []string `json:"global_ineligibility_reasons"`
+	EvidenceKind               string   `json:"evidence_kind"`
+	EvidenceHash               string   `json:"evidence_hash,omitempty"`
 }
 
 // AssumptionPreferences is the resolved global default selection.
@@ -61,11 +64,11 @@ type AssumptionPreferences struct {
 	DefaultScenario       string `json:"default_scenario"`
 }
 
-// EnsureSystemDefault performs the idempotent system-profile upgrade. It publishes the current system default
-// (system_cma_v3@1) as a NEW immutable identity without ever updating or deleting
-// the frozen system_cma_v1@1 / system_cma_v2@1, then atomically repoints the
-// global default preference to v3 only when it is empty or still points at v3's
-// DIRECT predecessor (v2). A preference pointing at a user-chosen custom profile,
+// EnsureSystemDefault performs the idempotent system-profile upgrade. It publishes
+// the current system default as a NEW immutable identity without ever updating or
+// deleting frozen predecessors, then atomically repoints the global default only
+// when it is empty or still points at the current identity's DIRECT predecessor.
+// A preference pointing at a user-chosen custom profile,
 // or at a non-direct predecessor (v1), is left untouched.
 //
 // Identity integrity:
@@ -74,7 +77,7 @@ type AssumptionPreferences struct {
 //   - A user profile that squats on the reserved system_cma_ namespace is migrated
 //     to a deterministic user_legacy_<hash> id (repointing plan pins and the global
 //     default) before the real system identity is published.
-//   - EVERY surviving owner_scope=system reserved-namespace row (v1/v2/v3/future)
+//   - EVERY surviving owner_scope=system reserved-namespace row (past/current/future)
 //     must match a recognized published content; an unknown or tampered system
 //     content yields a conflict and is never overwritten.
 //
@@ -109,7 +112,7 @@ func (r *AssumptionProfileRepo) EnsureSystemDefault(ctx context.Context) error {
 // systemNamespaceClean reports whether the reserved system namespace needs no
 // repair, publish or audit work, so EnsureSystemDefault can skip the upgrade
 // transaction. It is clean ONLY when all three read-only probes pass:
-//   - the current identity (v3) exists, is owner_scope=system and matches the
+//   - the current identity exists, is owner_scope=system and matches the
 //     registry canonical hash (stored content hash AND raw canonical bytes);
 //   - no owner_scope=user profile squats on the reserved system_cma_ namespace;
 //   - every owner_scope=system reserved-namespace row is registry-recognized and
@@ -155,12 +158,12 @@ func (r *AssumptionProfileRepo) runSystemDefaultUpgrade(
 		return err
 	}
 	// R14/R16 #2: every surviving owner_scope=system reserved-namespace row
-	// (v1/v2/v3/future) must be a recognized, untampered published content. This is
+	// (past/current/future) must be a recognized, untampered published content. This is
 	// enforced uniformly at startup so it can never surface lazily at pin-run time.
 	if err := auditReservedSystemRows(ctx, tx); err != nil {
 		return err
 	}
-	// Re-evaluate the current identity inside the tx (a user v3 squatter is gone).
+	// Re-evaluate the current identity inside the tx after namespace repair.
 	row, found, err := probeProfileRow(ctx, tx, cur.ID, cur.Version)
 	if err != nil {
 		return err
@@ -170,13 +173,13 @@ func (r *AssumptionProfileRepo) runSystemDefaultUpgrade(
 			return fmt.Errorf("current system identity %s is owner_scope=%s: %w",
 				cur.Ref(), row.ownerScope, ErrSystemProfileIdentityConflict)
 		}
-		// v3 already exists and was audited above. Do NOT migrate the default here:
-		// only a freshly-published v3 triggers the v2->v3 repoint, so a user's
-		// deliberate non-v3 default choice is preserved.
+		// The current identity already exists and was audited above. Do NOT migrate
+		// the default here: only a freshly published identity triggers a direct-
+		// predecessor repoint, so a deliberate alternative choice is preserved.
 		return assertRecognizedCurrentIdentity(cur, row)
 	}
 	// Publish the current system identity and migrate the default from its direct
-	// predecessor (v2 -> v3) only.
+	// predecessor only.
 	p := assumptions.SystemDefaultProfile()
 	if err := insertProfileTx(ctx, tx, p, assumptions.OwnerSystem, assumptions.StatusActive,
 		assumptions.SystemProfileSourceNote, assumptions.SystemProfileReviewedBy,
@@ -444,20 +447,21 @@ func deleteProfileVersionTx(ctx context.Context, tx *sql.Tx, id string, version 
 }
 
 // migrateDefaultToCurrentSystem atomically repoints the single global default
-// preference from the current identity's DIRECT predecessor (system_cma_v2@1) to
-// the current system default (system_cma_v3@1 / baseline) ONLY when it currently
-// points at that direct predecessor. A preference row pointing at a user-chosen
-// custom profile, or at a non-direct predecessor (system_cma_v1@1), is left
-// untouched; a missing preference row resolves to the current default via
-// GetPreferences's fallback.
+// preference to the current system default when it still points at v3 (the direct
+// predecessor) or v2 (the last version used by databases that skipped v3).
+// A preference row pointing at a user-chosen profile or v1 is left untouched; a
+// missing preference row resolves to the current default via GetPreferences.
 func (r *AssumptionProfileRepo) migrateDefaultToCurrentSystem(ctx context.Context, tx *sql.Tx) error {
 	exec := r.exec(tx)
 	_, err := exec.ExecContext(ctx,
 		`UPDATE simulation_assumption_preferences
-		 SET default_profile_id=?, default_profile_version=?, default_scenario=?, updated_at=?
-		 WHERE id=1 AND default_profile_id=? AND default_profile_version=?`,
+		 SET default_profile_id=?, default_profile_version=?, updated_at=?
+		 WHERE id=1 AND (
+		   (default_profile_id=? AND default_profile_version=?) OR
+		   (default_profile_id=? AND default_profile_version=?))`,
 		assumptions.SystemProfileID, assumptions.SystemProfileVersion,
-		assumptions.ScenarioBaseline, time.Now().UnixMilli(),
+		time.Now().UnixMilli(),
+		assumptions.SystemProfileV3ID, assumptions.SystemProfileV3Version,
 		assumptions.SystemProfileV2ID, assumptions.SystemProfileV2Version)
 	return wrapSQL("migrate default assumption preference", err)
 }
@@ -595,10 +599,10 @@ func (r *AssumptionProfileRepo) Save(
 
 // Activate marks a draft version active and supersedes other active versions of
 // the same id. Active rows are otherwise immutable.
-func (r *AssumptionProfileRepo) Activate(ctx context.Context, id string, version int) error {
+func (r *AssumptionProfileRepo) Activate(ctx context.Context, id string, version int) (bool, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return wrapSQL("begin activate profile tx", err)
+		return false, wrapSQL("begin activate profile tx", err)
 	}
 	now := time.Now().UnixMilli()
 	if _, err := tx.ExecContext(ctx,
@@ -606,7 +610,7 @@ func (r *AssumptionProfileRepo) Activate(ctx context.Context, id string, version
 		 WHERE id=? AND status=?`,
 		assumptions.StatusSuperseded, now, id, assumptions.StatusActive); err != nil {
 		_ = tx.Rollback()
-		return wrapSQL("supersede active profile", err)
+		return false, wrapSQL("supersede active profile", err)
 	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE simulation_assumption_profiles SET status=?, updated_at=?
@@ -614,17 +618,29 @@ func (r *AssumptionProfileRepo) Activate(ctx context.Context, id string, version
 		assumptions.StatusActive, now, id, version, assumptions.StatusDraft)
 	if err != nil {
 		_ = tx.Rollback()
-		return wrapSQL("activate profile version", err)
+		return false, wrapSQL("activate profile version", err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
 		_ = tx.Rollback()
-		return ErrAssumptionProfileNotFound
+		return false, ErrAssumptionProfileNotFound
+	}
+	// A global default follows the newest active version of the same logical
+	// profile. Explicit plan pins are intentionally left untouched.
+	prefResult, err := tx.ExecContext(ctx,
+		`UPDATE simulation_assumption_preferences
+		 SET default_profile_version=?, updated_at=?
+		 WHERE id=1 AND default_profile_id=? AND default_profile_version<>?`,
+		version, now, id, version)
+	if err != nil {
+		_ = tx.Rollback()
+		return false, wrapSQL("migrate assumption preference version", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return wrapSQL("commit activate profile", err)
+		return false, wrapSQL("commit activate profile", err)
 	}
-	return nil
+	migrated, _ := prefResult.RowsAffected()
+	return migrated > 0, nil
 }
 
 // GetPreferences returns the user's global default selection, falling back to the

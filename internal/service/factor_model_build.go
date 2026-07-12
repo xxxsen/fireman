@@ -12,7 +12,8 @@ var (
 	// errFactorCorrelationMissing is returned when a cross-type factor pair has no
 	// correlation prior in the resolved profile. The forward engine must block
 	// rather than silently assume ρ=0.
-	errFactorCorrelationMissing = errors.New("no correlation prior for factor pair")
+	errFactorCorrelationMissing         = errors.New("no correlation prior for factor pair")
+	errFactorSameTypeCorrelationMissing = errors.New("no same-type correlation prior for factor")
 	// errFactorModelNotPSD is returned when the frozen covariance cannot be
 	// Cholesky-decomposed, so the joint sampler cannot be built.
 	errFactorModelNotPSD = errors.New("factor model covariance is not positive semi-definite")
@@ -107,6 +108,7 @@ func (fb *factorBuild) correlations(
 	profile assumptions.Profile,
 ) ([][]float64, map[string]int, map[string]float64, []string, error) {
 	priorLookup := correlationPriorLookup(profile)
+	versionedSelfCorrelation := profile.HasSelfCorrelationPriors()
 	strength := profile.CorrelationStrengthMonths
 	n := len(fb.names)
 	r := make([][]float64, n)
@@ -120,7 +122,10 @@ func (fb *factorBuild) correlations(
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
 			pk := simulation.PairKey(fb.names[i], fb.names[j])
-			rho, err := fb.pairCorrelation(i, j, priorLookup, strength, pk, pairMonths, lambda, &priorOnly)
+			rho, err := fb.pairCorrelation(
+				i, j, priorLookup, versionedSelfCorrelation, strength, pk,
+				pairMonths, lambda, &priorOnly,
+			)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
@@ -132,7 +137,8 @@ func (fb *factorBuild) correlations(
 }
 
 func (fb *factorBuild) pairCorrelation(
-	i, j int, priorLookup func(a, b string) (float64, bool), strength int,
+	i, j int, priorLookup func(a, b string) (float64, bool), versionedSelfCorrelation bool,
+	strength int,
 	pk string, pairMonths map[string]int, lambda map[string]float64, priorOnly *[]string,
 ) (float64, error) {
 	if fb.exactKeys[i] != "" && fb.exactKeys[i] == fb.exactKeys[j] {
@@ -140,13 +146,22 @@ func (fb *factorBuild) pairCorrelation(
 		lambda[pk] = 0
 		return 1, nil
 	}
-	prior, hasPrior := 1.0, fb.typeKeys[i] == fb.typeKeys[j]
-	if !hasPrior {
+	prior, hasPrior := 0.0, false
+	if fb.typeKeys[i] == fb.typeKeys[j] {
+		prior, hasPrior = priorLookup(fb.typeKeys[i], fb.typeKeys[j])
+		if !hasPrior && !versionedSelfCorrelation {
+			// Profiles published before v4 had an implicit same-type rho=1.
+			prior, hasPrior = 1, true
+		}
+	} else {
 		prior, hasPrior = priorLookup(fb.typeKeys[i], fb.typeKeys[j])
 	}
 	if !hasPrior {
 		// A missing cross-type correlation prior must block the run, never silently
 		// become ρ=0.
+		if fb.typeKeys[i] == fb.typeKeys[j] {
+			return 0, fmt.Errorf("%w: %s", errFactorSameTypeCorrelationMissing, fb.typeKeys[i])
+		}
 		return 0, fmt.Errorf("%w: %s|%s", errFactorCorrelationMissing, fb.typeKeys[i], fb.typeKeys[j])
 	}
 	rhoHist, m, histOK := simulation.PairwiseCorrelation(

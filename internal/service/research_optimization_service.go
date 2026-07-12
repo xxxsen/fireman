@@ -538,11 +538,7 @@ func (s *ResearchService) findReusableOptimization(
 	}
 	view := buildOptimizationView(run)
 	if job, jobErr := s.jobs.GetByID(ctx, run.JobID); jobErr == nil {
-		view.Job = &ResearchJobView{
-			Status: job.Status, Phase: job.Phase,
-			ProgressCurrent: job.ProgressCurrent, ProgressTotal: job.ProgressTotal,
-			ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage,
-		}
+		applyOptimizationJobState(&view, job)
 	}
 	return ResearchOptimizationCreateResult{Optimization: view, Reused: true}, true, nil
 }
@@ -651,11 +647,7 @@ func (s *ResearchService) GetOptimization(
 	}
 	view := buildOptimizationView(run)
 	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-		view.Job = &ResearchJobView{
-			Status: job.Status, Phase: job.Phase,
-			ProgressCurrent: job.ProgressCurrent, ProgressTotal: job.ProgressTotal,
-			ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage,
-		}
+		applyOptimizationJobState(&view, job)
 	}
 	return view, nil
 }
@@ -674,13 +666,27 @@ func (s *ResearchService) GetLatestOptimization(
 	}
 	view := buildOptimizationView(run)
 	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-		view.Job = &ResearchJobView{
-			Status: job.Status, Phase: job.Phase,
-			ProgressCurrent: job.ProgressCurrent, ProgressTotal: job.ProgressTotal,
-			ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage,
-		}
+		applyOptimizationJobState(&view, job)
 	}
 	return view, true, nil
+}
+
+func applyOptimizationJobState(view *ResearchOptimizationView, job repository.Job) {
+	view.Job = buildResearchJobView(job)
+	if view.Status != repository.ResearchRunStatusQueued &&
+		view.Status != repository.ResearchRunStatusRunning {
+		return
+	}
+	view.Status = job.Status
+	if job.ErrorCode != "" {
+		view.ErrorCode = job.ErrorCode
+	}
+	if job.ErrorMessage != "" {
+		view.ErrorMessage = job.ErrorMessage
+	}
+	if job.FinishedAt != nil {
+		view.CompletedAt = job.FinishedAt
+	}
 }
 
 // ResearchOptimizationApplyRequest selects one immutable ranked result and

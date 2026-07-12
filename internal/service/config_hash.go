@@ -10,11 +10,12 @@ import (
 
 // ConfigHashService computes configuration hashes for change detection.
 type ConfigHashService struct {
-	plans     *repository.PlanRepo
-	params    *repository.ParametersRepo
-	alloc     *repository.AllocationRepo
-	holdings  *repository.HoldingsRepo
-	overrides *repository.ReturnOverrideRepo
+	plans       *repository.PlanRepo
+	params      *repository.ParametersRepo
+	alloc       *repository.AllocationRepo
+	holdings    *repository.HoldingsRepo
+	overrides   *repository.ReturnOverrideRepo
+	assumptions *repository.AssumptionProfileRepo
 }
 
 func NewConfigHashService(
@@ -23,18 +24,66 @@ func NewConfigHashService(
 	alloc *repository.AllocationRepo,
 	holdings *repository.HoldingsRepo,
 	overrides *repository.ReturnOverrideRepo,
+	assumptionRepos ...*repository.AssumptionProfileRepo,
 ) *ConfigHashService {
-	return &ConfigHashService{plans: plans, params: params, alloc: alloc, holdings: holdings, overrides: overrides}
+	var assumptionRepo *repository.AssumptionProfileRepo
+	if len(assumptionRepos) > 0 {
+		assumptionRepo = assumptionRepos[0]
+	} else {
+		assumptionRepo = params.AssumptionProfiles()
+	}
+	return &ConfigHashService{
+		plans: plans, params: params, alloc: alloc, holdings: holdings,
+		overrides: overrides, assumptions: assumptionRepo,
+	}
 }
 
 func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string, error) {
-	plan, err := s.plans.GetByID(ctx, planID)
-	if err != nil {
-		return "", fmt.Errorf("load plan: %w", err)
-	}
 	params, err := s.params.Get(ctx, planID)
 	if err != nil {
 		return "", fmt.Errorf("load parameters: %w", err)
+	}
+	var identity *EffectiveAssumptionIdentity
+	if params.ReturnAssumptionMode == repository.ModeBlendedPrior ||
+		params.ReturnAssumptionMode == repository.ModeCustom {
+		if s.assumptions == nil {
+			return "", fmt.Errorf("resolve effective assumption identity: repository is not configured")
+		}
+		if err := s.assumptions.EnsureSystemDefault(ctx); err != nil {
+			return "", fmt.Errorf("ensure system assumption profile: %w", err)
+		}
+		profile, scenario, contentHash, err := resolveProfileAndScenario(ctx, s.assumptions, params)
+		if err != nil {
+			return "", err
+		}
+		identity = &EffectiveAssumptionIdentity{
+			ProfileID: profile.ID, ProfileVersion: profile.Version,
+			ContentHash: contentHash, Scenario: scenario,
+		}
+	}
+	return s.compute(ctx, planID, params, identity)
+}
+
+// ComputeWithIdentity hashes a plan using an already-resolved identity. Run
+// creation passes the same identity to this method and the snapshot builder,
+// preventing a global preference change between the two reads.
+func (s *ConfigHashService) ComputeWithIdentity(
+	ctx context.Context, planID string, identity *EffectiveAssumptionIdentity,
+) (string, error) {
+	params, err := s.params.Get(ctx, planID)
+	if err != nil {
+		return "", fmt.Errorf("load parameters: %w", err)
+	}
+	return s.compute(ctx, planID, params, identity)
+}
+
+func (s *ConfigHashService) compute(
+	ctx context.Context, planID string, params repository.PlanParameters,
+	identity *EffectiveAssumptionIdentity,
+) (string, error) {
+	plan, err := s.plans.GetByID(ctx, planID)
+	if err != nil {
+		return "", fmt.Errorf("load plan: %w", err)
 	}
 	alloc, err := s.alloc.Get(ctx, planID)
 	if err != nil {
@@ -49,12 +98,19 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 		return "", fmt.Errorf("list return overrides: %w", err)
 	}
 
+	parameterMap := parametersToMap(params)
+	if identity != nil {
+		parameterMap["effective_assumption_profile_id"] = identity.ProfileID
+		parameterMap["effective_assumption_profile_version"] = identity.ProfileVersion
+		parameterMap["effective_assumption_profile_content_hash"] = identity.ContentHash
+		parameterMap["effective_assumption_scenario"] = identity.Scenario
+	}
 	in := domain.ConfigHashInput{
 		PlanID:        planID,
 		Name:          plan.Name,
 		BaseCurrency:  plan.BaseCurrency,
 		ValuationDate: plan.ValuationDate,
-		Parameters:    parametersToMap(params),
+		Parameters:    parameterMap,
 		AssetClass:    assetClassToMaps(alloc.AssetClassTargets),
 		RegionTargets: regionToMaps(alloc.RegionTargets),
 		Holdings:      holdingsToMaps(holds, overrides),
@@ -160,6 +216,7 @@ func holdingsToMaps(holds []repository.PlanHolding,
 	for _, h := range holds {
 		m := map[string]any{
 			"asset_key": h.AssetKey, "enabled": h.Enabled,
+			"asset_class": h.AssetClass, "region": h.Region,
 			"weight_within_group":    h.WeightWithinGroup,
 			"current_amount_minor":   h.CurrentAmountMinor,
 			"simulation_snapshot_id": h.SimulationSnapshotID,

@@ -21,6 +21,7 @@ import (
 // reviewed volatility ranges; they never change holdings, inflation, spending or
 // the random seed.
 const (
+	ScenarioFollowGlobal = "follow_global"
 	ScenarioConservative = "conservative"
 	ScenarioBaseline     = "baseline"
 	ScenarioOptimistic   = "optimistic"
@@ -129,7 +130,7 @@ var (
 	errFXPriorAudit             = errors.New("fx prior needs https source_url and ISO (YYYY-MM-DD) dates")
 	errFXPriorDuplicate         = errors.New("duplicate fx prior for the same from/base currency pair")
 	errCorrelationRange         = errors.New("correlation rho must be finite and in [-1, 1]")
-	errCorrelationFactor        = errors.New("correlation prior requires two distinct factors")
+	errCorrelationFactor        = errors.New("correlation prior requires known non-empty factors")
 	errCorrelationDuplicate     = errors.New("duplicate correlation prior for the same factor pair")
 	errCorrelationUnknownFactor = errors.New("correlation prior references a factor with no asset/fx prior")
 	errCorrelationIncomplete    = errors.New("missing correlation prior for a required factor pair")
@@ -394,7 +395,7 @@ func collectCorrelationPairs(
 ) (map[string]struct{}, error) {
 	seen := make(map[string]struct{}, len(priors))
 	for _, c := range priors {
-		if c.FactorA == "" || c.FactorB == "" || c.FactorA == c.FactorB {
+		if c.FactorA == "" || c.FactorB == "" {
 			return nil, errCorrelationFactor
 		}
 		if math.IsNaN(c.Rho) || math.IsInf(c.Rho, 0) || c.Rho < -1 || c.Rho > 1 {
@@ -428,6 +429,39 @@ func validateCorrelationComplete(keys []string, seen map[string]struct{}) error 
 		}
 	}
 	return nil
+}
+
+// ValidateSelfCorrelationCoverage requires one versioned prior for two distinct
+// assets of each non-cash asset factor type. Legacy profiles may omit these rows
+// and retain their historical rho=1 behavior, but a newly published/global
+// profile must call this gate.
+func (p *Profile) ValidateSelfCorrelationCoverage() error {
+	seen := make(map[string]struct{})
+	for _, c := range p.CorrelationPriors {
+		if c.FactorA == c.FactorB {
+			seen[c.FactorA] = struct{}{}
+		}
+	}
+	for _, key := range p.FactorUniverse() {
+		if !strings.HasPrefix(key, "asset:") {
+			continue
+		}
+		if _, ok := seen[key]; !ok {
+			return fmt.Errorf("missing same-type correlation prior: %s", key)
+		}
+	}
+	return nil
+}
+
+// HasSelfCorrelationPriors distinguishes profiles using the v4 same-type
+// contract from legacy profiles whose implicit same-type rho was 1.
+func (p *Profile) HasSelfCorrelationPriors() bool {
+	for _, c := range p.CorrelationPriors {
+		if c.FactorA != "" && c.FactorA == c.FactorB {
+			return true
+		}
+	}
+	return false
 }
 
 // canonicalPair orders two factor keys so a <= b.

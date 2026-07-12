@@ -110,6 +110,7 @@ export function buildCorrelationMatrix(profile: AssumptionProfile): {
   for (const c of profile.correlation_priors ?? []) {
     const i = idx.get(c.factor_a)!;
     const j = idx.get(c.factor_b)!;
+    if (i === j) continue;
     matrix[i][j] = c.rho;
     matrix[j][i] = c.rho;
   }

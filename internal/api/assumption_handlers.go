@@ -89,11 +89,12 @@ func (s Services) activateAssumptionProfile(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, "invalid_request", "version must be an integer", nil)
 		return
 	}
-	if err := s.Assumptions.Activate(c.Request.Context(), c.Param("id"), version); err != nil {
+	migrated, err := s.Assumptions.Activate(c.Request.Context(), c.Param("id"), version)
+	if err != nil {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"activated": true})
+	OK(c, gin.H{"activated": true, "default_migrated": migrated})
 }
 
 func (s Services) getAssumptionPreferences(c *gin.Context) {

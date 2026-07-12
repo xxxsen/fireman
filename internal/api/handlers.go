@@ -57,7 +57,10 @@ func NewServices(
 	snapRepo := repository.NewSnapshotRepo(db)
 	workerTaskRepo := repository.NewWorkerTaskRepo(db)
 	marketAssetRepo := repository.NewMarketAssetRepo(db)
-	hash := service.NewConfigHashService(plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db))
+	assumptionRepo := repository.NewAssumptionProfileRepo(db)
+	hash := service.NewConfigHashService(
+		plans, params, alloc, holdings, repository.NewReturnOverrideRepo(db), assumptionRepo,
+	)
 	snapSvc := marketdata.NewSnapshotService(snapRepo, marketAssetRepo)
 	jobRepo := repository.NewJobRepo(db)
 	simRepo := repository.NewSimulationRepo(db)
@@ -140,6 +143,8 @@ func (s Services) registerPlanRoutes(rg *gin.RouterGroup) {
 	rg.PUT("/plans/:plan_id/allocation", s.updateAllocation)
 	rg.GET("/plans/:plan_id/holdings", s.getHoldings)
 	rg.PUT("/plans/:plan_id/holdings", s.updateHoldings)
+	rg.POST("/plans/:plan_id/holding-region-changes/preview", s.previewHoldingRegionChange)
+	rg.POST("/plans/:plan_id/holding-region-changes/apply", s.applyHoldingRegionChange)
 	rg.GET("/plans/:plan_id/targets", s.getTargets)
 	rg.GET("/plans/:plan_id/rebalance", s.getRebalance)
 	rg.POST("/plans/:plan_id/portfolio-snapshots", s.createPortfolioSnapshot)
@@ -267,7 +272,14 @@ func (s Services) getParameters(c *gin.Context) {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"parameters": service.ParametersToAPI(params)})
+	identity, err := s.Assumptions.ResolveEffectiveIdentity(c.Request.Context(), params)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{
+		"parameters": service.ParametersToAPI(params), "effective_assumption": identity,
+	})
 }
 
 func (s Services) updateParameters(c *gin.Context) {
@@ -290,7 +302,14 @@ func (s Services) updateParameters(c *gin.Context) {
 		FailErr(c, err)
 		return
 	}
-	OK(c, gin.H{"parameters": service.ParametersToAPI(updated)})
+	identity, err := s.Assumptions.ResolveEffectiveIdentity(c.Request.Context(), updated)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{
+		"parameters": service.ParametersToAPI(updated), "effective_assumption": identity,
+	})
 }
 
 // planSettingsUpdateAPIRequest is the JSON body of PUT /plans/:plan_id/settings.
@@ -327,10 +346,16 @@ func (s Services) updatePlanSettings(c *gin.Context) {
 		FailErr(c, err)
 		return
 	}
+	identity, err := s.Assumptions.ResolveEffectiveIdentity(c.Request.Context(), out.Parameters)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
 	OK(c, gin.H{
-		"plan":       out.Plan,
-		"parameters": service.ParametersToAPI(out.Parameters),
-		"allocation": out.Allocation,
+		"plan":                 out.Plan,
+		"parameters":           service.ParametersToAPI(out.Parameters),
+		"allocation":           out.Allocation,
+		"effective_assumption": identity,
 	})
 }
 
@@ -387,6 +412,34 @@ func (s Services) updateHoldings(c *gin.Context) {
 		return
 	}
 	OK(c, gin.H{"holdings": out})
+}
+
+func (s Services) previewHoldingRegionChange(c *gin.Context) {
+	var req service.HoldingRegionChangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Holdings.PreviewRegionChange(c.Request.Context(), c.Param("plan_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) applyHoldingRegionChange(c *gin.Context) {
+	var req service.HoldingRegionChangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Holdings.ApplyRegionChange(c.Request.Context(), c.Param("plan_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
 }
 
 func checkHoldingReadOnlyFields(body []byte) error {

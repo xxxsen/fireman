@@ -20,6 +20,12 @@ func NewParametersRepo(db *sql.DB) *ParametersRepo {
 	return &ParametersRepo{db: db}
 }
 
+// AssumptionProfiles returns a repository sharing this plan-parameter database.
+// It keeps service wiring from needing to expose the raw SQL handle.
+func (r *ParametersRepo) AssumptionProfiles() *AssumptionProfileRepo {
+	return NewAssumptionProfileRepo(r.db)
+}
+
 func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters, error) {
 	return r.get(ctx, r.db, planID)
 }
@@ -185,7 +191,7 @@ func (r *ParametersRepo) Upsert(ctx context.Context, tx *sql.Tx, p PlanParameter
 const (
 	DefaultReturnAssumptionMode     = "historical_cagr"
 	DefaultAssumptionSelectionMode  = "follow_global"
-	DefaultReturnAssumptionScenario = "baseline"
+	DefaultReturnAssumptionScenario = "follow_global"
 
 	// Return-assumption modes. ModeHistoricalCAGR is the legacy/compat default for
 	// migrated plans and direct fixtures; new plans use ModeBlendedPrior.

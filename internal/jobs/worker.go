@@ -16,10 +16,12 @@ import (
 )
 
 const (
-	staleHeartbeat      = 10 * time.Minute
-	maxAutoRetry        = 1
-	heartbeatEvery      = 10 * time.Second
-	shutdownCleanupWait = 5 * time.Second
+	staleHeartbeat       = 60 * time.Second
+	reconcileEvery       = 60 * time.Second
+	maxAutoRetry         = 1
+	heartbeatEvery       = 10 * time.Second
+	shutdownCleanupWait  = 5 * time.Second
+	reconcileLogEventKey = "job_interruption_reconciled"
 )
 
 // Runner executes simulation jobs using the frozen input snapshot.
@@ -77,6 +79,8 @@ type Worker struct {
 	logger            *slog.Logger
 	interval          time.Duration
 	heartbeatInterval time.Duration
+	reconcileInterval time.Duration
+	staleThreshold    time.Duration
 	maintenance       func() bool
 }
 
@@ -106,14 +110,32 @@ func (w *Worker) Start(ctx context.Context, concurrency int) {
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	w.reconcileStale(ctx)
+	w.reconcileOrphanedJobs(ctx, true)
 	var wg sync.WaitGroup
+	wg.Go(func() { w.reconcileLoop(ctx) })
 	for range concurrency {
 		wg.Go(func() {
 			w.loop(ctx)
 		})
 	}
 	wg.Wait()
+}
+
+func (w *Worker) reconcileLoop(ctx context.Context) {
+	every := w.reconcileInterval
+	if every <= 0 {
+		every = reconcileEvery
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.reconcileOrphanedJobs(ctx, false)
+		}
+	}
 }
 
 func (w *Worker) loop(ctx context.Context) {
@@ -233,15 +255,60 @@ func (w *Worker) requeueInterrupted(ctx context.Context, jobID string) {
 	}
 }
 
-func (w *Worker) reconcileStale(ctx context.Context) {
-	staleBefore := time.Now().Add(-staleHeartbeat).UnixMilli()
-	n, err := w.jobs.RequeueStaleRunning(ctx, staleBefore, maxAutoRetry)
+func (w *Worker) reconcileOrphanedJobs(ctx context.Context, startup bool) {
+	threshold := w.staleThreshold
+	if threshold <= 0 {
+		threshold = staleHeartbeat
+	}
+	now := time.Now()
+	var staleBefore *int64
+	mode := "startup"
+	if !startup {
+		mode = "periodic"
+		v := now.Add(-threshold).UnixMilli()
+		staleBefore = &v
+	}
+	candidates, err := w.jobs.ListRunningForReconcile(ctx, staleBefore)
 	if err != nil {
-		w.logger.Error("reconcile stale jobs failed", "error", err)
+		w.logger.Error("list interrupted jobs failed", "mode", mode, "error", err)
 		return
 	}
-	if n > 0 {
-		w.logger.Info("requeued stale running jobs", "count", n)
+	for _, candidate := range candidates {
+		result, changed, err := w.jobs.ConvergeInterrupted(
+			ctx, candidate.ID, staleBefore, maxAutoRetry, now.UnixMilli(),
+		)
+		if err != nil {
+			w.logger.Error("converge interrupted job failed", "mode", mode, "job_id", candidate.ID, "error", err)
+			continue
+		}
+		if !changed {
+			continue
+		}
+		retryAfter := candidate.RetryCount
+		status := repository.JobStatusQueued
+		code, message := "", ""
+		switch result.Action {
+		case repository.InterruptedActionRequeued:
+			retryAfter++
+		case repository.InterruptedActionCanceled:
+			status = repository.JobStatusCanceled
+			code, message = candidate.ErrorCode, candidate.ErrorMessage
+			if code == "" {
+				code, message = "canceled_by_user", "canceled by user"
+			}
+		case repository.InterruptedActionFailed:
+			status = repository.JobStatusFailed
+			code = repository.JobErrorWorkerInterrupted
+			message = "执行进程中断，自动重试次数已用尽，请重新运行"
+		}
+		w.logger.Info(reconcileLogEventKey,
+			"mode", mode, "job_id", candidate.ID, "job_type", candidate.Type,
+			"action", result.Action, "retry_count_before", candidate.RetryCount,
+			"retry_count_after", retryAfter, "heartbeat_at", candidate.HeartbeatAt,
+		)
+		w.events.Publish(Event{
+			JobID: candidate.ID, Status: status, ErrorCode: code, ErrorMessage: message,
+		})
 	}
 }
 
@@ -463,8 +530,13 @@ func (w *Worker) handleRunError(
 func (w *Worker) fail(ctx context.Context, jobID, code, msg string) {
 	writeCtx, cancel := jobWriteCtx(ctx)
 	defer cancel()
-	if err := w.jobs.Finish(writeCtx, jobID, repository.JobStatusFailed, code, msg); err != nil {
+	changed, err := w.jobs.Finish(writeCtx, jobID, repository.JobStatusFailed, code, msg)
+	if err != nil {
 		w.logger.Error("finish failed job failed", "job_id", jobID, "error", err)
+		return
+	}
+	if !changed {
+		return
 	}
 	w.events.Publish(Event{JobID: jobID, Status: repository.JobStatusFailed, ErrorCode: code, ErrorMessage: msg})
 }
@@ -472,8 +544,13 @@ func (w *Worker) fail(ctx context.Context, jobID, code, msg string) {
 func (w *Worker) finish(ctx context.Context, jobID, status, msg, runID string) {
 	writeCtx, cancel := jobWriteCtx(ctx)
 	defer cancel()
-	if err := w.jobs.Finish(writeCtx, jobID, status, "", msg); err != nil {
+	changed, err := w.jobs.Finish(writeCtx, jobID, status, "", msg)
+	if err != nil {
 		w.logger.Error("finish job failed", "job_id", jobID, "status", status, "error", err)
+		return
+	}
+	if !changed {
+		return
 	}
 	w.events.Publish(Event{JobID: jobID, Status: status, ErrorMessage: msg, RunID: runID})
 }

@@ -46,6 +46,7 @@ const RETURN_MODE_OPTIONS: { value: string; label: string }[] = [
 ];
 
 const SCENARIO_OPTIONS: { value: string; label: string }[] = [
+  { value: "follow_global", label: "跟随全局默认" },
   { value: "conservative", label: "保守" },
   { value: "baseline", label: "基准" },
   { value: "optimistic", label: "乐观" },
@@ -651,7 +652,7 @@ export function ParametersContent({
               ))}
             </select>
           </label>
-          {params.return_assumption_mode === "blended_prior" && (
+          {params.return_assumption_mode !== "historical_cagr" && (
             <label className="block text-sm">
               假设情景
               <select
@@ -667,9 +668,9 @@ export function ParametersContent({
               </select>
             </label>
           )}
-          {params.return_assumption_mode === "blended_prior" && (
+          {params.return_assumption_mode !== "historical_cagr" && (
             <label className="block text-sm">
-              假设集
+              Profile 选择
               <select
                 className="input-base mt-1"
                 value={params.assumption_selection_mode}
@@ -689,7 +690,7 @@ export function ParametersContent({
                     );
                   } else {
                     const first = assumptionProfilesQ.data?.profiles.find(
-                      (pr) => pr.status === "active",
+                      (pr) => pr.status !== "draft",
                     );
                     setLocalParams((p) =>
                       p
@@ -717,7 +718,7 @@ export function ParametersContent({
               </select>
             </label>
           )}
-          {params.return_assumption_mode === "blended_prior" &&
+          {params.return_assumption_mode !== "historical_cagr" &&
             params.assumption_selection_mode === "pinned_profile" && (
               <label className="block text-sm">
                 指定假设集版本
@@ -737,16 +738,18 @@ export function ParametersContent({
                     );
                   }}
                 >
-                  {(assumptionProfilesQ.data?.profiles ?? []).map((pr) => (
+                  {(assumptionProfilesQ.data?.profiles ?? [])
+                    .filter((pr) => pr.status !== "draft")
+                    .map((pr) => (
                     <option key={`${pr.id}@${pr.version}`} value={`${pr.id}@${pr.version}`}>
                       {pr.name}（{pr.id}@{pr.version}·{pr.status}）
                     </option>
-                  ))}
+                    ))}
                 </select>
               </label>
             )}
         </div>
-        {params.return_assumption_mode === "blended_prior" &&
+        {params.return_assumption_mode !== "historical_cagr" &&
           params.assumption_selection_mode === "follow_global" &&
           assumptionProfilesQ.data && (
             <p className="mt-2 text-xs text-ink-muted">
@@ -755,6 +758,12 @@ export function ParametersContent({
               {assumptionProfilesQ.data.preferences.default_scenario}）。可在「模拟假设」修改。
             </p>
           )}
+        {params.return_assumption_mode !== "historical_cagr" && paramsQ.data?.effective_assumption && (
+          <p className="mt-2 text-xs text-ink-muted" data-testid="effective-assumption">
+            本次实际使用：{paramsQ.data.effective_assumption.profile_id}@
+            {paramsQ.data.effective_assumption.profile_version} / {paramsQ.data.effective_assumption.scenario} / {paramsQ.data.effective_assumption.content_hash.slice(0, 8)}
+          </p>
+        )}
         {params.return_assumption_mode === "historical_cagr" && (
           <p className="mt-3 rounded-md border border-danger/30 bg-danger/5 p-3 text-sm text-danger">
             历史收益不代表未来收益。有限历史样本（尤其是高景气区间）不适合直接外推到数十年的 FIRE

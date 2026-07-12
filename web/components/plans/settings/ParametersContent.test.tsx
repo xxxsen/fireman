@@ -83,6 +83,12 @@ vi.mock("@/lib/api/plans", () => ({
         return_assumption_scenario: "baseline",
         updated_at: 0,
       },
+      effective_assumption: {
+        profile_id: "system_cma_v3",
+        profile_version: 1,
+        content_hash: "1234567890abcdef",
+        scenario: "baseline",
+      },
     }),
   updatePlanSettings: (...args: unknown[]) => updatePlanSettings(...args),
 }));
@@ -573,5 +579,21 @@ describe("ParametersPage strategy enums", () => {
     expect(percentInputByLabel("提取率")).not.toBeInTheDocument();
     expect(percentInputByLabel("护栏下限比例")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /查看「护栏提取率」说明/ })).toBeInTheDocument();
+  });
+
+  it("keeps follow-global and baseline as distinct scenario choices", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage showAllocation={false} showStale={false} />
+      </QueryClientProvider>,
+    );
+
+    const select = await screen.findByLabelText("假设情景");
+    expect(within(select).getByRole("option", { name: "跟随全局默认" })).toHaveValue("follow_global");
+    expect(within(select).getByRole("option", { name: "基准" })).toHaveValue("baseline");
+    expect(screen.getByTestId("effective-assumption")).toHaveTextContent(
+      "system_cma_v3@1 / baseline / 12345678",
+    );
   });
 });

@@ -1,0 +1,89 @@
+{
+  "version": "internal-policy-v4-2026-07-12",
+  "evidence_kind": "internal_policy",
+  "calculation_convention": "The values are internal long-horizon policy assumptions. Asset priors are final nominal geometric returns with ongoing fund expenses treated as already embedded; the system never deducts an expense ratio again. Research Affiliates and BIS are methodological background sources, not direct publishers of these CNY product-return values. Values are rounded to 4 decimals only when written into the canonical profile.",
+  "return_priors": [
+    {
+      "asset_class": "equity", "region": "domestic", "valuation_currency": "CNY",
+      "market": "China equity internal policy cell", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.040, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.12, "annual_volatility_ceiling": 0.35,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12",
+      "note": "Internal policy prior. Ongoing product expenses are treated as embedded in the final return assumption."
+    },
+    {
+      "asset_class": "equity", "region": "foreign", "valuation_currency": "CNY",
+      "market": "Foreign equity represented by a CNY NAV", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.045, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.12, "annual_volatility_ceiling": 0.40,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12",
+      "note": "Internal policy prior. For a CNY-valued foreign fund, FX risk is embedded in its CNY NAV and no separate FX factor is added."
+    },
+    {
+      "asset_class": "bond", "region": "domestic", "valuation_currency": "CNY",
+      "market": "China bond internal policy cell", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.010, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.02, "annual_volatility_ceiling": 0.10,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12", "note": "Internal policy prior."
+    },
+    {
+      "asset_class": "bond", "region": "foreign", "valuation_currency": "CNY",
+      "market": "Foreign bond represented by a CNY NAV", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.010, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.03, "annual_volatility_ceiling": 0.12,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12",
+      "note": "Internal policy prior. FX risk is embedded when the product NAV is CNY-valued."
+    },
+    {
+      "asset_class": "cash", "region": "domestic", "valuation_currency": "CNY",
+      "market": "China cash internal policy cell", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": -0.002, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.00, "annual_volatility_ceiling": 0.00,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12", "note": "Internal policy prior."
+    },
+    {
+      "asset_class": "equity", "region": "foreign", "valuation_currency": "USD",
+      "market": "Foreign equity local USD factor", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.045, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.12, "annual_volatility_ceiling": 0.40,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12", "note": "Internal local-return policy prior; FX is a separate factor."
+    },
+    {
+      "asset_class": "bond", "region": "foreign", "valuation_currency": "USD",
+      "market": "Foreign bond local USD factor", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.010, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.03, "annual_volatility_ceiling": 0.12,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12", "note": "Internal local-return policy prior; FX is a separate factor."
+    },
+    {
+      "asset_class": "equity", "region": "foreign", "valuation_currency": "HKD",
+      "market": "Foreign equity local HKD factor", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.045, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.12, "annual_volatility_ceiling": 0.40,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12", "note": "Internal local-return policy prior; FX is a separate factor."
+    },
+    {
+      "asset_class": "bond", "region": "foreign", "valuation_currency": "HKD",
+      "market": "Foreign bond local HKD factor", "source_url": "https://interactive.researchaffiliates.com/asset-allocation/",
+      "source_published_at": "2026-03-31", "real_geometric_return": 0.010, "expected_inflation": 0.020,
+      "annual_fee_rate": 0.000, "annual_volatility_floor": 0.03, "annual_volatility_ceiling": 0.12,
+      "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12", "note": "Internal local-return policy prior; FX is a separate factor."
+    }
+  ],
+  "fx_priors": [
+    {
+      "from_currency": "USD", "base_currency": "CNY", "method": "internal_policy_zero_drift",
+      "source_url": "https://www.bis.org/statistics/eer/", "source_published_at": "2026-05-31",
+      "base_inflation": 0.020, "quote_inflation": 0.020, "annual_volatility_floor": 0.03,
+      "annual_volatility_ceiling": 0.12, "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12",
+      "note": "Zero drift and the volatility range are internal policy assumptions; BIS EER is background evidence only."
+    },
+    {
+      "from_currency": "HKD", "base_currency": "CNY", "method": "internal_policy_zero_drift",
+      "source_url": "https://www.bis.org/statistics/eer/", "source_published_at": "2026-05-31",
+      "base_inflation": 0.020, "quote_inflation": 0.020, "annual_volatility_floor": 0.03,
+      "annual_volatility_ceiling": 0.12, "reviewed_by": "FIRE 投研团队", "reviewed_at": "2026-07-12",
+      "note": "Zero drift and the volatility range are internal policy assumptions; BIS EER is background evidence only."
+    }
+  ]
+}

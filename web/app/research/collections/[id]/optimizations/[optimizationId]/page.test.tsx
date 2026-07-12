@@ -245,4 +245,47 @@ describe("OptimizationDetailPage", () => {
     expect(await screen.findByText(/981 个场景/)).toBeInTheDocument();
   });
 
+  it("shows an interrupted optimization retry", async () => {
+    getOptimizationMock.mockResolvedValue({
+      ...optimization(),
+      status: "queued",
+      result: undefined,
+      evaluated_count: 0,
+      job: {
+        status: "queued",
+        phase: "retrying",
+        progress_current: 0,
+        progress_total: 10,
+        retry_count: 1,
+      },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("任务中断后自动重试（1/1），等待执行…")).toBeInTheDocument();
+  });
+
+  it("explains a worker interruption terminal failure", async () => {
+    getOptimizationMock.mockResolvedValue({
+      ...optimization(),
+      status: "failed",
+      result: undefined,
+      error_code: "worker_interrupted",
+      error_message: "执行进程中断，自动重试次数已用尽，请重新运行",
+      job: {
+        status: "failed",
+        phase: "",
+        progress_current: 0,
+        progress_total: 10,
+        retry_count: 1,
+        error_code: "worker_interrupted",
+      },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("调优失败")).toBeInTheDocument();
+    expect(screen.getByText("执行进程中断，自动重试仍未完成。请重新发起调优。")).toBeInTheDocument();
+  });
+
 });

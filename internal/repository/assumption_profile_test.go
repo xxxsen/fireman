@@ -94,7 +94,7 @@ func TestSaveAndActivateDraftProfile(t *testing.T) {
 	if err := repo.Save(ctx, draft, "copied from system", "tester", "2026-06-20"); err != nil {
 		t.Fatalf("save draft: %v", err)
 	}
-	if err := repo.Activate(ctx, "user_cma", 1); err != nil {
+	if _, err := repo.Activate(ctx, "user_cma", 1); err != nil {
 		t.Fatalf("activate draft: %v", err)
 	}
 	active, err := repo.GetActiveLatest(ctx, "user_cma")

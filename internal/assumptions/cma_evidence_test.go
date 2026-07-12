@@ -250,11 +250,11 @@ func TestSystemProfileRegistryGuardsV3(t *testing.T) {
 		t.Fatalf("content hash: %v", err)
 	}
 	if builtHash != cur.CanonicalHash {
-		t.Fatalf("built v3 canonical hash %q != registry %q; publish a new identity and update the registry",
+		t.Fatalf("built current canonical hash %q != registry %q; publish a new identity and update the registry",
 			builtHash, cur.CanonicalHash)
 	}
 	if cur.EvidenceHash != CMAEvidenceContentHash {
-		t.Fatalf("registry v3 evidence hash %q != artifact hash %q; edited artifact must bump identity",
+		t.Fatalf("registry current evidence hash %q != artifact hash %q; edited artifact must bump identity",
 			cur.EvidenceHash, CMAEvidenceContentHash)
 	}
 }
@@ -263,12 +263,12 @@ func TestSystemProfileRegistryGuardsV3(t *testing.T) {
 // records every recognized published system CONTENT keyed by (id, version,
 // content_hash), including the TD 065 v2 variant. LookupSystemContent
 // must accept exactly these contents and reject unknown ones, and only the current
-// identity (v3) may be a global default.
+// identity may be a global default.
 func TestHistoricalSystemProfileVariants(t *testing.T) {
 	variants := HistoricalSystemProfileVariants()
-	// v1, v2 (TD064), v2 (TD065 variant), v3.
-	if len(variants) != 4 {
-		t.Fatalf("expected 4 recognized system contents, got %d", len(variants))
+	// v1, v2 (TD064), v2 (TD065 variant), v3, v4.
+	if len(variants) != 5 {
+		t.Fatalf("expected 5 recognized system contents, got %d", len(variants))
 	}
 	// Both published v2 contents must be recognized under the same identity.
 	v2Hashes := RecognizedSystemContentHashes(SystemProfileV2ID, SystemProfileV2Version)
@@ -276,14 +276,14 @@ func TestHistoricalSystemProfileVariants(t *testing.T) {
 		t.Fatalf("expected 2 recognized v2 contents, got %v", v2Hashes)
 	}
 
-	// The current v3 content is recognized and carries the live evidence hash.
+	// The current v4 content is recognized and carries the live evidence hash.
 	cur := CurrentSystemIdentity()
-	v3, ok := LookupSystemContent(SystemProfileID, SystemProfileVersion, cur.CanonicalHash)
+	v4, ok := LookupSystemContent(SystemProfileID, SystemProfileVersion, cur.CanonicalHash)
 	if !ok {
-		t.Fatal("current v3 content must be recognized")
+		t.Fatal("current v4 content must be recognized")
 	}
-	if v3.EvidenceHash != CMAEvidenceContentHash {
-		t.Errorf("v3 variant evidence hash %q != artifact %q", v3.EvidenceHash, CMAEvidenceContentHash)
+	if v4.EvidenceHash != CMAEvidenceContentHash {
+		t.Errorf("v4 variant evidence hash %q != artifact %q", v4.EvidenceHash, CMAEvidenceContentHash)
 	}
 
 	// The TD 065 v2 variant is recognized and pins its own evidence hash, distinct
@@ -333,11 +333,11 @@ func TestReservedSystemNamespace(t *testing.T) {
 // v1/v2 canonical hashes.
 func TestSystemProfileRegistryChain(t *testing.T) {
 	reg := SystemProfileRegistry()
-	if len(reg) != 3 {
-		t.Fatalf("expected 3 system identities, got %d", len(reg))
+	if len(reg) != 4 {
+		t.Fatalf("expected 4 system identities, got %d", len(reg))
 	}
-	wantRefs := []string{"system_cma_v1@1", "system_cma_v2@1", "system_cma_v3@1"}
-	wantPred := []string{"", "system_cma_v1@1", "system_cma_v2@1"}
+	wantRefs := []string{"system_cma_v1@1", "system_cma_v2@1", "system_cma_v3@1", "system_cma_v4@1"}
+	wantPred := []string{"", "system_cma_v1@1", "system_cma_v2@1", "system_cma_v3@1"}
 	for i, e := range reg {
 		if e.Ref() != wantRefs[i] {
 			t.Errorf("entry %d ref %q != %q", i, e.Ref(), wantRefs[i])
@@ -349,12 +349,12 @@ func TestSystemProfileRegistryChain(t *testing.T) {
 			t.Errorf("entry %d canonical hash must be a 64-char sha256, got %q", i, e.CanonicalHash)
 		}
 	}
-	if reg[2].Predecessor != CurrentSystemPredecessorRef() {
-		t.Errorf("predecessor ref mismatch: %q vs %q", reg[2].Predecessor, CurrentSystemPredecessorRef())
+	if reg[3].Predecessor != CurrentSystemPredecessorRef() {
+		t.Errorf("predecessor ref mismatch: %q vs %q", reg[3].Predecessor, CurrentSystemPredecessorRef())
 	}
-	// Only the current identity (v3) is default-able.
+	// Only the current identity is default-able.
 	if !IsCurrentSystemDefaultIdentity(SystemProfileID, SystemProfileVersion) {
-		t.Error("v3 must be the current default-able identity")
+		t.Error("v4 must be the current default-able identity")
 	}
 	if IsCurrentSystemDefaultIdentity(SystemProfileV2ID, SystemProfileV2Version) {
 		t.Error("v2 must NOT be default-able")

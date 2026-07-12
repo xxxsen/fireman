@@ -1,4 +1,10 @@
-import type { AssetClassTarget, Plan, PlanParameters, RegionTarget } from "@/types/api";
+import type {
+  AssetClassTarget,
+  EffectiveAssumptionIdentity,
+  Plan,
+  PlanParameters,
+  RegionTarget,
+} from "@/types/api";
 import { apiDelete, apiGet, apiPost, apiPut } from "./client";
 
 export function listPlans(): Promise<Plan[]> {
@@ -58,6 +64,7 @@ export function deletePlan(planId: string): Promise<{ deleted: boolean }> {
 
 export function getParameters(planId: string): Promise<{
   parameters: PlanParameters;
+  effective_assumption: EffectiveAssumptionIdentity;
 }> {
   return apiGet(`/api/v1/plans/${planId}/parameters`);
 }
@@ -69,7 +76,7 @@ export function updateParameters(
     parameters: PlanParameters;
     apply_unallocated_to_cash?: boolean;
   },
-): Promise<{ parameters: PlanParameters }> {
+): Promise<{ parameters: PlanParameters; effective_assumption: EffectiveAssumptionIdentity }> {
   return apiPut(`/api/v1/plans/${planId}/parameters`, body);
 }
 
@@ -97,6 +104,7 @@ export function updatePlanSettings(
     asset_class_targets: AssetClassTarget[];
     region_targets: RegionTarget[];
   };
+  effective_assumption: EffectiveAssumptionIdentity;
 }> {
   return apiPut(`/api/v1/plans/${planId}/settings`, body);
 }
