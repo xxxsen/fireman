@@ -125,7 +125,7 @@ type ActiveRebalanceExecution struct {
 // DashboardAnalysisSummary holds stress/sensitivity summary for the dashboard.
 type DashboardAnalysisSummary struct {
 	Available         bool            `json:"available"`
-	JobID             string          `json:"job_id,omitempty"`
+	TaskID            string          `json:"task_id,omitempty"`
 	ResultStale       bool            `json:"result_stale"`
 	BaselineSuccess   float64         `json:"baseline_success_probability,omitempty"`
 	WorstScenarioID   string          `json:"worst_scenario_id,omitempty"`
@@ -280,12 +280,12 @@ func (s *DashboardService) stressSummary(ctx context.Context, planID string) *Da
 	if err != nil || len(recs) == 0 || isPendingResult(recs[0].ResultJSON) {
 		return &DashboardAnalysisSummary{Available: false, Message: "尚未运行压力测试"}
 	}
-	view, err := s.stress.GetByJobID(ctx, recs[0].JobID)
+	view, err := s.stress.GetByTaskID(ctx, recs[0].TaskID)
 	if err != nil {
 		return &DashboardAnalysisSummary{Available: false, Message: "尚未运行压力测试"}
 	}
 	sum := &DashboardAnalysisSummary{
-		Available: true, JobID: view.JobID, ResultStale: view.ResultStale, Result: view.Result,
+		Available: true, TaskID: view.TaskID, ResultStale: view.ResultStale, Result: view.Result,
 	}
 	var report struct {
 		BaselineSuccessProbability float64 `json:"baseline_success_probability"`
@@ -314,12 +314,12 @@ func (s *DashboardService) sensitivitySummary(ctx context.Context, planID string
 	if err != nil || len(recs) == 0 || isPendingResult(recs[0].ResultJSON) {
 		return &DashboardAnalysisSummary{Available: false, Message: "尚未运行敏感性测试"}
 	}
-	view, err := s.sensitivity.GetByJobID(ctx, recs[0].JobID)
+	view, err := s.sensitivity.GetByTaskID(ctx, recs[0].TaskID)
 	if err != nil {
 		return &DashboardAnalysisSummary{Available: false, Message: "尚未运行敏感性测试"}
 	}
 	sum := &DashboardAnalysisSummary{
-		Available: true, JobID: view.JobID, ResultStale: view.ResultStale, Result: view.Result,
+		Available: true, TaskID: view.TaskID, ResultStale: view.ResultStale, Result: view.Result,
 	}
 	var report struct {
 		BaselineSuccessProbability float64 `json:"baseline_success_probability"`

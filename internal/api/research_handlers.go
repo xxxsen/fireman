@@ -29,6 +29,7 @@ func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 	research.POST("/collections/:collection_id/normalize-weights", s.normalizeResearchWeights)
 
 	research.GET("/collections/:collection_id/readiness", s.getResearchReadiness)
+	research.GET("/collections/:collection_id/sync-history", s.getResearchSyncStatus)
 	research.POST("/collections/:collection_id/sync-history", s.syncResearchHistory)
 
 	research.POST("/collections/:collection_id/backtests", s.createResearchBacktest)
@@ -243,6 +244,17 @@ func (s Services) normalizeResearchWeights(c *gin.Context) {
 
 func (s Services) getResearchReadiness(c *gin.Context) {
 	out, err := s.Research.GetReadiness(c.Request.Context(), c.Param("collection_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) getResearchSyncStatus(c *gin.Context) {
+	out, err := s.Research.GetCollectionSyncStatus(
+		c.Request.Context(), c.Param("collection_id"),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
 )
@@ -141,10 +140,7 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	seedResearchAsset(t, db, "RA2", "债券基金", 1500, 50)
 
 	services := buildServices(db)
-	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db),
-		jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db)),
-		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.Research,
-		services.EventHub, nil, nil)
+	worker := newTestTaskWorker(db, services)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go worker.Start(ctx, 1)
@@ -237,7 +233,7 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	backtest := envData(t, body)
 	run := backtest["run"].(map[string]any)
 	runID := run["id"].(string)
-	jobID := run["job_id"].(string)
+	jobID := run["task_id"].(string)
 	waitJobSucceeded(t, srv, jobID)
 
 	// Run detail carries summary, years, months and the input snapshot.
@@ -246,7 +242,7 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 		t.Fatalf("get run status=%d", resp.StatusCode)
 	}
 	runDetail := envData(t, body)
-	if runDetail["status"].(string) != "succeeded" {
+	if runDetail["status"].(string) != "complete" {
 		t.Fatalf("run not succeeded: %s", body)
 	}
 	summary := runDetail["summary"].(map[string]any)
@@ -351,7 +347,7 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	}
 	optimization := envData(t, body)["optimization"].(map[string]any)
 	optimizationID := optimization["id"].(string)
-	waitJobSucceeded(t, srv, optimization["job_id"].(string))
+	waitJobSucceeded(t, srv, optimization["task_id"].(string))
 	resp, body = researchGet(t, srv, "/api/v1/research/optimizations/"+optimizationID)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get optimization status=%d body=%s", resp.StatusCode, body)
@@ -509,6 +505,23 @@ func TestResearchAPISyncHistory(t *testing.T) {
 		t.Fatal("task id missing for created sync")
 	}
 
+	// A read-only status request restores the active batch after navigation and
+	// does not enqueue another task.
+	resp, body = researchGet(t, srv,
+		"/api/v1/research/collections/"+collectionID+"/sync-history")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync status=%d body=%s", resp.StatusCode, body)
+	}
+	activeAssets := envData(t, body)["assets"].([]any)
+	if len(activeAssets) != 1 {
+		t.Fatalf("active sync assets=%s", body)
+	}
+	active := activeAssets[0].(map[string]any)
+	if active["asset_key"] != "RB2" ||
+		active["task"].(map[string]any)["id"] != taskID {
+		t.Fatalf("active sync task mismatch: %s", body)
+	}
+
 	// The shared task endpoint serves the research task panel polling.
 	resp, body = researchGet(t, srv, "/api/v1/tasks/"+taskID)
 	if resp.StatusCode != http.StatusOK {
@@ -605,7 +618,7 @@ func TestResearchAPICopyToPlanValidation(t *testing.T) {
 		t.Fatalf("simulation after research apply status=%d body=%s", resp.StatusCode, body)
 	}
 	simulation := envData(t, body)
-	if simulation["status"] != "queued" || simulation["run_id"] == "" {
+	if simulation["status"] != "pending" || simulation["run_id"] == "" {
 		t.Fatalf("simulation after research apply wrong: %s", body)
 	}
 

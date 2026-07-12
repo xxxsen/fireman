@@ -8,9 +8,8 @@ import { cn } from "@/lib/cn";
 
 const TABS = [
   { href: "/admin", label: "概览" },
-  { href: "/admin/worker-tasks", label: "市场数据任务" },
-  { href: "/admin/jobs", label: "计算作业" },
-  { href: "/admin/callbacks", label: "回调记录" },
+  { href: "/admin/worker-tasks", label: "任务管理" },
+  { href: "/admin/finalizations", label: "终结记录" },
   { href: "/admin/data-versions", label: "数据版本" },
   { href: "/admin/auto-updates", label: "自动更新管理" },
 ] as const;
@@ -36,7 +35,11 @@ export function AdminNav() {
 
   return (
     <div className="mb-5 overflow-x-auto border-b border-line">
-      <nav className="flex gap-0.5" data-testid="admin-nav" aria-label="管理后台导航">
+      <nav
+        className="flex gap-0.5"
+        data-testid="admin-nav"
+        aria-label="管理后台导航"
+      >
         {TABS.map((tab) => {
           const active =
             tab.href === "/admin"

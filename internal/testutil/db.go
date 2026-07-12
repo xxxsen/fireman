@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/fireman/fireman/internal/bootstrap"
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/migrations"
 )
@@ -22,6 +23,9 @@ func OpenTestDBPath(t *testing.T) (*sql.DB, string) {
 	fdb.SetMigrations(migrations.FS)
 	if err := fdb.Migrate(context.Background(), pool, path, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := bootstrap.EnsureBuiltinData(context.Background(), pool); err != nil {
+		t.Fatalf("bootstrap builtin data: %v", err)
 	}
 	t.Cleanup(func() { _ = pool.Close() })
 	return pool, path

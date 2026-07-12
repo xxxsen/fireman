@@ -5,7 +5,7 @@
 ## 原则
 
 - 业务 schema 的 DDL 只能放在 `migrations/`，包括 `CREATE TABLE`、`ALTER TABLE`、`CREATE INDEX`、`DROP` 等。
-- 新增 migration 文件只允许 DDL，禁止使用 `INSERT`、`UPDATE`、`DELETE` 修正、回填或初始化业务数据。
+- migration SQL 只允许 DDL，禁止使用 `INSERT`、`UPDATE`、`DELETE`、`REPLACE` 修正、回填或初始化业务数据。
 - Go 运行时代码不得做业务表的 schema repair、动态 `ALTER TABLE` 或按列探测后补 schema。
 - 测试 fixture 可以写 DDL，但只能用于构造测试数据库状态。
 - 基础设施例外：迁移器初始化 `schema_migrations` 表、SQLite PRAGMA、备份/完整性检查等不属于业务 schema 演进。
@@ -13,14 +13,14 @@
 ## 当前策略
 
 - `migrations/0001_init.sql` 描述新建库完整基线 schema。
-- 后续 schema 变更通过顺序 migration 文件表达，例如 `migrations/0014_xxx.sql`。
+- 首次生产发布前只维护 `migrations/0001_init.sql`，不得增加增量 migration 文件；schema 变更直接修改完整基线并重建开发库。
 - 当前未上线，不保留旧临时库兼容修补；遇到旧本地 DB 结构不一致时，删除旧 DB 并重新执行 migrations。
 - 当前 `.dev-data` 中的业务数据需要修正时，直接调整开发数据库或重建开发数据库，不为数据修正创建 migration。
-- `migrations/0012_snapshot_metrics_columns.sql` 是 no-op，用于保留历史迁移编号；相关列已经在 `0001_init.sql` 中声明。
-- `migrations/0015_instrument_library_metrics.sql` 创建的列表投影表属于历史结构，已在 `0021` 中删除；计划持仓现直接引用 `market_assets.asset_key`。
+- 内置场景、系统现金和系统 FX 等参考数据由 `internal/bootstrap` 在建表后幂等初始化，不写入 migration。
 
 ## 验收方式
 
-- `rg -n "ALTER TABLE|CREATE TABLE|CREATE INDEX|DROP TABLE" internal migrations -S` 中，业务 schema DDL 应只出现在 `migrations/` 或测试文件。
-- 删除本地数据库后，应用或测试应能通过 migrations 创建完整 schema。
+- `migrations/` 中只能存在 `0001_init.sql`，且 DML 扫描结果必须为零。
+- 删除本地数据库后，应用应能通过基线建表并由 bootstrap 初始化完整参考数据。
+- `PRAGMA integrity_check` 必须返回 `ok`，`PRAGMA foreign_key_check` 必须为空。
 - `go test ./...` 必须通过。

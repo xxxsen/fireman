@@ -363,21 +363,31 @@ func (s *ResearchService) loadFXData(ctx context.Context, pair string) (*researc
 
 // fxSyncActive reports whether an fx_rate_sync task is currently active.
 func (s *ResearchService) fxSyncActive(ctx context.Context) (bool, error) {
+	task, ok, err := s.fxSyncTask(ctx)
+	if err != nil {
+		return false, err
+	}
+	return ok && repository.IsActiveWorkerTaskStatus(task.Status), nil
+}
+
+func (s *ResearchService) fxSyncTask(
+	ctx context.Context,
+) (repository.WorkerTask, bool, error) {
 	st, ok, err := s.assets.GetSyncState(ctx, ScopeFXRates)
 	if err != nil {
-		return false, wrapRepo("load fx sync state", err)
+		return repository.WorkerTask{}, false, wrapRepo("load fx sync state", err)
 	}
 	if !ok || st.LastTaskID == "" {
-		return false, nil
+		return repository.WorkerTask{}, false, nil
 	}
 	task, err := s.tasks.GetByID(ctx, st.LastTaskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrWorkerTaskNotFound) {
-			return false, nil
+			return repository.WorkerTask{}, false, nil
 		}
-		return false, wrapRepo("load fx sync task", err)
+		return repository.WorkerTask{}, false, wrapRepo("load fx sync task", err)
 	}
-	return repository.IsActiveWorkerTaskStatus(task.Status), nil
+	return task, true, nil
 }
 
 // --- evaluation ---

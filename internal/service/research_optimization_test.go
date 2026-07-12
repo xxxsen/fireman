@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fireman/fireman/internal/repository"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 func seedSucceededOptimization(
@@ -53,15 +54,19 @@ func seedSucceededOptimization(
 	}
 	defer func() { _ = tx.Rollback() }()
 	optimizationID := "ror_apply_test_" + detail.ID
-	jobID := "job_apply_test_" + detail.ID
-	if err := repository.NewJobRepo(db).Create(ctx, tx, repository.Job{
-		ID: jobID, Type: repository.JobTypeResearchOptimization,
-		Status: repository.JobStatusSucceeded, InputHash: "apply-test", CreatedAt: detail.UpdatedAt,
+	taskID := "task_apply_test_" + detail.ID
+	tasks := repository.NewWorkerTaskRepo(db)
+	coordinator := taskcore.NewCoordinator(db, tasks, taskcore.DefaultRegistry(), taskcore.NewEventHub())
+	if err := coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+		ID: taskID, WorkerType: repository.WorkerTypeGo,
+		Type:   repository.WorkerTaskTypeResearchOptimization,
+		Status: repository.WorkerTaskStatusComplete, InputHash: "apply-test",
+		PayloadJSON: `{}`, CreatedAt: detail.UpdatedAt,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.NewResearchRepo(db).CreateOptimizationRunTx(ctx, tx, repository.ResearchOptimizationRun{
-		ID: optimizationID, CollectionID: detail.ID, JobID: jobID,
+		ID: optimizationID, CollectionID: detail.ID, TaskID: taskID,
 		Status: repository.ResearchRunStatusSucceeded, InputHash: "apply-test",
 		SourceHash: "source", EngineVersion: OptimizationEngineVersion,
 		BaseCurrency: detail.BaseCurrency, RebalancePolicy: detail.RebalancePolicy,
@@ -1280,7 +1285,7 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 		t.Fatalf("expected creation above recommendation to succeed, candidate_count=%d",
 			created.Optimization.CandidateCount)
 	}
-	if err := svc.ExecuteOptimizationJob(context.Background(), created.Optimization.JobID,
+	if err := svc.ExecuteOptimizationJob(context.Background(), created.Optimization.TaskID,
 		func() bool { return false }, nil); err != nil {
 		t.Fatalf("execute optimization worker: %v", err)
 	}
@@ -1332,7 +1337,7 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create filtered optimization: %v", err)
 	}
-	if err := svc.ExecuteOptimizationJob(context.Background(), filtered.Optimization.JobID,
+	if err := svc.ExecuteOptimizationJob(context.Background(), filtered.Optimization.TaskID,
 		func() bool { return false }, nil); err != nil {
 		t.Fatalf("execute filtered optimization: %v", err)
 	}
@@ -1376,7 +1381,7 @@ func TestOptimizationWorkerAndAtomicApplyEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create reproducing backtest: %v", err)
 	}
-	if err := svc.ExecuteBacktestJob(context.Background(), ordinary.Run.JobID, nil, nil); err != nil {
+	if err := svc.ExecuteBacktestJob(context.Background(), ordinary.Run.TaskID, nil, nil); err != nil {
 		t.Fatalf("execute reproducing backtest: %v", err)
 	}
 	ordinaryDetail, err := svc.GetRun(context.Background(), ordinary.Run.ID)

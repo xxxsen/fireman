@@ -53,7 +53,7 @@
 | TickFlow 优先行情源 | 可选（默认关闭）：已解析 A 股与场内 `etf/index_etf` 在未复权口径下优先 `tickflow.klines:1d`，未命中自动回退 AKShare；LOF/公募基金/resolve 不接入；官方 SDK 接入，支持 free/paid（API key）两种模式 |
 | 数据清洗 | 日收益异常检测、年度收益、CAGR/波动/回撤指标 |
 | 模拟快照 | 纳入日最近最多 20 个完整自然年度；`source_hash` 审计 |
-| 系统标的 | 系统现金、USDCNY/HKDCNY 汇率（migration 0003） |
+| 系统标的 | 系统现金、USDCNY/HKDCNY 汇率（应用启动时由 Go bootstrap 幂等初始化） |
 | 数据过期提示 | 距最近交易日 >7 自然日返回 stale 警告 |
 | Refresh | 手工刷新立即执行；源切换时全量替换 |
 | 自动更新管理 | 可配置的定时扫描器，为目录单元和资产历史维度创建刷新任务；复用既有 worker/sidecar 链路，乐观锁并发控制和 active-dedupe 保证幂等，见 [029-market-data-auto-update-scheduler.md](./029-market-data-auto-update-scheduler.md) |

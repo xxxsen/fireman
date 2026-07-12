@@ -17,7 +17,6 @@ func (s Services) registerMarketAssetRoutes(rg *gin.RouterGroup) {
 	rg.POST("/market-assets/history-sync", s.syncMarketAssetHistory)
 	rg.PUT("/market-assets/history-auto-update", s.setMarketAssetHistoryAutoUpdate)
 	rg.POST("/market-assets/fx-sync", s.syncFXRates)
-	rg.GET("/tasks/:task_id", s.getWorkerTask)
 }
 
 func (s Services) setMarketAssetHistoryAutoUpdate(c *gin.Context) {
@@ -120,15 +119,6 @@ func (s Services) syncMarketAssetHistory(c *gin.Context) {
 
 func (s Services) syncFXRates(c *gin.Context) {
 	out, err := s.MarketAssets.SyncFXRates(c.Request.Context())
-	if err != nil {
-		FailErr(c, err)
-		return
-	}
-	OK(c, out)
-}
-
-func (s Services) getWorkerTask(c *gin.Context) {
-	out, err := s.MarketAssets.GetTask(c.Request.Context(), c.Param("task_id"))
 	if err != nil {
 		FailErr(c, err)
 		return

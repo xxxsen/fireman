@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fireman/fireman/internal/repository"
+	taskcore "github.com/fireman/fireman/internal/task"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
@@ -22,13 +23,14 @@ func newResearchTestService(t *testing.T) (*ResearchService, *sql.DB) {
 	t.Helper()
 	db := testutil.OpenTestDB(t)
 	tasks := repository.NewWorkerTaskRepo(db)
+	coordinator := taskcore.NewCoordinator(db, tasks, taskcore.DefaultRegistry(), taskcore.NewEventHub())
 	assets := repository.NewMarketAssetRepo(db)
 	svc := NewResearchService(
 		db,
 		repository.NewResearchRepo(db),
 		assets,
 		tasks,
-		repository.NewJobRepo(db),
+		coordinator,
 		repository.NewInstrumentRepo(db),
 		repository.NewMarketDataRepo(db),
 		repository.NewPlanRepo(db),
@@ -315,7 +317,7 @@ func TestResearchBacktestEndToEnd(t *testing.T) {
 
 	// Execute the job like the worker would.
 	var phases []string
-	err = svc.ExecuteBacktestJob(ctx, created.Run.JobID, func() bool { return false },
+	err = svc.ExecuteBacktestJob(ctx, created.Run.TaskID, func() bool { return false },
 		func(_, _ int, phase string) { phases = append(phases, phase) })
 	if err != nil {
 		t.Fatalf("execute backtest job: %v", err)
@@ -541,7 +543,7 @@ func TestResearchBacktestAnchorChangeCreatesFreshRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create backtest: %v", err)
 	}
-	if err := svc.ExecuteBacktestJob(ctx, created.Run.JobID, nil, nil); err != nil {
+	if err := svc.ExecuteBacktestJob(ctx, created.Run.TaskID, nil, nil); err != nil {
 		t.Fatalf("execute backtest job: %v", err)
 	}
 
@@ -573,7 +575,7 @@ func TestResearchBacktestAnchorChangeCreatesFreshRun(t *testing.T) {
 		WHERE asset_key='D1' AND trade_date='2020-05-31'`); err != nil {
 		t.Fatalf("mutate anchor again: %v", err)
 	}
-	err = svc.ExecuteBacktestJob(ctx, again.Run.JobID, nil, nil)
+	err = svc.ExecuteBacktestJob(ctx, again.Run.TaskID, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "source data changed") {
 		t.Fatalf("expected source-changed error for anchor drift, got %v", err)
 	}
@@ -599,7 +601,7 @@ func TestResearchBacktestSourceChanged(t *testing.T) {
 		t.Fatalf("mutate point: %v", err)
 	}
 
-	err = svc.ExecuteBacktestJob(ctx, created.Run.JobID, nil, nil)
+	err = svc.ExecuteBacktestJob(ctx, created.Run.TaskID, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "source data changed") {
 		t.Fatalf("expected source-changed error, got %v", err)
 	}
@@ -640,6 +642,14 @@ func TestResearchSyncHistoryCreateReuseSkip(t *testing.T) {
 	}
 	if statuses["FRESH"] != "skipped" {
 		t.Fatalf("FRESH expected skipped, got %+v", out.Assets)
+	}
+	active, err := svc.GetCollectionSyncStatus(ctx, detail.ID)
+	if err != nil {
+		t.Fatalf("get active sync status: %v", err)
+	}
+	if len(active.Assets) != 1 || active.Assets[0].AssetKey != "BARE" ||
+		active.Assets[0].Task == nil || active.Assets[0].Task.ID != out.Assets[1].Task.ID {
+		t.Fatalf("active sync status does not restore BARE task: %+v", active.Assets)
 	}
 
 	// Second call: the still-pending task is reused.

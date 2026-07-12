@@ -12,7 +12,7 @@ import (
 
 func saveUserProfileVersion(
 	t *testing.T, repo *repository.AssumptionProfileRepo, id string, version int,
-) assumptions.Profile {
+) {
 	t.Helper()
 	p := assumptions.SystemDefaultProfile()
 	p.ID = id
@@ -23,7 +23,6 @@ func saveUserProfileVersion(
 	if err := repo.Save(context.Background(), p, "internal test", "tester", "2026-07-12"); err != nil {
 		t.Fatal(err)
 	}
-	return p
 }
 
 func TestAssumptionActivationMigratesDefaultAndKeepsSupersededPin(t *testing.T) {
@@ -115,14 +114,19 @@ func TestResolvePinnedDraftIsRejected(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	repo := repository.NewAssumptionProfileRepo(db)
 	saveUserProfileVersion(t, repo, "user_draft", 1)
-	_, _, _, err := resolveProfileAndScenario(context.Background(), repo, repository.PlanParameters{
-		AssumptionSelectionMode: SelectionPinnedProfile,
-		ReturnAssumptionSetID:   "user_draft", ReturnAssumptionSetVersion: 1,
-		ReturnAssumptionScenario: assumptions.ScenarioBaseline,
-	})
+	profile, scenario, contentHash, err := resolveProfileAndScenario(
+		context.Background(), repo, repository.PlanParameters{
+			AssumptionSelectionMode: SelectionPinnedProfile,
+			ReturnAssumptionSetID:   "user_draft", ReturnAssumptionSetVersion: 1,
+			ReturnAssumptionScenario: assumptions.ScenarioBaseline,
+		},
+	)
 	var appErr *AppError
 	if !errors.As(err, &appErr) || appErr.Code != "assumption_profile_draft" {
-		t.Fatalf("err=%v", err)
+		t.Fatalf(
+			"profile=%+v scenario=%s content_hash=%s err=%v",
+			profile, scenario, contentHash, err,
+		)
 	}
 }
 

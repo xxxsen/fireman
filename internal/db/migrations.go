@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +35,10 @@ const backupRetention = 5
 var (
 	errMigrationNameFormat       = errors.New("migration filename must start with NNNN_")
 	errDuplicateMigrationVersion = errors.New("duplicate migration version")
+	errMigrationNotDDL           = errors.New("migration SQL must contain DDL only")
 )
+
+var blockSQLComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 // Migrate applies all pending SQL migrations from the embedded FS to the
 // database. Before applying any migration it creates a timestamped backup of
@@ -185,6 +189,9 @@ func pendingMigrations(ctx context.Context, pool *sql.DB, files []migrationFile)
 }
 
 func applyMigration(ctx context.Context, pool *sql.DB, m migrationFile, body []byte) error {
+	if err := validateMigrationDDL(m.filename, string(body)); err != nil {
+		return err
+	}
 	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin tx for %s: %w", m.filename, err)
@@ -200,6 +207,32 @@ func applyMigration(ctx context.Context, pool *sql.DB, m migrationFile, body []b
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("db: commit migration %s: %w", m.filename, err)
+	}
+	return nil
+}
+
+func validateMigrationDDL(filename, body string) error {
+	body = blockSQLComment.ReplaceAllString(body, "")
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if comment := strings.Index(line, "--"); comment >= 0 {
+			lines[i] = line[:comment]
+		}
+	}
+	for _, statement := range strings.Split(strings.Join(lines, "\n"), ";") {
+		fields := strings.Fields(statement)
+		if len(fields) == 0 {
+			continue
+		}
+		switch strings.ToUpper(fields[0]) {
+		case "CREATE", "ALTER", "DROP", "PRAGMA":
+			continue
+		default:
+			return fmt.Errorf(
+				"db: migration %s starts statement with %q: %w",
+				filename, fields[0], errMigrationNotDDL,
+			)
+		}
 	}
 	return nil
 }

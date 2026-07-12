@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   isTaskActive,
   listMarketAssets,
@@ -16,9 +20,13 @@ import {
   type WorkerTask,
 } from "@/lib/api/market-assets";
 import { ApiError } from "@/lib/api/client";
-import { dataSourceLabel, formatDateTimeFromMs, instrumentTypeLabel } from "@/lib/format";
+import {
+  dataSourceLabel,
+  formatDateTimeFromMs,
+  instrumentTypeLabel,
+} from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
-import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -88,10 +96,12 @@ function DirectoryUnitRow({
   onChanged: () => void;
 }) {
   const serverTask = unit.task ?? null;
-  const activeTaskId = serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
+  const activeTaskId =
+    serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
 
-  const { task: polledTask, pollError } = useWorkerTaskPolling(activeTaskId, {
-    initialTask: serverTask && serverTask.id === activeTaskId ? serverTask : undefined,
+  const { task: polledTask, pollError } = useTaskStatus(activeTaskId, {
+    initialTask:
+      serverTask && serverTask.id === activeTaskId ? serverTask : undefined,
     onComplete: onChanged,
     onFailed: onChanged,
   });
@@ -107,15 +117,23 @@ function DirectoryUnitRow({
       <span className="w-40 shrink-0 text-xs text-ink">{unit.label}</span>
       <span className="flex min-w-0 items-center gap-2 text-xs text-ink-muted">
         {task ? (
-          <TaskStatusBadge status={task.status} labels={DIRECTORY_TASK_LABELS} />
+          <TaskStatusBadge
+            status={task.status}
+            labels={DIRECTORY_TASK_LABELS}
+          />
         ) : (
           <span>从未同步</span>
         )}
         {active && <LoadingState label="同步进行中…" className="text-xs" />}
         {task?.status === "failed" && (
-          <TaskErrorInline errorCode={task.error_code} errorMessage={task.error_message} />
+          <TaskErrorInline
+            errorCode={task.error_code}
+            errorMessage={task.error_message}
+          />
         )}
-        {pollError && <span className="text-danger">任务状态查询失败：{pollError}</span>}
+        {pollError && (
+          <span className="text-danger">任务状态查询失败：{pollError}</span>
+        )}
       </span>
       <span className="ml-auto text-xs text-ink-muted">
         最近成功：
@@ -151,7 +169,11 @@ function DirectoryScopeRow({
       onChanged();
     } catch (err) {
       const message =
-        err instanceof ApiError ? err.message : err instanceof Error ? err.message : "创建任务失败";
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "创建任务失败";
       setCreateError(message);
     } finally {
       setSubmitting(false);
@@ -168,25 +190,36 @@ function DirectoryScopeRow({
   return (
     <div className="py-2" data-testid={`directory-sync-${view.scope}`}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="w-32 shrink-0 text-sm font-medium text-ink">{view.label}</span>
+        <span className="w-32 shrink-0 text-sm font-medium text-ink">
+          {view.label}
+        </span>
         <span className="flex items-center gap-2 text-xs text-ink-muted">
           <Badge variant={SCOPE_STATUS_VARIANTS[view.status] ?? "neutral"}>
-            <span data-testid={`scope-status-${view.scope}`} data-status={view.status}>
+            <span
+              data-testid={`scope-status-${view.scope}`}
+              data-status={view.status}
+            >
               {SCOPE_STATUS_LABELS[view.status] ?? view.status}
             </span>
           </Badge>
-          {view.status === "running" && <LoadingState label="同步进行中…" className="text-xs" />}
+          {view.status === "running" && (
+            <LoadingState label="同步进行中…" className="text-xs" />
+          )}
         </span>
         <span className="text-xs text-ink-muted">
           最近全量成功：
           <span className="font-mono-numeric text-ink">{lastFullSuccess}</span>
         </span>
         <span className="ml-auto flex items-center gap-2">
-          {createError && <span className="text-xs text-danger">{createError}</span>}
+          {createError && (
+            <span className="text-xs text-danger">{createError}</span>
+          )}
           <SplitButton
             data-testid={`sync-button-${view.scope}`}
             pending={submitting}
-            onMain={() => void submit({ scope: view.scope as DirectorySyncScope })}
+            onMain={() =>
+              void submit({ scope: view.scope as DirectorySyncScope })
+            }
             items={view.units.map((unit) => {
               const active = isTaskActive(unit.task?.status);
               return {
@@ -204,7 +237,11 @@ function DirectoryScopeRow({
       </div>
       <div className="mt-1 divide-y divide-line/60">
         {view.units.map((unit) => (
-          <DirectoryUnitRow key={unit.sync_key} unit={unit} onChanged={onChanged} />
+          <DirectoryUnitRow
+            key={unit.sync_key}
+            unit={unit}
+            onChanged={onChanged}
+          />
         ))}
       </div>
     </div>
@@ -226,11 +263,13 @@ function FXSyncRow({
   const [manualTaskId, setManualTaskId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const serverActiveId = serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
+  const serverActiveId =
+    serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
   const trackedTaskId = serverActiveId ?? manualTaskId;
 
-  const { task: polledTask, pollError } = useWorkerTaskPolling(trackedTaskId, {
-    initialTask: serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
+  const { task: polledTask, pollError } = useTaskStatus(trackedTaskId, {
+    initialTask:
+      serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
     onComplete: onChanged,
     onFailed: onChanged,
   });
@@ -242,14 +281,26 @@ function FXSyncRow({
       className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2"
       data-testid="fx-sync-row"
     >
-      <span className="w-32 shrink-0 text-sm font-medium text-ink">汇率（USD/HKD）</span>
+      <span className="w-32 shrink-0 text-sm font-medium text-ink">
+        汇率（USD/HKD）
+      </span>
       <span className="flex items-center gap-2 text-xs text-ink-muted">
-        {task && <TaskStatusBadge status={task.status} labels={DIRECTORY_TASK_LABELS} />}
+        {task && (
+          <TaskStatusBadge
+            status={task.status}
+            labels={DIRECTORY_TASK_LABELS}
+          />
+        )}
         {active && <LoadingState label="同步进行中…" className="text-xs" />}
         {task?.status === "failed" && (
-          <TaskErrorInline errorCode={task.error_code} errorMessage={task.error_message} />
+          <TaskErrorInline
+            errorCode={task.error_code}
+            errorMessage={task.error_message}
+          />
         )}
-        {pollError && <span className="text-danger">任务状态查询失败：{pollError}</span>}
+        {pollError && (
+          <span className="text-danger">任务状态查询失败：{pollError}</span>
+        )}
       </span>
       <span className="text-xs text-ink-muted">
         最近成功：
@@ -258,7 +309,9 @@ function FXSyncRow({
         </span>
       </span>
       <span className="ml-auto flex items-center gap-2">
-        {createError && <span className="text-xs text-danger">{createError}</span>}
+        {createError && (
+          <span className="text-xs text-danger">{createError}</span>
+        )}
         <RefreshTaskButton
           variant="secondary"
           className="min-h-8 px-3 py-1 text-xs"
@@ -291,7 +344,9 @@ export default function MarketAssetsPage() {
   const [pageInput, setPageInput] = useState("");
   // null = auto (derived from sync state); true/false = user's explicit choice
   // which is respected for the rest of the page lifetime.
-  const [panelOpenOverride, setPanelOpenOverride] = useState<boolean | null>(null);
+  const [panelOpenOverride, setPanelOpenOverride] = useState<boolean | null>(
+    null,
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -389,7 +444,11 @@ export default function MarketAssetsPage() {
       {panelOpen && (
         <div className="divide-y divide-line border-t border-line px-4 py-1">
           {syncs.map((view) => (
-            <DirectoryScopeRow key={view.scope} view={view} onChanged={invalidateDirectory} />
+            <DirectoryScopeRow
+              key={view.scope}
+              view={view}
+              onChanged={invalidateDirectory}
+            />
           ))}
           <FXSyncRow view={data?.fx_sync} onChanged={invalidateDirectory} />
         </div>
@@ -463,7 +522,9 @@ export default function MarketAssetsPage() {
           含已退市
         </label>
       </div>
-      {isFetching && !isLoading && data && <LoadingState label="刷新中…" className="text-xs" />}
+      {isFetching && !isLoading && data && (
+        <LoadingState label="刷新中…" className="text-xs" />
+      )}
     </div>
   );
 
@@ -542,7 +603,10 @@ export default function MarketAssetsPage() {
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border border-line bg-surface">
-            <table className="min-w-full text-sm" data-testid="market-assets-table">
+            <table
+              className="min-w-full text-sm"
+              data-testid="market-assets-table"
+            >
               <thead className="border-b border-line bg-surface-muted/60 text-left text-ink-muted">
                 <tr>
                   <th className="px-3 py-2.5 font-medium">代码</th>
@@ -579,17 +643,24 @@ export default function MarketAssetsPage() {
                         {asset.name}
                       </Link>
                       {!asset.active && (
-                        <span className="ml-2 text-xs text-warning">已退市/未在目录</span>
+                        <span className="ml-2 text-xs text-warning">
+                          已退市/未在目录
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2.5">{asset.market}</td>
-                    <td className="px-3 py-2.5">{instrumentTypeLabel(asset.instrument_type)}</td>
+                    <td className="px-3 py-2.5">
+                      {instrumentTypeLabel(asset.instrument_type)}
+                    </td>
                     <td className="px-3 py-2.5">{asset.exchange || "—"}</td>
                     <td className="px-3 py-2.5">{asset.currency || "—"}</td>
                     <td className="px-3 py-2.5 text-xs">
                       {asset.has_history ? (
                         <span className="text-ink-muted">
-                          截至 <span className="font-mono-numeric">{asset.history_data_as_of || "—"}</span>
+                          截至{" "}
+                          <span className="font-mono-numeric">
+                            {asset.history_data_as_of || "—"}
+                          </span>
                         </span>
                       ) : (
                         <span className="text-warning">未同步</span>
@@ -612,8 +683,8 @@ export default function MarketAssetsPage() {
             data-testid="market-assets-pagination"
           >
             <span data-testid="market-assets-range">
-              当前第 {rangeStart}-{rangeEnd} 条，共 {total} 条 · 第 {currentPage} /{" "}
-              {totalPages} 页
+              当前第 {rangeStart}-{rangeEnd} 条，共 {total} 条 · 第{" "}
+              {currentPage} / {totalPages} 页
             </span>
             <span className="flex items-center gap-2">
               <Button

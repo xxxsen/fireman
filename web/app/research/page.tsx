@@ -40,7 +40,7 @@ function latestRunCell(item: ResearchCollectionListItem) {
   const run = item.latest_run;
   if (!run) return <span className="text-xs text-ink-muted">尚未回测</span>;
   const summary = item.latest_run_summary;
-  if (run.status === "succeeded" && summary) {
+  if (run.status === "complete" && summary) {
     return (
       <div className="space-y-0.5 text-xs">
         <div>
@@ -98,7 +98,7 @@ function RecentRunsAside({
                 </div>
                 <div className="mt-1 flex items-center justify-between text-xs text-ink-muted">
                   <span>
-                    {run.status === "succeeded" && run.summary
+                    {run.status === "complete" && run.summary
                       ? `CAGR ${formatPercent(run.summary.cagr)} · 回撤 ${formatPercent(run.summary.max_drawdown)}`
                       : run.rebalance_policy}
                   </span>
@@ -281,7 +281,7 @@ export default function ResearchHomePage() {
   const archived = allCollections.filter((c) => c.status === "archived");
   const runs = recentRunsQuery.data?.runs ?? [];
   const syncingCollections = collections.filter(
-    (c) => c.latest_run && (c.latest_run.status === "queued" || c.latest_run.status === "running"),
+    (c) => c.latest_run && (c.latest_run.status === "pending" || c.latest_run.status === "running"),
   );
   const attentionCollections = collections.filter(
     (c) =>

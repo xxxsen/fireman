@@ -16,7 +16,9 @@ vi.mock("@/lib/api/admin", async (importOriginal) => ({
   getAdminOverview: () => getOverviewMock(),
 }));
 
-function makeOverview(workerTasks: Partial<{ failed_last_24h: number; stale_running: number }>) {
+function makeOverview(
+  workerTasks: Partial<{ failed_last_24h: number; stale_running: number }>,
+) {
   return {
     worker_tasks: {
       active: 0,
@@ -26,8 +28,7 @@ function makeOverview(workerTasks: Partial<{ failed_last_24h: number; stale_runn
       stale_running: 0,
       ...workerTasks,
     },
-    jobs: { queued: 0, running: 0, failed_last_24h: 0, succeeded_last_24h: 0 },
-    callbacks: { total_last_24h: 0, failed_last_24h: 0 },
+    finalizations: { total_last_24h: 0, failed_last_24h: 0 },
     sync_health: {
       directory_scopes: [],
       fx_pairs: [],
@@ -38,7 +39,9 @@ function makeOverview(workerTasks: Partial<{ failed_last_24h: number; stale_runn
 }
 
 function renderNav() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <AdminNav />
@@ -56,7 +59,13 @@ describe("AdminNav", () => {
   it("renders all admin tabs with the overview active on /admin", () => {
     renderNav();
     const nav = screen.getByTestId("admin-nav");
-    for (const label of ["概览", "市场数据任务", "计算作业", "回调记录", "数据版本", "自动更新管理"]) {
+    for (const label of [
+      "概览",
+      "任务管理",
+      "终结记录",
+      "数据版本",
+      "自动更新管理",
+    ]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: "概览" })).toHaveAttribute(
@@ -69,11 +78,13 @@ describe("AdminNav", () => {
   it("marks the matching tab active by path prefix", () => {
     mockPathname.mockReturnValue("/admin/worker-tasks");
     renderNav();
-    expect(screen.getByRole("link", { name: "市场数据任务" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "任务管理" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("link", { name: "概览" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "概览" })).not.toHaveAttribute(
+      "aria-current",
+    );
   });
 
   it("shows the alert dot when tasks failed in the last 24h", async () => {

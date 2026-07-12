@@ -44,7 +44,10 @@ export function JsonViewer({ label, raw }: JsonViewerProps) {
   };
 
   return (
-    <details className="group rounded-md border border-line" data-testid="json-viewer">
+    <details
+      className="group rounded-md border border-line"
+      data-testid="json-viewer"
+    >
       <summary className="flex cursor-pointer select-none items-center justify-between gap-2 px-3 py-2 text-xs text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink">
         <span>{label}</span>
         <span className="text-[10px] group-open:hidden">展开</span>

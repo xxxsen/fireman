@@ -12,7 +12,7 @@ import {
   type MarketAssetDetail,
   type WorkerTask,
 } from "@/lib/api/market-assets";
-import { useWorkerTaskPolling } from "@/hooks/useWorkerTaskPolling";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 import { queryErrorMessage } from "@/lib/query-error";
 import {
   adjustPolicyLabel,
@@ -75,7 +75,7 @@ export default function MarketAssetDetailPage() {
     void qc.invalidateQueries({ queryKey: ["market-asset-detail", assetKey] });
   };
 
-  const { task: polledTask, pollError } = useWorkerTaskPolling(trackedTaskId, {
+  const { task: polledTask, pollError } = useTaskStatus(trackedTaskId, {
     initialTask:
       serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
     onComplete: invalidateDetail,

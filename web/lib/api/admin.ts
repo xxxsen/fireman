@@ -1,5 +1,9 @@
 import { apiGet, apiPost, apiPut } from "./client";
-import type { AutoUpdateRule, WorkerTask, WorkerTaskStatus } from "./market-assets";
+import type {
+  AutoUpdateRule,
+  WorkerTask,
+  WorkerTaskStatus,
+} from "./market-assets";
 
 export interface AdminAutoUpdateRule extends AutoUpdateRule {
   target_label: string;
@@ -39,7 +43,9 @@ export function createAdminDirectoryAutoUpdate(body: {
   return apiPost("/api/v1/admin/auto-updates/directories", body);
 }
 
-export function listAdminAutoUpdateDirectoryUnits(): Promise<AdminAutoUpdateDirectoryUnit[]> {
+export function listAdminAutoUpdateDirectoryUnits(): Promise<
+  AdminAutoUpdateDirectoryUnit[]
+> {
   return apiGet("/api/v1/admin/auto-updates/directories");
 }
 
@@ -68,14 +74,7 @@ export interface AdminWorkerTaskStats {
   stale_running: number;
 }
 
-export interface AdminJobStats {
-  queued: number;
-  running: number;
-  failed_last_24h: number;
-  succeeded_last_24h: number;
-}
-
-export interface AdminCallbackStats {
+export interface AdminFinalizeStats {
   total_last_24h: number;
   failed_last_24h: number;
 }
@@ -126,8 +125,7 @@ export interface AdminStorageStats {
 
 export interface AdminOverview {
   worker_tasks: AdminWorkerTaskStats;
-  jobs: AdminJobStats;
-  callbacks: AdminCallbackStats;
+  finalizations: AdminFinalizeStats;
   sync_health: AdminSyncHealth;
   storage: AdminStorageStats;
 }
@@ -139,11 +137,23 @@ export function getAdminOverview(): Promise<AdminOverview> {
 // --- worker tasks ---
 
 export type WorkerTaskType =
+  | "simulation"
+  | "stress"
+  | "sensitivity"
+  | "research_backtest"
+  | "research_optimization_backtest"
+  | "market_data_auto_update_scan"
   | "asset_directory_sync"
   | "asset_history_sync"
   | "fx_rate_sync";
 
 export const WORKER_TASK_TYPE_LABELS: Record<WorkerTaskType, string> = {
+  simulation: "FIRE 模拟",
+  stress: "压力测试",
+  sensitivity: "敏感性分析",
+  research_backtest: "组合回测",
+  research_optimization_backtest: "组合寻优",
+  market_data_auto_update_scan: "自动更新扫描",
   asset_directory_sync: "目录同步",
   asset_history_sync: "历史同步",
   fx_rate_sync: "汇率同步",
@@ -155,12 +165,23 @@ export function workerTaskTypeLabel(type: string): string {
 
 export interface AdminWorkerTaskItem {
   id: string;
+  worker_type: "go_worker" | "sidecar_worker";
   type: string;
   status: WorkerTaskStatus;
+  scope_type: string;
+  scope_id: string;
   dedupe_key: string;
+  claimed_by?: string;
+  attempt_count: number;
+  max_attempts: number;
+  progress_current: number;
+  progress_total: number;
+  phase: string;
+  heartbeat_at?: number | null;
+  lease_expires_at?: number | null;
   error_code: string;
   error_message: string;
-  post_process_attempts: number;
+  finalize_attempts: number;
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
@@ -168,8 +189,11 @@ export interface AdminWorkerTaskItem {
 }
 
 export interface AdminWorkerTaskListParams {
+  workerType?: string;
   type?: string;
   status?: string;
+  scopeType?: string;
+  scopeId?: string;
   q?: string;
   limit?: number;
   offset?: number;
@@ -179,8 +203,11 @@ export function listAdminWorkerTasks(
   params?: AdminWorkerTaskListParams,
 ): Promise<AdminPage<AdminWorkerTaskItem>> {
   const qs = new URLSearchParams();
+  if (params?.workerType) qs.set("worker_type", params.workerType);
   if (params?.type) qs.set("type", params.type);
   if (params?.status) qs.set("status", params.status);
+  if (params?.scopeType) qs.set("scope_type", params.scopeType);
+  if (params?.scopeId) qs.set("scope_id", params.scopeId);
   if (params?.q) qs.set("q", params.q);
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
@@ -191,16 +218,23 @@ export function listAdminWorkerTasks(
 export interface AdminWorkerTaskFull {
   id: string;
   version_no: number;
+  worker_type: "go_worker" | "sidecar_worker";
   type: string;
   status: WorkerTaskStatus;
+  scope_type: string;
+  scope_id: string;
   dedupe_key: string;
   payload_json: string;
-  result_data: string;
+  result_key?: string;
+  result_meta_json: string;
+  claimed_by?: string;
+  attempt_count: number;
+  max_attempts: number;
   heartbeat_at?: number | null;
   error_code: string;
   error_message: string;
-  post_process_attempts: number;
-  next_post_process_at?: number | null;
+  finalize_attempts: number;
+  next_finalize_at?: number | null;
   created_at: number;
   started_at?: number | null;
   pre_completed_at?: number | null;
@@ -218,14 +252,14 @@ export interface AdminTaskHeartbeat {
   stale: boolean;
 }
 
-export type CallbackResult = "success" | "retryable_error" | "permanent_error";
+export type FinalizeResult = "success" | "retryable_error" | "permanent_error";
 
-export interface AdminPostProcessRecord {
+export interface AdminFinalizeRecord {
   id: number;
   task_id: string;
   task_type: string;
   attempt_no: number;
-  result: CallbackResult;
+  result: FinalizeResult;
   error_code: string;
   error_message: string;
   duration_ms: number;
@@ -236,66 +270,30 @@ export interface AdminWorkerTaskDetail {
   task: AdminWorkerTaskFull;
   timeline: AdminTaskTimelinePhase[];
   heartbeat?: AdminTaskHeartbeat | null;
-  post_process_records: AdminPostProcessRecord[];
+  finalize_records: AdminFinalizeRecord[];
+  attempts: Array<{
+    task_id: string;
+    attempt_no: number;
+    worker_type: string;
+    worker_id: string;
+    claimed_at: number;
+    last_heartbeat_at?: number | null;
+    released_at?: number | null;
+    outcome: string;
+    error_code: string;
+    error_message: string;
+  }>;
 }
 
-export function getAdminWorkerTask(taskId: string): Promise<AdminWorkerTaskDetail> {
+export function getAdminWorkerTask(
+  taskId: string,
+): Promise<AdminWorkerTaskDetail> {
   return apiGet(`/api/v1/admin/worker-tasks/${encodeURIComponent(taskId)}`);
 }
 
-// --- jobs ---
+// --- finalization records ---
 
-export type AdminJobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
-
-export const JOB_TYPE_LABELS: Record<string, string> = {
-  simulation: "模拟",
-  stress: "压力测试",
-  sensitivity: "敏感性分析",
-};
-
-export function jobTypeLabel(type: string): string {
-  return JOB_TYPE_LABELS[type] ?? type;
-}
-
-export interface AdminJobItem {
-  id: string;
-  plan_id: string;
-  plan_name: string;
-  type: string;
-  status: AdminJobStatus;
-  phase: string;
-  progress_current: number;
-  progress_total: number;
-  error_code: string;
-  error_message: string;
-  created_at: number;
-  started_at: number | null;
-  finished_at: number | null;
-  duration_ms: number | null;
-}
-
-export interface AdminJobListParams {
-  type?: string;
-  status?: string;
-  planId?: string;
-  limit?: number;
-  offset?: number;
-}
-
-export function listAdminJobs(params?: AdminJobListParams): Promise<AdminPage<AdminJobItem>> {
-  const qs = new URLSearchParams();
-  if (params?.type) qs.set("type", params.type);
-  if (params?.status) qs.set("status", params.status);
-  if (params?.planId) qs.set("plan_id", params.planId);
-  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
-  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
-  const query = qs.toString();
-  return apiGet(`/api/v1/admin/jobs${query ? `?${query}` : ""}`);
-}
-
-// --- post process records ---
-
-export interface AdminCallbackListParams {
+export interface AdminFinalizeListParams {
   taskId?: string;
   result?: string;
   taskType?: string;
@@ -303,9 +301,9 @@ export interface AdminCallbackListParams {
   offset?: number;
 }
 
-export function listAdminPostProcessRecords(
-  params?: AdminCallbackListParams,
-): Promise<AdminPage<AdminPostProcessRecord>> {
+export function listAdminFinalizeRecords(
+  params?: AdminFinalizeListParams,
+): Promise<AdminPage<AdminFinalizeRecord>> {
   const qs = new URLSearchParams();
   if (params?.taskId) qs.set("task_id", params.taskId);
   if (params?.result) qs.set("result", params.result);
@@ -313,7 +311,7 @@ export function listAdminPostProcessRecords(
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
   const query = qs.toString();
-  return apiGet(`/api/v1/admin/post-process-records${query ? `?${query}` : ""}`);
+  return apiGet(`/api/v1/admin/finalize-records${query ? `?${query}` : ""}`);
 }
 
 // --- data versions ---
@@ -366,7 +364,7 @@ export function directoryScopeStatusLabel(status: string): string {
   return DIRECTORY_SCOPE_STATUS_LABELS[status] ?? status;
 }
 
-export const CALLBACK_RESULT_LABELS: Record<CallbackResult, string> = {
+export const FINALIZE_RESULT_LABELS: Record<FinalizeResult, string> = {
   success: "成功",
   retryable_error: "可重试失败",
   permanent_error: "永久失败",

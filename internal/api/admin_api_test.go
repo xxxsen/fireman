@@ -16,9 +16,11 @@ func seedAdminWorkerTask(t *testing.T, db *sql.DB, id, taskType, status, dedupe 
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO worker_tasks
-			(id, version_no, type, status, dedupe_key, payload_json, created_at)
-		VALUES (?,?,?,?,?,'{"scope":"cn_all"}',?)`,
-		id, 1, taskType, status, dedupe, createdAt); err != nil {
+			(id, version_no, worker_type, type, status, dedupe_key, payload_json,
+			 available_at, created_at, updated_at)
+		VALUES (?,?,?, ?,?,?, '{"scope":"cn_all"}', ?,?,?)`,
+		id, createdAt+1, repository.WorkerTypeSidecar, taskType, status, dedupe,
+		createdAt, createdAt, createdAt); err != nil {
 		t.Fatalf("seed worker task: %v", err)
 	}
 }
@@ -59,7 +61,7 @@ func TestAdminOverviewEndpoint(t *testing.T) {
 		"running", "asset_history|x", now)
 
 	data := dataOf(t, adminGetJSON(t, client, srv.URL+"/api/v1/admin/overview", http.StatusOK))
-	for _, key := range []string{"worker_tasks", "jobs", "callbacks", "sync_health", "storage"} {
+	for _, key := range []string{"worker_tasks", "finalizations", "sync_health", "storage"} {
 		if _, ok := data[key]; !ok {
 			t.Fatalf("overview missing %s: %v", key, data)
 		}
@@ -138,15 +140,16 @@ func TestAdminWorkerTaskDetailEndpoint(t *testing.T) {
 	now := time.Now().UnixMilli()
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO worker_tasks
-			(id, version_no, type, status, dedupe_key, payload_json, result_data,
-			 error_code, error_message, created_at, started_at, pre_completed_at, finished_at)
-		VALUES ('wt_x', 7, ?, 'failed', 'asset_history|x', '{"a":1}', '{"resource_key":"k"}',
-			'source_unavailable', 'boom', ?, ?, ?, ?)`,
-		repository.WorkerTaskTypeAssetHistorySync, now-4000, now-3000, now-2000, now-1000); err != nil {
+			(id, version_no, worker_type, type, status, dedupe_key, payload_json,
+			 result_key, result_meta_json, error_code, error_message, available_at,
+			 created_at, started_at, pre_completed_at, finished_at, updated_at)
+		VALUES ('wt_x', 7, 'sidecar_worker', ?, 'failed', 'asset_history|x', '{"a":1}',
+			'resource:k', '{"resource_key":"k"}', 'source_unavailable', 'boom', ?, ?, ?, ?, ?, ?)`,
+		repository.WorkerTaskTypeAssetHistorySync, now-4000, now-4000, now-3000, now-2000, now-1000, now-1000); err != nil {
 		t.Fatal(err)
 	}
-	records := repository.NewPostProcessRecordRepo(db)
-	if err := records.Insert(context.Background(), repository.PostProcessRecord{
+	records := repository.NewWorkerTaskFinalizeRecordRepo(db)
+	if err := records.Insert(context.Background(), repository.WorkerTaskFinalizeRecord{
 		TaskID: "wt_x", TaskType: repository.WorkerTaskTypeAssetHistorySync,
 		AttemptNo: 1, Result: "permanent_error", ErrorCode: "invalid_result_data",
 		DurationMs: 12, CreatedAt: now - 1500,
@@ -156,7 +159,7 @@ func TestAdminWorkerTaskDetailEndpoint(t *testing.T) {
 
 	data := dataOf(t, adminGetJSON(t, client, srv.URL+"/api/v1/admin/worker-tasks/wt_x", http.StatusOK))
 	task := data["task"].(map[string]any)
-	if task["payload_json"] != `{"a":1}` || task["result_data"] != `{"resource_key":"k"}` {
+	if task["payload_json"] != `{"a":1}` || task["result_key"] != `resource:k` {
 		t.Fatalf("task raw fields=%v", task)
 	}
 	timeline := data["timeline"].([]any)
@@ -167,7 +170,7 @@ func TestAdminWorkerTaskDetailEndpoint(t *testing.T) {
 	if last["phase"] != "finished" || last["status"] != "failed" {
 		t.Fatalf("finished node=%v", last)
 	}
-	recs := data["post_process_records"].([]any)
+	recs := data["finalize_records"].([]any)
 	if len(recs) != 1 {
 		t.Fatalf("records=%v", recs)
 	}
@@ -179,47 +182,11 @@ func TestAdminWorkerTaskDetailEndpoint(t *testing.T) {
 	}
 }
 
-func TestAdminJobsEndpoint(t *testing.T) {
+func TestAdminWorkerTaskFinalizeRecordsEndpoint(t *testing.T) {
 	srv, db, client := testRouterWithDB(t)
-	plan := createTestPlan(t, db)
-	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO jobs (id, plan_id, type, status, input_hash, progress_current, progress_total,
-			phase, cancel_requested, retry_count, created_at, started_at)
-		VALUES ('job_1', ?, 'simulation', 'running', '', 42, 100, 'mc_paths', 0, 0, ?, ?)`,
-		plan.ID, now, now); err != nil {
-		t.Fatal(err)
-	}
-
-	data := dataOf(t, adminGetJSON(t, client, srv.URL+"/api/v1/admin/jobs", http.StatusOK))
-	items := data["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("items=%v", items)
-	}
-	job := items[0].(map[string]any)
-	if job["plan_name"] != plan.Name || job["phase"] != "mc_paths" {
-		t.Fatalf("job=%v", job)
-	}
-	if job["progress_current"].(float64) != 42 {
-		t.Fatalf("progress=%v", job["progress_current"])
-	}
-
-	body := adminGetJSON(t, client, srv.URL+"/api/v1/admin/jobs?type=bogus", http.StatusBadRequest)
-	if body["code"] != "invalid_request" {
-		t.Fatalf("invalid type code=%v", body["code"])
-	}
-	// active pseudo status accepted.
-	data = dataOf(t, adminGetJSON(t, client, srv.URL+"/api/v1/admin/jobs?status=active", http.StatusOK))
-	if data["total"].(float64) != 1 {
-		t.Fatalf("active jobs=%v", data["total"])
-	}
-}
-
-func TestAdminPostProcessRecordsEndpoint(t *testing.T) {
-	srv, db, client := testRouterWithDB(t)
-	records := repository.NewPostProcessRecordRepo(db)
+	records := repository.NewWorkerTaskFinalizeRecordRepo(db)
 	for i, result := range []string{"success", "retryable_error", "permanent_error"} {
-		if err := records.Insert(context.Background(), repository.PostProcessRecord{
+		if err := records.Insert(context.Background(), repository.WorkerTaskFinalizeRecord{
 			TaskID: fmt.Sprintf("wt_%d", i), TaskType: repository.WorkerTaskTypeFXRateSync,
 			Result: result, CreatedAt: int64(100 + i),
 		}); err != nil {
@@ -227,24 +194,24 @@ func TestAdminPostProcessRecordsEndpoint(t *testing.T) {
 		}
 	}
 
-	data := dataOf(t, adminGetJSON(t, client, srv.URL+"/api/v1/admin/post-process-records", http.StatusOK))
+	data := dataOf(t, adminGetJSON(t, client, srv.URL+"/api/v1/admin/finalize-records", http.StatusOK))
 	if data["total"].(float64) != 3 {
 		t.Fatalf("total=%v", data["total"])
 	}
 	data = dataOf(t, adminGetJSON(t, client,
-		srv.URL+"/api/v1/admin/post-process-records?result=retryable_error", http.StatusOK))
+		srv.URL+"/api/v1/admin/finalize-records?result=retryable_error", http.StatusOK))
 	if data["total"].(float64) != 1 {
 		t.Fatalf("filtered total=%v", data["total"])
 	}
 	body := adminGetJSON(t, client,
-		srv.URL+"/api/v1/admin/post-process-records?result=bogus", http.StatusBadRequest)
+		srv.URL+"/api/v1/admin/finalize-records?result=bogus", http.StatusBadRequest)
 	if body["code"] != "invalid_request" {
 		t.Fatalf("invalid result code=%v", body["code"])
 	}
 
 	// Empty result pages keep the items array shape (never null).
 	data = dataOf(t, adminGetJSON(t, client,
-		srv.URL+"/api/v1/admin/post-process-records?task_id=missing", http.StatusOK))
+		srv.URL+"/api/v1/admin/finalize-records?task_id=missing", http.StatusOK))
 	if items, ok := data["items"].([]any); !ok || len(items) != 0 {
 		t.Fatalf("empty items=%v (%T), want []", data["items"], data["items"])
 	}

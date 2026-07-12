@@ -11,7 +11,7 @@ import { Alert } from "@/components/ui/Alert";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageSkeleton } from "@/components/ui/Skeleton";
-import { useJobStatus } from "@/hooks/useJobStatus";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 import { getDashboard } from "@/lib/api/dashboard";
 import { formatMoney, formatMoneyScaled, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
@@ -36,7 +36,9 @@ function ChartCardHeader({
         {title}
         <MetricHelp termKey={termKey} />
       </h2>
-      <p className="mt-1 h-5 truncate text-xs leading-5 text-ink-muted">{description}</p>
+      <p className="mt-1 h-5 truncate text-xs leading-5 text-ink-muted">
+        {description}
+      </p>
     </div>
   );
 }
@@ -44,13 +46,13 @@ function ChartCardHeader({
 export default function OverviewPage() {
   const planId = useParams().id as string;
   const searchParams = useSearchParams();
-  const pendingJobId = searchParams.get("job_id");
+  const pendingTaskId = searchParams.get("task_id");
   const simulationStartFailed = searchParams.get("simulation_error") === "1";
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["dashboard", planId],
     queryFn: () => getDashboard(planId),
   });
-  const pendingJob = useJobStatus(pendingJobId);
+  const pendingTask = useTaskStatus(pendingTaskId);
 
   if (isLoading && !data) {
     return <PageSkeleton label="加载组合总览…" />;
@@ -68,7 +70,9 @@ export default function OverviewPage() {
   if (!data) return null;
 
   const enabledHoldings = data.allocation_bars.length > 0;
-  const failedChecks = data.weight_checks.checks.filter((check) => !check.passed);
+  const failedChecks = data.weight_checks.checks.filter(
+    (check) => !check.passed,
+  );
   const simulationSettingsHref = `/plans/${planId}/settings?section=simulation`;
   const activeExecution = data.active_rebalance_execution;
   const rebalanceHref = activeExecution
@@ -77,10 +81,13 @@ export default function OverviewPage() {
 
   // Explicit job-status branches: pending/running → info, failed → warning,
   // succeeded → success, canceled → silent.
-  const jobStatus = pendingJobId ? pendingJob.job?.status ?? "pending" : null;
-  const simulationRunning = jobStatus === "pending" || jobStatus === "running";
-  const simulationSucceeded = jobStatus === "succeeded";
-  const simulationFailed = jobStatus === "failed";
+  const taskStatus = pendingTaskId
+    ? (pendingTask.task?.status ?? "pending")
+    : null;
+  const simulationRunning =
+    taskStatus === "pending" || taskStatus === "running";
+  const simulationSucceeded = taskStatus === "complete";
+  const simulationFailed = taskStatus === "failed";
 
   // Fold same-screen notices to a single highest-priority banner:
   // blocking error > warning > in-progress > success.
@@ -101,7 +108,10 @@ export default function OverviewPage() {
     topBanner = (
       <Alert variant="warning">
         计划已创建，但 FIRE 模拟未能启动。
-        <Link href={simulationSettingsHref} className="ml-2 font-medium underline underline-offset-2">
+        <Link
+          href={simulationSettingsHref}
+          className="ml-2 font-medium underline underline-offset-2"
+        >
           前往计划设置重新运行
         </Link>
       </Alert>
@@ -109,8 +119,11 @@ export default function OverviewPage() {
   } else if (simulationFailed) {
     topBanner = (
       <Alert variant="warning">
-        FIRE 模拟运行失败{pendingJob.error ? `：${pendingJob.error}` : "。"}
-        <Link href={simulationSettingsHref} className="ml-2 font-medium underline underline-offset-2">
+        FIRE 模拟运行失败{pendingTask.error ? `：${pendingTask.error}` : "。"}
+        <Link
+          href={simulationSettingsHref}
+          className="ml-2 font-medium underline underline-offset-2"
+        >
           前往计划设置重试
         </Link>
       </Alert>
@@ -118,8 +131,11 @@ export default function OverviewPage() {
   } else if (simulationRunning) {
     topBanner = (
       <Alert variant="info">
-        FIRE 模拟正在后台运行：{Math.round(pendingJob.progress * 100)}%。
-        <Link href={simulationSettingsHref} className="ml-2 font-medium underline underline-offset-2">
+        FIRE 模拟正在后台运行：{Math.round(pendingTask.progress * 100)}%。
+        <Link
+          href={simulationSettingsHref}
+          className="ml-2 font-medium underline underline-offset-2"
+        >
           前往计划设置查看
         </Link>
       </Alert>
@@ -128,7 +144,10 @@ export default function OverviewPage() {
     topBanner = (
       <Alert variant="success">
         FIRE 模拟已完成。
-        <Link href={simulationSettingsHref} className="ml-2 font-medium underline underline-offset-2">
+        <Link
+          href={simulationSettingsHref}
+          className="ml-2 font-medium underline underline-offset-2"
+        >
           在计划设置中查看结果
         </Link>
       </Alert>
@@ -147,7 +166,10 @@ export default function OverviewPage() {
               <MetricHelp termKey="configured_total_assets" />
             </dt>
             <dd className="mt-1 text-lg font-semibold text-ink">
-              {formatMoneyScaled(data.parameters.total_assets_minor, data.plan.base_currency)}
+              {formatMoneyScaled(
+                data.parameters.total_assets_minor,
+                data.plan.base_currency,
+              )}
             </dd>
           </div>
           <div>
@@ -156,7 +178,10 @@ export default function OverviewPage() {
               <MetricHelp termKey="invested_minor" />
             </dt>
             <dd className="mt-1 text-lg font-semibold text-ink">
-              {formatMoneyScaled(data.invested_minor ?? 0, data.plan.base_currency)}
+              {formatMoneyScaled(
+                data.invested_minor ?? 0,
+                data.plan.base_currency,
+              )}
             </dd>
           </div>
           <div>
@@ -251,7 +276,9 @@ export default function OverviewPage() {
                   >
                     <span className="text-ink">
                       {deviation.instrument_name}{" "}
-                      <span className="text-ink-muted">({deviation.instrument_code})</span>
+                      <span className="text-ink-muted">
+                        ({deviation.instrument_code})
+                      </span>
                     </span>
                     <Link
                       href={rebalanceHref}
@@ -265,18 +292,25 @@ export default function OverviewPage() {
                             : "text-danger"
                         }
                       >
-                        {deviation.deviation_amount_minor >= 0 ? "还差 " : "超出 "}
-                        {formatMoney(Math.abs(deviation.deviation_amount_minor))}
+                        {deviation.deviation_amount_minor >= 0
+                          ? "还差 "
+                          : "超出 "}
+                        {formatMoney(
+                          Math.abs(deviation.deviation_amount_minor),
+                        )}
                       </strong>
                       <span className="ml-2 text-xs text-ink-muted">
-                        偏离 {formatPercent(Math.abs(deviation.deviation_weight))}
+                        偏离{" "}
+                        {formatPercent(Math.abs(deviation.deviation_weight))}
                       </span>
                     </Link>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="mt-3 text-sm text-ink-muted">当前持仓与目标配置一致。</p>
+              <p className="mt-3 text-sm text-ink-muted">
+                当前持仓与目标配置一致。
+              </p>
             )}
           </section>
         </>

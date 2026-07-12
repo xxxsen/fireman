@@ -235,7 +235,8 @@ func profileRef(id string, version int) string {
 // geometric conversion to a CNY-nominal after-fee return. Any change to the inputs
 // changes the artifact hash and must publish a NEW system profile identity.
 var SystemProfileSourceNote = "Internal policy prior v4 (evidence_kind=internal_policy; sha256:" +
-	CMAEvidenceContentHash[:12] + "; artifact=" + CMAEvidenceVersion + "). Values are FIRE planning policy assumptions, not directly published CNY " +
+	CMAEvidenceContentHash[:12] + "; artifact=" + CMAEvidenceVersion +
+	"). Values are FIRE planning policy assumptions, not directly published CNY " +
 	"product-return forecasts. Research Affiliates and BIS are methodology/background references. Fund NAV and " +
 	"profile returns are treated as already containing ongoing management/custody expenses; no expense ratio is " +
 	"deducted again. CNY-valued foreign funds contain FX risk in NAV; native-currency assets use a separate FX factor."

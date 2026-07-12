@@ -1,4 +1,4 @@
-"""Market data worker: claims worker_tasks from the main SQLite DB, executes
+"""Market data worker: claims tasks through the Go API, executes
 remote fetches, uploads results to the Go backend via the internal resource
 upload API, and drives the task state machine (running -> pre_complete ->
 complete/failed).

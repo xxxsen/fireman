@@ -324,7 +324,7 @@ export function BacktestPanel({
               {latest.window_start} ~ {latest.window_end}
             </Link>
             {runStatusBadge(latest.status)}
-            {latest.status === "succeeded" && latest.summary && (
+            {latest.status === "complete" && latest.summary && (
               <span className="text-xs text-ink-muted">
                 CAGR {formatPercent(latest.summary.cagr)} · 回撤{" "}
                 {formatPercent(latest.summary.max_drawdown)} · 波动{" "}
@@ -371,7 +371,7 @@ function LatestOptimizationEntry({
           {optimization.window_start} ~ {optimization.window_end}
         </Link>
         {runStatusBadge(optimization.status)}
-        {optimization.status === "succeeded" && (
+        {optimization.status === "complete" && (
           <span className="text-xs text-ink-muted">
             候选 {optimization.candidate_count} · 已评估{" "}
             {optimization.evaluated_count}

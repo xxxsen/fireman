@@ -3,7 +3,7 @@
 Each task carries a sync_key identifying one directory sync unit (Go owns
 the unit registry and task splitting). Every instrument_type in the payload
 is a required category: any category failing upstream fails the whole task
-(no partial success, matching Go's post-process contract). Listings are
+(no partial success, matching Go's finalization contract). Listings are
 cached in memory for a short TTL so repeated syncs do not hammer the
 full-list endpoints; force=true bypasses the cache.
 """

@@ -109,7 +109,7 @@ export default function ResearchRunDetailPage() {
     queryFn: () => getRun(runId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "queued" || status === "running" ? 2000 : false;
+      return status === "pending" || status === "running" ? 2000 : false;
     },
   });
 
@@ -119,7 +119,7 @@ export default function ResearchRunDetailPage() {
   });
 
   const run = runQuery.data;
-  const succeeded = run?.status === "succeeded";
+  const succeeded = run?.status === "complete";
 
   const pointsQuery = useQuery({
     queryKey: ["research", "run-points", runId, "weights"],
@@ -242,7 +242,7 @@ export default function ResearchRunDetailPage() {
           run.rebalance_policy
         } · ${run.base_currency} · ${formatDateTimeFromMs(run.created_at)}`}
         secondaryActions={
-          run.status === "succeeded" ? (
+          run.status === "complete" ? (
             <>
               <Button variant="secondary" onClick={() => setCompareOpen(true)} data-testid="compare-run">
                 与其他 run 对比
@@ -275,16 +275,16 @@ export default function ResearchRunDetailPage() {
         }
       />
 
-      {(run.status === "queued" || run.status === "running") && (
+      {(run.status === "pending" || run.status === "running") && (
         <div className="rounded-lg border border-info/25 bg-info/5 px-4 py-6 text-center" role="status">
           <LoadingState
             label={
-              run.job?.phase === "retrying"
-                ? `执行进程中断，正在自动重试（${run.job.retry_count ?? 0}/1）…`
-                : run.job?.phase
-                ? `${(run.job.retry_count ?? 0) > 0 ? `中断后自动重试（${run.job.retry_count}/1），` : ""}回测计算中（${run.job.phase}${
-                    run.job.progress_total > 0
-                      ? ` ${run.job.progress_current}/${run.job.progress_total}`
+              run.task?.phase === "retrying"
+                ? `执行进程中断，正在自动重试（${run.task.attempt_count ?? 0}/1）…`
+                : run.task?.phase
+                ? `${(run.task.attempt_count ?? 0) > 0 ? `中断后自动重试（${run.task.attempt_count}/1），` : ""}回测计算中（${run.task.phase}${
+                    run.task.progress_total > 0
+                      ? ` ${run.task.progress_current}/${run.task.progress_total}`
                       : ""
                   }）…`
                 : "回测排队/计算中，页面将自动刷新…"
@@ -298,11 +298,11 @@ export default function ResearchRunDetailPage() {
         <ErrorState
           title="回测失败"
           message={
-            run.job?.error_code === "worker_interrupted"
+            run.task?.error_code === "worker_interrupted"
               ? "执行进程中断，自动重试仍未完成。请重新发起回测。"
-              : run.job?.error_message || "回测计算失败。"
+              : run.task?.error_message || "回测计算失败。"
           }
-          technicalDetail={run.job?.error_code}
+          technicalDetail={run.task?.error_code}
           backHref={`/research/collections/${collectionId}`}
           backLabel="返回集合"
         />

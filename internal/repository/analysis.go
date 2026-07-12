@@ -15,7 +15,7 @@ const (
 
 // AnalysisResult stores stress/sensitivity job output.
 type AnalysisResult struct {
-	JobID           string `json:"job_id"`
+	TaskID          string `json:"task_id"`
 	PlanID          string `json:"plan_id"`
 	Type            string `json:"type"`
 	InputHash       string `json:"input_hash"`
@@ -40,30 +40,34 @@ func (r *AnalysisRepo) CreatePending(ctx context.Context, tx *sql.Tx, rec Analys
 		rec.CreatedAt = now
 	}
 	_, err := exec.ExecContext(ctx, `
-		INSERT INTO analysis_results (job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at)
+		INSERT INTO analysis_results (task_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at)
 		VALUES (?,?,?,?,?,?,?)`,
-		rec.JobID, rec.PlanID, rec.Type, rec.InputHash, rec.SimulationRunID, rec.ResultJSON, rec.CreatedAt)
+		rec.TaskID, rec.PlanID, rec.Type, rec.InputHash, rec.SimulationRunID, rec.ResultJSON, rec.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert analysis result: %w", err)
 	}
 	return nil
 }
 
-func (r *AnalysisRepo) Complete(ctx context.Context, jobID, resultJSON string) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE analysis_results SET result_json=? WHERE job_id=?`, resultJSON, jobID)
+func (r *AnalysisRepo) Complete(ctx context.Context, taskID, resultJSON string) error {
+	return r.CompleteTx(ctx, nil, taskID, resultJSON)
+}
+
+func (r *AnalysisRepo) CompleteTx(ctx context.Context, tx *sql.Tx, taskID, resultJSON string) error {
+	_, err := r.exec(tx).ExecContext(ctx, `
+		UPDATE analysis_results SET result_json=? WHERE task_id=?`, resultJSON, taskID)
 	if err != nil {
 		return fmt.Errorf("complete analysis result: %w", err)
 	}
 	return nil
 }
 
-func (r *AnalysisRepo) GetByJobID(ctx context.Context, jobID string) (AnalysisResult, error) {
+func (r *AnalysisRepo) GetByTaskID(ctx context.Context, taskID string) (AnalysisResult, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
-		FROM analysis_results WHERE job_id=?`, jobID)
+		SELECT task_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
+		FROM analysis_results WHERE task_id=?`, taskID)
 	var rec AnalysisResult
-	err := row.Scan(&rec.JobID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.SimulationRunID,
+	err := row.Scan(&rec.TaskID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.SimulationRunID,
 		&rec.ResultJSON, &rec.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AnalysisResult{}, ErrAnalysisNotFound
@@ -83,7 +87,7 @@ func (r *AnalysisRepo) ListByPlan(
 		limit = 20
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
+		SELECT task_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
 		FROM analysis_results WHERE plan_id=? AND type=? ORDER BY created_at DESC LIMIT ?`,
 		planID, typ, limit)
 	if err != nil {
@@ -102,7 +106,7 @@ func (r *AnalysisRepo) ListBySimulationRun(
 		limit = 20
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT job_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
+		SELECT task_id, plan_id, type, input_hash, simulation_run_id, result_json, created_at
 		FROM analysis_results WHERE simulation_run_id=? AND type=? ORDER BY created_at DESC LIMIT ?`,
 		runID, typ, limit)
 	if err != nil {
@@ -111,14 +115,14 @@ func (r *AnalysisRepo) ListBySimulationRun(
 	return scanAnalysisRows(rows)
 }
 
-// JobIDsBySimulationRunAndType returns job ids of existing analysis results of a
-// type bound to one run, used to cancel superseded jobs before deleting records.
-func (r *AnalysisRepo) JobIDsBySimulationRunAndType(
+// TaskIDsBySimulationRunAndType returns task ids of existing analysis results of
+// a type bound to one run, used to cancel superseded tasks before deleting records.
+func (r *AnalysisRepo) TaskIDsBySimulationRunAndType(
 	ctx context.Context, tx *sql.Tx, runID, typ string,
 ) ([]string, error) {
 	exec := r.execQuery(tx)
 	rows, err := exec.QueryContext(ctx,
-		`SELECT job_id FROM analysis_results WHERE simulation_run_id=? AND type=?`, runID, typ)
+		`SELECT task_id FROM analysis_results WHERE simulation_run_id=? AND type=?`, runID, typ)
 	if err != nil {
 		return nil, fmt.Errorf("query analysis job ids: %w", err)
 	}
@@ -177,7 +181,7 @@ func scanAnalysisRows(rows *sql.Rows) ([]AnalysisResult, error) {
 	for rows.Next() {
 		var rec AnalysisResult
 		if err := rows.Scan(
-			&rec.JobID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.SimulationRunID,
+			&rec.TaskID, &rec.PlanID, &rec.Type, &rec.InputHash, &rec.SimulationRunID,
 			&rec.ResultJSON, &rec.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan analysis result row: %w", err)

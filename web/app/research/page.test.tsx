@@ -62,7 +62,7 @@ function run(overrides: Partial<ResearchRunView> = {}): ResearchRunView {
   return {
     id: "rbr_1",
     collection_id: "rc_1",
-    job_id: "job_1",
+    task_id: "job_1",
     input_hash: "h",
     source_hash: "s",
     engine_version: "research_backtest_v1",
@@ -70,7 +70,7 @@ function run(overrides: Partial<ResearchRunView> = {}): ResearchRunView {
     rebalance_policy: "monthly",
     window_start: "2020-01-01",
     window_end: "2026-06-30",
-    status: "succeeded",
+    status: "complete",
     created_at: 1750000000000,
     ...overrides,
   };

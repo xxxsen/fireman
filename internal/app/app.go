@@ -14,25 +14,33 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fireman/fireman/internal/api"
+	"github.com/fireman/fireman/internal/bootstrap"
 	"github.com/fireman/fireman/internal/config"
 	fdb "github.com/fireman/fireman/internal/db"
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/resourcedb"
 	"github.com/fireman/fireman/internal/service"
+	taskcore "github.com/fireman/fireman/internal/task"
+	workerpkg "github.com/fireman/fireman/internal/worker"
 	"github.com/fireman/fireman/migrations"
+	"github.com/google/uuid"
 )
 
 // resourceCleanupInterval controls how often expired rows are purged from
 // resource_db.
 const resourceCleanupInterval = time.Hour
 
+var errAutoUpdateScanIdempotencyConflict = errors.New("auto-update scan idempotency conflict")
+
 // Run boots the backend and blocks until the process receives SIGINT/SIGTERM
 // or the HTTP server fails. It is the single entry point used by main.
+//
+//nolint:funlen // Startup wiring remains contiguous so ownership and shutdown order are auditable.
 func Run(ctx context.Context, cfg config.Config) error {
 	logger := buildLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
@@ -51,6 +59,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err := fdb.Migrate(ctx, pool, cfg.DBPath, logger); err != nil {
 		closePoolAfterStartupFailure(pool, logger, "migrate")
 		return fmt.Errorf("migrate: %w", err)
+	}
+	if err := bootstrap.EnsureBuiltinData(ctx, pool); err != nil {
+		closePoolAfterStartupFailure(pool, logger, "bootstrap builtin data")
+		return fmt.Errorf("bootstrap builtin data: %w", err)
 	}
 
 	if err := ensureDataDir(cfg.ResourceDBPath); err != nil {
@@ -72,17 +84,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 	maintenance := &service.MaintenanceGate{}
 	services := api.NewServices(pool, cfg.DBPath, maintenance, resources, loc)
 	services.Research.SetOptimizationConcurrency(cfg.ResearchOptimizationConcurrency)
-	jobRepo := repository.NewJobRepo(pool)
-	simRepo := repository.NewSimulationRepo(pool)
-	runner := jobs.NewSimulationRunner(pool, simRepo)
-	analysisRunner := jobs.NewAnalysisRunner(repository.NewAnalysisRepo(pool))
-	worker := jobs.NewWorker(
-		pool, jobRepo, simRepo, runner, analysisRunner, services.Research,
-		services.EventHub, logger, maintenance.Active,
+	taskRepo := repository.NewWorkerTaskRepo(pool)
+	processors := workerpkg.NewProcessorSet(
+		pool, services.TaskCoordinator, services.Research, services.AutoUpdates, resources,
 	)
+	supervisor := workerpkg.NewSupervisor(
+		services.TaskCoordinator, processors, logger, maintenance.Active,
+	)
+	finalizer := newTaskFinalizer(pool, resources, services.TaskCoordinator)
+	taskMaintenance := workerpkg.NewMaintenance(services.TaskCoordinator, finalizer, logger)
 	autoScheduler := service.NewAutoUpdateScheduler(
 		services.AutoUpdates, cfg.AutoUpdateScanIntervalMinutes,
 	)
+	autoScheduler.SetTaskEnqueuer(func(ctx context.Context, slot int64) error {
+		return enqueueAutoUpdateScanTask(ctx, pool, taskRepo, services.TaskCoordinator, slot)
+	})
 	autoScheduler.Start(ctx)
 
 	resourcedb.StartCleanup(ctx, resources, resourceCleanupInterval, logger.Warn)
@@ -90,7 +106,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() {
-		worker.Start(workerCtx, cfg.WorkerConcurrency)
+		var group sync.WaitGroup
+		group.Add(2)
+		go func() { defer group.Done(); supervisor.Start(workerCtx, cfg.WorkerConcurrency) }()
+		go func() { defer group.Done(); taskMaintenance.Run(workerCtx) }()
+		group.Wait()
 		close(workerDone)
 	}()
 
@@ -99,7 +119,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	})
 
 	internalRouter := api.NewInternalRouter(ctx, api.InternalDeps{
-		Logger: logger, PostProcess: newPostProcessService(pool, resources), Resources: resources,
+		Logger: logger, Coordinator: services.TaskCoordinator, Resources: resources,
 	})
 
 	server := &http.Server{
@@ -122,18 +142,54 @@ func closePoolAfterStartupFailure(pool *sql.DB, logger *slog.Logger, phase strin
 	}
 }
 
-func newPostProcessService(pool *sql.DB, resources *resourcedb.DB) *service.PostProcessService {
-	svc := service.NewPostProcessService(
+func newTaskFinalizer(
+	pool *sql.DB, resources *resourcedb.DB, coordinator *taskcore.Coordinator,
+) *service.TaskFinalizer {
+	svc := service.NewTaskFinalizer(
 		pool,
 		repository.NewWorkerTaskRepo(pool),
 		repository.NewMarketAssetRepo(pool),
 		repository.NewInstrumentRepo(pool),
 		repository.NewMarketDataRepo(pool),
 		resources,
-		repository.NewPostProcessRecordRepo(pool),
+		repository.NewWorkerTaskFinalizeRecordRepo(pool),
 	)
 	svc.SetAutoUpdateRepo(repository.NewMarketDataAutoUpdateRepo(pool))
+	svc.SetCoordinator(coordinator)
 	return svc
+}
+
+//nolint:wrapcheck // Repository and coordinator errors retain identity for startup diagnostics.
+func enqueueAutoUpdateScanTask(
+	ctx context.Context, pool *sql.DB, repo *repository.WorkerTaskRepo,
+	coordinator *taskcore.Coordinator, slot int64,
+) error {
+	idempotencyKey := fmt.Sprintf("%d", slot)
+	dedupe := fmt.Sprintf("auto_update_scan|slot:%d", slot)
+	if _, storedHash, err := repo.FindIdempotency(ctx, "system", "auto_update",
+		repository.WorkerTaskTypeAutoUpdateScan, idempotencyKey); err == nil {
+		if storedHash != dedupe {
+			return fmt.Errorf("%w for slot %d", errAutoUpdateScanIdempotencyConflict, slot)
+		}
+		return nil
+	} else if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return err
+	}
+	return fdb.WithTx(ctx, pool, func(tx *sql.Tx) error {
+		task := &repository.WorkerTask{
+			ID: "task_" + uuid.NewString(), WorkerType: repository.WorkerTypeGo,
+			Type:   repository.WorkerTaskTypeAutoUpdateScan,
+			Status: repository.WorkerTaskStatusPending, Priority: 50,
+			ScopeType: "system", ScopeID: "auto_update_scan", DedupeKey: dedupe,
+			InputHash: dedupe, PayloadJSON: fmt.Sprintf(`{"slot_timestamp":%d}`, slot),
+			ProgressTotal: 1,
+		}
+		if err := coordinator.CreateTx(ctx, tx, task); err != nil {
+			return err
+		}
+		return repo.SaveIdempotency(ctx, tx, "system", "auto_update",
+			repository.WorkerTaskTypeAutoUpdateScan, idempotencyKey, task.ID, dedupe)
+	})
 }
 
 func runServer(

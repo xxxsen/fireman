@@ -313,7 +313,7 @@ export default function NewPlanWizardPage() {
     onSuccess: ({ plan, sim, simulationFailed }) => {
       setError(null);
       const suffix = sim
-        ? `?job_id=${encodeURIComponent(sim.job_id)}`
+        ? `?task_id=${encodeURIComponent(sim.task_id)}`
         : simulationFailed
           ? "?simulation_error=1"
           : "";

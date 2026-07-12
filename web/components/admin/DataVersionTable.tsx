@@ -5,7 +5,12 @@ import type { AdminDataVersion } from "@/lib/api/admin";
 import { formatRelativeTime, middleTruncate } from "@/lib/admin-format";
 import { formatDateTimeFromMs } from "@/lib/format";
 
-export const DATA_VERSION_TABLE_HEADERS = ["版本键", "version_no", "来源任务", "更新时间"];
+export const DATA_VERSION_TABLE_HEADERS = [
+  "版本键",
+  "version_no",
+  "来源任务",
+  "更新时间",
+];
 
 /**
  * Body rows of the market_data_versions listing. The source task links back
@@ -21,11 +26,16 @@ export function DataVersionTableRows({ items }: { items: AdminDataVersion[] }) {
           className="border-b border-line/60 last:border-b-0"
         >
           <td className="max-w-80 px-3 py-2">
-            <span className="block truncate font-mono text-xs text-ink" title={v.version_key}>
+            <span
+              className="block truncate font-mono text-xs text-ink"
+              title={v.version_key}
+            >
               {v.version_key}
             </span>
           </td>
-          <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink">{v.version_no}</td>
+          <td className="whitespace-nowrap px-3 py-2 tabular-nums text-ink">
+            {v.version_no}
+          </td>
           <td className="max-w-60 px-3 py-2">
             {v.task_id ? (
               <Link

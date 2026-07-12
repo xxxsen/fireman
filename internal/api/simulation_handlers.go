@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/service"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 func (s Services) registerSimulationRoutes(rg *gin.RouterGroup) {
@@ -70,10 +70,24 @@ func (s Services) syncHoldingSimulationSnapshot(c *gin.Context) {
 	OK(c, out)
 }
 
-func (s Services) registerJobRoutes(rg *gin.RouterGroup) {
-	rg.GET("/jobs/:job_id", s.getJob)
-	rg.POST("/jobs/:job_id/cancel", s.cancelJob)
-	rg.GET("/jobs/:job_id/events", s.jobEvents)
+func (s Services) registerTaskRoutes(rg *gin.RouterGroup) {
+	rg.GET("/tasks", s.listTasks)
+	rg.GET("/tasks/:task_id", s.getTask)
+	rg.POST("/tasks/:task_id/cancel", s.cancelTask)
+	rg.GET("/tasks/:task_id/events", s.taskEvents)
+}
+
+func (s Services) listTasks(c *gin.Context) {
+	items, total, err := s.Tasks.List(c.Request.Context(), service.TaskListParams{
+		WorkerType: c.Query("worker_type"), Type: c.Query("type"), Status: c.Query("status"),
+		ScopeType: c.Query("scope_type"), ScopeID: c.Query("scope_id"), Query: c.Query("q"),
+		Limit: atoiDefault(c.Query("limit"), 20), Offset: atoiDefault(c.Query("offset"), 0),
+	})
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{"items": items, "total": total})
 }
 
 func (s Services) createSimulation(c *gin.Context) {
@@ -128,7 +142,8 @@ func (s Services) setReturnOverride(c *gin.Context) {
 		return
 	}
 	out, err := s.Simulations.SetReturnOverride(
-		c.Request.Context(), c.Param("plan_id"), c.Param("asset_key"), req)
+		c.Request.Context(), c.Param("plan_id"), c.Param("asset_key"), req,
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -138,7 +153,8 @@ func (s Services) setReturnOverride(c *gin.Context) {
 
 func (s Services) deleteReturnOverride(c *gin.Context) {
 	err := s.Simulations.DeleteReturnOverride(
-		c.Request.Context(), c.Param("plan_id"), c.Param("asset_key"))
+		c.Request.Context(), c.Param("plan_id"), c.Param("asset_key"),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -178,8 +194,8 @@ func (s Services) getSimulationPath(c *gin.Context) {
 	OK(c, out)
 }
 
-func (s Services) getJob(c *gin.Context) {
-	out, err := s.Jobs.Get(c.Request.Context(), c.Param("job_id"))
+func (s Services) getTask(c *gin.Context) {
+	out, err := s.Tasks.Get(c.Request.Context(), c.Param("task_id"))
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -187,8 +203,8 @@ func (s Services) getJob(c *gin.Context) {
 	OK(c, out)
 }
 
-func (s Services) cancelJob(c *gin.Context) {
-	out, err := s.Jobs.Cancel(c.Request.Context(), c.Param("job_id"))
+func (s Services) cancelTask(c *gin.Context) {
+	out, err := s.Tasks.Cancel(c.Request.Context(), c.Param("task_id"))
 	if err != nil {
 		FailErr(c, err)
 		return
@@ -196,13 +212,13 @@ func (s Services) cancelJob(c *gin.Context) {
 	OK(c, out)
 }
 
-func (s Services) jobEvents(c *gin.Context) {
-	jobID := c.Param("job_id")
-	if _, err := s.Jobs.Get(c.Request.Context(), jobID); err != nil {
+func (s Services) taskEvents(c *gin.Context) {
+	taskID := c.Param("task_id")
+	if _, err := s.Tasks.Get(c.Request.Context(), taskID); err != nil {
 		FailErr(c, err)
 		return
 	}
-	ch, unsub := s.Jobs.EventsHub().Subscribe(jobID)
+	ch, unsub := s.Tasks.EventsHub().Subscribe(taskID)
 	defer unsub()
 
 	c.Header("Content-Type", "text/event-stream")
@@ -225,7 +241,7 @@ func (s Services) jobEvents(c *gin.Context) {
 			if !open {
 				return
 			}
-			frame, err := jobs.FormatSSE(ev)
+			frame, err := taskcore.FormatSSE(ev)
 			if err != nil {
 				return
 			}
@@ -233,7 +249,7 @@ func (s Services) jobEvents(c *gin.Context) {
 				return
 			}
 			flusher.Flush()
-			if ev.Status == "succeeded" || ev.Status == "failed" || ev.Status == "canceled" {
+			if ev.Status == "complete" || ev.Status == "failed" || ev.Status == "canceled" {
 				return
 			}
 		}

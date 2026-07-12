@@ -1,4 +1,7 @@
-import type { AdminTaskHeartbeat, AdminTaskTimelinePhase } from "@/lib/api/admin";
+import type {
+  AdminTaskHeartbeat,
+  AdminTaskTimelinePhase,
+} from "@/lib/api/admin";
 import { formatDateTimeFromMs } from "@/lib/format";
 import { formatDurationMs } from "@/lib/admin-format";
 import { cn } from "@/lib/cn";
@@ -27,7 +30,11 @@ export interface TaskTimelineProps {
  * Vertical execution timeline. Each node shows its absolute time and the
  * interval from the previous node; the backend derives which phases exist.
  */
-export function TaskTimeline({ timeline, heartbeat, running }: TaskTimelineProps) {
+export function TaskTimeline({
+  timeline,
+  heartbeat,
+  running,
+}: TaskTimelineProps) {
   return (
     <ol className="space-y-0" data-testid="task-timeline">
       {timeline.map((node, i) => {
@@ -53,7 +60,12 @@ export function TaskTimeline({ timeline, heartbeat, running }: TaskTimelineProps
               <p className="text-sm text-ink">
                 {PHASE_LABELS[node.phase] ?? node.phase}
                 {node.phase === "finished" && node.status && (
-                  <span className={cn("ml-2 text-xs", failed ? "text-danger" : "text-ink-muted")}>
+                  <span
+                    className={cn(
+                      "ml-2 text-xs",
+                      failed ? "text-danger" : "text-ink-muted",
+                    )}
+                  >
                     {FINISH_STATUS_LABELS[node.status] ?? node.status}
                   </span>
                 )}
@@ -61,7 +73,9 @@ export function TaskTimeline({ timeline, heartbeat, running }: TaskTimelineProps
               <p className="text-xs text-ink-muted">
                 {formatDateTimeFromMs(node.at)}
                 {prev && node.at >= prev.at && (
-                  <span className="ml-2 tabular-nums">+{formatDurationMs(node.at - prev.at)}</span>
+                  <span className="ml-2 tabular-nums">
+                    +{formatDurationMs(node.at - prev.at)}
+                  </span>
                 )}
               </p>
             </div>
@@ -69,7 +83,10 @@ export function TaskTimeline({ timeline, heartbeat, running }: TaskTimelineProps
         );
       })}
       {running && heartbeat && (
-        <li className="relative flex gap-3" data-testid="task-timeline-heartbeat">
+        <li
+          className="relative flex gap-3"
+          data-testid="task-timeline-heartbeat"
+        >
           <span
             aria-hidden="true"
             className={cn(
@@ -78,10 +95,17 @@ export function TaskTimeline({ timeline, heartbeat, running }: TaskTimelineProps
             )}
           />
           <div className="min-w-0">
-            <p className={cn("text-sm", heartbeat.stale ? "text-warning" : "text-ink")}>
+            <p
+              className={cn(
+                "text-sm",
+                heartbeat.stale ? "text-warning" : "text-ink",
+              )}
+            >
               {heartbeat.stale ? "心跳滞留，等待回收" : "心跳正常"}
             </p>
-            <p className="text-xs text-ink-muted">{formatDateTimeFromMs(heartbeat.at)}</p>
+            <p className="text-xs text-ink-muted">
+              {formatDateTimeFromMs(heartbeat.at)}
+            </p>
           </div>
         </li>
       )}

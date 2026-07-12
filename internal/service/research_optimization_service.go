@@ -23,7 +23,7 @@ import (
 
 // research_optimization_service.go implements the service layer for
 // portfolio auto-optimization (td/103): creation, readiness, querying
-// and the job executor entry point.
+// and the task executor entry point.
 
 // --- optimization readiness ---
 
@@ -333,31 +333,31 @@ type ResearchOptimizationCreateResult struct {
 
 // ResearchOptimizationView is the API shape of one optimization run.
 type ResearchOptimizationView struct {
-	ID              string           `json:"id"`
-	CollectionID    string           `json:"collection_id"`
-	JobID           string           `json:"job_id"`
-	Status          string           `json:"status"`
-	Config          json.RawMessage  `json:"config"`
-	CandidateCount  int              `json:"candidate_count"`
-	EvaluatedCount  int              `json:"evaluated_count"`
-	Result          json.RawMessage  `json:"result,omitempty"`
-	ErrorCode       string           `json:"error_code,omitempty"`
-	ErrorMessage    string           `json:"error_message,omitempty"`
-	BaseCurrency    string           `json:"base_currency"`
-	RebalancePolicy string           `json:"rebalance_policy"`
-	WindowStart     string           `json:"window_start"`
-	WindowEnd       string           `json:"window_end"`
-	EngineVersion   string           `json:"engine_version"`
-	CreatedAt       int64            `json:"created_at"`
-	CompletedAt     *int64           `json:"completed_at,omitempty"`
-	Job             *ResearchJobView `json:"job,omitempty"`
+	ID              string            `json:"id"`
+	CollectionID    string            `json:"collection_id"`
+	TaskID          string            `json:"task_id"`
+	Status          string            `json:"status"`
+	Config          json.RawMessage   `json:"config"`
+	CandidateCount  int               `json:"candidate_count"`
+	EvaluatedCount  int               `json:"evaluated_count"`
+	Result          json.RawMessage   `json:"result,omitempty"`
+	ErrorCode       string            `json:"error_code,omitempty"`
+	ErrorMessage    string            `json:"error_message,omitempty"`
+	BaseCurrency    string            `json:"base_currency"`
+	RebalancePolicy string            `json:"rebalance_policy"`
+	WindowStart     string            `json:"window_start"`
+	WindowEnd       string            `json:"window_end"`
+	EngineVersion   string            `json:"engine_version"`
+	CreatedAt       int64             `json:"created_at"`
+	CompletedAt     *int64            `json:"completed_at,omitempty"`
+	Task            *ResearchTaskView `json:"task,omitempty"`
 }
 
 func buildOptimizationView(run repository.ResearchOptimizationRun) ResearchOptimizationView {
 	view := ResearchOptimizationView{
 		ID:              run.ID,
 		CollectionID:    run.CollectionID,
-		JobID:           run.JobID,
+		TaskID:          run.TaskID,
 		Status:          run.Status,
 		CandidateCount:  run.CandidateCount,
 		EvaluatedCount:  run.EvaluatedCount,
@@ -451,19 +451,19 @@ func (s *ResearchService) CreateOptimization(
 
 	now := s.now().UnixMilli()
 	runID := "ror_" + uuid.New().String()
-	jobID := "job_" + uuid.New().String()
+	taskID := "task_" + uuid.New().String()
 	payloadJSON, err := json.Marshal(map[string]string{
 		"optimization_run_id": runID, "collection_id": collectionID,
 	})
 	if err != nil {
-		return zero, fmt.Errorf("marshal job payload: %w", err)
+		return zero, fmt.Errorf("marshal task payload: %w", err)
 	}
 
 	candidateCount := CountCandidates(buildOptimizationAssets(ds), config.WeightStep)
 
 	run := repository.ResearchOptimizationRun{
-		ID: runID, CollectionID: collectionID, JobID: jobID,
-		Status: repository.ResearchRunStatusQueued, InputHash: inputHash,
+		ID: runID, CollectionID: collectionID, TaskID: taskID,
+		Status: repository.WorkerTaskStatusPending, InputHash: inputHash,
 		SourceHash: snapshot.SourceHash, EngineVersion: OptimizationEngineVersion,
 		BaseCurrency: collection.BaseCurrency, RebalancePolicy: collection.RebalancePolicy,
 		WindowStart: stdReadiness.WindowStart, WindowEnd: stdReadiness.WindowEnd,
@@ -537,8 +537,8 @@ func (s *ResearchService) findReusableOptimization(
 		return ResearchOptimizationCreateResult{}, false, wrapRepo("find active optimization", err)
 	}
 	view := buildOptimizationView(run)
-	if job, jobErr := s.jobs.GetByID(ctx, run.JobID); jobErr == nil {
-		applyOptimizationJobState(&view, job)
+	if task, taskErr := s.tasks.GetByID(ctx, run.TaskID); taskErr == nil {
+		applyOptimizationTaskState(&view, task)
 	}
 	return ResearchOptimizationCreateResult{Optimization: view, Reused: true}, true, nil
 }
@@ -549,12 +549,17 @@ func (s *ResearchService) persistQueuedOptimization(
 	inputHash, payloadJSON string,
 	now int64,
 ) error {
-	job := repository.Job{
-		ID: run.JobID, Type: repository.JobTypeResearchOptimization,
-		Status: repository.JobStatusQueued, InputHash: inputHash,
-		PayloadJSON: payloadJSON, CreatedAt: now,
+	task := repository.WorkerTask{
+		ID: run.TaskID, WorkerType: repository.WorkerTypeGo,
+		Type:      repository.WorkerTaskTypeResearchOptimization,
+		Status:    repository.WorkerTaskStatusPending,
+		ScopeType: "research_collection", ScopeID: run.CollectionID,
+		DedupeKey: repository.WorkerTaskTypeResearchOptimization +
+			"|collection:" + run.CollectionID + "|input:" + inputHash,
+		InputHash: inputHash, PayloadJSON: payloadJSON, ProgressTotal: run.CandidateCount,
+		CreatedAt: now,
 	}
-	return s.persistQueuedResearchJob(ctx, job, "create optimization run", func(tx *sql.Tx) error {
+	return s.persistQueuedResearchTask(ctx, task, "create optimization run", func(tx *sql.Tx) error {
 		if err := s.research.CreateOptimizationRunTx(ctx, tx, run); err != nil {
 			return fmt.Errorf("create optimization run: %w", err)
 		}
@@ -646,8 +651,8 @@ func (s *ResearchService) GetOptimization(
 		return ResearchOptimizationView{}, wrapRepo("load optimization run", err)
 	}
 	view := buildOptimizationView(run)
-	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-		applyOptimizationJobState(&view, job)
+	if task, err := s.tasks.GetByID(ctx, run.TaskID); err == nil {
+		applyOptimizationTaskState(&view, task)
 	}
 	return view, nil
 }
@@ -665,27 +670,23 @@ func (s *ResearchService) GetLatestOptimization(
 		return ResearchOptimizationView{}, false, wrapRepo("load latest optimization", err)
 	}
 	view := buildOptimizationView(run)
-	if job, err := s.jobs.GetByID(ctx, run.JobID); err == nil {
-		applyOptimizationJobState(&view, job)
+	if task, err := s.tasks.GetByID(ctx, run.TaskID); err == nil {
+		applyOptimizationTaskState(&view, task)
 	}
 	return view, true, nil
 }
 
-func applyOptimizationJobState(view *ResearchOptimizationView, job repository.Job) {
-	view.Job = buildResearchJobView(job)
-	if view.Status != repository.ResearchRunStatusQueued &&
-		view.Status != repository.ResearchRunStatusRunning {
-		return
+func applyOptimizationTaskState(view *ResearchOptimizationView, task repository.WorkerTask) {
+	view.Task = buildResearchTaskView(task)
+	view.Status = task.Status
+	if task.ErrorCode != "" {
+		view.ErrorCode = task.ErrorCode
 	}
-	view.Status = job.Status
-	if job.ErrorCode != "" {
-		view.ErrorCode = job.ErrorCode
+	if task.ErrorMessage != "" {
+		view.ErrorMessage = task.ErrorMessage
 	}
-	if job.ErrorMessage != "" {
-		view.ErrorMessage = job.ErrorMessage
-	}
-	if job.FinishedAt != nil {
-		view.CompletedAt = job.FinishedAt
+	if task.FinishedAt != nil {
+		view.CompletedAt = task.FinishedAt
 	}
 }
 
@@ -923,19 +924,29 @@ func validateOptimizationResultWeights(
 	return weights, nil
 }
 
-// --- optimization job executor ---
+// --- optimization task executor ---
 
-// ExecuteOptimizationJob is the entry point called by the jobs worker
-// for one research_optimization_backtest job (td/103 §Worker 执行流程).
-func (s *ResearchService) ExecuteOptimizationJob(
+// ExecuteOptimizationTask is the entry point called by the task worker
+// for one research_optimization_backtest task (td/103 §Worker 执行流程).
+func (s *ResearchService) ExecuteOptimizationTask(
 	ctx context.Context,
-	jobID string,
+	taskID string,
 	cancelCheck func() bool,
 	progress func(done, total int, phase string),
 ) error {
-	run, err := s.research.GetOptimizationRunByJobID(ctx, jobID)
+	return s.ExecuteOptimizationTaskOwned(ctx, taskID, cancelCheck, progress, nil)
+}
+
+func (s *ResearchService) ExecuteOptimizationTaskOwned(
+	ctx context.Context,
+	taskID string,
+	cancelCheck func() bool,
+	progress func(done, total int, phase string),
+	complete func(*sql.Tx) error,
+) error {
+	run, err := s.research.GetOptimizationRunByTaskID(ctx, taskID)
 	if err != nil {
-		return fmt.Errorf("load optimization run for job %s: %w", jobID, err)
+		return fmt.Errorf("load optimization run for task %s: %w", taskID, err)
 	}
 	if run.Status == repository.ResearchRunStatusSucceeded {
 		return nil
@@ -966,8 +977,16 @@ func (s *ResearchService) ExecuteOptimizationJob(
 	}
 
 	completedAt := s.now().UnixMilli()
-	if err := s.research.CompleteOptimizationRun(ctx, run.ID,
-		string(resultJSON), optResult.EvaluatedCount, completedAt); err != nil {
+	if err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if err := s.research.CompleteOptimizationRunTx(ctx, tx, run.ID,
+			string(resultJSON), optResult.EvaluatedCount, completedAt); err != nil {
+			return fmt.Errorf("persist optimization result: %w", err)
+		}
+		if complete != nil {
+			return complete(tx)
+		}
+		return nil
+	}); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("complete optimization after cancellation: %w", err)
 		}

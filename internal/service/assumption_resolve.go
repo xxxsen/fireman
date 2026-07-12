@@ -61,6 +61,7 @@ func (s *SimulationService) ResolveAssumptionProfile(
 	}, nil
 }
 
+//nolint:gocyclo,nestif // Resolution enumerates the explicit pinned/global profile and scenario contract.
 func resolveProfileAndScenario(
 	ctx context.Context, repo *repository.AssumptionProfileRepo, params repository.PlanParameters,
 ) (assumptions.Profile, string, string, error) {

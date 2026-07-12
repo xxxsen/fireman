@@ -1,7 +1,17 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdminDataVersion, AdminOverview, AdminPage } from "@/lib/api/admin";
+import type {
+  AdminDataVersion,
+  AdminOverview,
+  AdminPage,
+} from "@/lib/api/admin";
 import AdminDataVersionsPage from "./page";
 
 const replaceMock = vi.hoisted(() => vi.fn());
@@ -31,8 +41,7 @@ function makeOverview(): AdminOverview {
       completed_last_24h: 0,
       stale_running: 0,
     },
-    jobs: { queued: 0, running: 0, failed_last_24h: 0, succeeded_last_24h: 0 },
-    callbacks: { total_last_24h: 0, failed_last_24h: 0 },
+    finalizations: { total_last_24h: 0, failed_last_24h: 0 },
     sync_health: {
       directory_scopes: [
         {
@@ -61,7 +70,9 @@ function makeOverview(): AdminOverview {
   };
 }
 
-function makeVersion(overrides: Partial<AdminDataVersion> = {}): AdminDataVersion {
+function makeVersion(
+  overrides: Partial<AdminDataVersion> = {},
+): AdminDataVersion {
   return {
     version_key: "asset_directory|cn_exchange_stock",
     version_no: 812,
@@ -79,7 +90,9 @@ function makePage(
 }
 
 function renderPage() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <AdminDataVersionsPage />
@@ -101,7 +114,9 @@ describe("AdminDataVersionsPage", () => {
     renderPage();
     expect(await screen.findByTestId("sync-health-panel")).toBeInTheDocument();
     const row = await screen.findByTestId("data-version-row");
-    expect(within(row).getByText("asset_directory|cn_exchange_stock")).toBeInTheDocument();
+    expect(
+      within(row).getByText("asset_directory|cn_exchange_stock"),
+    ).toBeInTheDocument();
     expect(within(row).getByText("812")).toBeInTheDocument();
     expect(within(row).getByRole("link")).toHaveAttribute(
       "href",
@@ -135,7 +150,10 @@ describe("AdminDataVersionsPage", () => {
     listVersionsMock.mockResolvedValue(makePage([]));
     renderPage();
     expect(await screen.findByText("尚无数据版本记录")).toBeInTheDocument();
-    expect(screen.getByTestId("empty-state-action")).toHaveAttribute("href", "/assets");
+    expect(screen.getByTestId("empty-state-action")).toHaveAttribute(
+      "href",
+      "/assets",
+    );
   });
 
   it("keeps the version table alive when only the overview fails", async () => {

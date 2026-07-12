@@ -12,7 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/fireman/fireman/internal/db"
-	"github.com/fireman/fireman/internal/jobs"
 	"github.com/fireman/fireman/internal/service"
 )
 
@@ -22,7 +21,6 @@ type Deps struct {
 	DBPath   string
 	Logger   *slog.Logger
 	Services Services
-	Worker   *jobs.Worker
 }
 
 // NewRouter builds the Gin engine and registers routes.
@@ -51,7 +49,7 @@ func NewRouter(ctx context.Context, deps Deps) *gin.Engine {
 	deps.Services.registerSimulationRoutes(v1)
 	deps.Services.registerAssumptionRoutes(v1)
 	deps.Services.registerAnalysisRoutes(v1)
-	deps.Services.registerJobRoutes(v1)
+	deps.Services.registerTaskRoutes(v1)
 	deps.Services.registerResearchRoutes(v1)
 	deps.Services.registerSystemRoutes(v1)
 	deps.Services.registerAdminRoutes(v1)

@@ -7,7 +7,7 @@ import MarketAssetDetailPage from "./page";
 
 const getMarketAssetDetailMock = vi.hoisted(() => vi.fn());
 const setMarketAssetHistoryAutoUpdateMock = vi.hoisted(() => vi.fn());
-const useWorkerTaskPollingMock = vi.hoisted(() => vi.fn());
+const useTaskStatusMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({
@@ -23,9 +23,8 @@ vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
     setMarketAssetHistoryAutoUpdateMock(...args),
 }));
 
-vi.mock("@/hooks/useWorkerTaskPolling", () => ({
-  useWorkerTaskPolling: (...args: unknown[]) =>
-    useWorkerTaskPollingMock(...args),
+vi.mock("@/hooks/useTaskStatus", () => ({
+  useTaskStatus: (...args: unknown[]) => useTaskStatusMock(...args),
 }));
 
 // ECharts does not render in jsdom; the stub exposes what the page passed in
@@ -135,8 +134,8 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
     setMarketAssetHistoryAutoUpdateMock.mockReset();
-    useWorkerTaskPollingMock.mockReset();
-    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+    useTaskStatusMock.mockReset();
+    useTaskStatusMock.mockReturnValue({ task: null, pollError: null });
     getMarketAssetDetailMock.mockResolvedValue(makeDetailWithHistory());
   });
 
@@ -216,8 +215,8 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
 describe("MarketAssetDetailPage mutual fund fee identity", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
-    useWorkerTaskPollingMock.mockReset();
-    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+    useTaskStatusMock.mockReset();
+    useTaskStatusMock.mockReturnValue({ task: null, pollError: null });
   });
 
   it("explains shared NAV history without claiming transaction fees are included", async () => {
@@ -246,8 +245,8 @@ describe("MarketAssetDetailPage failed-task error display", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
     setMarketAssetHistoryAutoUpdateMock.mockReset();
-    useWorkerTaskPollingMock.mockReset();
-    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+    useTaskStatusMock.mockReset();
+    useTaskStatusMock.mockReturnValue({ task: null, pollError: null });
     getMarketAssetDetailMock.mockResolvedValue(makeDetail());
   });
 
@@ -286,8 +285,8 @@ describe("MarketAssetDetailPage automatic update", () => {
   beforeEach(() => {
     getMarketAssetDetailMock.mockReset();
     setMarketAssetHistoryAutoUpdateMock.mockReset();
-    useWorkerTaskPollingMock.mockReset();
-    useWorkerTaskPollingMock.mockReturnValue({ task: null, pollError: null });
+    useTaskStatusMock.mockReset();
+    useTaskStatusMock.mockReturnValue({ task: null, pollError: null });
   });
 
   it("enables the current history dimension and renders the returned interval", async () => {
@@ -309,12 +308,10 @@ describe("MarketAssetDetailPage automatic update", () => {
       created_at: Date.now(),
       updated_at: Date.now(),
     };
-    getMarketAssetDetailMock
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValue({
-        ...initial,
-        history: { ...initial.history, auto_update: updatedRule },
-      });
+    getMarketAssetDetailMock.mockResolvedValueOnce(initial).mockResolvedValue({
+      ...initial,
+      history: { ...initial.history, auto_update: updatedRule },
+    });
     setMarketAssetHistoryAutoUpdateMock.mockResolvedValue(updatedRule);
     renderPage();
 

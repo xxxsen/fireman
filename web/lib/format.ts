@@ -129,6 +129,13 @@ export function formatDateFromMs(ts?: number | null): string {
  * sync freshness displays. Returns "—" for empty/invalid values.
  */
 export function formatDateTimeFromMs(ts?: number | null): string {
+  return formatDateTimeFromMsInTimeZone(ts);
+}
+
+export function formatDateTimeFromMsInTimeZone(
+  ts?: number | null,
+  timeZone?: string,
+): string {
   if (!ts) return "—";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "—";
@@ -138,6 +145,7 @@ export function formatDateTimeFromMs(ts?: number | null): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone,
   });
 }
 

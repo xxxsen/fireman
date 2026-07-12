@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+var marketAssetTaskVersion atomic.Int64
 
 type testResponse struct {
 	StatusCode int
@@ -390,9 +393,10 @@ func TestListMarketAssets_ScopeAggregation(t *testing.T) {
 	seedTask := func(id, status string) {
 		t.Helper()
 		if _, err := db.Exec(`
-			INSERT INTO worker_tasks (id, version_no, type, status, dedupe_key, payload_json, created_at)
-			VALUES (?,1,'asset_directory_sync',?,?, '{}', 1)`,
-			id, status, "asset_directory_sync|"+id); err != nil {
+			INSERT INTO worker_tasks (id, version_no, worker_type, type, status, dedupe_key,
+				payload_json, available_at, created_at, updated_at)
+			VALUES (?,?,'sidecar_worker','asset_directory_sync',?,?, '{}', 1,1,1)`,
+			id, marketAssetTaskVersion.Add(1), status, "asset_directory_sync|"+id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -480,10 +484,11 @@ func TestListMarketAssets_HistorySyncStatusForPendingAndFailed(t *testing.T) {
 	seedMarketAssetWithHistory(t, db, seed)
 
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO worker_tasks (id, version_no, type, status, payload_json,
-			error_code, error_message, created_at)
-		VALUES ('task_failed_1', 1, 'asset_history_sync', 'failed', '{}',
-			'provider_unreachable', 'upstream timed out', ?)`, now); err != nil {
+		INSERT INTO worker_tasks (id, version_no, worker_type, type, status, payload_json,
+			error_code, error_message, available_at, created_at, updated_at)
+		VALUES ('task_failed_1', ?, 'sidecar_worker', 'asset_history_sync', 'failed', '{}',
+			'provider_unreachable', 'upstream timed out', ?,?,?)`,
+		marketAssetTaskVersion.Add(1), now, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `

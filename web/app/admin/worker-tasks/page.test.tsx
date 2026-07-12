@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -26,15 +32,25 @@ vi.mock("@/lib/api/admin", async (importOriginal) => ({
   getAdminWorkerTask: (...args: unknown[]) => detailMock(...args),
 }));
 
-function makeTask(overrides: Partial<AdminWorkerTaskItem> = {}): AdminWorkerTaskItem {
+function makeTask(
+  overrides: Partial<AdminWorkerTaskItem> = {},
+): AdminWorkerTaskItem {
   return {
     id: "wt_1",
+    worker_type: "sidecar_worker",
     type: "asset_history_sync",
     status: "failed",
+    scope_type: "asset",
+    scope_id: "CN|cn_exchange_fund|sh|510300",
     dedupe_key: "asset_history|SH|cn_exchange_fund|sh|510300|none|close",
+    attempt_count: 2,
+    max_attempts: 3,
+    progress_current: 10,
+    progress_total: 10,
+    phase: "",
     error_code: "source_unavailable",
     error_message: "tickflow down",
-    post_process_attempts: 2,
+    finalize_attempts: 2,
     created_at: Date.now() - 180_000,
     started_at: Date.now() - 170_000,
     finished_at: Date.now() - 151_000,
@@ -56,16 +72,22 @@ function makeDetail(): AdminWorkerTaskDetail {
     task: {
       id: "wt_1",
       version_no: 3,
+      worker_type: "sidecar_worker",
       type: "asset_history_sync",
       status: "failed",
+      scope_type: "market_asset",
+      scope_id: "CN|cn_exchange_fund|sh|510300",
       dedupe_key: "asset_history|SH|cn_exchange_fund|sh|510300|none|close",
       payload_json: '{"scope":"cn_all"}',
-      result_data: "",
+      result_key: "",
+      result_meta_json: "",
+      attempt_count: 2,
+      max_attempts: 3,
       heartbeat_at: null,
       error_code: "source_unavailable",
       error_message: "tickflow down",
-      post_process_attempts: 2,
-      next_post_process_at: null,
+      finalize_attempts: 2,
+      next_finalize_at: null,
       created_at: t0,
       started_at: t0 + 1000,
       pre_completed_at: t0 + 15_000,
@@ -78,7 +100,21 @@ function makeDetail(): AdminWorkerTaskDetail {
       { phase: "finished", at: t0 + 20_000, status: "failed" },
     ],
     heartbeat: null,
-    post_process_records: [
+    attempts: [
+      {
+        task_id: "wt_1",
+        attempt_no: 1,
+        worker_type: "sidecar_worker",
+        worker_id: "sidecar-test",
+        claimed_at: t0 + 1000,
+        last_heartbeat_at: t0 + 10_000,
+        released_at: t0 + 20_000,
+        outcome: "failed",
+        error_code: "source_unavailable",
+        error_message: "tickflow down",
+      },
+    ],
+    finalize_records: [
       {
         id: 12,
         task_id: "wt_1",
@@ -94,8 +130,23 @@ function makeDetail(): AdminWorkerTaskDetail {
   };
 }
 
+function makePendingDetail(): AdminWorkerTaskDetail {
+  const detail = makeDetail();
+  detail.task.status = "pending";
+  detail.task.result_key = undefined;
+  detail.task.started_at = null;
+  detail.task.pre_completed_at = null;
+  detail.task.finished_at = null;
+  detail.timeline = detail.timeline.slice(0, 1);
+  detail.attempts = [];
+  detail.finalize_records = [];
+  return detail;
+}
+
 function renderPage() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <AdminWorkerTasksPage />
@@ -144,9 +195,12 @@ describe("AdminWorkerTasksPage", () => {
     fireEvent.change(screen.getByTestId("admin-filter-status"), {
       target: { value: "failed" },
     });
-    expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks?status=failed", {
-      scroll: false,
-    });
+    expect(replaceMock).toHaveBeenCalledWith(
+      "/admin/worker-tasks?status=failed",
+      {
+        scroll: false,
+      },
+    );
   });
 
   it("debounces the search input before writing q into the URL", async () => {
@@ -159,21 +213,28 @@ describe("AdminWorkerTasksPage", () => {
     expect(replaceMock).not.toHaveBeenCalled();
     await waitFor(
       () =>
-        expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks?q=510300", {
-          scroll: false,
-        }),
+        expect(replaceMock).toHaveBeenCalledWith(
+          "/admin/worker-tasks?q=510300",
+          {
+            scroll: false,
+          },
+        ),
       { timeout: 2000 },
     );
   });
 
   it("passes URL filters to the API call", async () => {
-    searchParamsMock.value = new URLSearchParams("type=fx_rate_sync&status=active&offset=40");
+    searchParamsMock.value = new URLSearchParams(
+      "type=fx_rate_sync&status=active&scope_type=system&scope_id=fx&offset=40",
+    );
     renderPage();
     await waitFor(() =>
       expect(listMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "fx_rate_sync",
           status: "active",
+          scopeType: "system",
+          scopeId: "fx",
           limit: 20,
           offset: 40,
         }),
@@ -182,23 +243,30 @@ describe("AdminWorkerTasksPage", () => {
   });
 
   it("resets all filters at once", async () => {
-    searchParamsMock.value = new URLSearchParams("type=fx_rate_sync&q=abc&offset=20");
+    searchParamsMock.value = new URLSearchParams(
+      "type=fx_rate_sync&q=abc&offset=20",
+    );
     renderPage();
     await screen.findByTestId("worker-task-row");
     fireEvent.click(screen.getByTestId("admin-filter-reset"));
-    expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks", { scroll: false });
+    expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks", {
+      scroll: false,
+    });
   });
 
   it("opens the detail drawer via row click by writing task_id into the URL", async () => {
     renderPage();
     const row = await screen.findByTestId("worker-task-row");
     fireEvent.click(row);
-    expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks?task_id=wt_1", {
-      scroll: false,
-    });
+    expect(replaceMock).toHaveBeenCalledWith(
+      "/admin/worker-tasks?task_id=wt_1",
+      {
+        scroll: false,
+      },
+    );
   });
 
-  it("renders the drawer with timeline, callback records and payload viewer", async () => {
+  it("renders the drawer with timeline, finalization records and payload viewer", async () => {
     searchParamsMock.value = new URLSearchParams("task_id=wt_1");
     detailMock.mockResolvedValue(makeDetail());
     renderPage();
@@ -213,15 +281,16 @@ describe("AdminWorkerTasksPage", () => {
     expect(within(timeline).getByText("执行结束")).toBeInTheDocument();
     expect(within(timeline).getByText("同步失败")).toBeInTheDocument();
 
-    const callbackTable = within(detail).getByTestId("task-callback-table");
-    expect(within(callbackTable).getByTestId("callback-result-badge")).toHaveAttribute(
-      "data-result",
-      "retryable_error",
-    );
-    expect(within(callbackTable).getByText("resource_not_found")).toBeInTheDocument();
+    const finalizationTable = within(detail).getByTestId("task-finalize-table");
+    expect(
+      within(finalizationTable).getByTestId("finalize-result-badge"),
+    ).toHaveAttribute("data-result", "retryable_error");
+    expect(
+      within(finalizationTable).getByText("resource_not_found"),
+    ).toBeInTheDocument();
 
     expect(within(detail).getByText("payload_json")).toBeInTheDocument();
-    // Empty result_data renders the empty marker instead of a viewer.
+    // Empty result metadata renders the empty marker instead of a viewer.
     expect(within(detail).getByTestId("json-viewer-empty")).toBeInTheDocument();
   });
 
@@ -238,6 +307,22 @@ describe("AdminWorkerTasksPage", () => {
 
     const node = await screen.findByTestId("task-timeline-heartbeat");
     expect(node).toHaveTextContent("心跳正常");
+  });
+
+  it("renders a pending task whose result key has not been produced", async () => {
+    searchParamsMock.value = new URLSearchParams("task_id=wt_pending");
+    const detail = makePendingDetail();
+    detail.task.id = "wt_pending";
+    detailMock.mockResolvedValue(detail);
+    renderPage();
+
+    const drawer = await screen.findByTestId("worker-task-detail");
+    expect(
+      within(drawer).getByText("任务尚未被 worker 领取。"),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).queryByText("查看关联业务结果"),
+    ).not.toBeInTheDocument();
   });
 
   it("marks a stale heartbeat as waiting for reclaim", async () => {
@@ -261,13 +346,15 @@ describe("AdminWorkerTasksPage", () => {
     await screen.findByTestId("worker-task-detail");
 
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks", { scroll: false });
+    expect(replaceMock).toHaveBeenCalledWith("/admin/worker-tasks", {
+      scroll: false,
+    });
   });
 
   it("shows the empty state when no task matches", async () => {
     listMock.mockResolvedValue(makePage([]));
     renderPage();
-    expect(await screen.findByText("没有匹配的市场数据任务")).toBeInTheDocument();
+    expect(await screen.findByText("没有匹配的任务")).toBeInTheDocument();
   });
 
   it("shows the error state with retry when the list request fails", async () => {
