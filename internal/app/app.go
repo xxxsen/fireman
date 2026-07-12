@@ -49,31 +49,23 @@ func Run(ctx context.Context, cfg config.Config) error {
 	fdb.SetMigrations(migrations.FS)
 
 	if err := fdb.Migrate(ctx, pool, cfg.DBPath, logger); err != nil {
-		if closeErr := pool.Close(); closeErr != nil {
-			logger.Error("db close after migrate failure", "error", closeErr)
-		}
+		closePoolAfterStartupFailure(pool, logger, "migrate")
 		return fmt.Errorf("migrate: %w", err)
 	}
 
 	if err := ensureDataDir(cfg.ResourceDBPath); err != nil {
-		if closeErr := pool.Close(); closeErr != nil {
-			logger.Error("db close after resource dir failure", "error", closeErr)
-		}
+		closePoolAfterStartupFailure(pool, logger, "resource dir")
 		return fmt.Errorf("ensure resource db parent dir: %w", err)
 	}
 	resources, err := resourcedb.Open(ctx, cfg.ResourceDBPath)
 	if err != nil {
-		if closeErr := pool.Close(); closeErr != nil {
-			logger.Error("db close after resource db failure", "error", closeErr)
-		}
+		closePoolAfterStartupFailure(pool, logger, "resource db")
 		return fmt.Errorf("open resource database: %w", err)
 	}
 
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
-		if closeErr := pool.Close(); closeErr != nil {
-			logger.Error("db close after timezone failure", "error", closeErr)
-		}
+		closePoolAfterStartupFailure(pool, logger, "timezone")
 		return fmt.Errorf("load timezone %q: %w", cfg.Timezone, err)
 	}
 
@@ -119,6 +111,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	return runServer(ctx, server, internalServer, pool, resources, logger, workerCancel, workerDone, autoScheduler)
+}
+
+func closePoolAfterStartupFailure(pool *sql.DB, logger *slog.Logger, phase string) {
+	if err := pool.Close(); err != nil {
+		logger.Error("db close after startup failure", "phase", phase, "error", err)
+	}
 }
 
 func newPostProcessService(pool *sql.DB, resources *resourcedb.DB) *service.PostProcessService {

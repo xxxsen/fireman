@@ -8,20 +8,25 @@ import {
   type ResearchReadiness,
   type ResearchReadinessAssetView,
 } from "@/lib/api/research";
-import { formatPercent, instrumentTypeLabel } from "@/lib/format";
+import { formatPercent, instrumentTypeLabel, pointTypeLabel } from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 
 const ADJUST_POLICY_OPTIONS = [
   { value: "qfq", label: "前复权" },
-  { value: "none", label: "不复权" },
+  { value: "hfq", label: "后复权" },
 ];
 
-const POINT_TYPE_OPTIONS = [
-  { value: "adjusted_close", label: "复权收盘价" },
-  { value: "nav", label: "单位净值" },
-  { value: "total_return_index", label: "累计净值" },
-];
+function isExchangeTraded(instrumentType: string): boolean {
+  return [
+    "cn_exchange_stock",
+    "cn_exchange_fund",
+    "hk_stock",
+    "hk_etf",
+    "us_stock",
+    "us_etf",
+  ].includes(instrumentType);
+}
 
 /** Weight edits produced by batch tools, applied by the parent. */
 export type WeightUpdates = { itemId: string; weight: number }[];
@@ -378,12 +383,17 @@ export function WeightEditor({
                       <span className="block text-xs">
                         {it.instrument_type_label || instrumentTypeLabel(it.instrument_type)}
                       </span>
-                      {!it.is_cash && (
+                      {!it.is_cash && isExchangeTraded(it.instrument_type) && (
                         <span className="mt-0.5 flex gap-1">
                           <select
                             value={it.adjust_policy}
                             disabled={pending}
-                            onChange={(e) => onUpdateItem(it.id, { adjust_policy: e.target.value })}
+                            onChange={(e) =>
+                              onUpdateItem(it.id, {
+                                adjust_policy: e.target.value,
+                                point_type: "adjusted_close",
+                              })
+                            }
                             className="rounded border border-line bg-surface px-1 py-0.5 text-xs text-ink-muted"
                             aria-label="复权口径"
                           >
@@ -393,19 +403,14 @@ export function WeightEditor({
                               </option>
                             ))}
                           </select>
-                          <select
-                            value={it.point_type}
-                            disabled={pending}
-                            onChange={(e) => onUpdateItem(it.id, { point_type: e.target.value })}
-                            className="rounded border border-line bg-surface px-1 py-0.5 text-xs text-ink-muted"
-                            aria-label="点位类型"
-                          >
-                            {POINT_TYPE_OPTIONS.map((o) => (
-                              <option key={o.value} value={o.value}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
+                          <span className="px-1 py-0.5 text-xs text-ink-muted">
+                            {pointTypeLabel(it.point_type)}
+                          </span>
+                        </span>
+                      )}
+                      {!it.is_cash && !isExchangeTraded(it.instrument_type) && (
+                        <span className="mt-0.5 block text-xs text-ink-muted">
+                          {pointTypeLabel(it.point_type)}
                         </span>
                       )}
                     </td>

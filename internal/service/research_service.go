@@ -314,6 +314,8 @@ type ResearchCollectionInput struct {
 	BenchmarkAssetKey   string                        `json:"benchmark_asset_key"`
 	RiskFreeRate        float64                       `json:"risk_free_rate"`
 	TransactionCostRate float64                       `json:"transaction_cost_rate"`
+	TailRiskConfidence  *float64                      `json:"tail_risk_confidence,omitempty"`
+	TailRiskHorizonDays *int                          `json:"tail_risk_horizon_days,omitempty"`
 	Tags                []string                      `json:"tags"`
 	Items               []ResearchCollectionItemInput `json:"items"`
 	FromPlanID          string                        `json:"from_plan_id"`
@@ -440,6 +442,20 @@ func normalizeResearchCollectionInput(in *ResearchCollectionInput) (string, erro
 	if in.StartPolicy == "" {
 		in.StartPolicy = ResearchStartPolicyCommon
 	}
+	confidence := DefaultTailRiskConfidence
+	if in.TailRiskConfidence != nil {
+		confidence = *in.TailRiskConfidence
+	}
+	horizon := DefaultTailRiskHorizon
+	if in.TailRiskHorizonDays != nil {
+		horizon = *in.TailRiskHorizonDays
+	}
+	tailRisk, err := CanonicalTailRiskSpec(TailRiskSpec{Confidence: confidence, HorizonDays: horizon})
+	if err != nil {
+		return "", tailRiskAppError(err)
+	}
+	in.TailRiskConfidence = &tailRisk.Confidence
+	in.TailRiskHorizonDays = &tailRisk.HorizonDays
 	if err := validateCollectionEnums(in.BaseCurrency, in.RebalancePolicy, in.StartPolicy); err != nil {
 		return "", err
 	}
@@ -495,6 +511,7 @@ func buildResearchCollectionRecord(
 		StartPolicy: in.StartPolicy, WindowStart: in.WindowStart, WindowEnd: in.WindowEnd,
 		BenchmarkAssetKey: in.BenchmarkAssetKey, RiskFreeRate: in.RiskFreeRate,
 		TransactionCostRate: in.TransactionCostRate, Status: repository.ResearchCollectionStatusActive,
+		TailRiskConfidence: *in.TailRiskConfidence, TailRiskHorizonDays: *in.TailRiskHorizonDays,
 		TagsJSON: string(tagsJSON), CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
@@ -583,12 +600,27 @@ func (s *ResearchService) buildResearchItem(
 		return zero, "", wrapRepo("load market asset", err)
 	}
 	adjustPolicy := strings.TrimSpace(in.AdjustPolicy)
-	if adjustPolicy == "" {
-		adjustPolicy = "none"
-	}
 	pointType := strings.TrimSpace(in.PointType)
+	// Older screener clients echoed the legacy impossible dimension
+	// none+adjusted_close. Treat it as an omitted dimension so adding an asset
+	// uses the return-analysis-safe default instead of failing the workflow.
+	if isExchangeInstrumentType(asset.InstrumentType) &&
+		adjustPolicy == "none" && pointType == "adjusted_close" {
+		adjustPolicy = ""
+		pointType = ""
+	}
+	if adjustPolicy == "" {
+		adjustPolicy = DefaultAdjustPolicy(asset.InstrumentType)
+	}
 	if pointType == "" {
-		pointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+		if adjustPolicy == "none" && asset.InstrumentType != "cn_mutual_fund" {
+			pointType = "close"
+		} else {
+			pointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+		}
+	}
+	if err := ValidateHistoryDimension(asset, adjustPolicy, pointType); err != nil {
+		return zero, "", err
 	}
 	weight := researchInputWeight(in.Weight, allWeightsOmitted, total)
 	if weight < 0 || weight > 1+ResearchWeightTolerance {
@@ -820,6 +852,8 @@ type ResearchCollectionUpdate struct {
 	BenchmarkAssetKey   *string  `json:"benchmark_asset_key,omitempty"`
 	RiskFreeRate        *float64 `json:"risk_free_rate,omitempty"`
 	TransactionCostRate *float64 `json:"transaction_cost_rate,omitempty"`
+	TailRiskConfidence  *float64 `json:"tail_risk_confidence,omitempty"`
+	TailRiskHorizonDays *int     `json:"tail_risk_horizon_days,omitempty"`
 	Status              *string  `json:"status,omitempty"`
 	Tags                []string `json:"tags,omitempty"`
 }
@@ -842,7 +876,7 @@ func (s *ResearchService) UpdateCollection(
 	if err := s.applyResearchBenchmarkUpdate(ctx, &collection, in.BenchmarkAssetKey); err != nil {
 		return zero, err
 	}
-	if err := validateUpdatedResearchCollection(collection); err != nil {
+	if err := validateUpdatedResearchCollection(&collection); err != nil {
 		return zero, err
 	}
 	collection.UpdatedAt = maxInt64(s.now().UnixMilli(), currentCollectionUpdatedAt+1)
@@ -916,6 +950,12 @@ func applyResearchCollectionMetadata(
 	if in.TransactionCostRate != nil {
 		collection.TransactionCostRate = *in.TransactionCostRate
 	}
+	if in.TailRiskConfidence != nil {
+		collection.TailRiskConfidence = *in.TailRiskConfidence
+	}
+	if in.TailRiskHorizonDays != nil {
+		collection.TailRiskHorizonDays = *in.TailRiskHorizonDays
+	}
 	if in.Status != nil {
 		if *in.Status != repository.ResearchCollectionStatusActive &&
 			*in.Status != repository.ResearchCollectionStatusArchived {
@@ -949,19 +989,29 @@ func (s *ResearchService) applyResearchBenchmarkUpdate(
 	return nil
 }
 
-func validateUpdatedResearchCollection(collection repository.ResearchCollection) error {
+func validateUpdatedResearchCollection(collection *repository.ResearchCollection) error {
 	if err := validateCollectionEnums(
-		collection.BaseCurrency, collection.RebalancePolicy, collection.StartPolicy); err != nil {
+		collection.BaseCurrency, collection.RebalancePolicy, collection.StartPolicy,
+	); err != nil {
 		return err
 	}
 	if err := validateWindowDates(
-		collection.StartPolicy, collection.WindowStart, collection.WindowEnd); err != nil {
+		collection.StartPolicy, collection.WindowStart, collection.WindowEnd,
+	); err != nil {
 		return err
 	}
 	if collection.RebalancePolicy == ResearchRebalanceThreshold && collection.RebalanceThreshold <= 0 {
 		return newErr("invalid_request",
 			"rebalance_threshold must be positive for the threshold policy", nil)
 	}
+	tailRisk, err := CanonicalTailRiskSpec(TailRiskSpec{
+		Confidence: collection.TailRiskConfidence, HorizonDays: collection.TailRiskHorizonDays,
+	})
+	if err != nil {
+		return tailRiskAppError(err)
+	}
+	collection.TailRiskConfidence = tailRisk.Confidence
+	collection.TailRiskHorizonDays = tailRisk.HorizonDays
 	return nil
 }
 
@@ -1055,6 +1105,13 @@ func (s *ResearchService) UpdateItem(
 		return zero, wrapRepo("load research item", err)
 	}
 	if err := applyResearchItemUpdate(&item, in); err != nil {
+		return zero, err
+	}
+	asset, err := s.assets.GetByKey(ctx, item.AssetKey)
+	if err != nil {
+		return zero, wrapRepo("load research item asset", err)
+	}
+	if err := ValidateHistoryDimension(asset, item.AdjustPolicy, item.PointType); err != nil {
 		return zero, err
 	}
 	now := s.now().UnixMilli()
@@ -1490,6 +1547,8 @@ type researchSnapshotParams struct {
 	StartPolicy         string  `json:"start_policy"`
 	RiskFreeRate        float64 `json:"risk_free_rate"`
 	TransactionCostRate float64 `json:"transaction_cost_rate"`
+	TailRiskConfidence  float64 `json:"tail_risk_confidence"`
+	TailRiskHorizonDays int     `json:"tail_risk_horizon_days"`
 	BenchmarkAssetKey   string  `json:"benchmark_asset_key,omitempty"`
 }
 
@@ -1659,18 +1718,8 @@ func buildResearchSnapshot(ds *researchDataset, readiness ResearchReadiness) res
 		CommonEnd:     readiness.CommonEnd,
 		WindowStart:   readiness.WindowStart,
 		WindowEnd:     readiness.WindowEnd,
-		Collection: researchSnapshotParams{
-			CollectionID:        ds.Collection.ID,
-			BaseCurrency:        ds.Collection.BaseCurrency,
-			InitialAmountMinor:  ds.Collection.InitialAmountMinor,
-			RebalancePolicy:     ds.Collection.RebalancePolicy,
-			RebalanceThreshold:  ds.Collection.RebalanceThreshold,
-			StartPolicy:         ds.Collection.StartPolicy,
-			RiskFreeRate:        ds.Collection.RiskFreeRate,
-			TransactionCostRate: ds.Collection.TransactionCostRate,
-			BenchmarkAssetKey:   ds.Collection.BenchmarkAssetKey,
-		},
-		FX: []researchSnapshotSeries{},
+		Collection:    snapshotResearchCollectionParams(ds.Collection),
+		FX:            []researchSnapshotSeries{},
 	}
 	winLo, winHi := readiness.WindowStart, readiness.WindowEnd
 
@@ -1732,6 +1781,17 @@ func buildResearchSnapshot(ds *researchDataset, readiness ResearchReadiness) res
 
 	snapshot.SourceHash = computeResearchSourceHash(snapshot)
 	return snapshot
+}
+
+func snapshotResearchCollectionParams(collection repository.ResearchCollection) researchSnapshotParams {
+	return researchSnapshotParams{
+		CollectionID: collection.ID, BaseCurrency: collection.BaseCurrency,
+		InitialAmountMinor: collection.InitialAmountMinor, RebalancePolicy: collection.RebalancePolicy,
+		RebalanceThreshold: collection.RebalanceThreshold, StartPolicy: collection.StartPolicy,
+		RiskFreeRate: collection.RiskFreeRate, TransactionCostRate: collection.TransactionCostRate,
+		TailRiskConfidence: collection.TailRiskConfidence, TailRiskHorizonDays: collection.TailRiskHorizonDays,
+		BenchmarkAssetKey: collection.BenchmarkAssetKey,
+	}
 }
 
 // researchSeriesObs is the source-agnostic observation shape shared by the
@@ -1850,13 +1910,15 @@ func computeResearchInputHash(snapshot researchInputSnapshot, ds *researchDatase
 	fmt.Fprintf(h, "source:%s\n", snapshot.SourceHash)
 	fmt.Fprintf(h, "engine:%s\n", snapshot.EngineVersion)
 	c := snapshot.Collection
-	fmt.Fprintf(h, "params:%s|%d|%s|%s|%s|%s|%s|%s\n",
+	fmt.Fprintf(h, "params:%s|%d|%s|%s|%s|%s|%s|%s|%s|%d|%s\n",
 		c.BaseCurrency, c.InitialAmountMinor, c.RebalancePolicy,
 		strconv.FormatFloat(c.RebalanceThreshold, 'g', 17, 64),
 		c.StartPolicy,
 		strconv.FormatFloat(c.RiskFreeRate, 'g', 17, 64),
 		strconv.FormatFloat(c.TransactionCostRate, 'g', 17, 64),
-		c.BenchmarkAssetKey)
+		c.BenchmarkAssetKey,
+		strconv.FormatFloat(c.TailRiskConfidence, 'g', 17, 64), c.TailRiskHorizonDays,
+		TailRiskAlgorithmVersion)
 	fmt.Fprintf(h, "window:%s..%s\n", snapshot.WindowStart, snapshot.WindowEnd)
 	items := make([]repository.ResearchCollectionItem, 0, len(ds.Enabled))
 	for _, a := range ds.Enabled {
@@ -2224,7 +2286,8 @@ func (s *ResearchService) CopyToPlan(
 			AssetClass: item.AssetClass,
 			Region:     item.Region,
 			CurrentAmountMinor: int64(
-				math.Round(item.Weight * float64(collection.InitialAmountMinor))),
+				math.Round(item.Weight * float64(collection.InitialAmountMinor)),
+			),
 		}
 		if asset, err := s.assets.GetByKey(ctx, item.AssetKey); err == nil {
 			holding.Name = asset.Name

@@ -12,6 +12,7 @@ import {
 } from "@/lib/api/research";
 import { queryErrorMessage } from "@/lib/query-error";
 import { Button } from "@/components/ui/Button";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 
 export const REBALANCE_POLICY_LABELS: Record<ResearchRebalancePolicy, string> = {
   monthly: "月度再平衡",
@@ -129,6 +130,8 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
   const [benchmark, setBenchmark] = useState(detail.benchmark_asset_key ?? "");
   const [riskFree, setRiskFree] = useState(String(detail.risk_free_rate * 100));
   const [txCost, setTxCost] = useState(String(detail.transaction_cost_rate * 100));
+  const [tailConfidence, setTailConfidence] = useState(detail.tail_risk_confidence);
+  const [tailHorizon, setTailHorizon] = useState(detail.tail_risk_horizon_days);
   const [showAdvanced, setShowAdvanced] = useState(detail.transaction_cost_rate > 0);
 
   const dirty = useMemo(() => {
@@ -145,11 +148,14 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
       windowEnd !== detail.window_end ||
       benchmark !== (detail.benchmark_asset_key ?? "") ||
       Number(riskFree) / 100 !== detail.risk_free_rate ||
-      Number(txCost) / 100 !== detail.transaction_cost_rate
+      Number(txCost) / 100 !== detail.transaction_cost_rate ||
+      tailConfidence !== detail.tail_risk_confidence ||
+      tailHorizon !== detail.tail_risk_horizon_days
     );
   }, [
     detail, name, description, tags, baseCurrency, initialAmount, rebalancePolicy,
     threshold, startPolicy, windowStart, windowEnd, benchmark, riskFree, txCost,
+    tailConfidence, tailHorizon,
   ]);
 
   const saveMutation = useMutation({
@@ -167,6 +173,8 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
           .split(/[,，]/)
           .map((t) => t.trim())
           .filter(Boolean),
+        tail_risk_confidence: tailConfidence,
+        tail_risk_horizon_days: tailHorizon,
       };
       const amount = Number(initialAmount);
       if (Number.isFinite(amount) && amount > 0) {
@@ -237,6 +245,50 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
             <option value="HKD">HKD</option>
           </select>
         </label>
+
+        <div className="sm:col-span-2 lg:col-span-3">
+          <p className="mb-2 text-xs font-medium text-ink-muted">尾部风险口径</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <span className="mb-1 flex items-center text-xs text-ink-muted">
+                置信度
+                <MetricHelp text="95% CVaR 表示在历史上最差 5% 的持有期场景中，平均损失是多少。" />
+              </span>
+              <div className="inline-flex overflow-hidden rounded-md border border-line" data-testid="tail-confidence-control">
+                {([0.9, 0.95, 0.99] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={tailConfidence === value}
+                    onClick={() => setTailConfidence(value)}
+                    className={`min-h-9 px-3 text-sm ${tailConfidence === value ? "bg-brand text-white" : "bg-surface text-ink hover:bg-surface-muted"}`}
+                  >
+                    {value * 100}%
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <span className="mb-1 flex items-center text-xs text-ink-muted">
+                持有期
+                <MetricHelp text="20 日按回测有效收益日滚动复合，相邻场景会共享部分交易日。" />
+              </span>
+              <div className="inline-flex overflow-hidden rounded-md border border-line" data-testid="tail-horizon-control">
+                {([1, 20] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={tailHorizon === value}
+                    onClick={() => setTailHorizon(value)}
+                    className={`min-h-9 px-3 text-sm ${tailHorizon === value ? "bg-brand text-white" : "bg-surface text-ink hover:bg-surface-muted"}`}
+                  >
+                    {value === 1 ? "1 日" : "20 个有效交易日"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
 
         <label className="block">
           <span className={labelCls()}>初始资金（{baseCurrency}）</span>

@@ -38,7 +38,7 @@ func TestHistoryAutoUpdateEnableAndAdminList(t *testing.T) {
 	if value, exists := history["auto_update"]; !exists || value != nil {
 		t.Fatalf("auto_update before enable=%v exists=%v, want explicit null", value, exists)
 	}
-	status, body := putAutoUpdate(t, client, srv.URL+"/api/v1/market-assets/history-auto-update", map[string]any{"asset_key": seed.AssetKey, "adjust_policy": "none", "point_type": seed.PointType, "enabled": true})
+	status, body := putAutoUpdate(t, client, srv.URL+"/api/v1/market-assets/history-auto-update", map[string]any{"asset_key": seed.AssetKey, "adjust_policy": "qfq", "point_type": seed.PointType, "enabled": true})
 	if status != http.StatusOK {
 		t.Fatalf("enable status=%d body=%s", status, body)
 	}
@@ -162,13 +162,17 @@ func TestHistoryAutoUpdateDimensionsAreUniqueAndIdempotent(t *testing.T) {
 	seed := cnETFAssetSeed()
 	seedMarketAssetWithHistory(t, db, seed)
 	endpoint := srv.URL + "/api/v1/market-assets/history-auto-update"
-	for _, adjust := range []string{"none", "qfq", "none"} {
+	for _, dimension := range []struct{ adjust, point string }{
+		{adjust: "none", point: "close"},
+		{adjust: "qfq", point: "adjusted_close"},
+		{adjust: "none", point: "close"},
+	} {
 		status, body := putAutoUpdate(t, client, endpoint, map[string]any{
-			"asset_key": seed.AssetKey, "adjust_policy": adjust,
-			"point_type": seed.PointType, "enabled": true,
+			"asset_key": seed.AssetKey, "adjust_policy": dimension.adjust,
+			"point_type": dimension.point, "enabled": true,
 		})
 		if status != http.StatusOK {
-			t.Fatalf("adjust=%s status=%d body=%s", adjust, status, body)
+			t.Fatalf("adjust=%s status=%d body=%s", dimension.adjust, status, body)
 		}
 	}
 	resp, body := getJSON(t, client, srv.URL+"/api/v1/admin/auto-updates?target_type=asset_history")

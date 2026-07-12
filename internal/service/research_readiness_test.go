@@ -46,7 +46,7 @@ func rdAsset(t *testing.T, key string, weight float64, start string, days int) r
 	return researchAssetData{
 		Item: repository.ResearchCollectionItem{
 			ID: "item_" + key, AssetKey: key, Enabled: true, Weight: weight,
-			AdjustPolicy: "none", PointType: "adjusted_close",
+			AdjustPolicy: "qfq", PointType: "adjusted_close",
 		},
 		Asset: repository.MarketAsset{
 			AssetKey: key, Market: "CN", InstrumentType: "cn_exchange_fund",
@@ -54,7 +54,7 @@ func rdAsset(t *testing.T, key string, weight float64, start string, days int) r
 		},
 		HasState: true,
 		State: repository.MarketAssetHistoryState{
-			AssetKey: key, AdjustPolicy: "none", PointType: "adjusted_close",
+			AssetKey: key, AdjustPolicy: "qfq", PointType: "adjusted_close",
 			DataAsOf: points[len(points)-1].TradeDate, PointCount: len(points),
 		},
 		Points:      points,
@@ -117,6 +117,30 @@ func TestReadinessPassesForHealthyPortfolio(t *testing.T) {
 	}
 }
 
+func TestReadinessReportsExactCVaRSampleGate(t *testing.T) {
+	asset := rdAsset(t, "TAIL", 1, "2020-01-01", 400)
+	ds := rdDataset(asset)
+	ds.Collection.TailRiskConfidence = 0.99
+	ds.Collection.TailRiskHorizonDays = 20
+	readiness := evaluateResearchReadiness(ds, rdNow(t))
+	if !hasBlock(readiness, ResearchReasonCVARSample) || readiness.TailRisk == nil {
+		t.Fatalf("expected CVaR sample blocker: %+v", readiness)
+	}
+	if readiness.TailRisk.EffectiveReturnCount != 399 || readiness.TailRisk.ScenarioCount != 380 ||
+		readiness.TailRisk.MinimumScenarioCount != 500 {
+		t.Fatalf("unexpected CVaR readiness counts: %+v", readiness.TailRisk)
+	}
+
+	asset = rdAsset(t, "TAIL", 1, "2020-01-01", 550)
+	ds = rdDataset(asset)
+	ds.Collection.TailRiskConfidence = 0.99
+	ds.Collection.TailRiskHorizonDays = 20
+	readiness = evaluateResearchReadiness(ds, rdNow(t))
+	if hasBlock(readiness, ResearchReasonCVARSample) || readiness.TailRisk == nil || readiness.TailRisk.ScenarioCount != 530 {
+		t.Fatalf("CVaR readiness did not become ready after data extension: %+v", readiness)
+	}
+}
+
 func TestReadinessBlocksNoEnabledAssets(t *testing.T) {
 	r := evaluateResearchReadiness(rdDataset(), rdNow(t))
 	if r.Ready || !hasBlock(r, ResearchReasonNoEnabledAssets) {
@@ -159,6 +183,23 @@ func TestReadinessBlocksMissingHistory(t *testing.T) {
 	}
 	if r.DataDependencies.MissingHistoryCount != 1 {
 		t.Fatalf("missing history count expected 1, got %d", r.DataDependencies.MissingHistoryCount)
+	}
+}
+
+func TestReadinessBlocksUnadjustedAndDiscontinuousSeries(t *testing.T) {
+	raw := rdAsset(t, "RAW", 1, "2020-01-01", 1642)
+	raw.Item.AdjustPolicy = "none"
+	raw.Item.PointType = "close"
+	r := evaluateResearchReadiness(rdDataset(raw), rdNow(t))
+	if !hasBlock(r, ResearchReasonUnadjustedSeries) {
+		t.Fatalf("expected unadjusted series block, got %+v", r.BlockingReasons)
+	}
+
+	broken := rdAsset(t, "BROKEN", 1, "2020-01-01", 1642)
+	broken.Points[500].Value = broken.Points[499].Value * 2.0094
+	r = evaluateResearchReadiness(rdDataset(broken), rdNow(t))
+	if !hasBlock(r, ResearchReasonAdjustmentBreak) {
+		t.Fatalf("expected adjustment discontinuity block, got %+v", r.BlockingReasons)
 	}
 }
 

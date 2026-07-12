@@ -174,6 +174,7 @@ describe("ResearchRunDetailPage", () => {
     expect(screen.getByText("累计收益")).toBeInTheDocument();
     expect(screen.getByText("35%")).toBeInTheDocument();
     expect(screen.getByText("1.20")).toBeInTheDocument();
+    expect(screen.getByText("该历史回测版本未计算 CVaR")).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getAllByTestId("echarts").length).toBeGreaterThan(0));
 
@@ -201,6 +202,31 @@ describe("ResearchRunDetailPage", () => {
     expect(screen.getByTestId("export-json")).toBeInTheDocument();
     expect(screen.getByTestId("compare-run")).toBeInTheDocument();
     expect(screen.getByTestId("clone-params")).toBeInTheDocument();
+  });
+
+  it("renders frozen VaR and CVaR metrics from a v3 summary", async () => {
+    const detail = runDetail();
+    getRunMock.mockResolvedValue(runDetail({
+      engine_version: "research_backtest_v3",
+      summary: {
+        ...detail.summary!,
+        tail_risk: {
+          algorithm_version: "empirical_cvar_v1",
+          confidence: 0.95,
+          horizon_days: 20,
+          scenario_count: 233,
+          tail_count: 12,
+          var_loss: 0.05,
+          cvar_loss: 0.08,
+          worst_loss: 0.13,
+        },
+      },
+    }));
+    renderPage();
+    expect(await screen.findByText("20 日 95% VaR")).toBeInTheDocument();
+    expect(screen.getByText("20 日 95% CVaR")).toBeInTheDocument();
+    expect(screen.getByText("最差 20 日损失")).toBeInTheDocument();
+    expect(screen.queryByText("该历史回测版本未计算 CVaR")).not.toBeInTheDocument();
   });
 
   it("renders data quality when historical run stores fx as null", async () => {

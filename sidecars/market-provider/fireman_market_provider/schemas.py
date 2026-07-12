@@ -25,7 +25,7 @@ InstrumentType = Literal[
     "us_etf",
     "fx_rate",
 ]
-PointType = Literal["adjusted_close", "nav", "total_return_index", "fx_rate"]
+PointType = Literal["close", "adjusted_close", "nav", "total_return_index", "fx_rate"]
 ExpenseRatioStatus = Literal["provider_verified", "unavailable", "not_applicable"]
 SourceQuality = Literal["full", "partial", "empty"]
 

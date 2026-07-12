@@ -21,6 +21,7 @@ var (
 	errOptimizationAssetMismatch     = errors.New("调优结果与当前组合资产不一致，请重新运行调优")
 	errOptimizationDuplicateAsset    = errors.New("调优结果包含重复资产，请重新运行调优")
 	errOptimizationWeightSum         = errors.New("调优结果权重合计不是 100%，请重新运行调优")
+	errOptimizationMinimumCAGR       = errors.New("minimum_cagr must be finite and within [-0.95, 2.0]")
 )
 
 // research_optimization.go implements the pure candidate generation and
@@ -28,7 +29,7 @@ var (
 // No I/O: the service layer feeds inputs and the job runner orchestrates.
 
 const (
-	OptimizationEngineVersion       = "research_optimizer_v2"
+	OptimizationEngineVersion       = "research_optimizer_v3"
 	OptimizationDefaultWeightStep   = 0.05
 	OptimizationDefaultTopK         = 20
 	OptimizationDefaultMaxCandidate = 20000
@@ -43,13 +44,16 @@ const (
 	ObjectiveMaxCAGR     OptimizationObjective = "max_cagr"
 	ObjectiveMinDrawdown OptimizationObjective = "min_drawdown"
 	ObjectiveMaxCalmar   OptimizationObjective = "max_calmar"
+	ObjectiveMinCVaR     OptimizationObjective = "min_cvar"
 )
 
 // OptimizationConfig is the user-controllable config for one optimization run.
 type OptimizationConfig struct {
-	WeightStep        float64 `json:"weight_step"`
-	MaxCandidateCount int     `json:"max_candidate_count"`
-	TopK              int     `json:"top_k"`
+	WeightStep        float64      `json:"weight_step"`
+	MaxCandidateCount int          `json:"max_candidate_count"`
+	TopK              int          `json:"top_k"`
+	TailRisk          TailRiskSpec `json:"tail_risk"`
+	MinimumCAGR       *float64     `json:"minimum_cagr,omitempty"`
 }
 
 // NormalizeDefaults fills zero fields with defaults.
@@ -77,6 +81,14 @@ func (c OptimizationConfig) Validate() error {
 	}
 	if c.TopK <= 0 || c.TopK > 100 {
 		return errOptimizationTopK
+	}
+	if c.TailRisk.Confidence != 0 || c.TailRisk.HorizonDays != 0 {
+		if _, err := CanonicalTailRiskSpec(c.TailRisk); err != nil {
+			return err
+		}
+	}
+	if c.MinimumCAGR != nil && (!optimizationFinite(*c.MinimumCAGR) || *c.MinimumCAGR < -0.95 || *c.MinimumCAGR > 2) {
+		return errOptimizationMinimumCAGR
 	}
 	return nil
 }
@@ -115,12 +127,20 @@ type OptimizationResultItem struct {
 
 // OptimizationResult is the final output of one optimization run.
 type OptimizationResult struct {
-	CandidateCount int                      `json:"candidate_count"`
-	EvaluatedCount int                      `json:"evaluated_count"`
-	SkippedCount   int                      `json:"skipped_count"`
-	BestByCAGR     []OptimizationResultItem `json:"best_by_cagr"`
-	BestByDrawdown []OptimizationResultItem `json:"best_by_drawdown"`
-	BestByCalmar   []OptimizationResultItem `json:"best_by_calmar"`
+	CandidateCount    int                      `json:"candidate_count"`
+	EvaluatedCount    int                      `json:"evaluated_count"`
+	SkippedCount      int                      `json:"skipped_count"`
+	BestByCAGR        []OptimizationResultItem `json:"best_by_cagr"`
+	BestByDrawdown    []OptimizationResultItem `json:"best_by_drawdown"`
+	BestByCalmar      []OptimizationResultItem `json:"best_by_calmar"`
+	BestByCVaR        []OptimizationResultItem `json:"best_by_cvar"`
+	CVaREligibleCount int                      `json:"cvar_eligible_count"`
+	Warnings          []OptimizationWarning    `json:"warnings,omitempty"`
+}
+
+type OptimizationWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // ValidateOptimizationInput checks preconditions (td/103 §准入规则).
@@ -483,6 +503,15 @@ func (t *TopKTracker) Results() []OptimizationResultItem {
 }
 
 func optimizationResultBetter(a, b OptimizationResultItem) bool {
+	if a.Objective == ObjectiveMinCVaR && b.Objective == ObjectiveMinCVaR &&
+		a.Summary.TailRisk != nil && b.Summary.TailRisk != nil {
+		if a.Summary.TailRisk.CVaRLoss != b.Summary.TailRisk.CVaRLoss {
+			return a.Summary.TailRisk.CVaRLoss < b.Summary.TailRisk.CVaRLoss
+		}
+		if a.Summary.TailRisk.VaRLoss != b.Summary.TailRisk.VaRLoss {
+			return a.Summary.TailRisk.VaRLoss < b.Summary.TailRisk.VaRLoss
+		}
+	}
 	if a.Score != b.Score {
 		return a.Score > b.Score
 	}
@@ -531,6 +560,11 @@ func ScoreForObjective(objective OptimizationObjective, summary BacktestSummary)
 			return summary.CAGR / math.Abs(summary.MaxDrawdown), true
 		}
 		return 0, false
+	case ObjectiveMinCVaR:
+		if summary.TailRisk == nil {
+			return 0, false
+		}
+		return -summary.TailRisk.CVaRLoss, true
 	default:
 		return 0, false
 	}

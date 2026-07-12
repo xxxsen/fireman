@@ -451,7 +451,7 @@ def test_fetch_stock_prefers_tickflow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["data"]["name"] == "贵州茅台"
     assert "asset_class" not in body["data"]
     assert body["data"]["currency"] == "CNY"
-    assert body["data"]["point_type"] == "adjusted_close"
+    assert body["data"]["point_type"] == "close"
     assert [p["value"] for p in body["data"]["points"]] == [10.2, 10.3]
     assert [p["date"] for p in body["data"]["points"]] == ["2024-01-02", "2024-01-03"]
 

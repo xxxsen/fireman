@@ -275,20 +275,22 @@ def _build_stock_hk_daily(payload: dict[str, Any], start: str, end: str) -> Upst
 
 def _build_stock_us_daily(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
+    policy = str(payload.get("adjust_policy", "none"))
     return UpstreamCall(
         "stock_us_daily",
-        kwargs=(("symbol", str(payload.get("symbol", ""))), ("adjust", "qfq")),
+        kwargs=(("symbol", str(payload.get("symbol", ""))), ("adjust", "" if policy == "none" else policy)),
     )
 
 
 def _build_stock_us_hist(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+    policy = str(payload.get("adjust_policy", "none"))
     return UpstreamCall(
         "stock_us_hist",
         kwargs=(
             ("symbol", str(payload.get("symbol", ""))),
             ("start_date", start),
             ("end_date", end),
-            ("adjust", "qfq"),
+            ("adjust", "" if policy == "none" else policy),
         ),
     )
 
@@ -355,9 +357,16 @@ def _fetch_pinned_tickflow(payload: dict[str, Any], start: str, end: str) -> pd.
     return df
 
 
+def _history_point_type(instrument_type: str, adjust_policy: str, requested: str) -> str:
+    if instrument_type in (*_CN_EXCHANGE_TYPES, "hk_stock", "hk_etf", "us_stock", "us_etf"):
+        return "close" if adjust_policy == "none" else "adjusted_close"
+    return requested
+
+
 def _execute_pinned(payload: dict[str, Any], source_name: str) -> list:
     """Run exactly one pinned source; SourceUnavailable on any failure."""
     instrument_type = str(payload.get("instrument_type", ""))
+    adjust_policy = str(payload.get("adjust_policy", "none"))
     start_iso = str(payload.get("start_date", "") or "")
     start = _compact(start_iso) if start_iso else "19900101"
     end = _compact(_today())
@@ -365,6 +374,12 @@ def _execute_pinned(payload: dict[str, Any], source_name: str) -> list:
     if source_name == TICKFLOW_KLINES_SOURCE:
         df = _fetch_pinned_tickflow(payload, start, end)
         return normalize_dataframe(df)
+
+    if adjust_policy != "none" and source_name in (
+        "ak.fund_etf_hist_sina",
+        "ak.fund_etf_fund_info_em",
+    ):
+        raise SourceUnavailable(f"source {source_name} cannot guarantee adjusted history")
 
     builders = _PINNED_SOURCES.get(instrument_type, {})
     builder = builders.get(source_name)
@@ -385,7 +400,7 @@ def _execute_pinned(payload: dict[str, Any], source_name: str) -> list:
     return _filter_points(points, start_iso or None)
 
 
-def _execute_unpinned(payload: dict[str, Any]) -> tuple[list, str]:
+def _execute_unpinned(payload: dict[str, Any]) -> tuple[list, str, str]:
     """Full-range fetch via the existing priority/fallback chain."""
     start_iso = str(payload.get("start_date", "") or "") or None
     req = _fetch_request(payload, start_iso)
@@ -401,7 +416,7 @@ def _execute_unpinned(payload: dict[str, Any]) -> tuple[list, str]:
         raise TaskFailure("asset_identity_incomplete", str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise TaskFailure("market_provider_unavailable", f"history fetch failed: {exc}") from exc
-    return list(data.points), data.source_name
+    return list(data.points), data.source_name, data.point_type
 
 
 def execute_history_sync(payload: dict[str, Any]) -> dict[str, Any]:
@@ -425,8 +440,16 @@ def execute_history_sync(payload: dict[str, Any]) -> dict[str, Any]:
     if required_source:
         points = _execute_pinned(payload, required_source)
         source_name = required_source
+        actual_point_type = _history_point_type(instrument_type, adjust_policy, point_type)
     else:
-        points, source_name = _execute_unpinned(payload)
+        points, source_name, actual_point_type = _execute_unpinned(payload)
+
+    if actual_point_type != point_type:
+        raise TaskFailure(
+            "history_dimension_mismatch",
+            f"requested point_type={point_type} but source produced {actual_point_type} "
+            f"for adjust_policy={adjust_policy}",
+        )
 
     result: dict[str, Any] = {
         "type": "asset_history_sync",

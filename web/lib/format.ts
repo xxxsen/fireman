@@ -244,7 +244,8 @@ export function dataSourceLabel(sourceName: string | undefined | null): string {
 export function pointTypeLabel(pointType: string | undefined | null): string {
   if (!pointType) return "—";
   const map: Record<string, string> = {
-    adjusted_close: "前复权收盘价",
+    close: "未复权收盘价",
+    adjusted_close: "复权收盘价",
     nav: "单位净值",
     total_return_index: "累计净值",
     fx_rate: "汇率",

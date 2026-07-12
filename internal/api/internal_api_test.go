@@ -453,7 +453,7 @@ func historySyncResult(assetKey, source string, dates []string, values []float64
 	raw, _ := json.Marshal(map[string]any{
 		"type":          "asset_history_sync",
 		"asset_key":     assetKey,
-		"adjust_policy": "none",
+		"adjust_policy": "qfq",
 		"point_type":    "adjusted_close",
 		"source_name":   source,
 		"points":        points,
@@ -505,7 +505,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	var pointCount int
 	if err := st.db.QueryRow(`
 		SELECT data_as_of, source_name, point_count FROM market_asset_history_state
-		WHERE asset_key=? AND adjust_policy='none' AND point_type='adjusted_close'`, assetKey).
+			WHERE asset_key=? AND adjust_policy='qfq' AND point_type='adjusted_close'`, assetKey).
 		Scan(&dataAsOf, &sourceName, &pointCount); err != nil {
 		t.Fatal(err)
 	}
@@ -525,6 +525,34 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	}
 	finishTask(t, st.db, fullTaskID, "complete")
 
+	// A discontinuity in an adjusted incremental series rolls the entire
+	// transaction back, including overlapping upserts and projections.
+	created, err = st.assets.SyncHistory(ctx, service.HistorySyncRequest{
+		AssetKey: assetKey, Mode: "default_refresh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discontinuityTaskID := created.Task.ID
+	discontinuityDates := sequentialDates(dataAsOf, 2)
+	env = uploadResult(t, st, historySyncResult(assetKey, "ak_primary", discontinuityDates,
+		[]float64{103.9, 210}))
+	markPreComplete(t, st.db, discontinuityTaskID, env)
+	assertOutcome(t, notifyPostProcess(t, st, discontinuityTaskID),
+		"permanent_error", "adjustment_discontinuity")
+	if n := countRows(t, st.db,
+		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 40 {
+		t.Fatalf("discontinuous merge mutated points: %d", n)
+	}
+	var maxDate string
+	if err := st.db.QueryRow(`SELECT MAX(trade_date) FROM market_asset_points WHERE asset_key=?`, assetKey).Scan(&maxDate); err != nil {
+		t.Fatal(err)
+	}
+	if maxDate != dataAsOf {
+		t.Fatalf("discontinuous merge changed max date to %s", maxDate)
+	}
+	finishTask(t, st.db, discontinuityTaskID, "failed")
+
 	// 2) Same-source merge with no_new_data: only success metadata moves.
 	created, err = st.assets.SyncHistory(ctx, service.HistorySyncRequest{
 		AssetKey: assetKey, Mode: "default_refresh",
@@ -535,7 +563,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	mergeTaskID := created.Task.ID
 	noNew, _ := json.Marshal(map[string]any{
 		"type": "asset_history_sync", "asset_key": assetKey,
-		"adjust_policy": "none", "point_type": "adjusted_close",
+		"adjust_policy": "qfq", "point_type": "adjusted_close",
 		"source_name": "ak_primary", "no_new_data": true,
 		"points": []any{},
 	})
@@ -545,7 +573,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	var lastSuccess string
 	if err := st.db.QueryRow(`
 		SELECT last_success_task_id FROM market_asset_history_state
-		WHERE asset_key=? AND adjust_policy='none' AND point_type='adjusted_close'`, assetKey).
+			WHERE asset_key=? AND adjust_policy='qfq' AND point_type='adjusted_close'`, assetKey).
 		Scan(&lastSuccess); err != nil {
 		t.Fatal(err)
 	}

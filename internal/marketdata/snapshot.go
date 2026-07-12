@@ -193,8 +193,8 @@ func (s *SnapshotService) CreateForHolding(
 }
 
 // LoadAssetPoints loads the asset's local history series for the dimension the
-// simulation should use: the history state with the most points wins, falling
-// back to (none, default point type by asset type).
+// simulation should use. Exchange-traded assets require an adjusted series;
+// raw prices must never win merely because they contain more points.
 func (s *SnapshotService) LoadAssetPoints(
 	ctx context.Context, asset repository.MarketAsset,
 ) ([]DataPoint, error) {
@@ -206,16 +206,27 @@ func (s *SnapshotService) LoadAssetPoints(
 func (s *SnapshotService) LoadAssetPointsTx(
 	ctx context.Context, tx *sql.Tx, asset repository.MarketAsset,
 ) ([]DataPoint, error) {
-	adjustPolicy, pointType := "none", defaultPointTypeForAsset(asset)
+	adjustPolicy, pointType := defaultSnapshotDimension(asset)
 	states, err := s.listHistoryStates(ctx, tx, asset.AssetKey)
 	if err != nil {
 		return nil, fmt.Errorf("list history states: %w", err)
 	}
 	bestCount := 0
 	for _, st := range states {
+		if isExchangeTradedAsset(asset) &&
+			(st.AdjustPolicy == "none" || st.PointType != "adjusted_close") {
+			continue
+		}
 		if st.PointCount > bestCount {
 			bestCount = st.PointCount
 			adjustPolicy, pointType = st.AdjustPolicy, st.PointType
+		}
+	}
+	if isExchangeTradedAsset(asset) && bestCount == 0 && len(states) > 0 {
+		return nil, &SnapshotError{
+			Code:    "unadjusted_price_series",
+			Message: "未复权收盘价不能用于 FIRE 模拟，请先同步前复权历史数据",
+			Details: map[string]any{"asset_key": asset.AssetKey},
 		}
 	}
 	rows, err := s.listPoints(ctx, tx, asset.AssetKey, adjustPolicy, pointType)
@@ -229,7 +240,39 @@ func (s *SnapshotService) LoadAssetPointsTx(
 			PointType: r.PointType, SourceName: r.SourceName, FetchedAt: r.FetchedAt,
 		}
 	}
+	if asset.Market == "CN" && isCNExchangeTradedAsset(asset) {
+		if discontinuity, found := FindPriceDiscontinuity(out, CNAdjustedPriceMaxDailyMove); found {
+			return nil, &SnapshotError{
+				Code:    "adjustment_discontinuity",
+				Message: "复权价格序列存在异常断点，请全量刷新历史数据",
+				Details: map[string]any{
+					"asset_key": asset.AssetKey, "previous_date": discontinuity.PreviousDate,
+					"date": discontinuity.Date, "return": discontinuity.Return,
+				},
+			}
+		}
+	}
 	return out, nil
+}
+
+func defaultSnapshotDimension(asset repository.MarketAsset) (string, string) {
+	if isExchangeTradedAsset(asset) {
+		return "qfq", "adjusted_close"
+	}
+	return "none", defaultPointTypeForAsset(asset)
+}
+
+func isCNExchangeTradedAsset(asset repository.MarketAsset) bool {
+	return asset.InstrumentType == "cn_exchange_stock" || asset.InstrumentType == "cn_exchange_fund"
+}
+
+func isExchangeTradedAsset(asset repository.MarketAsset) bool {
+	switch asset.InstrumentType {
+	case "cn_exchange_stock", "cn_exchange_fund", "hk_stock", "hk_etf", "us_stock", "us_etf":
+		return true
+	default:
+		return false
+	}
 }
 
 // assetByKey routes the directory read through tx when provided.

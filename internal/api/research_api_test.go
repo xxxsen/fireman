@@ -42,7 +42,7 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name string, days int, bas
 		for i := 0; i < days; i++ {
 			d := end.AddDate(0, 0, i-days+1)
 			points = append(points, repository.MarketAssetPoint{
-				AssetKey: key, AdjustPolicy: "none", PointType: "adjusted_close",
+				AssetKey: key, AdjustPolicy: "qfq", PointType: "adjusted_close",
 				TradeDate:  d.Format("2006-01-02"),
 				Value:      base * (1 + 0.03*math.Sin(float64(i)/9)) * math.Pow(1.0002, float64(i)),
 				SourceName: "test_source", FetchedAt: now,
@@ -55,7 +55,7 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name string, days int, bas
 			INSERT INTO market_asset_history_state
 				(asset_key, adjust_policy, point_type, data_as_of, point_count, source_name, updated_at)
 			VALUES (?,?,?,?,?,?,?)`,
-			key, "none", "adjusted_close",
+			key, "qfq", "adjusted_close",
 			points[len(points)-1].TradeDate, days, "test_source", now); err != nil {
 			t.Fatalf("insert history state: %v", err)
 		}
@@ -168,7 +168,7 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 
 	// Create collection with invalid weights: readiness must block.
 	resp, body = researchPost(t, srv, "/api/v1/research/collections", map[string]any{
-		"name": "接口组合",
+		"name": "接口组合", "tail_risk_confidence": 0.99, "tail_risk_horizon_days": 1,
 		"items": []map[string]any{
 			{"asset_key": "RA1", "weight": 0.5},
 			{"asset_key": "RA2", "weight": 0.3},
@@ -178,6 +178,9 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 		t.Fatalf("create collection status=%d body=%s", resp.StatusCode, body)
 	}
 	collection := envData(t, body)
+	if collection["tail_risk_confidence"] != 0.99 || collection["tail_risk_horizon_days"] != float64(1) {
+		t.Fatalf("tail-risk create round trip failed: %s", body)
+	}
 	collectionID := collection["id"].(string)
 	items := collection["items"].([]any)
 
@@ -249,6 +252,11 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	summary := runDetail["summary"].(map[string]any)
 	if _, ok := summary["cagr"]; !ok {
 		t.Fatalf("summary missing cagr: %s", body)
+	}
+	tailRisk := summary["tail_risk"].(map[string]any)
+	if tailRisk["confidence"] != 0.99 || tailRisk["horizon_days"] != float64(1) ||
+		tailRisk["algorithm_version"] != "empirical_cvar_v1" {
+		t.Fatalf("summary missing frozen CVaR contract: %s", body)
 	}
 	if len(runDetail["years"].([]any)) < 3 || len(runDetail["months"].([]any)) < 40 {
 		t.Fatalf("years/months missing: %s", body)
@@ -326,6 +334,51 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 		t.Fatalf("latest run annotations missing: %s", body)
 	}
 
+	// CVaR optimization runs through readiness, worker, result and apply APIs.
+	resp, body = researchGet(t, srv,
+		"/api/v1/research/collections/"+collectionID+
+			"/optimization-readiness?weight_step=0.1&cvar_confidence=0.95&cvar_horizon_days=20")
+	if resp.StatusCode != http.StatusOK || !envData(t, body)["ready"].(bool) {
+		t.Fatalf("optimization readiness failed: status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, body = researchPost(t, srv,
+		"/api/v1/research/collections/"+collectionID+"/optimizations", map[string]any{
+			"weight_step": 0.1, "top_k": 5,
+			"tail_risk": map[string]any{"confidence": 0.95, "horizon_days": 20},
+		})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create optimization status=%d body=%s", resp.StatusCode, body)
+	}
+	optimization := envData(t, body)["optimization"].(map[string]any)
+	optimizationID := optimization["id"].(string)
+	waitJobSucceeded(t, srv, optimization["job_id"].(string))
+	resp, body = researchGet(t, srv, "/api/v1/research/optimizations/"+optimizationID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get optimization status=%d body=%s", resp.StatusCode, body)
+	}
+	optimization = envData(t, body)
+	optimizationResult := optimization["result"].(map[string]any)
+	bestByCVaR := optimizationResult["best_by_cvar"].([]any)
+	if len(bestByCVaR) == 0 || optimizationResult["cvar_eligible_count"].(float64) == 0 {
+		t.Fatalf("CVaR optimization result incomplete: %s", body)
+	}
+	resp, body = researchGet(t, srv, "/api/v1/research/collections/"+collectionID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get collection before apply status=%d body=%s", resp.StatusCode, body)
+	}
+	expectedUpdatedAt := envData(t, body)["updated_at"].(float64)
+	resp, body = researchPost(t, srv, "/api/v1/research/optimizations/"+optimizationID+"/apply", map[string]any{
+		"objective": "min_cvar", "rank": 1, "expected_collection_updated_at": expectedUpdatedAt,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply CVaR optimization status=%d body=%s", resp.StatusCode, body)
+	}
+	appliedCollection := envData(t, body)
+	if appliedCollection["tail_risk_confidence"] != 0.95 ||
+		appliedCollection["tail_risk_horizon_days"] != float64(20) {
+		t.Fatalf("applied CVaR spec missing: %s", body)
+	}
+
 	// PATCH item weight (rebalances hash) and item update path.
 	itemID := items[0].(map[string]any)["id"].(string)
 	resp, body = researchPatch(t, srv,
@@ -337,12 +390,19 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 
 	// Update collection params via PATCH.
 	resp, body = researchPatch(t, srv, "/api/v1/research/collections/"+collectionID,
-		map[string]any{"rebalance_policy": "quarterly", "risk_free_rate": 0.02})
+		map[string]any{
+			"rebalance_policy": "quarterly", "risk_free_rate": 0.02,
+			"tail_risk_confidence": 0.9, "tail_risk_horizon_days": 20,
+		})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch collection status=%d body=%s", resp.StatusCode, body)
 	}
 	if got := envData(t, body)["rebalance_policy"].(string); got != "quarterly" {
 		t.Fatalf("rebalance policy not updated: %s", got)
+	}
+	patched := envData(t, body)
+	if patched["tail_risk_confidence"] != 0.9 || patched["tail_risk_horizon_days"] != float64(20) {
+		t.Fatalf("tail-risk patch round trip failed: %s", body)
 	}
 
 	// Archive then hard-delete.
@@ -369,6 +429,43 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	resp, _ = researchGet(t, srv, "/api/v1/research/collections/"+collectionID)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("deleted collection should 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestOptimizationReadinessRejectsMalformedQuery(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	services := buildServices(db)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	for _, query := range []string{
+		"weight_step=abc",
+		"cvar_confidence=abc",
+		"cvar_horizon_days=1.5",
+	} {
+		resp, body := researchGet(t, srv, "/api/v1/research/collections/missing/optimization-readiness?"+query)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("query %q status=%d body=%s", query, resp.StatusCode, body)
+		}
+		assertErrorCode(t, body, "invalid_request")
+	}
+	resp, body := researchPost(t, srv, "/api/v1/research/collections", map[string]any{"name": "CVaR query"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create collection status=%d body=%s", resp.StatusCode, body)
+	}
+	collectionID := envData(t, body)["id"].(string)
+	for _, tc := range []struct {
+		query, code string
+	}{
+		{"cvar_confidence=0.94", "cvar_confidence_invalid"},
+		{"cvar_horizon_days=2", "cvar_horizon_invalid"},
+	} {
+		resp, body = researchGet(t, srv,
+			"/api/v1/research/collections/"+collectionID+"/optimization-readiness?"+tc.query)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("query %q status=%d body=%s", tc.query, resp.StatusCode, body)
+		}
+		assertErrorCode(t, body, tc.code)
 	}
 }
 

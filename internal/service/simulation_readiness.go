@@ -502,7 +502,7 @@ func (s *SimulationReadinessService) syncOneAsset(
 	ctx context.Context, plan repository.Plan, assetKey string,
 	out *SyncMissingHistoryResult,
 ) error {
-	asset, err := s.assetRepo.GetByKey(ctx, assetKey)
+	_, err := s.assetRepo.GetByKey(ctx, assetKey)
 	if err != nil {
 		if errors.Is(err, repository.ErrMarketAssetNotFound) {
 			return newErr("market_asset_not_found",
@@ -527,10 +527,8 @@ func (s *SimulationReadinessService) syncOneAsset(
 		return nil
 	case ReadinessReasonHistoryMissing:
 		res, err := s.assetSvc.SyncHistory(ctx, HistorySyncRequest{
-			AssetKey:     assetKey,
-			AdjustPolicy: "none",
-			PointType:    DefaultPointType(asset.InstrumentType, asset.InstrumentKind),
-			Mode:         historyModeDefaultRefresh,
+			AssetKey: assetKey,
+			Mode:     historyModeDefaultRefresh,
 		})
 		if err != nil {
 			return err

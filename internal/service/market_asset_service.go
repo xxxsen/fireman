@@ -825,6 +825,66 @@ func DefaultPointType(instrumentType, instrumentKind string) string {
 	return "adjusted_close"
 }
 
+// DefaultAdjustPolicy returns the return-analysis-safe history policy.
+func DefaultAdjustPolicy(instrumentType string) string {
+	if instrumentType == "cn_mutual_fund" || instrumentType == "cash" || instrumentType == "fx_rate" {
+		return "none"
+	}
+	return "qfq"
+}
+
+// ValidateHistoryDimension prevents raw and adjusted prices from sharing a key.
+func ValidateHistoryDimension(asset repository.MarketAsset, adjustPolicy, pointType string) error {
+	switch adjustPolicy {
+	case "none", "qfq", "hfq":
+	default:
+		return newErr("invalid_request", "adjust_policy must be none, qfq or hfq", nil)
+	}
+	if asset.InstrumentType == "cn_mutual_fund" {
+		if adjustPolicy != "none" {
+			return newErr("invalid_request", "mutual fund history only supports adjust_policy none", nil)
+		}
+		want := DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+		if pointType != want {
+			return newErr("invalid_request", fmt.Sprintf("point_type must be %s for this asset", want), nil)
+		}
+		return nil
+	}
+	if asset.InstrumentType == "cash" {
+		if adjustPolicy != "none" {
+			return newErr("invalid_request", "cash only supports adjust_policy none", nil)
+		}
+		return nil
+	}
+	if asset.InstrumentType == "fx_rate" {
+		if adjustPolicy != "none" || pointType != "fx_rate" {
+			return newErr("invalid_request", "FX history requires none + fx_rate", nil)
+		}
+		return nil
+	}
+	if !isExchangeInstrumentType(asset.InstrumentType) {
+		return newErr("invalid_request", "unsupported history dimension for this asset type", nil)
+	}
+	want := "adjusted_close"
+	if adjustPolicy == "none" {
+		want = "close"
+	}
+	if pointType != want {
+		message := fmt.Sprintf("point_type must be %s when adjust_policy is %s", want, adjustPolicy)
+		return newErr("invalid_request", message, nil)
+	}
+	return nil
+}
+
+func isExchangeInstrumentType(instrumentType string) bool {
+	switch instrumentType {
+	case "cn_exchange_stock", "cn_exchange_fund", "hk_stock", "hk_etf", "us_stock", "us_etf":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetDetail loads the asset, its history state/points and the commit-time
 // detail projection for one history dimension.
 func (s *MarketAssetService) GetDetail(
@@ -936,6 +996,14 @@ func (s *MarketAssetService) resolveHistoryDimension(
 	}
 	if len(states) > 0 {
 		st := states[0]
+		defaultAdjust := DefaultAdjustPolicy(asset.InstrumentType)
+		defaultPoint := DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+		for _, candidate := range states {
+			if candidate.AdjustPolicy == defaultAdjust && candidate.PointType == defaultPoint {
+				st = candidate
+				break
+			}
+		}
 		if adjustPolicy == "" {
 			adjustPolicy = st.AdjustPolicy
 		}
@@ -945,7 +1013,7 @@ func (s *MarketAssetService) resolveHistoryDimension(
 		return adjustPolicy, pointType, nil
 	}
 	if adjustPolicy == "" {
-		adjustPolicy = "none"
+		adjustPolicy = DefaultAdjustPolicy(asset.InstrumentType)
 	}
 	if pointType == "" {
 		pointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
@@ -1045,10 +1113,17 @@ func (s *MarketAssetService) syncHistory(
 		return TaskCreateResult{}, wrapRepo("load market asset", err)
 	}
 	if req.AdjustPolicy == "" {
-		req.AdjustPolicy = "none"
+		req.AdjustPolicy = DefaultAdjustPolicy(asset.InstrumentType)
 	}
 	if req.PointType == "" {
-		req.PointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+		if req.AdjustPolicy == "none" && asset.InstrumentType != "cn_mutual_fund" {
+			req.PointType = "close"
+		} else {
+			req.PointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
+		}
+	}
+	if err := ValidateHistoryDimension(asset, req.AdjustPolicy, req.PointType); err != nil {
+		return TaskCreateResult{}, err
 	}
 
 	payload, err := s.buildHistoryPayload(ctx, asset, req)

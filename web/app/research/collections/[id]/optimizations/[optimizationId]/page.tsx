@@ -23,14 +23,16 @@ import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import type { ResearchRebalancePolicy } from "@/lib/api/research";
 
-type TabKey = "cagr" | "drawdown" | "calmar";
+type TabKey = "cagr" | "drawdown" | "cvar" | "calmar";
 const TABS: { key: TabKey; label: string }[] = [
   { key: "cagr", label: "最高收益" },
   { key: "drawdown", label: "最低回撤" },
+  { key: "cvar", label: "最低尾部损失" },
   { key: "calmar", label: "收益回撤平衡" },
 ];
 
 function scoreFmt(tab: TabKey, score: number): string {
+  if (tab === "cvar") return formatPercent(-score);
   if (tab === "drawdown") return formatPercent(score);
   if (tab === "calmar") return score.toFixed(3);
   return formatPercent(score);
@@ -46,20 +48,22 @@ function ResultTable({
   onApply: (item: ResearchOptimizationResultItem) => void;
 }) {
   if (items.length === 0) {
-    return <p className="py-4 text-center text-sm text-ink-muted">无结果</p>;
+    return <p className="py-4 text-center text-sm text-ink-muted">{tab === "cvar" ? "没有候选达到最低 CAGR 门槛。降低门槛或关闭该限制后重新运行调优。" : "无结果"}</p>;
   }
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[780px] text-sm" data-testid={`result-table-${tab}`}>
+      <table className="w-full min-w-[980px] text-sm" data-testid={`result-table-${tab}`}>
         <thead>
           <tr className="border-b border-line text-left text-xs text-ink-muted">
             <th className="px-2 py-2 font-medium">#</th>
-            <th className="px-2 py-2 font-medium">得分</th>
+            <th className="px-2 py-2 font-medium">{tab === "cvar" ? "CVaR" : "得分"}</th>
             <th className="px-2 py-2 font-medium">年化收益</th>
             <th className="px-2 py-2 font-medium">累计收益</th>
             <th className="px-2 py-2 font-medium">最大回撤</th>
             <th className="px-2 py-2 font-medium">波动率</th>
+            <th className="px-2 py-2 font-medium">VaR loss</th>
+            <th className="px-2 py-2 font-medium">CVaR loss</th>
             <th className="px-2 py-2 font-medium">
               <MetricHeader
                 label="夏普比率"
@@ -99,6 +103,8 @@ function ResultTable({
               <td className="px-2 py-2 font-mono-numeric text-ink">
                 {formatNullablePercent(item.summary.annual_volatility)}
               </td>
+              <TailLossCell item={item} field="var_loss" />
+              <TailLossCell item={item} field="cvar_loss" />
               <td className="px-2 py-2 font-mono-numeric text-ink">
                 {item.summary.sharpe != null ? item.summary.sharpe.toFixed(2) : "—"}
               </td>
@@ -122,6 +128,26 @@ function ResultTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function TailLossCell({
+  item,
+  field,
+}: {
+  item: ResearchOptimizationResultItem;
+  field: "var_loss" | "cvar_loss";
+}) {
+  const tail = item.summary.tail_risk;
+  if (!tail) return <td className="px-2 py-2 text-ink-muted">—</td>;
+  const value = tail[field];
+  const details = `${tail.horizon_days} 日 / ${(tail.confidence * 100).toFixed(0)}%，${tail.scenario_count} 个场景，尾部计数 ${tail.tail_count}`;
+  return (
+    <td className={`px-2 py-2 font-mono-numeric ${value > 0 ? "text-danger" : "text-positive"}`}>
+      <Tooltip content={details} contentClassName="max-w-64">
+        <span className="cursor-help">{formatPercent(value)}</span>
+      </Tooltip>
+    </td>
   );
 }
 
@@ -228,6 +254,8 @@ export default function OptimizationDetailPage() {
         return opt.result.best_by_cagr ?? [];
       case "drawdown":
         return opt.result.best_by_drawdown ?? [];
+      case "cvar":
+        return opt.result.best_by_cvar ?? [];
       case "calmar":
         return opt.result.best_by_calmar ?? [];
     }
@@ -303,13 +331,25 @@ export default function OptimizationDetailPage() {
         } · ${opt.base_currency} · ${formatDateTimeFromMs(opt.created_at)}`}
       />
 
-      <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
+      <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3 lg:grid-cols-6">
         <div>
           <dt className="text-ink-muted">权重步长</dt>
           <dd className="font-medium text-ink">
             {opt.config?.weight_step != null
               ? formatPercent(opt.config.weight_step)
               : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-ink-muted">CVaR 口径</dt>
+          <dd className="font-medium text-ink">
+            {opt.config?.tail_risk ? `${opt.config.tail_risk.horizon_days} 日 / ${opt.config.tail_risk.confidence * 100}%` : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-ink-muted">最低 CAGR</dt>
+          <dd className="font-medium text-ink">
+            {opt.config?.minimum_cagr != null ? formatPercent(opt.config.minimum_cagr) : "未限制"}
           </dd>
         </div>
         <div>
@@ -374,14 +414,18 @@ export default function OptimizationDetailPage() {
             </p>
           )}
 
-          <div className="flex gap-1 border-b border-line">
+          {opt.result.warnings?.map((warning) => (
+            <p key={warning.code} className="text-xs text-warning">{warning.message}</p>
+          ))}
+
+          <div className="flex gap-1 overflow-x-auto border-b border-line">
             {TABS.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
                 className={
-                  "px-4 py-2 text-sm font-medium transition-colors " +
+                  "shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors " +
                   (activeTab === tab.key
                     ? "border-b-2 border-brand text-brand"
                     : "text-ink-muted hover:text-ink")
@@ -435,9 +479,15 @@ export default function OptimizationDetailPage() {
                 <dd className="font-medium text-ink">
                   {opt.window_start} ~ {opt.window_end}
                 </dd>
+                <dt className="text-ink-muted">尾部风险口径</dt>
+                <dd className="font-medium text-ink">
+                  {opt.config?.tail_risk ? `${opt.config.tail_risk.horizon_days} 日 / ${opt.config.tail_risk.confidence * 100}%` : "—"}
+                </dd>
+                <dt className="text-ink-muted">最低 CAGR</dt>
+                <dd className="font-medium text-ink">仅用于本次筛选，不写入集合</dd>
               </dl>
               <p className="text-xs text-warning">
-                应用后会覆盖当前组合的启用、锁定、权重和回测区间设置。
+                应用后会同步当前组合的启用、锁定、权重、回测区间和尾部风险口径。
               </p>
             </div>
           ) : (

@@ -27,20 +27,27 @@ import (
 
 // OptimizationReadiness is the response for optimization readiness checks.
 type OptimizationReadiness struct {
-	Ready           bool                     `json:"ready"`
-	CandidateCount  int                      `json:"candidate_count"`
-	EnabledCount    int                      `json:"enabled_count"`
-	LockedCount     int                      `json:"locked_count"`
-	TunableCount    int                      `json:"tunable_count"`
-	LockedWeightSum float64                  `json:"locked_weight_sum"`
-	BlockingReasons []ResearchReadinessIssue `json:"blocking_reasons"`
-	Warnings        []ResearchReadinessIssue `json:"warnings"`
+	Ready           bool                       `json:"ready"`
+	CandidateCount  int                        `json:"candidate_count"`
+	EnabledCount    int                        `json:"enabled_count"`
+	LockedCount     int                        `json:"locked_count"`
+	TunableCount    int                        `json:"tunable_count"`
+	LockedWeightSum float64                    `json:"locked_weight_sum"`
+	BlockingReasons []ResearchReadinessIssue   `json:"blocking_reasons"`
+	Warnings        []ResearchReadinessIssue   `json:"warnings"`
+	TailRisk        *ResearchTailRiskReadiness `json:"tail_risk,omitempty"`
+}
+
+type OptimizationReadinessRequest struct {
+	WeightStep  float64
+	Confidence  *float64
+	HorizonDays *int
 }
 
 // GetOptimizationReadiness checks whether a collection is ready for
 // auto-optimization (td/103 §Readiness).
 func (s *ResearchService) GetOptimizationReadiness(
-	ctx context.Context, collectionID string, weightStep float64,
+	ctx context.Context, collectionID string, req OptimizationReadinessRequest,
 ) (OptimizationReadiness, error) {
 	var zero OptimizationReadiness
 	collection, err := s.research.GetCollection(ctx, collectionID)
@@ -61,7 +68,11 @@ func (s *ResearchService) GetOptimizationReadiness(
 		return zero, err
 	}
 
-	config := OptimizationConfig{WeightStep: weightStep}
+	spec, err := resolveRequestedTailRisk(collection, req.Confidence, req.HorizonDays)
+	if err != nil {
+		return zero, tailRiskAppError(err)
+	}
+	config := OptimizationConfig{WeightStep: req.WeightStep, TailRisk: spec}
 	config.NormalizeDefaults()
 	if err := config.Validate(); err != nil {
 		return zero, newErr("invalid_request", err.Error(), nil)
@@ -71,9 +82,13 @@ func (s *ResearchService) GetOptimizationReadiness(
 	// Merge data-dependency blocking reasons from standard readiness
 	// (excluding weight_sum_invalid) so the readiness endpoint is
 	// consistent with the creation endpoint.
+	originalConfidence, originalHorizon := ds.Collection.TailRiskConfidence, ds.Collection.TailRiskHorizonDays
+	ds.Collection.TailRiskConfidence, ds.Collection.TailRiskHorizonDays = spec.Confidence, spec.HorizonDays
 	stdReadiness := evaluateResearchReadiness(ds, s.now())
+	ds.Collection.TailRiskConfidence, ds.Collection.TailRiskHorizonDays = originalConfidence, originalHorizon
+	out.TailRisk = stdReadiness.TailRisk
 	for _, b := range stdReadiness.BlockingReasons {
-		if b.Reason == ResearchReasonWeightSumInvalid {
+		if b.Reason == ResearchReasonWeightSumInvalid || b.Reason == ResearchReasonCVARSample {
 			continue
 		}
 		alreadyPresent := false
@@ -87,9 +102,66 @@ func (s *ResearchService) GetOptimizationReadiness(
 			out.BlockingReasons = append(out.BlockingReasons, b)
 		}
 	}
+	appendOptimizationTailRiskIssues(ds, stdReadiness, spec, &out)
 	out.Ready = len(out.BlockingReasons) == 0
 
 	return out, nil
+}
+
+// appendOptimizationTailRiskIssues checks every asset that can receive a
+// positive candidate weight. This is deliberately more conservative than
+// checking the current portfolio's union of observations: every generated
+// candidate is guaranteed to satisfy the configured CVaR sample gate.
+func appendOptimizationTailRiskIssues(
+	ds *researchDataset,
+	readiness ResearchReadiness,
+	spec TailRiskSpec,
+	out *OptimizationReadiness,
+) {
+	lo, loErr := parseResearchDate(readiness.WindowStart)
+	hi, hiErr := parseResearchDate(readiness.WindowEnd)
+	if loErr != nil || hiErr != nil {
+		return
+	}
+	minimum := MinimumTailRiskScenarios(spec.Confidence)
+	minimumEffective, minimumScenarios := -1, -1
+	for i := range ds.Enabled {
+		asset := ds.Enabled[i]
+		if asset.Item.WeightLocked && asset.Item.Weight <= ResearchWeightTolerance {
+			continue
+		}
+		single := *ds
+		single.Enabled = append([]researchAssetData(nil), ds.Enabled...)
+		for j := range single.Enabled {
+			single.Enabled[j].Item.Weight = 0
+		}
+		single.Enabled[i].Item.Weight = 1
+		effectiveCount := len(relevantEffectiveObservationDays(&single, lo, hi))
+		scenarioCount := TailRiskScenarioCount(effectiveCount, spec.HorizonDays)
+		if minimumEffective < 0 || effectiveCount < minimumEffective {
+			minimumEffective = effectiveCount
+		}
+		if minimumScenarios < 0 || scenarioCount < minimumScenarios {
+			minimumScenarios = scenarioCount
+		}
+		if scenarioCount < minimum {
+			out.BlockingReasons = append(out.BlockingReasons, ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey,
+				Reason:   ResearchReasonCVARSample,
+				Message: fmt.Sprintf(
+					"资产 %s 的 CVaR 场景数 %d 少于最低要求 %d（%.0f%% / %d 日）",
+					asset.Item.AssetKey, scenarioCount, minimum, spec.Confidence*100, spec.HorizonDays,
+				),
+			})
+		}
+	}
+	if minimumEffective >= 0 {
+		out.TailRisk = &ResearchTailRiskReadiness{
+			Confidence: spec.Confidence, HorizonDays: spec.HorizonDays,
+			EffectiveReturnCount: minimumEffective, ScenarioCount: minimumScenarios,
+			MinimumScenarioCount: minimum,
+		}
+	}
 }
 
 func evaluateOptimizationReadiness(
@@ -205,9 +277,50 @@ func appendOptimizationCandidateIssues(
 
 // ResearchOptimizationRequest is the POST /collections/{id}/optimizations body.
 type ResearchOptimizationRequest struct {
-	WeightStep        float64 `json:"weight_step"`
-	MaxCandidateCount int     `json:"max_candidate_count"`
-	TopK              int     `json:"top_k"`
+	WeightStep        float64       `json:"weight_step"`
+	MaxCandidateCount int           `json:"max_candidate_count"`
+	TopK              int           `json:"top_k"`
+	TailRisk          *TailRiskSpec `json:"tail_risk,omitempty"`
+	MinimumCAGR       *float64      `json:"minimum_cagr,omitempty"`
+}
+
+func resolveRequestedTailRisk(
+	collection repository.ResearchCollection, confidence *float64, horizon *int,
+) (TailRiskSpec, error) {
+	value := collection.TailRiskConfidence
+	if confidence != nil {
+		value = *confidence
+	}
+	days := collection.TailRiskHorizonDays
+	if horizon != nil {
+		days = *horizon
+	}
+	return CanonicalTailRiskSpec(TailRiskSpec{Confidence: value, HorizonDays: days})
+}
+
+func optimizationConfigFromRequest(
+	collection repository.ResearchCollection, req ResearchOptimizationRequest,
+) (OptimizationConfig, error) {
+	var confidence *float64
+	var horizon *int
+	if req.TailRisk != nil {
+		confidence, horizon = &req.TailRisk.Confidence, &req.TailRisk.HorizonDays
+	}
+	spec, err := resolveRequestedTailRisk(collection, confidence, horizon)
+	if err != nil {
+		return OptimizationConfig{}, err
+	}
+	return OptimizationConfig{
+		WeightStep: req.WeightStep, MaxCandidateCount: req.MaxCandidateCount,
+		TopK: req.TopK, TailRisk: spec, MinimumCAGR: req.MinimumCAGR,
+	}, nil
+}
+
+func optionalFloatHash(value *float64) string {
+	if value == nil {
+		return "null"
+	}
+	return strconv.FormatFloat(*value, 'g', 17, 64)
 }
 
 // ResearchOptimizationCreateResult is the creation response.
@@ -304,7 +417,10 @@ func (s *ResearchService) CreateOptimization(
 		return zero, err
 	}
 
-	config := OptimizationConfig(req)
+	config, err := optimizationConfigFromRequest(collection, req)
+	if err != nil {
+		return zero, tailRiskAppError(err)
+	}
 	config.NormalizeDefaults()
 	if err := config.Validate(); err != nil {
 		return zero, newErr("invalid_request", err.Error(), nil)
@@ -372,12 +488,23 @@ func validateOptimizationCreationReadiness(
 			map[string]any{"readiness": optimizationReadiness},
 		)
 	}
+	originalConfidence, originalHorizon := ds.Collection.TailRiskConfidence, ds.Collection.TailRiskHorizonDays
+	ds.Collection.TailRiskConfidence = config.TailRisk.Confidence
+	ds.Collection.TailRiskHorizonDays = config.TailRisk.HorizonDays
 	readiness := evaluateResearchReadiness(ds, now)
+	ds.Collection.TailRiskConfidence, ds.Collection.TailRiskHorizonDays = originalConfidence, originalHorizon
 	blocking := make([]ResearchReadinessIssue, 0, len(readiness.BlockingReasons))
 	for _, issue := range readiness.BlockingReasons {
-		if issue.Reason != ResearchReasonWeightSumInvalid {
+		if issue.Reason != ResearchReasonWeightSumInvalid && issue.Reason != ResearchReasonCVARSample {
 			blocking = append(blocking, issue)
 		}
+	}
+	appendOptimizationTailRiskIssues(ds, readiness, config.TailRisk, &optimizationReadiness)
+	if len(optimizationReadiness.BlockingReasons) > 0 {
+		return ResearchReadiness{}, newErr(
+			"research_optimization_not_ready", "集合未通过调优准入检查",
+			map[string]any{"readiness": optimizationReadiness},
+		)
 	}
 	if len(blocking) > 0 {
 		return ResearchReadiness{}, newErr(
@@ -498,9 +625,12 @@ func computeOptimizationInputHash(snapshot optimizationInputSnapshot) string {
 	for _, id := range sortedTunable {
 		fmt.Fprintf(h, "tunable:%s\n", id)
 	}
-	fmt.Fprintf(h, "config:%s|%d|%d\n",
+	fmt.Fprintf(h, "config:%s|%d|%d|%s|%d|%s|%s\n",
 		strconv.FormatFloat(snapshot.Config.WeightStep, 'g', 17, 64),
-		snapshot.Config.MaxCandidateCount, snapshot.Config.TopK)
+		snapshot.Config.MaxCandidateCount, snapshot.Config.TopK,
+		strconv.FormatFloat(snapshot.Config.TailRisk.Confidence, 'g', 17, 64),
+		snapshot.Config.TailRisk.HorizonDays, optionalFloatHash(snapshot.Config.MinimumCAGR),
+		TailRiskAlgorithmVersion)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -587,7 +717,8 @@ func (s *ResearchService) ApplyOptimization(
 
 func validOptimizationApplyRequest(req ResearchOptimizationApplyRequest) bool {
 	validObjective := req.Objective == ObjectiveMaxCAGR ||
-		req.Objective == ObjectiveMinDrawdown || req.Objective == ObjectiveMaxCalmar
+		req.Objective == ObjectiveMinDrawdown || req.Objective == ObjectiveMaxCalmar ||
+		req.Objective == ObjectiveMinCVaR
 	return req.Rank > 0 && req.ExpectedCollectionUpdatedAt > 0 && validObjective
 }
 
@@ -683,6 +814,18 @@ func (s *ResearchService) applyOptimizationSelection(
 		}
 		collection.StartPolicy = ResearchStartPolicyCustom
 		collection.WindowStart, collection.WindowEnd = run.WindowStart, run.WindowEnd
+		if run.EngineVersion == OptimizationEngineVersion {
+			var snapshot optimizationInputSnapshot
+			if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil {
+				return newErr("research_optimization_result_stale", "调优快照无法读取", nil)
+			}
+			spec, err := CanonicalTailRiskSpec(snapshot.Config.TailRisk)
+			if err != nil {
+				return newErr("research_optimization_result_stale", "调优快照的尾部风险口径无效", nil)
+			}
+			collection.TailRiskConfidence = spec.Confidence
+			collection.TailRiskHorizonDays = spec.HorizonDays
+		}
 		collection.UpdatedAt = now
 		if err := s.research.UpdateCollectionTx(ctx, tx, collection); err != nil {
 			return fmt.Errorf("update collection in apply transaction: %w", err)
@@ -731,6 +874,8 @@ func findOptimizationResult(
 		items = result.BestByDrawdown
 	case ObjectiveMaxCalmar:
 		items = result.BestByCalmar
+	case ObjectiveMinCVaR:
+		items = result.BestByCVaR
 	}
 	for _, item := range items {
 		if item.Rank == rank && item.Objective == objective {
@@ -886,7 +1031,7 @@ func buildOptimizationExecutionAssets(
 }
 
 type optimizationCandidateTrackers struct {
-	cagr, drawdown, calmar *TopKTracker
+	cagr, drawdown, calmar, cvar *TopKTracker
 }
 
 func newOptimizationCandidateTrackers(topK int) optimizationCandidateTrackers {
@@ -894,6 +1039,7 @@ func newOptimizationCandidateTrackers(topK int) optimizationCandidateTrackers {
 		cagr:     NewTopKTracker(ObjectiveMaxCAGR, topK),
 		drawdown: NewTopKTracker(ObjectiveMinDrawdown, topK),
 		calmar:   NewTopKTracker(ObjectiveMaxCalmar, topK),
+		cvar:     NewTopKTracker(ObjectiveMinCVaR, topK),
 	}
 }
 
@@ -907,7 +1053,7 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 	progress func(int, int, string),
 ) (OptimizationResult, error) {
 	trackers := newOptimizationCandidateTrackers(snapshot.Config.TopK)
-	evaluated, skipped := 0, 0
+	evaluated, skipped, cvarEligible := 0, 0, 0
 	progressInterval := maxInt(1, len(candidates)/100)
 	for i, candidate := range candidates {
 		if cancelCheck != nil && cancelCheck() {
@@ -915,11 +1061,13 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 			return OptimizationResult{}, context.Canceled
 		}
 		result, err := RunResearchBacktest(buildBacktestInputForCandidate(snapshot, ds, candidate))
-		if err != nil {
+		if err != nil || result.Summary.TailRisk == nil {
 			skipped++
 		} else {
 			evaluated++
-			trackOptimizationCandidate(trackers, candidate, result.Summary)
+			if trackOptimizationCandidate(trackers, candidate, result.Summary, snapshot.Config.MinimumCAGR) {
+				cvarEligible++
+			}
 		}
 		if (i+1)%progressInterval == 0 {
 			publishOptimizationProgress(ctx, s.research, runID, evaluated, skipped, len(candidates), progress)
@@ -931,18 +1079,25 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 			"%w: candidate_count=%d", errOptimizationAllCandidates, len(candidates),
 		)
 	}
-	return OptimizationResult{
+	result := OptimizationResult{
 		CandidateCount: len(candidates), EvaluatedCount: evaluated, SkippedCount: skipped,
 		BestByCAGR: trackers.cagr.Results(), BestByDrawdown: trackers.drawdown.Results(),
-		BestByCalmar: trackers.calmar.Results(),
-	}, nil
+		BestByCalmar: trackers.calmar.Results(), BestByCVaR: trackers.cvar.Results(),
+		CVaREligibleCount: cvarEligible,
+	}
+	if cvarEligible == 0 {
+		result.Warnings = append(result.Warnings, OptimizationWarning{
+			Code: "cvar_minimum_cagr_unmet", Message: "没有候选达到最低 CAGR 门槛",
+		})
+	}
+	return result, nil
 }
 
 func trackOptimizationCandidate(
 	trackers optimizationCandidateTrackers,
 	candidate OptimizationWeightVector,
-	summary BacktestSummary,
-) {
+	summary BacktestSummary, minimumCAGR *float64,
+) bool {
 	item := OptimizationResultItem{Weights: candidate.Weights, Summary: summary}
 	for objective, tracker := range map[OptimizationObjective]*TopKTracker{
 		ObjectiveMaxCAGR:     trackers.cagr,
@@ -955,6 +1110,15 @@ func trackOptimizationCandidate(
 			tracker.Push(scored)
 		}
 	}
+	eligible := summary.TailRisk != nil && (minimumCAGR == nil || summary.CAGR >= *minimumCAGR)
+	if eligible {
+		if score, ok := ScoreForObjective(ObjectiveMinCVaR, summary); ok {
+			scored := item
+			scored.Score = score
+			trackers.cvar.Push(scored)
+		}
+	}
+	return eligible
 }
 
 func publishOptimizationProgress(
@@ -986,6 +1150,7 @@ func buildBacktestInputForCandidate(
 		RebalanceThreshold:  snapshot.Collection.RebalanceThreshold,
 		RiskFreeRate:        snapshot.Collection.RiskFreeRate,
 		TransactionCostRate: snapshot.Collection.TransactionCostRate,
+		TailRisk:            &snapshot.Config.TailRisk,
 		WindowStart:         snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
 		FX: map[string][]ResearchSeriesPoint{},
 	}

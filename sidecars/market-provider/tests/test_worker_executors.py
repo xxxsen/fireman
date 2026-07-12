@@ -243,12 +243,40 @@ HISTORY_PAYLOAD = {
     "instrument_type": "cn_exchange_fund",
     "region_code": "sh",
     "symbol": "510300",
-    "adjust_policy": "none",
+    "adjust_policy": "qfq",
     "point_type": "adjusted_close",
 }
 
 
 class TestHistorySync:
+    def test_raw_price_cannot_be_labeled_adjusted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_fetch(req):
+            return FetchData(
+                provider="akshare",
+                provider_symbol="510300",
+                name="沪深300ETF",
+                currency="CNY",
+                point_type="close",
+                expense_ratio_status="unavailable",
+                source_name="ak.fund_etf_hist_em",
+                source_quality="full",
+                points=[HistoricalPoint(date="2024-01-08", value=4.0)],
+            )
+
+        monkeypatch.setattr(
+            "fireman_market_provider.worker.executors.history.fetch_instrument", fake_fetch
+        )
+        with pytest.raises(TaskFailure) as exc:
+            execute_history_sync(
+                {
+                    **HISTORY_PAYLOAD,
+                    "adjust_policy": "none",
+                    "point_type": "adjusted_close",
+                    "replacement_mode": "full",
+                }
+            )
+        assert exc.value.error_code == "history_dimension_mismatch"
+
     def test_pinned_source_merge_window(self) -> None:
         captured: dict = {}
 

@@ -93,6 +93,10 @@ export const TERMS: Record<string, string> = {
     "年化波动率：所选完整年度内月度对数收益的样本标准差乘 √12。仅基于当前纳入模拟的完整年度与清洗后行情",
   metric_max_drawdown:
     "最大回撤：所选完整年度窗口中，从历史峰值到其后低点的最大跌幅，以正数幅度展示。仅基于当前纳入模拟的完整年度与清洗后行情",
+  metric_var_loss:
+    "VaR loss：给定置信度与持有期下，历史尾部场景的分位损失。正数表示损失，负数表示收益",
+  metric_cvar_loss:
+    "CVaR loss：比 VaR 更差的历史尾部场景的平均损失，不是预计最大亏损",
 };
 
 /** Short Chinese display names per term, used for accessible help labels. */
@@ -141,6 +145,8 @@ export const TERM_LABELS: Record<string, string> = {
   metric_cagr: "CAGR",
   metric_annual_volatility: "年化波动率",
   metric_max_drawdown: "最大回撤",
+  metric_var_loss: "VaR loss",
+  metric_cvar_loss: "CVaR loss",
   config_template: "配置模板",
   assumption_scenario: "假设情景",
   gap_color_semantics: "还差与超出的颜色含义",

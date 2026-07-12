@@ -9,14 +9,14 @@ import (
 )
 
 var (
-	errConfigPathRequired = errors.New("config path is required")
-	errAddrEmpty          = errors.New("addr must not be empty")
-	errInternalAddrEmpty  = errors.New("internal_addr must not be empty")
-	errDBPathEmpty        = errors.New("db_path must not be empty")
+	errConfigPathRequired  = errors.New("config path is required")
+	errAddrEmpty           = errors.New("addr must not be empty")
+	errInternalAddrEmpty   = errors.New("internal_addr must not be empty")
+	errDBPathEmpty         = errors.New("db_path must not be empty")
 	errResourceDBPathEmpty = errors.New("resource_db_path must not be empty")
-	errTimezoneEmpty      = errors.New("timezone must not be empty")
-	errLogLevelEmpty      = errors.New("log_level must not be empty")
-	errWorkerConcurrency  = errors.New("worker_concurrency must be >= 1")
+	errTimezoneEmpty       = errors.New("timezone must not be empty")
+	errLogLevelEmpty       = errors.New("log_level must not be empty")
+	errWorkerConcurrency   = errors.New("worker_concurrency must be >= 1")
 )
 
 // Config holds runtime settings loaded from a JSON config file.
@@ -34,12 +34,12 @@ type Config struct {
 }
 
 const (
-	defaultAddr           = ":8080"
-	defaultInternalAddr   = ":8081"
-	defaultDBPath         = "/data/fireman.db"
-	defaultResourceDBPath = "/data/fireman_resource.db"
-	defaultTimezone       = "Asia/Shanghai"
-	defaultLogLevel       = "info"
+	defaultAddr              = ":8080"
+	defaultInternalAddr      = ":8081"
+	defaultDBPath            = "/data/fireman.db"
+	defaultResourceDBPath    = "/data/fireman_resource.db"
+	defaultTimezone          = "Asia/Shanghai"
+	defaultLogLevel          = "info"
 	defaultWorkerConcurrency = 1
 )
 
