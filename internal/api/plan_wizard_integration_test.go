@@ -265,7 +265,10 @@ func TestPlanWizardInvalidAdvancedParametersRejected(t *testing.T) {
 			p["withdrawal_type"] = "guardrail"
 			p["withdrawal_ceiling_ratio"] = 2.5
 		}},
-		{"floor zero", func(p map[string]any) { p["withdrawal_floor_ratio"] = 0.0 }},
+		{"floor zero", func(p map[string]any) {
+			p["withdrawal_type"] = "guardrail"
+			p["withdrawal_floor_ratio"] = 0.0
+		}},
 		{"fixed inflation above cap", func(p map[string]any) { p["fixed_inflation_rate"] = 0.25 }},
 		{"negative transaction cost", func(p map[string]any) { p["transaction_cost_rate"] = -0.01 }},
 		{"transaction cost equals one", func(p map[string]any) { p["transaction_cost_rate"] = 1.0 }},

@@ -51,17 +51,44 @@ func TestValidateParametersAdvancedRanges(t *testing.T) {
 	}
 	// Doc-defined boundaries must be rejected.
 	invalid := map[string]repository.PlanParameters{
-		"fixed_inflation high":   mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = 0.25 }),
-		"fixed_inflation low":    mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = -0.05 }),
-		"inflation_mu high":      mutate(func(p *repository.PlanParameters) { p.InflationMu = 0.30 }),
-		"inflation_sigma neg":    mutate(func(p *repository.PlanParameters) { p.InflationSigma = -0.01 }),
-		"inflation_sigma high":   mutate(func(p *repository.PlanParameters) { p.InflationSigma = 0.30 }),
-		"inflation_phi high":     mutate(func(p *repository.PlanParameters) { p.InflationPhi = 1.2 }),
-		"withdrawal_rate high":   mutate(func(p *repository.PlanParameters) { p.WithdrawalRate = 1.5 }),
-		"floor zero":             mutate(func(p *repository.PlanParameters) { p.WithdrawalFloorRatio = 0 }),
-		"floor above one":        mutate(func(p *repository.PlanParameters) { p.WithdrawalFloorRatio = 1.1 }),
-		"ceiling below one":      mutate(func(p *repository.PlanParameters) { p.WithdrawalCeilingRatio = 0.9 }),
-		"ceiling above two":      mutate(func(p *repository.PlanParameters) { p.WithdrawalCeilingRatio = 2.5 }),
+		"fixed_inflation high": mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = 0.25 }),
+		"fixed_inflation low":  mutate(func(p *repository.PlanParameters) { p.FixedInflationRate = -0.05 }),
+		"inflation_mu high": mutate(func(p *repository.PlanParameters) {
+			p.InflationMode = "random_ar1"
+			p.InflationMu = 0.30
+		}),
+		"inflation_sigma neg": mutate(func(p *repository.PlanParameters) {
+			p.InflationMode = "random_ar1"
+			p.InflationSigma = -0.01
+		}),
+		"inflation_sigma high": mutate(func(p *repository.PlanParameters) {
+			p.InflationMode = "random_ar1"
+			p.InflationSigma = 0.30
+		}),
+		"inflation_phi high": mutate(func(p *repository.PlanParameters) {
+			p.InflationMode = "random_ar1"
+			p.InflationPhi = 1.2
+		}),
+		"withdrawal_rate high": mutate(func(p *repository.PlanParameters) {
+			p.WithdrawalType = "fixed_portfolio"
+			p.WithdrawalRate = 1.5
+		}),
+		"floor zero": mutate(func(p *repository.PlanParameters) {
+			p.WithdrawalType = "guardrail"
+			p.WithdrawalFloorRatio = 0
+		}),
+		"floor above one": mutate(func(p *repository.PlanParameters) {
+			p.WithdrawalType = "guardrail"
+			p.WithdrawalFloorRatio = 1.1
+		}),
+		"ceiling below one": mutate(func(p *repository.PlanParameters) {
+			p.WithdrawalType = "guardrail"
+			p.WithdrawalCeilingRatio = 0.9
+		}),
+		"ceiling above two": mutate(func(p *repository.PlanParameters) {
+			p.WithdrawalType = "guardrail"
+			p.WithdrawalCeilingRatio = 2.5
+		}),
 		"tax rate high":          mutate(func(p *repository.PlanParameters) { p.WithdrawalTaxRate = 1.2 }),
 		"taxable ratio high":     mutate(func(p *repository.PlanParameters) { p.TaxableWithdrawalRatio = 1.2 }),
 		"tax product equals one": mutate(func(p *repository.PlanParameters) { p.WithdrawalTaxRate = 1; p.TaxableWithdrawalRatio = 1 }),
@@ -75,6 +102,32 @@ func TestValidateParametersAdvancedRanges(t *testing.T) {
 	ok := mutate(func(p *repository.PlanParameters) { p.WithdrawalTaxRate = 0.2; p.TaxableWithdrawalRatio = 0.8 })
 	if err := validateParameters(ok); err != nil {
 		t.Fatalf("expected valid tax product: %v", err)
+	}
+}
+
+func TestValidateParametersIgnoresInactiveModeFields(t *testing.T) {
+	p := validParametersFixture()
+	p.InflationMu = 99
+	p.InflationPhi = 99
+	p.InflationSigma = -99
+	p.WithdrawalRate = 99
+	p.WithdrawalFloorRatio = -99
+	p.WithdrawalCeilingRatio = -99
+	if err := validateParameters(p); err != nil {
+		t.Fatalf("inactive fixed-real fields must not block save: %v", err)
+	}
+
+	p.InflationMode = "random_ar1"
+	p.FixedInflationRate = 99
+	p.InflationMu = 0.03
+	p.InflationPhi = 0.5
+	p.InflationSigma = 0.01
+	p.WithdrawalType = "guardrail"
+	p.WithdrawalRate = 99
+	p.WithdrawalFloorRatio = 0.7
+	p.WithdrawalCeilingRatio = 1.3
+	if err := validateParameters(p); err != nil {
+		t.Fatalf("inactive random/guardrail fields must not block save: %v", err)
 	}
 }
 

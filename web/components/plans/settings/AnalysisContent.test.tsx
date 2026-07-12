@@ -607,6 +607,7 @@ describe("AnalysisPage zero success", () => {
           ...defaultSimulations.simulations[0],
           id: "run_pending",
           job_id: "job_resume",
+          job_status: "running",
           summary_json: {},
         },
       ],
@@ -634,6 +635,7 @@ describe("AnalysisPage zero success", () => {
           ...defaultSimulations.simulations[0],
           id: "run_old_failed",
           job_id: "job_old_failed",
+          job_status: "failed",
           summary_json: {},
           created_at: -1000,
         },
@@ -649,6 +651,26 @@ describe("AnalysisPage zero success", () => {
     );
     expect(screen.getByRole("button", { name: "运行模拟" })).not.toBeDisabled();
     expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
+
+  it("renders a persisted failed simulation as a terminal error", async () => {
+    listSimulationsMock.mockReset();
+    listSimulationsMock.mockResolvedValue({
+      simulations: [{
+        ...defaultSimulations.simulations[0],
+        id: "run_failed",
+        job_id: "job_failed_persisted",
+        job_status: "failed",
+        job_error_code: "simulation_failed",
+        job_error_message: "输入快照不可用",
+        summary_json: {},
+      }],
+    });
+
+    renderAnalysis();
+    expect(await screen.findByText("模拟失败：输入快照不可用")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /失败/ })).toBeInTheDocument();
+    expect(useJobStatusMock).not.toHaveBeenCalledWith("job_failed_persisted", expect.anything());
   });
 
   it("re-attaches running stress and sensitivity jobs from persisted lists", async () => {

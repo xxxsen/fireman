@@ -259,10 +259,6 @@ export default function ResearchCollectionPage() {
           collectionId={id}
           readiness={readinessQuery.data}
           readinessLoading={readinessQuery.isFetching}
-          onReadinessRefresh={() => {
-            void queryClient.invalidateQueries({ queryKey: ["research", "readiness", id] });
-            void queryClient.invalidateQueries({ queryKey: ["research", "collection", id] });
-          }}
         />
 
         <BacktestPanel

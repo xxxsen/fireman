@@ -83,7 +83,7 @@ CHECK 约束确保两种规则的字段互斥填充。
 
 调度器和规则的 `next_run_at` 均采用 wall-clock 对齐（crontab 风格），而非"上次执行 + 间隔"的相对计时。
 
-**扫描器触发**：每 10 分钟触发一次（常量 `autoUpdateScanIntervalMinute = 10`），对齐到 :00、:10、:20、:30、:40、:50 时刻。启动后立即执行一次 catch-up 扫描，随后按 wall-clock 对齐到下一个 10 分钟边界。
+**扫描器触发**：`auto_update_scan_interval_minutes` 默认 60 分钟，可由同名 JSON 字段或优先级更高的 `AUTO_UPDATE_SCAN_INTERVAL_MINUTES` 环境变量配置，有效范围 5..1440。启动后立即执行一次 catch-up；后续以本地午夜后 10 分钟为锚点，例如 60 分钟为 00:10、01:10、02:10。每次扫描后重新按 wall-clock 计算下一槽位，任务耗时不会累积成调度漂移。
 
 **规则周期对齐**（`nextAlignedSlot` 函数）：
 
@@ -103,7 +103,7 @@ CHECK 约束确保两种规则的字段互斥填充。
 
 同一文件中的调度器组件：
 
-- `Start(ctx)` — 启动后立即执行一次 `RunOnce`，随后按 wall-clock 对齐到下一个 10 分钟边界触发
+- `Start(ctx)` — 启动后立即执行一次 `RunOnce`，随后按配置周期和本地 00:10 锚点触发
 - `Stop()` — 取消 context 并等待当前扫描退出
 - 每次扫描有 10 分钟超时保护
 
@@ -162,7 +162,7 @@ PUT  /api/v1/admin/auto-updates/:id
 ### 资产详情页
 
 在"刷新历史数据"控制组旁：
-- 无规则/暂停 → 显示"启用每日自动更新"，点击调用 `PUT history-auto-update(enabled=true)`
+- 无规则/暂停 → 显示"启用"，点击调用 `PUT history-auto-update(enabled=true)`；默认规则周期为 24 小时
 - 已启用 → 显示"自动更新：每 N 小时"，可暂停或跳转管理页
 - 切换历史维度后控件随响应中对应维度的规则更新
 
@@ -171,7 +171,7 @@ PUT  /api/v1/admin/auto-updates/:id
 路由 `/admin/auto-updates`，包含两个区域：
 
 1. **资产目录区**：始终按静态注册表列出全部 7 个目录单元。未启用的行显示周期选择和"启用"按钮；已启用的行显示完整规则状态和操作。
-2. **资产历史区**：支持状态筛选（全部/已启用/已暂停/最近失败）和关键字搜索，仅展示已创建的历史规则。
+2. **资产历史区**：支持状态筛选（全部/已启用/已暂停/最近失败）和 300ms 去抖的关键字搜索，仅展示已创建的历史规则；服务端按 50 条分页返回 `items/total/limit/offset`，筛选变化回到第一页，空页自动退回最后一个有效页。
 
 行操作：启用/暂停、修改周期（下拉选项 1 小时/6 小时/12 小时/1 天/2 天/3 天/7 天）。提交带 `version`，收到 409 时保留用户输入并提示刷新。>= 24 小时的周期在前端统一以"天"为单位显示。
 
@@ -193,7 +193,7 @@ PUT  /api/v1/admin/auto-updates/:id
 2. 任务创建和规则绑定在同一 SQLite 事务，失败回滚
 3. 已有 pending/running 任务时复用而非重复创建（active-dedupe）
 4. 两个并发 `RunOnce` 不产生重复任务（数据库条件更新 + worker task dedupe 双保险）
-5. **Due 查询终态门控**：`Due` SQL 在 `next_run_at<=now` 基础上额外排除 `last_task_id` 仍处于非终态（pending/running）的规则。即使 10 分钟一次的扫描多次触发，同一资产只有当上次任务已完成（complete/failed/canceled）后才会再次入队
+5. **Due 查询终态门控**：`Due` SQL 在 `next_run_at<=now` 基础上额外排除 `last_task_id` 仍处于非终态（pending/running）的规则。即使扫描周期短于规则周期，同一资产也只有在到期且上次任务已完成（complete/failed/canceled）后才会再次入队
 
 ### 失败恢复
 

@@ -632,12 +632,17 @@ func TestResearchCopyFromAndToPlan(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create plan: %v", err)
 	}
+	params := defaultParameters("plan_1", nil)
+	params.TotalAssetsMinor = 2_000_000
+	if err := repository.NewParametersRepo(db).Upsert(ctx, nil, params); err != nil {
+		t.Fatalf("create plan parameters: %v", err)
+	}
 	for i, h := range []struct {
 		id, key, class, region string
 		amount                 int64
 	}{
-		{"h1", "P1", "equity", "cn", 600000},
-		{"h2", "P2", "bond", "cn", 400000},
+		{"h1", "P1", "equity", "domestic", 600000},
+		{"h2", "P2", "bond", "domestic", 400000},
 	} {
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO plan_holdings (
@@ -665,20 +670,50 @@ func TestResearchCopyFromAndToPlan(t *testing.T) {
 		t.Fatalf("plan weights wrong: %+v", weights)
 	}
 
-	// Copy to plan succeeds because asset_class/region came from the plan.
-	result, err := svc.CopyToPlan(ctx, detail.ID, ResearchCopyToPlanRequest{PlanID: "plan_1"})
+	// Preview derives a complete plan configuration and uses the target plan's
+	// total assets, rather than the research collection's initial amount.
+	preview, err := svc.PreviewPlanReplacement(ctx, detail.ID, ResearchPlanPreviewRequest{PlanID: "plan_1"})
 	if err != nil {
-		t.Fatalf("copy to plan: %v", err)
+		t.Fatalf("preview plan replacement: %v", err)
 	}
-	if len(result.Holdings) != 2 || result.PlanName != "退休计划" {
-		t.Fatalf("draft payload wrong: %+v", result)
+	if len(preview.Holdings) != 2 || preview.PlanName != "退休计划" || preview.ExpectedConfigVersion != 1 {
+		t.Fatalf("preview payload wrong: %+v", preview)
 	}
 	var totalAmount int64
-	for _, h := range result.Holdings {
+	for _, h := range preview.Holdings {
 		totalAmount += h.CurrentAmountMinor
 	}
-	if totalAmount != detail.InitialAmountMinor {
-		t.Fatalf("draft amounts expected %d, got %d", detail.InitialAmountMinor, totalAmount)
+	if totalAmount != params.TotalAssetsMinor || totalAmount == detail.InitialAmountMinor {
+		t.Fatalf("preview amounts expected plan total %d, got %d", params.TotalAssetsMinor, totalAmount)
+	}
+	if len(preview.Allocation.AssetClassTargets) != 3 || len(preview.Allocation.RegionTargets) != 6 {
+		t.Fatalf("complete allocation hierarchy missing: %+v", preview.Allocation)
+	}
+
+	result, err := svc.ApplyPlanReplacement(ctx, detail.ID, ResearchPlanApplyRequest{
+		PlanID: "plan_1", ExpectedConfigVersion: preview.ExpectedConfigVersion,
+		ExpectedReplacementHash: preview.ReplacementHash, Mode: "replace_all",
+	})
+	if err != nil {
+		t.Fatalf("apply plan replacement: %v", err)
+	}
+	if result.ConfigVersion != 2 || result.HoldingCount != 2 || result.PortfolioSnapshotID == "" {
+		t.Fatalf("apply result wrong: %+v", result)
+	}
+	stored, err := repository.NewHoldingsRepo(db).ListByPlan(ctx, "plan_1")
+	if err != nil {
+		t.Fatalf("load replaced holdings: %v", err)
+	}
+	totalAmount = 0
+	for _, h := range stored {
+		totalAmount += h.CurrentAmountMinor
+	}
+	if len(stored) != 2 || totalAmount != params.TotalAssetsMinor {
+		t.Fatalf("stored holdings not conserved: count=%d total=%d", len(stored), totalAmount)
+	}
+	snapshots, err := repository.NewPortfolioSnapshotRepo(db).ListByPlan(ctx, "plan_1")
+	if err != nil || len(snapshots) != 1 || snapshots[0].TotalAmountMinor != params.TotalAssetsMinor {
+		t.Fatalf("replacement snapshot wrong: snapshots=%+v err=%v", snapshots, err)
 	}
 
 	// Items missing asset_class/region are rejected with details.
@@ -686,10 +721,26 @@ func TestResearchCopyFromAndToPlan(t *testing.T) {
 		Name:  "缺字段",
 		Items: []ResearchCollectionItemInput{{AssetKey: "P1", Weight: fptr(1)}},
 	})
-	_, err = svc.CopyToPlan(ctx, bare.ID, ResearchCopyToPlanRequest{PlanID: "plan_1"})
+	_, err = svc.PreviewPlanReplacement(ctx, bare.ID, ResearchPlanPreviewRequest{PlanID: "plan_1"})
 	var appErr *AppError
-	if err == nil || !errorsAsAppError(err, &appErr) || appErr.Code != "research_items_incomplete" {
-		t.Fatalf("expected research_items_incomplete, got %v", err)
+	if err == nil || !errorsAsAppError(err, &appErr) || appErr.Code != "research_item_classification_incomplete" {
+		t.Fatalf("expected research_item_classification_incomplete, got %v", err)
+	}
+
+	// A stale preview cannot overwrite a newer plan configuration.
+	stale, err := svc.PreviewPlanReplacement(ctx, detail.ID, ResearchPlanPreviewRequest{PlanID: "plan_1"})
+	if err != nil {
+		t.Fatalf("preview before conflict: %v", err)
+	}
+	if _, err := plans.BumpVersion(ctx, "plan_1", stale.ExpectedConfigVersion); err != nil {
+		t.Fatalf("bump plan version: %v", err)
+	}
+	_, err = svc.ApplyPlanReplacement(ctx, detail.ID, ResearchPlanApplyRequest{
+		PlanID: "plan_1", ExpectedConfigVersion: stale.ExpectedConfigVersion,
+		ExpectedReplacementHash: stale.ReplacementHash, Mode: "replace_all",
+	})
+	if err == nil || !errorsAsAppError(err, &appErr) || appErr.Code != "plan_config_conflict" {
+		t.Fatalf("expected plan_config_conflict, got %v", err)
 	}
 }
 

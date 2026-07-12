@@ -67,6 +67,7 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 }
 
 func parametersToMap(p repository.PlanParameters) map[string]any {
+	p = normalizeActiveParameters(p)
 	m := map[string]any{
 		"current_age":                          p.CurrentAge,
 		"retirement_age":                       p.RetirementAge,
@@ -79,14 +80,7 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		"annual_retirement_income_growth_rate": p.AnnualRetirementIncomeGrowthRate,
 		"terminal_wealth_floor_minor":          p.TerminalWealthFloorMinor,
 		"inflation_mode":                       p.InflationMode,
-		"fixed_inflation_rate":                 p.FixedInflationRate,
-		"inflation_mu":                         p.InflationMu,
-		"inflation_phi":                        p.InflationPhi,
-		"inflation_sigma":                      p.InflationSigma,
 		"withdrawal_type":                      p.WithdrawalType,
-		"withdrawal_rate":                      p.WithdrawalRate,
-		"withdrawal_floor_ratio":               p.WithdrawalFloorRatio,
-		"withdrawal_ceiling_ratio":             p.WithdrawalCeilingRatio,
 		"withdrawal_tax_rate":                  p.WithdrawalTaxRate,
 		"taxable_withdrawal_ratio":             p.TaxableWithdrawalRatio,
 		"rebalance_frequency":                  p.RebalanceFrequency,
@@ -101,6 +95,20 @@ func parametersToMap(p repository.PlanParameters) map[string]any {
 		"return_assumption_set_id":      p.ReturnAssumptionSetID,
 		"return_assumption_set_version": p.ReturnAssumptionSetVersion,
 		"return_assumption_scenario":    p.ReturnAssumptionScenario,
+	}
+	if p.InflationMode == "random_ar1" {
+		m["inflation_mu"] = p.InflationMu
+		m["inflation_phi"] = p.InflationPhi
+		m["inflation_sigma"] = p.InflationSigma
+	} else {
+		m["fixed_inflation_rate"] = p.FixedInflationRate
+	}
+	switch p.WithdrawalType {
+	case "fixed_portfolio":
+		m["withdrawal_rate"] = p.WithdrawalRate
+	case "guardrail":
+		m["withdrawal_floor_ratio"] = p.WithdrawalFloorRatio
+		m["withdrawal_ceiling_ratio"] = p.WithdrawalCeilingRatio
 	}
 	// student_t_df is a legacy 2.x-only field. Forward (blended_prior/custom) runs
 	// freeze the global profile's df, so the plan value has no effect on a forward

@@ -54,6 +54,14 @@ function caliberLabel(c: "nominal" | "real"): string {
   return c === "real" ? "起点购买力" : "名义金额";
 }
 
+function formatFailureAge(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const totalMonths = Math.round(value * 12);
+  const years = Math.floor(totalMonths / 12);
+  const months = totalMonths % 12;
+  return months === 0 ? `${years} 岁` : `${years} 岁 ${months} 个月`;
+}
+
 const RETURN_MODE_LABELS: Record<string, string> = {
   blended_prior: "前瞻收益（历史向长期先验收缩）",
   historical_cagr: "历史 CAGR（旧模式）",
@@ -105,7 +113,9 @@ function RunAssumptionCard({
 }: {
   assumption: NonNullable<SimulationRun["assumption"]>;
 }) {
-  const modeLabel = RETURN_MODE_LABELS[assumption.mode] ?? assumption.mode;
+  const modeLabel = assumption.mode
+    ? (RETURN_MODE_LABELS[assumption.mode] ?? assumption.mode)
+    : "旧版未冻结运行级模式";
   const factorLabel =
     FACTOR_MODEL_LABELS[assumption.random_factor_model] ?? assumption.random_factor_model;
   const riskAssets = assumption.assets.filter((a) => !a.is_cash);
@@ -129,7 +139,9 @@ function RunAssumptionCard({
               <tr className="text-ink-muted">
                 <th className="pr-3 py-1">资产</th>
                 <th className="pr-3 py-1">历史 CAGR</th>
-                <th className="pr-3 py-1">前瞻年化</th>
+                <th className="pr-3 py-1">本地前瞻收益</th>
+                <th className="pr-3 py-1">FX 前瞻收益</th>
+                <th className="pr-3 py-1">基准币种合成收益</th>
                 <th className="pr-3 py-1">历史权重</th>
                 <th className="pr-3 py-1">样本年数</th>
                 <th className="pr-3 py-1">波动率</th>
@@ -145,6 +157,12 @@ function RunAssumptionCard({
                   <td className="py-1 pr-3">{formatPercent(a.historical_annual_geometric_return)}</td>
                   <td className="py-1 pr-3 font-medium">
                     {formatPercent(a.forward_annual_geometric_return)}
+                  </td>
+                  <td className="py-1 pr-3">
+                    {a.has_fx ? formatPercent(a.fx_forward_return) : "—"}
+                  </td>
+                  <td className="py-1 pr-3 font-medium">
+                    {formatPercent(a.base_currency_forward_return)}
                   </td>
                   <td className="py-1 pr-3">{formatPercent(a.historical_weight)}</td>
                   <td className="py-1 pr-3">{a.sample_years || "—"}</td>
@@ -165,8 +183,17 @@ function RunAssumptionCard({
 function simulationOptionLabel(run: SimulationRun): string {
   const date = formatDateTimeFromMs(run.created_at);
   const success = run.summary_json?.success_probability;
-  const tail =
-    typeof success === "number" ? `成功率 ${formatPercent(success)}` : "进行中";
+  const status = run.job_status ?? (typeof success === "number" ? "succeeded" : "unknown");
+  const statusLabels: Record<string, string> = {
+    queued: "排队中",
+    running: "运行中",
+    failed: "失败",
+    canceled: "已取消",
+    unknown: "状态未知",
+  };
+  const tail = status === "succeeded" && typeof success === "number"
+    ? `成功率 ${formatPercent(success)}`
+    : (statusLabels[status] ?? status);
   return `${date} · ${run.runs} 次 · ${tail}`;
 }
 
@@ -285,7 +312,7 @@ function AnalysisJobPanel({
                     <th className="pr-3 py-1">相对基准</th>
                     <th className="pr-3 py-1">终值 P25/P50/P95</th>
                     <th className="pr-3 py-1">P95 回撤</th>
-                    <th className="pr-3 py-1">失败年份 P50</th>
+                    <th className="pr-3 py-1">首次资金不足年龄 P50</th>
                     <th className="pr-3 py-1">恢复期 P50</th>
                     <th className="pr-3 py-1">说明</th>
                     <th className="pr-3 py-1">风险提示</th>
@@ -312,7 +339,11 @@ function AnalysisJobPanel({
                         </td>
                         <td className="py-1 pr-3">{formatPercent((s.max_drawdown_p95 as number) ?? 0)}</td>
                         <td className="py-1 pr-3">
-                          {s.failure_year_p50 ? String(s.failure_year_p50) : "—"}
+                          {s.failure_age_p50 != null
+                            ? formatFailureAge(s.failure_age_p50)
+                            : s.failure_year_p50 != null
+                              ? `${formatFailureAge(s.failure_year_p50)}（旧版仅精确到整岁）`
+                              : "—"}
                         </td>
                         <td className="py-1 pr-3">
                           {s.recovery_not_within_plan
@@ -497,17 +528,13 @@ export function AnalysisContent() {
         next[kind] = jobId;
         changed = true;
       };
-      // A simulation run persists its summary only on success, so the newest
-      // run having a job_id but no numeric success_probability means it is
-      // still pending (or failed — attaching then surfaces the failure reason
-      // once). Only the newest run is considered: creating a new run
-      // supersedes older jobs, so an older run without a summary is a settled
-      // failure whose banner must not resurface on every page visit.
+      // Only live persisted jobs are adopted after refresh. Failed/canceled
+      // runs are terminal records and render their stored error directly.
       const newestSim = simsData?.simulations?.[0];
       adopt(
         "sim",
         newestSim?.job_id &&
-          typeof newestSim.summary_json?.success_probability !== "number"
+		  (newestSim.job_status === "queued" || newestSim.job_status === "running")
           ? newestSim.job_id
           : undefined,
       );
@@ -585,6 +612,7 @@ export function AnalysisContent() {
           failure_count: 0,
           summary_json: {},
           created_at: Date.now(),
+		  job_status: "queued",
         };
         qc.setQueryData<{ simulations: SimulationRun[] }>(
           ["simulations", planId],
@@ -802,6 +830,14 @@ export function AnalysisContent() {
             </div>
           </Alert>
         )}
+		{!simPanelError && selectedRun?.job_status === "failed" && (
+		  <Alert variant="danger" className="mt-3">
+			模拟失败：{selectedRun.job_error_message || selectedRun.job_error_code || "未知错误"}
+		  </Alert>
+		)}
+		{selectedRun?.job_status === "canceled" && (
+		  <Alert variant="warning" className="mt-3">该次模拟已取消。</Alert>
+		)}
         {simsQ.isError && !simsQ.data && (
           <Alert variant="danger" className="mt-3">
             <div className="flex flex-wrap items-center gap-3">
@@ -876,7 +912,7 @@ export function AnalysisContent() {
             </div>
           )}
 
-          <ScenarioComparisonCard planId={planId} />
+          <ScenarioComparisonCard planId={planId} runId={latest.id} inputHash={latest.input_hash} />
         </section>
       )}
 

@@ -30,6 +30,37 @@ func TestLoad_DefaultsFromEmptyJSON(t *testing.T) {
 	if cfg.WorkerConcurrency != 1 {
 		t.Errorf("expected default worker concurrency 1, got %d", cfg.WorkerConcurrency)
 	}
+	if cfg.AutoUpdateScanIntervalMinutes != 60 {
+		t.Errorf("expected default auto-update interval 60, got %d", cfg.AutoUpdateScanIntervalMinutes)
+	}
+}
+
+func TestLoad_AutoUpdateScanIntervalJSONAndEnvOverride(t *testing.T) {
+	t.Setenv("AUTO_UPDATE_SCAN_INTERVAL_MINUTES", "")
+	if err := os.Unsetenv("AUTO_UPDATE_SCAN_INTERVAL_MINUTES"); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfigFile(t, `{"auto_update_scan_interval_minutes":10}`)
+	cfg, err := Load(path)
+	if err != nil || cfg.AutoUpdateScanIntervalMinutes != 10 {
+		t.Fatalf("JSON interval: cfg=%+v err=%v", cfg, err)
+	}
+	t.Setenv("AUTO_UPDATE_SCAN_INTERVAL_MINUTES", "90")
+	cfg, err = Load(path)
+	if err != nil || cfg.AutoUpdateScanIntervalMinutes != 90 {
+		t.Fatalf("env interval: cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestLoad_RejectsAutoUpdateScanIntervalOutsideRange(t *testing.T) {
+	for _, value := range []string{"4", "1441"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("AUTO_UPDATE_SCAN_INTERVAL_MINUTES", value)
+			if _, err := Load(writeConfigFile(t, `{}`)); err == nil {
+				t.Fatalf("expected interval %s to fail", value)
+			}
+		})
+	}
 }
 
 func TestLoad_OverridesAndValidation(t *testing.T) {

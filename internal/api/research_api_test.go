@@ -555,33 +555,69 @@ func TestResearchAPICopyToPlanValidation(t *testing.T) {
 	collectionID := collection["id"].(string)
 	itemID := collection["items"].([]any)[0].(map[string]any)["id"].(string)
 
-	// Missing asset_class/region → rejected with details.
+	// Missing asset_class/region is rejected during preview.
 	resp, body = researchPost(t, srv,
-		"/api/v1/research/collections/"+collectionID+"/copy-to-plan",
+		"/api/v1/research/collections/"+collectionID+"/plan-preview",
 		map[string]any{"plan_id": plan.ID})
 	if resp.StatusCode == http.StatusOK {
 		t.Fatalf("incomplete items must fail: %s", body)
 	}
-	assertErrorCode(t, body, "research_items_incomplete")
+	assertErrorCode(t, body, "research_item_classification_incomplete")
 
 	// Fill the fields and retry.
 	resp, body = researchPatch(t, srv,
 		"/api/v1/research/collections/"+collectionID+"/items/"+itemID,
-		map[string]any{"asset_class": "equity", "region": "cn"})
+		map[string]any{"asset_class": "equity", "region": "domestic"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch item status=%d body=%s", resp.StatusCode, body)
 	}
 	resp, body = researchPost(t, srv,
-		"/api/v1/research/collections/"+collectionID+"/copy-to-plan",
+		"/api/v1/research/collections/"+collectionID+"/plan-preview",
 		map[string]any{"plan_id": plan.ID})
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("copy-to-plan status=%d body=%s", resp.StatusCode, body)
+		t.Fatalf("plan-preview status=%d body=%s", resp.StatusCode, body)
 	}
-	draft := envData(t, body)
-	holdings := draft["holdings"].([]any)
-	if len(holdings) != 1 || draft["plan_id"].(string) != plan.ID {
-		t.Fatalf("draft wrong: %s", body)
+	preview := envData(t, body)
+	holdings := preview["holdings"].([]any)
+	if len(holdings) != 1 || preview["plan_id"].(string) != plan.ID {
+		t.Fatalf("preview wrong: %s", body)
 	}
+	resp, body = researchPost(t, srv,
+		"/api/v1/research/collections/"+collectionID+"/apply-to-plan",
+		map[string]any{
+			"plan_id":                   plan.ID,
+			"expected_config_version":   int(preview["expected_config_version"].(float64)),
+			"expected_replacement_hash": preview["replacement_hash"].(string),
+			"mode":                      "replace_all",
+		})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply-to-plan status=%d body=%s", resp.StatusCode, body)
+	}
+	applied := envData(t, body)
+	if int(applied["config_version"].(float64)) != plan.ConfigVersion+1 ||
+		int(applied["holding_count"].(float64)) != 1 {
+		t.Fatalf("apply result wrong: %s", body)
+	}
+	resp, body = researchPost(t, srv,
+		"/api/v1/plans/"+plan.ID+"/simulations",
+		map[string]any{"runs": 1000, "seed": "117"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("simulation after research apply status=%d body=%s", resp.StatusCode, body)
+	}
+	simulation := envData(t, body)
+	if simulation["status"] != "queued" || simulation["run_id"] == "" {
+		t.Fatalf("simulation after research apply wrong: %s", body)
+	}
+
+	// The legacy draft endpoint is explicitly retired instead of silently
+	// returning a payload that is not persisted.
+	resp, body = researchPost(t, srv,
+		"/api/v1/research/collections/"+collectionID+"/copy-to-plan",
+		map[string]any{"plan_id": plan.ID})
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("legacy copy-to-plan status=%d body=%s", resp.StatusCode, body)
+	}
+	assertErrorCode(t, body, "copy_to_plan_deprecated")
 
 	// Copy from plan is covered at the service layer; here verify the
 	// from_collection path clones items.

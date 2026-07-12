@@ -96,6 +96,51 @@ func TestConfigHashStudentTDfLegacySemantics(t *testing.T) {
 	}
 }
 
+func TestConfigHashOnlyIncludesActiveModeFields(t *testing.T) {
+	hashOf := func(p repository.PlanParameters) string {
+		h, err := domain.ComputeConfigHash(domain.ConfigHashInput{
+			PlanID: p.PlanID, Parameters: parametersToMap(p),
+		})
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		return h
+	}
+
+	fixed := validParametersFixture()
+	fixed.PlanID = "plan_1"
+	fixedHash := hashOf(fixed)
+	inactiveRandom := fixed
+	inactiveRandom.InflationMu = 0.19
+	inactiveRandom.InflationPhi = 0.99
+	inactiveRandom.InflationSigma = 0.19
+	inactiveRandom.WithdrawalRate = 0.99
+	inactiveRandom.WithdrawalFloorRatio = 0.1
+	inactiveRandom.WithdrawalCeilingRatio = 1.9
+	if hashOf(inactiveRandom) != fixedHash {
+		t.Fatal("inactive inflation/withdrawal fields changed fixed-real config hash")
+	}
+	activeFixed := fixed
+	activeFixed.FixedInflationRate = 0.04
+	if hashOf(activeFixed) == fixedHash {
+		t.Fatal("active fixed inflation did not change config hash")
+	}
+
+	guardrail := fixed
+	guardrail.WithdrawalType = "guardrail"
+	guardrailHash := hashOf(guardrail)
+	guardrailRate := guardrail
+	guardrailRate.WithdrawalRate = 0.75
+	if hashOf(guardrailRate) != guardrailHash {
+		t.Fatal("inactive guardrail withdrawal_rate changed config hash")
+	}
+	guardrailFloor := guardrail
+	guardrailFloor.WithdrawalFloorRatio = 0.75
+	if hashOf(guardrailFloor) == guardrailHash {
+		t.Fatal("active guardrail floor did not change config hash")
+	}
+}
+
 // An asset-level override is part of the plan config, so adding or
 // editing one (for a held instrument) must change the config hash that marks
 // existing runs stale.

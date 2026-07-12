@@ -16,6 +16,16 @@ vi.mock("next/navigation", () => ({
 const createPlanWizard = vi.fn();
 const createSimulation = vi.fn();
 
+function percentInputByLabel(label: string): HTMLInputElement | null {
+  for (const node of screen.queryAllByText(label)) {
+    const input = node.closest("label")?.querySelector<HTMLInputElement>(
+      'input[data-testid="percent-input"]',
+    );
+    if (input) return input;
+  }
+  return null;
+}
+
 vi.mock("@/lib/api/plans", () => ({
   createPlanWizard: (...args: unknown[]) => createPlanWizard(...args),
   createPlan: vi.fn(),
@@ -723,6 +733,21 @@ describe("NewPlanWizardPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/按大类分标签页搜索并添加标的/)).toBeInTheDocument(),
     );
+  });
+
+  it("drops inactive fixed-inflation and withdrawal-rate validation", async () => {
+    renderWizard();
+    fireEvent.change(percentInputByLabel("固定通胀率")!, { target: { value: "25" } });
+    expect(screen.getByTestId("wizard-advanced-errors")).toHaveTextContent("固定通胀率需在 -2% 到 20% 之间。");
+
+    fireEvent.change(screen.getByLabelText("通胀模式"), { target: { value: "random_ar1" } });
+    expect(percentInputByLabel("固定通胀率")).not.toBeInTheDocument();
+    expect(screen.queryByText("固定通胀率需在 -2% 到 20% 之间。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /确认固定通胀率超过 15%/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("提取策略"), { target: { value: "guardrail" } });
+    expect(percentInputByLabel("提取率")).not.toBeInTheDocument();
+    expect(percentInputByLabel("护栏下限比例")).toBeInTheDocument();
   });
 
   it("sends end_age = retirement_age + custom duration", async () => {

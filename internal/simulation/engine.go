@@ -38,6 +38,7 @@ type Summary struct {
 	SuccessTerminal            []int64            `json:"success_terminal_distribution,omitempty"`
 	FailureTerminal            []int64            `json:"failure_terminal_distribution,omitempty"`
 	FailureYearQuantiles       map[string]float64 `json:"failure_year_quantiles,omitempty"`
+	FailureAgeQuantiles        map[string]float64 `json:"failure_age_quantiles,omitempty"`
 	MaxDrawdownQuantiles       map[string]float64 `json:"max_drawdown_quantiles,omitempty"`
 	SpendingP50Minor           int64              `json:"spending_p50_minor"`
 	TransactionCostP50Minor    int64              `json:"transaction_cost_p50_minor"`
@@ -60,6 +61,8 @@ type QuantilePoint struct {
 }
 
 // Run executes all paths deterministically sorted by path_no.
+//
+//nolint:funlen // Aggregation stays adjacent to versioned result construction to preserve replay semantics.
 func Run(in *InputSnapshot, opt RunOptions) RunResult {
 	runs := opt.Runs
 	if runs <= 0 {
@@ -119,7 +122,11 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 		CorrelationDisclaimer:      "未使用基金间历史相关性，分散化结果可能偏乐观",
 	}
 	summary.SuccessTerminal, summary.FailureTerminal = splitTerminals(paths)
-	summary.FailureYearQuantiles = failureYearQuantiles(paths, in.Parameters.CurrentAge)
+	if UsesMonthPrecisionFailureAge(in.EngineVersion) {
+		summary.FailureAgeQuantiles = failureAgeQuantiles(paths, in.Parameters.CurrentAge)
+	} else {
+		summary.FailureYearQuantiles = failureYearQuantiles(paths, in.Parameters.CurrentAge)
+	}
 	summary.MaxDrawdownQuantiles = drawdownQuantiles(paths)
 	summary.SpendingP50Minor = medianInt64(spendingSlice(paths))
 	summary.TransactionCostP50Minor = medianInt64(txCostSlice(paths))
@@ -315,6 +322,31 @@ func failureYearQuantiles(paths []PathSummary, startAge int) map[string]float64 
 		"p25": Quantile(years, 0.25),
 		"p50": Quantile(years, 0.50),
 		"p75": Quantile(years, 0.75),
+	}
+}
+
+// FailureAgeAtMonthEnd converts a zero-based failure month into the age at the
+// end of that month. It is shared by simulation summaries and stress analysis.
+func FailureAgeAtMonthEnd(currentAge, failureMonth int) float64 {
+	return float64(currentAge) + float64(failureMonth+1)/12
+}
+
+func failureAgeQuantiles(paths []PathSummary, startAge int) map[string]float64 {
+	ages := make([]float64, 0, len(paths))
+	for _, path := range paths {
+		if path.Succeeded || path.FailureMonth == nil {
+			continue
+		}
+		ages = append(ages, FailureAgeAtMonthEnd(startAge, *path.FailureMonth))
+	}
+	if len(ages) == 0 {
+		return nil
+	}
+	sort.Float64s(ages)
+	return map[string]float64{
+		"p25": Quantile(ages, 0.25),
+		"p50": Quantile(ages, 0.50),
+		"p75": Quantile(ages, 0.75),
 	}
 }
 

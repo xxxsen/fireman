@@ -440,7 +440,12 @@ export function ParametersContent({
         <h2 className="text-lg font-medium">提取与通胀</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
-            提取策略
+            <span className="flex items-center">
+              提取策略
+              {params.withdrawal_type === "guardrail" && (
+                <MetricHelp termKey="guardrail_withdrawal_rate" />
+              )}
+            </span>
             <select
               className="input-base mt-1"
               value={params.withdrawal_type}
@@ -462,11 +467,13 @@ export function ParametersContent({
               <option value="random_ar1">随机通胀</option>
             </select>
           </label>
-          <PercentInput
-            label="固定通胀率"
-            value={params.fixed_inflation_rate}
-            onChange={(v) => update("fixed_inflation_rate", v)}
-          />
+          {params.inflation_mode === "fixed_real" && (
+            <PercentInput
+              label="固定通胀率"
+              value={params.fixed_inflation_rate}
+              onChange={(v) => update("fixed_inflation_rate", v)}
+            />
+          )}
           {params.inflation_mode === "random_ar1" && (
             <>
               <PercentInput
@@ -493,7 +500,7 @@ export function ParametersContent({
               </label>
             </>
           )}
-          {params.fixed_inflation_rate > 0.15 && (
+          {params.inflation_mode === "fixed_real" && params.fixed_inflation_rate > 0.15 && (
             <label className="flex items-center gap-2 text-sm sm:col-span-2">
               <input
                 type="checkbox"
@@ -503,8 +510,7 @@ export function ParametersContent({
               确认固定通胀率超过 15%（非常规假设）
             </label>
           )}
-          {(params.withdrawal_type === "fixed_portfolio" ||
-            params.withdrawal_type === "guardrail") && (
+          {params.withdrawal_type === "fixed_portfolio" && (
             <PercentInput
               label="提取率"
               value={params.withdrawal_rate}
@@ -864,7 +870,11 @@ export function ParametersContent({
             setSaveError("资产配置权重未通过校验。");
             return;
           }
-          if (params.fixed_inflation_rate > 0.15 && !highInflationConfirmed) {
+          if (
+            params.inflation_mode === "fixed_real" &&
+            params.fixed_inflation_rate > 0.15 &&
+            !highInflationConfirmed
+          ) {
             setSaveError("固定通胀率超过 15%，请勾选确认。");
             return;
           }
@@ -872,7 +882,10 @@ export function ParametersContent({
             setSaveError("切换收益假设来源需先勾选确认。");
             return;
           }
-          if (params.withdrawal_floor_ratio >= params.withdrawal_ceiling_ratio) {
+          if (
+            params.withdrawal_type === "guardrail" &&
+            params.withdrawal_floor_ratio >= params.withdrawal_ceiling_ratio
+          ) {
             setSaveError("护栏下限比例需小于上限比例。");
             return;
           }

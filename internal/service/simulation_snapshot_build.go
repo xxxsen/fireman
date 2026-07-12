@@ -125,7 +125,8 @@ func (s *SimulationService) buildOneSnapshotAsset(
 		Currency:   currency, AssetClass: line.AssetClass, Region: region, IsCash: isCash,
 		InitialMinor: line.CurrentAmountMinor, TargetWeight: line.PortfolioTargetWeight,
 		MaxDrawdown: snap.MaxDrawdown, FeeTreatment: snap.FeeTreatment, ExpenseRatio: snap.ExpenseRatio,
-		SourceHash: snap.SourceHash, Years: years,
+		HistoricalAnnualVolatility: snap.AnnualVolatility,
+		SourceHash:                 snap.SourceHash, Years: years,
 		CompleteYearCount: snap.CompleteYearCount, MonthlyReturnCount: snap.MonthlyReturnCount,
 		HistoryDepth: snap.HistoryDepth, MetricsVersion: snap.MetricsVersion,
 		DataWarnings: parseSnapshotWarnings(snap.WarningsJSON),
@@ -235,6 +236,9 @@ func applyReturnCalibration(sa *simulation.SnapshotAsset, cal assumptions.Calibr
 // warning) so the run's assumption view explains why the number differs from the
 // global profile.
 func applyReturnOverride(sa *simulation.SnapshotAsset, ov repository.PlanReturnOverride) {
+	sa.OverrideForwardReturn = ov.ForwardReturn
+	sa.OverrideAnnualVolatility = ov.AnnualVolatility
+	sa.OverrideReason = ov.Reason
 	if ov.ForwardReturn != nil {
 		r := *ov.ForwardReturn
 		sa.ForwardAnnualGeometricReturn = r
@@ -267,6 +271,7 @@ func (s *SimulationService) enrichSnapshotAssetFX(
 	histVol := marketdata.MetricFloat(fxMetrics.AnnualVolatility)
 	sa.FXSnapshotID = fxMetrics.SourceHash
 	sa.FXHistoricalReturn = hist
+	sa.FXHistoricalVolatility = histVol
 	sa.FXModeledReturn = hist
 	sa.FXAnnualVolatility = histVol
 	sa.FXCompleteYearCount = fxMetrics.CompleteYearCount
@@ -375,6 +380,7 @@ func parseSnapshotWarnings(raw string) []string {
 	return out
 }
 
+//nolint:funlen // Snapshot assembly is kept contiguous so every frozen field is auditable at one boundary.
 func buildInputSnapshotStruct(
 	plan repository.Plan,
 	params repository.PlanParameters,
@@ -383,6 +389,7 @@ func buildInputSnapshotStruct(
 	assets []simulation.SnapshotAsset,
 	resolved resolvedAssumption,
 ) (*simulation.InputSnapshot, error) {
+	params = normalizeActiveParameters(params)
 	in := &simulation.InputSnapshot{
 		EngineVersion:          simulation.EngineVersion,
 		PlanID:                 plan.ID,
@@ -417,6 +424,10 @@ func buildInputSnapshotStruct(
 	// system content is refused outright so it can never run with forged provenance.
 	in.AssumptionProfileID = resolved.Profile.ID
 	in.AssumptionProfileVersion = resolved.Profile.Version
+	in.ReturnAssumptionMode = resolved.Mode
+	in.ReturnAssumptionScenario = resolved.Scenario
+	in.ReturnAssumptionSetID = resolved.Profile.ID
+	in.ReturnAssumptionSetVersion = resolved.Profile.Version
 	contentHash := resolved.ProfileContentHash
 	if contentHash == "" {
 		// In-memory profile (no stored row, e.g. a unit test or built-in fallback):
@@ -444,27 +455,35 @@ func buildInputSnapshotStruct(
 		}
 		in.AssumptionEvidenceHash = variant.EvidenceHash
 	}
+	comparisonModel, comparisonRefs, comparisonErr := buildFrozenFactorModel(
+		assets, plan.BaseCurrency, resolved.Profile,
+	)
+	if comparisonErr == nil {
+		in.ScenarioComparisonReady = true
+		in.ScenarioComparisonFactorModel = comparisonModel
+		in.AssetFactorRefs = comparisonRefs
+	}
 	// Forward-looking modes (blended_prior / custom) run the joint, correlated
 	// engine and apply the deterministic cash return; historical_cagr keeps the
 	// legacy independent path with implicit 0% cash so migrated plans reproduce
-	// their old numbers exactly.
+	// their old numbers exactly. Historical runs retain a comparison-only frozen
+	// correlation model when it can be assembled, but never change samplers.
 	if resolved.Mode != assumptions.SourceHistoricalCAGR {
 		// Forward modes enable deterministic cash return and the joint factor
 		// model; the engine version is already the current version for every new run.
 		in.DeterministicCashReturn = true
 		freezeTailRiskParams(in, resolved.Profile)
-		fm, refs, err := buildFrozenFactorModel(assets, plan.BaseCurrency, resolved.Profile)
-		if err != nil {
+		if comparisonErr != nil {
 			// The forward engine must block, never silently fall back to the
 			// independent 2.0.0 path.
 			return nil, newErr("assumption_unavailable",
 				"forward risk model could not be built; check the global assumption profile",
-				map[string]any{"error": err.Error()})
+				map[string]any{"error": comparisonErr.Error()})
 		}
-		if fm != nil {
+		in.AssetFactorRefs = comparisonRefs
+		if comparisonModel != nil {
 			in.RandomFactorModel = simulation.FactorModelMultivariate
-			in.FactorModel = fm
-			in.AssetFactorRefs = refs
+			in.FactorModel = comparisonModel
 		}
 	}
 	in.MarketSnapshotHash = simulation.MarketHashFromAssets(assets)

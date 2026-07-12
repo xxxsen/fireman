@@ -1,7 +1,7 @@
 # 组合研究（Portfolio Research）
 
 - 方案来源：`td/099-asset-selection.md`；实施 review 见 `td/100-td099-implementation-review.md`
-- 定位：与「计划」「资产」平级的研究工作台——筛选资产、组建研究集合、运行确定性历史回测，并与 FIRE 计划双向复制。研究集合不直接改写任何计划持仓。
+- 定位：与「计划」「资产」平级的研究工作台——筛选资产、组建研究集合、运行确定性历史回测，并与 FIRE 计划双向联动。只有用户核对替换预览并明确确认后，研究集合才会原子改写目标计划。
 
 ## 1. 信息架构
 
@@ -28,7 +28,7 @@
 ## 3. 研究集合与权重编辑
 
 - 集合字段：名称/描述/标签、基准币种（默认 CNY）、初始资金（默认 1,000,000）、再平衡规则、历史区间策略（共同区间 / 自定义区间）、可选基准资产、无风险利率、预留 `transaction_cost_rate`。
-- 集合操作：新建、从筛选/候选池创建、从集合复制、从计划复制、复制到计划草稿、归档/恢复/硬删除、导入/导出 JSON。
+- 集合操作：新建、从筛选/候选池创建、从集合复制、从计划复制、预览并应用到计划、归档/恢复/硬删除、导入/导出 JSON。
 - 权重编辑：直接输入、等权、按类别/市场等权、剩余分配、锁定后归一化、拖拽排序、禁用但保留、现金资产、逐资产 adjust_policy/point_type。
 - 实时汇总：权重合计、币种/市场/资产类型暴露、单资产最大权重、缺历史与缺 FX 数量、共同区间预估。
 - 权重校验统一 `1e-6` 容差。
@@ -57,12 +57,12 @@
 ## 7. 与 FIRE 计划联动
 
 - 从计划复制：持仓 current amount 折算权重（同资产多分组合并），基准币种继承计划。
-- 复制到计划：校验 asset_class/region 完整性（缺失时对话框内补齐后重试），按初始资金折算目标金额，生成持仓草稿并跳转计划持仓校正流程；不直接写 `plan_holdings`。
+- 应用到计划：先校验 asset_class/region、启用权重合计和资产有效性；目标金额按目标计划当前 `total_assets_minor` 折算。预览返回完整大类/区域配置、替换后持仓、删除清单、`config_version` 和 replacement hash。用户确认后在一个事务内替换 allocation/holdings、创建组合快照并仅将计划版本加一；版本或集合变化返回冲突并要求重新预览。
 
 ## 8. 数据模型与 API
 
 - migration `0025_research.sql`：`research_collections`、`research_collection_items`、`research_saved_filters`、`research_backtest_runs`（含 succeeded 部分唯一索引 `uq_research_backtest_runs_success_input`）、`research_backtest_points/years/months`、`research_asset_metrics`。
-- API 全部挂 `/api/v1/research`，与 td/099 §5.3 路由表一一对应（assets、saved-filters、collections 及 items/normalize-weights/readiness/sync-history/backtests/runs、runs 详情/points/export.csv、copy-to-plan，另有 `GET /runs` 最近运行）。
+- API 全部挂 `/api/v1/research`。计划联动使用 `POST /collections/:id/plan-preview` 和 `POST /collections/:id/apply-to-plan`；旧 `copy-to-plan` 在兼容周期内返回 410，防止调用方误以为未落库草稿已经生效。
 - job 类型 `research_backtest` 纳入 worker 分发与 admin 控制台。
 
 ## 9. 测试

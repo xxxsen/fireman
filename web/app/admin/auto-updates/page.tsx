@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import {
   createAdminDirectoryAutoUpdate,
   listAdminAutoUpdateDirectoryUnits,
@@ -13,6 +13,7 @@ import {
 import type { AdminAutoUpdateRule, AdminPage } from "@/lib/api/admin";
 import { adjustPolicyLabel, formatDateTimeFromMs, pointTypeLabel } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
+import { AdminPagination } from "@/components/admin/AdminTable";
 
 const HOURS = [1, 6, 12, 24, 48, 72, 168];
 function formatInterval(hours: number): string {
@@ -20,6 +21,7 @@ function formatInterval(hours: number): string {
   return `${hours} 小时`;
 }
 const DIRECTORY_QUERY_KEY = ["admin", "auto-updates", "directories"] as const;
+const HISTORY_PAGE_SIZE = 50;
 function TaskLink({ rule }: { rule: AdminAutoUpdateRule }) {
   if (!rule.last_task_id) return <>--</>;
   return (
@@ -117,13 +119,27 @@ function AutoUpdatesContent() {
   const searchParams = useSearchParams();
   const [enabled, setEnabled] = useState("");
   const [q, setQ] = useState(() => searchParams.get("q") ?? "");
+  const [debouncedQ, setDebouncedQ] = useState(() => searchParams.get("q") ?? "");
+  const [historyOffset, setHistoryOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [directoryIntervals, setDirectoryIntervals] = useState<Record<string, number>>({});
   const [pendingTarget, setPendingTarget] = useState<string | null>(null);
   const historyQueryKey = useMemo(
-    () => ["admin", "auto-updates", "asset_history", enabled, q] as const,
-    [enabled, q],
+    () => [
+      "admin", "auto-updates", "asset_history", enabled, debouncedQ,
+      HISTORY_PAGE_SIZE, historyOffset,
+    ] as const,
+    [enabled, debouncedQ, historyOffset],
   );
+
+  useEffect(() => {
+	if (q.trim() === debouncedQ) return;
+    const timer = window.setTimeout(() => {
+      setDebouncedQ(q.trim());
+      setHistoryOffset(0);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [q, debouncedQ]);
   const directories = useQuery({
     queryKey: DIRECTORY_QUERY_KEY,
     queryFn: () => listAdminAutoUpdates({ targetType: "directory_unit", limit: 100 }),
@@ -135,8 +151,20 @@ function AutoUpdatesContent() {
   });
   const histories = useQuery({
     queryKey: historyQueryKey,
-    queryFn: () => listAdminAutoUpdates({ targetType: "asset_history", enabled, q, limit: 100 }),
+    queryFn: () => listAdminAutoUpdates({
+      targetType: "asset_history", enabled, q: debouncedQ,
+      limit: HISTORY_PAGE_SIZE, offset: historyOffset,
+    }),
   });
+
+  useEffect(() => {
+    const total = histories.data?.total;
+    if (total == null || total === 0 || historyOffset < total) return;
+	const timer = window.setTimeout(() => {
+		setHistoryOffset(Math.max(0, Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE));
+	}, 0);
+	return () => window.clearTimeout(timer);
+  }, [histories.data?.total, historyOffset]);
 
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ["admin", "auto-updates"] });
@@ -223,11 +251,14 @@ function AutoUpdatesContent() {
     <section>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h2 className="mr-auto text-base font-semibold text-ink">资产历史自动更新</h2>
-        <select aria-label="资产规则状态" value={enabled} onChange={(event) => setEnabled(event.target.value)}><option value="">全部状态</option><option value="true">已启用</option><option value="false">已暂停</option><option value="failed">最近失败</option></select>
+        <select aria-label="资产规则状态" value={enabled} onChange={(event) => { setEnabled(event.target.value); setHistoryOffset(0); }}><option value="">全部状态</option><option value="true">已启用</option><option value="false">已暂停</option><option value="failed">最近失败</option></select>
         <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索资产代码或名称" className="border border-line px-2 py-1" />
       </div>
       {histories.isError && <p role="alert" className="mb-2 text-sm text-danger">资产历史自动更新配置加载失败：{queryErrorMessage(histories.error)}</p>}
-      {histories.isLoading ? <p>加载中…</p> : (histories.data?.items.length ?? 0) === 0 ? <p>未配置资产历史自动更新。</p> : <div className="overflow-x-auto"><table className="w-full min-w-[1160px] text-sm"><thead><tr><th>资产</th><th>口径</th><th>状态</th><th>周期</th><th>下次执行</th><th>最近成功</th><th>最近失败</th><th>任务</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{histories.data?.items.map((rule) => <tr key={rule.id} className="border-t border-line"><td>{rule.target_label}</td><td>{adjustPolicyLabel(rule.adjust_policy)} · {pointTypeLabel(rule.point_type)}</td><RuleCells rule={rule} pending={pendingTarget === rule.id} onUpdate={(active, hours) => updateRule(rule, active, hours)} /></tr>)}</tbody></table></div>}
+      {histories.isLoading ? <p>加载中…</p> : (histories.data?.items.length ?? 0) === 0 ? <p>未配置资产历史自动更新。</p> : <>
+        <div className="overflow-x-auto"><table className="w-full min-w-[1160px] text-sm"><thead><tr><th>资产</th><th>口径</th><th>状态</th><th>周期</th><th>下次执行</th><th>最近成功</th><th>最近失败</th><th>任务</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{histories.data?.items.map((rule) => <tr key={rule.id} className="border-t border-line"><td>{rule.target_label}</td><td>{adjustPolicyLabel(rule.adjust_policy)} · {pointTypeLabel(rule.point_type)}</td><RuleCells rule={rule} pending={pendingTarget === rule.id} onUpdate={(active, hours) => updateRule(rule, active, hours)} /></tr>)}</tbody></table></div>
+        <AdminPagination total={histories.data?.total ?? 0} limit={HISTORY_PAGE_SIZE} offset={historyOffset} onOffsetChange={setHistoryOffset} />
+      </>}
     </section>
   </div>;
 }

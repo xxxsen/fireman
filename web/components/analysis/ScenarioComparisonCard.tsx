@@ -32,11 +32,19 @@ function deltaLabel(value: number, baseline: number, isBaseline: boolean): strin
  * the rows isolate the effect of the return/volatility shift; the deltas are
  * measured against the baseline row.
  */
-export function ScenarioComparisonCard({ planId }: { planId: string }) {
+export function ScenarioComparisonCard({
+  planId,
+  runId,
+  inputHash,
+}: {
+  planId: string;
+  runId: string;
+  inputHash: string;
+}) {
   const [enabled, setEnabled] = useState(false);
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
-    queryKey: ["scenario-comparison", planId],
-    queryFn: () => getScenarioComparison(planId),
+    queryKey: ["scenario-comparison", planId, runId, inputHash],
+    queryFn: () => getScenarioComparison(planId, runId),
     enabled,
     staleTime: 0,
   });
@@ -50,7 +58,7 @@ export function ScenarioComparisonCard({ planId }: { planId: string }) {
         <div>
           <h3 className="text-sm font-medium text-ink">情景比较（保守 / 基准 / 乐观）</h3>
           <p className="mt-1 text-xs text-ink-muted">
-            使用同一计划冻结输入与同一随机种子，仅切换全局情景并列运行，隔离收益/波动假设的影响。
+            使用所选历史模拟的冻结输入与同一随机种子，仅切换全局情景并列运行。
           </p>
         </div>
         <Button
@@ -83,7 +91,7 @@ export function ScenarioComparisonCard({ planId }: { planId: string }) {
                 <tr>
                   <th className="px-3 py-2 text-left font-medium text-ink-muted">情景</th>
                   <th className="px-3 py-2 text-right font-medium text-ink-muted">前瞻收益</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">波动率</th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted">目标权重下近似年化波动率</th>
                   <th className="px-3 py-2 text-right font-medium text-ink-muted">成功率</th>
                   <th className="px-3 py-2 text-right font-medium text-ink-muted">终值 P50（名义）</th>
                   <th className="px-3 py-2 text-right font-medium text-ink-muted">较基准</th>

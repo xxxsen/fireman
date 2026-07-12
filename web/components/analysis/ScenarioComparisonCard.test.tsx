@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 
@@ -14,7 +14,7 @@ function renderCard() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <ScenarioComparisonCard planId="plan_1" />
+      <ScenarioComparisonCard planId="plan_1" runId="run_1" inputHash="hash_1" />
     </QueryClientProvider>,
   );
 }
@@ -23,6 +23,8 @@ describe("ScenarioComparisonCard", () => {
   it("runs three scenarios on demand and shows deltas vs baseline", async () => {
     mockGet.mockResolvedValue({
       plan_id: "plan_1",
+      base_run_id: "run_1",
+      base_input_hash: "hash_1",
       profile_id: "system_cma_v3",
       profile_version: 1,
       seed: "42",
@@ -80,6 +82,30 @@ describe("ScenarioComparisonCard", () => {
     expect(screen.getByText(/条路径/)).toBeInTheDocument();
     // After the first run the action becomes a re-run.
     expect(screen.getByRole("button", { name: "重新运行" })).toBeInTheDocument();
-    expect(mockGet).toHaveBeenCalledWith("plan_1");
+    expect(mockGet).toHaveBeenCalledWith("plan_1", "run_1");
+  });
+
+  it("refetches against the newly selected frozen run", async () => {
+    const response = {
+      plan_id: "plan_1", base_run_id: "run_1", base_input_hash: "hash_1",
+      profile_id: "system_cma_v3", profile_version: 1, seed: "42", runs: 10,
+      baseline_key: "baseline", scenarios: [],
+    };
+    mockGet.mockResolvedValue(response);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <ScenarioComparisonCard planId="plan_1" runId="run_1" inputHash="hash_1" />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "运行情景比较" }));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("plan_1", "run_1"));
+
+    view.rerender(
+      <QueryClientProvider client={qc}>
+        <ScenarioComparisonCard planId="plan_1" runId="run_2" inputHash="hash_2" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("plan_1", "run_2"));
   });
 });

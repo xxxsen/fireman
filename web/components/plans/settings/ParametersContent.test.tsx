@@ -9,6 +9,16 @@ vi.mock("next/navigation", () => ({
 
 const updatePlanSettings = vi.fn();
 
+function percentInputByLabel(label: string): HTMLInputElement | null {
+  for (const node of screen.queryAllByText(label)) {
+    const input = node.closest("label")?.querySelector<HTMLInputElement>(
+      'input[data-testid="percent-input"]',
+    );
+    if (input) return input;
+  }
+  return null;
+}
+
 vi.mock("@/hooks/usePlanResultStale", () => ({
   usePlanResultStale: () => ({ stale: false }),
 }));
@@ -538,5 +548,30 @@ describe("ParametersPage strategy enums", () => {
     }
     expect(screen.queryByText("有未保存的修改")).not.toBeInTheDocument();
     expect(updatePlanSettings).not.toHaveBeenCalled();
+  });
+
+  it("shows and validates only fields active in the selected modes", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ParametersPage showAllocation={false} showStale={false} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("提取与通胀");
+    expect(percentInputByLabel("固定通胀率")).toBeInTheDocument();
+    expect(percentInputByLabel("通胀均值 μ")).not.toBeInTheDocument();
+    expect(percentInputByLabel("提取率")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("通胀模式"), { target: { value: "random_ar1" } });
+    expect(percentInputByLabel("固定通胀率")).not.toBeInTheDocument();
+    expect(percentInputByLabel("通胀均值 μ")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/提取策略/), { target: { value: "fixed_portfolio" } });
+    expect(percentInputByLabel("提取率")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/提取策略/), { target: { value: "guardrail" } });
+    expect(percentInputByLabel("提取率")).not.toBeInTheDocument();
+    expect(percentInputByLabel("护栏下限比例")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /查看「护栏提取率」说明/ })).toBeInTheDocument();
   });
 });

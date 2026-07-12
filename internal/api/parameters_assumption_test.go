@@ -187,6 +187,7 @@ func TestPlanParametersAssumptionRejections(t *testing.T) {
 			p["custom_return_assumptions_json"] = "{not-json"
 		}},
 		{"floor >= ceiling", func(p map[string]any) {
+			p["withdrawal_type"] = "guardrail"
 			p["withdrawal_floor_ratio"] = 1.0
 			p["withdrawal_ceiling_ratio"] = 1.0
 		}},

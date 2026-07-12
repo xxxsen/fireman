@@ -237,6 +237,20 @@ def _build_open_fund_info(indicator: str) -> CallBuilder:
     return build
 
 
+def _build_em_open_fund_history(indicator: str) -> CallBuilder:
+    def build(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
+        del start, end
+        return UpstreamCall(
+            "em_fund_open_history",
+            kwargs=(
+                ("symbol", str(payload.get("symbol", ""))),
+                ("indicator", indicator),
+            ),
+        )
+
+    return build
+
+
 def _build_money_fund_info(payload: dict[str, Any], start: str, end: str) -> UpstreamCall:
     del start, end
     return UpstreamCall("fund_money_fund_info_em", kwargs=(("symbol", str(payload.get("symbol", ""))),))
@@ -311,6 +325,12 @@ _PINNED_SOURCES: dict[str, dict[str, CallBuilder]] = {
         "ak.fund_etf_fund_info_em": _build_fund_etf_fund_info_em,
     },
     "cn_mutual_fund": {
+        "em.fund_open_history:累计净值走势": _build_em_open_fund_history(
+            "累计净值走势"
+        ),
+        "em.fund_open_history:单位净值走势": _build_em_open_fund_history(
+            "单位净值走势"
+        ),
         "ak.fund_open_fund_info_em:累计净值走势": _build_open_fund_info("累计净值走势"),
         "ak.fund_open_fund_info_em:单位净值走势": _build_open_fund_info("单位净值走势"),
         "ak.fund_money_fund_info_em": _build_money_fund_info,

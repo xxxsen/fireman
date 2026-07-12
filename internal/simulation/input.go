@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // EngineVersion is bumped when simulation semantics change. 3.0.0 introduced the
@@ -14,7 +16,9 @@ import (
 // adjustments compound on the previous year's spending instead of resetting to
 // the inflation baseline every year. 3.2.0 adds aggregate cash liquidity and
 // fact-based failure states. 3.3.0 adds stable after-retirement net income.
-const EngineVersion = "3.3.0"
+// 3.4.0 fixes retirement-income settlement, failed-path accounting, random
+// inflation initialization, and failure-age month precision.
+const EngineVersion = "3.4.0"
 
 // LegacyEngineVersion identifies snapshots created by the former independent
 // factor engine.
@@ -44,6 +48,52 @@ func UsesFactBasedFailureStates(engineVersion string) bool {
 	default:
 		return true
 	}
+}
+
+// UsesNetRetirementSettlement reports whether after-tax retirement income is
+// netted against living spending before portfolio-withdrawal tax is applied.
+func UsesNetRetirementSettlement(engineVersion string) bool {
+	return engineVersionAtLeast3_4(engineVersion)
+}
+
+// UsesStationaryInflationInitialState reports whether random AR(1) inflation
+// starts at its long-run mean instead of the legacy zero value.
+func UsesStationaryInflationInitialState(engineVersion string) bool {
+	return engineVersionAtLeast3_4(engineVersion)
+}
+
+// UsesZeroPaddedFailureSeries reports whether failed paths record the failure
+// month and remain at zero wealth for the rest of the horizon.
+func UsesZeroPaddedFailureSeries(engineVersion string) bool {
+	return engineVersionAtLeast3_4(engineVersion)
+}
+
+// UsesMonthPrecisionFailureAge reports whether failure age is calculated at
+// the end of the failure month with fractional-year precision.
+func UsesMonthPrecisionFailureAge(engineVersion string) bool {
+	return engineVersionAtLeast3_4(engineVersion)
+}
+
+func engineVersionAtLeast3_4(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	values := [3]int{}
+	for i, part := range parts {
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 {
+			return false
+		}
+		values[i] = value
+	}
+	want := [3]int{3, 4, 0}
+	for i := range values {
+		if values[i] != want[i] {
+			return values[i] > want[i]
+		}
+	}
+	return true
 }
 
 // Random factor model identifiers (InputSnapshot.RandomFactorModel).
@@ -91,6 +141,7 @@ type SnapshotAsset struct {
 	// engine (ForwardAnnualGeometricReturn == ModeledAnnualReturn) are kept
 	// separate and never mixed.
 	HistoricalAnnualGeometricReturn float64        `json:"historical_annual_geometric_return,omitempty"`
+	HistoricalAnnualVolatility      float64        `json:"historical_annual_volatility,omitempty"`
 	ForwardAnnualGeometricReturn    float64        `json:"forward_annual_geometric_return,omitempty"`
 	ForwardLogReturn                float64        `json:"forward_log_return,omitempty"`
 	AnnualVolatilityUsed            float64        `json:"annual_volatility_used,omitempty"`
@@ -101,6 +152,9 @@ type SnapshotAsset struct {
 	ReturnSampleYears               int            `json:"return_sample_years,omitempty"`
 	ReturnHistoricalWeight          float64        `json:"return_historical_weight,omitempty"`
 	ReturnWarnings                  []string       `json:"return_warnings,omitempty"`
+	OverrideForwardReturn           *float64       `json:"override_forward_return,omitempty"`
+	OverrideAnnualVolatility        *float64       `json:"override_annual_volatility,omitempty"`
+	OverrideReason                  string         `json:"override_reason,omitempty"`
 	FeeTreatment                    string         `json:"fee_treatment"`
 	ExpenseRatio                    *float64       `json:"expense_ratio,omitempty"`
 	SourceHash                      string         `json:"source_hash"`
@@ -122,12 +176,13 @@ type SnapshotAsset struct {
 	// value the engine consumes (the forward FX drift for blended_prior/custom, or
 	// the raw historical drift for historical_cagr). The fields below explain how
 	// it was derived; they are frozen so a run can always justify its FX drift.
-	FXHistoricalReturn float64  `json:"fx_historical_return,omitempty"`
-	FXPriorReturn      float64  `json:"fx_prior_return,omitempty"`
-	FXHistoricalWeight float64  `json:"fx_historical_weight,omitempty"`
-	FXReturnSource     string   `json:"fx_return_source,omitempty"`
-	FXReturnScenario   string   `json:"fx_return_scenario,omitempty"`
-	FXReturnWarnings   []string `json:"fx_return_warnings,omitempty"`
+	FXHistoricalReturn     float64  `json:"fx_historical_return,omitempty"`
+	FXHistoricalVolatility float64  `json:"fx_historical_volatility,omitempty"`
+	FXPriorReturn          float64  `json:"fx_prior_return,omitempty"`
+	FXHistoricalWeight     float64  `json:"fx_historical_weight,omitempty"`
+	FXReturnSource         string   `json:"fx_return_source,omitempty"`
+	FXReturnScenario       string   `json:"fx_return_scenario,omitempty"`
+	FXReturnWarnings       []string `json:"fx_return_warnings,omitempty"`
 	// Months / FXMonths freeze the complete-year monthly log-return series (keyed
 	// "YYYY-MM") used to estimate historical correlations in the joint factor
 	// model. Empty means the pair falls back to the
@@ -205,6 +260,16 @@ type InputSnapshot struct {
 	AssumptionProfileVersion     int    `json:"assumption_profile_version,omitempty"`
 	AssumptionProfileContentHash string `json:"assumption_profile_content_hash,omitempty"`
 	AssumptionEvidenceHash       string `json:"assumption_evidence_hash,omitempty"`
+	// Run-level return-assumption selection. Per-asset source fields may be
+	// overrides or cash rules and must never be used to infer these values.
+	ReturnAssumptionMode       string `json:"return_assumption_mode,omitempty"`
+	ReturnAssumptionScenario   string `json:"return_assumption_scenario,omitempty"`
+	ReturnAssumptionSetID      string `json:"return_assumption_set_id,omitempty"`
+	ReturnAssumptionSetVersion int    `json:"return_assumption_set_version,omitempty"`
+	// ScenarioComparisonFactorModel freezes the exact correlation matrix used to
+	// derive on-demand scenario variants without rereading mutable market data.
+	ScenarioComparisonReady       bool         `json:"scenario_comparison_ready,omitempty"`
+	ScenarioComparisonFactorModel *FactorModel `json:"scenario_comparison_factor_model,omitempty"`
 }
 
 // EffectiveDf returns the frozen Student-t degrees of freedom for sampling: the

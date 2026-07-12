@@ -178,35 +178,41 @@ func validateParameterAdvanced(p repository.PlanParameters) error {
 }
 
 func validateInflationParams(p repository.PlanParameters) error {
-	if p.FixedInflationRate < -0.02 || p.FixedInflationRate > 0.20 {
-		return errFixedInflationRange
-	}
-	if p.InflationMu < -0.02 || p.InflationMu > 0.20 {
-		return errInflationMuRange
-	}
-	if p.InflationSigma < 0 || p.InflationSigma > 0.20 {
-		return errInflationSigmaRange
-	}
-	if p.InflationPhi < 0 || p.InflationPhi > 1 {
-		return errInflationPhiRange
+	switch p.InflationMode {
+	case "fixed_real":
+		if p.FixedInflationRate < -0.02 || p.FixedInflationRate > 0.20 {
+			return errFixedInflationRange
+		}
+	case "random_ar1":
+		if p.InflationMu < -0.02 || p.InflationMu > 0.20 {
+			return errInflationMuRange
+		}
+		if p.InflationSigma < 0 || p.InflationSigma > 0.20 {
+			return errInflationSigmaRange
+		}
+		if p.InflationPhi < 0 || p.InflationPhi > 1 {
+			return errInflationPhiRange
+		}
 	}
 	return nil
 }
 
 func validateWithdrawalParams(p repository.PlanParameters) error {
-	if p.WithdrawalRate < 0 || p.WithdrawalRate > 1 {
-		return errWithdrawalRateRange
-	}
-	if p.WithdrawalFloorRatio <= 0 || p.WithdrawalFloorRatio > 1 {
-		return errWithdrawalFloorRange
-	}
-	if p.WithdrawalCeilingRatio < 1 || p.WithdrawalCeilingRatio > 2 {
-		return errWithdrawalCeilingRange
-	}
-	// Guardrail must keep a usable band: a floor at or above the ceiling leaves no
-	// room to flex spending and is an invalid plan.
-	if p.WithdrawalFloorRatio >= p.WithdrawalCeilingRatio {
-		return errWithdrawalFloorCeiling
+	switch p.WithdrawalType {
+	case "fixed_portfolio":
+		if p.WithdrawalRate < 0 || p.WithdrawalRate > 1 {
+			return errWithdrawalRateRange
+		}
+	case "guardrail":
+		if p.WithdrawalFloorRatio <= 0 || p.WithdrawalFloorRatio > 1 {
+			return errWithdrawalFloorRange
+		}
+		if p.WithdrawalCeilingRatio < 1 || p.WithdrawalCeilingRatio > 2 {
+			return errWithdrawalCeilingRange
+		}
+		if p.WithdrawalFloorRatio >= p.WithdrawalCeilingRatio {
+			return errWithdrawalFloorCeiling
+		}
 	}
 	if p.WithdrawalTaxRate < 0 || p.WithdrawalTaxRate > 1 {
 		return errWithdrawalTaxRateRange
@@ -221,6 +227,32 @@ func validateWithdrawalParams(p repository.PlanParameters) error {
 		return errWithdrawalTaxInvalid
 	}
 	return nil
+}
+
+// normalizeActiveParameters returns the simulation identity for a parameter
+// set. Inactive mode-specific values remain persisted for mode switching but
+// are zeroed in frozen inputs and omitted from change detection.
+func normalizeActiveParameters(p repository.PlanParameters) repository.PlanParameters {
+	switch p.InflationMode {
+	case "random_ar1":
+		p.FixedInflationRate = 0
+	default:
+		p.InflationMu = 0
+		p.InflationPhi = 0
+		p.InflationSigma = 0
+	}
+	switch p.WithdrawalType {
+	case "fixed_portfolio":
+		p.WithdrawalFloorRatio = 0
+		p.WithdrawalCeilingRatio = 0
+	case "guardrail":
+		p.WithdrawalRate = 0
+	default:
+		p.WithdrawalRate = 0
+		p.WithdrawalFloorRatio = 0
+		p.WithdrawalCeilingRatio = 0
+	}
+	return p
 }
 
 func validateParameterAges(p repository.PlanParameters) error {

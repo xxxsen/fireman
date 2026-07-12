@@ -304,6 +304,9 @@ export interface SimulationRun {
   failure_count: number;
   summary_json: SimulationSummary;
   created_at: number;
+  job_status?: "queued" | "running" | "succeeded" | "failed" | "canceled" | "unknown";
+  job_error_code?: string;
+  job_error_message?: string;
   asset_participation?: {
     holding_id: string;
     asset_key: string;
@@ -321,6 +324,7 @@ export interface SimulationSummary {
   monthly_wealth_quantiles?: QuantilePoint[];
   real_monthly_wealth_quantiles?: QuantilePoint[];
   failure_year_quantiles?: Record<string, number>;
+  failure_age_quantiles?: Record<string, number>;
   max_drawdown_quantiles?: Record<string, number>;
   model_warnings?: string[];
   correlation_disclaimer?: string;
@@ -346,11 +350,20 @@ export interface RunAssetAssumption {
   is_cash: boolean;
   historical_annual_geometric_return: number;
   forward_annual_geometric_return: number;
+  base_currency_forward_return: number;
   annual_volatility_used: number;
   source: string;
   sample_years: number;
   historical_weight: number;
   warnings?: string[];
+  has_fx: boolean;
+  fx_forward_return: number;
+  fx_historical_return: number;
+  fx_prior_return: number;
+  fx_annual_volatility: number;
+  fx_historical_weight: number;
+  fx_source: string;
+  fx_warnings?: string[];
 }
 
 export interface QuantilePoint {
@@ -485,6 +498,8 @@ export interface PathMonthRecord {
   month_offset: number;
   total_wealth_minor: number;
   spending_minor: number;
+  spending_requested_minor?: number;
+  unfunded_spending_minor?: number;
   income_minor: number;
   tax_minor: number;
   transaction_cost: number;
@@ -527,6 +542,8 @@ export interface ScenarioComparisonRow {
 
 export interface ScenarioComparison {
   plan_id: string;
+  base_run_id: string;
+  base_input_hash: string;
   profile_id: string;
   profile_version: number;
   seed: string;

@@ -103,6 +103,47 @@ func TestSimulationRepoPruneByPlanKeepsNewest(t *testing.T) {
 	}
 }
 
+func TestSimulationRepoReadsJoinedJobTerminalState(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	repo := NewSimulationRepo(db)
+	ctx := context.Background()
+	planID := "plan_run_states"
+	seedPlanRow(t, db, planID)
+	statuses := []string{
+		JobStatusQueued, JobStatusRunning, JobStatusSucceeded, JobStatusFailed, JobStatusCanceled,
+	}
+	for i, status := range statuses {
+		jobID := "job_state_" + status
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO jobs (id, plan_id, type, status, input_hash, error_code, error_message, created_at)
+			VALUES (?, ?, 'simulation', ?, 'h', ?, ?, ?)`,
+			jobID, planID, status, "code_"+status, "message_"+status, i); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.CreatePending(ctx, nil, SimulationRun{
+			ID: "run_state_" + status, JobID: jobID, PlanID: planID, InputHash: "h",
+			InputSnapshotJSON: "{}", MarketSnapshotHash: "m", EngineVersion: "v1",
+			Runs: 1, Seed: 1, HorizonMonths: 12, CreatedAt: int64(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := repo.ListByPlan(ctx, planID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != len(statuses) {
+		t.Fatalf("runs = %d, want %d", len(runs), len(statuses))
+	}
+	for _, run := range runs {
+		wantStatus := run.ID[len("run_state_"):]
+		if run.JobStatus != wantStatus || run.JobErrorCode != "code_"+wantStatus ||
+			run.JobErrorMessage != "message_"+wantStatus {
+			t.Fatalf("joined state = %+v", run)
+		}
+	}
+}
+
 func TestAnalysisRepoListAndDeleteBySimulationRun(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	sims := NewSimulationRepo(db)

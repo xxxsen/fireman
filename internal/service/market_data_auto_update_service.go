@@ -13,12 +13,11 @@ import (
 )
 
 const (
-	AutoUpdateTargetDirectory    = "directory_unit"
-	AutoUpdateTargetHistory      = "asset_history"
-	autoUpdateBatchSize          = 100
-	autoUpdateScanTimeout        = 10 * time.Minute
-	autoUpdateScanMinute         = 10
-	autoUpdateScanIntervalMinute = 10
+	AutoUpdateTargetDirectory = "directory_unit"
+	AutoUpdateTargetHistory   = "asset_history"
+	autoUpdateBatchSize       = 100
+	autoUpdateScanTimeout     = 10 * time.Minute
+	autoUpdateScanMinute      = 10
 )
 
 type AutoUpdateRuleView struct {
@@ -111,15 +110,24 @@ func nextAlignedSlot(after time.Time, intervalHours int, loc *time.Location) tim
 	return todaySlot.AddDate(0, 0, days)
 }
 
-// nextScanTime returns the next 10-minute-aligned wall-clock time after `now`.
-// Scans fire at :00, :10, :20, :30, :40, :50 of every hour.
-func nextScanTime(now time.Time) time.Time {
-	interval := time.Duration(autoUpdateScanIntervalMinute) * time.Minute
-	t := now.Truncate(interval)
-	if !t.After(now) {
-		t = t.Add(interval)
+// nextScanTime returns the next local wall-clock slot, strictly after now.
+// Every local day is anchored at 00:10; rebuilding candidates with time.Date
+// avoids elapsed-time drift and preserves the configured wall-clock schedule
+// across daylight-saving transitions.
+func nextScanTime(now time.Time, intervalMinutes int, loc *time.Location) time.Time {
+	local := now.In(loc)
+	for dayOffset := 0; dayOffset <= 2; dayOffset++ {
+		date := time.Date(local.Year(), local.Month(), local.Day()+dayOffset, 0, 0, 0, 0, loc)
+		for minuteOffset := autoUpdateScanMinute; minuteOffset < 24*60; minuteOffset += intervalMinutes {
+			candidate := time.Date(
+				date.Year(), date.Month(), date.Day(), minuteOffset/60, minuteOffset%60, 0, 0, loc,
+			)
+			if candidate.After(now) {
+				return candidate
+			}
+		}
 	}
-	return t
+	return time.Date(local.Year(), local.Month(), local.Day()+1, 0, autoUpdateScanMinute, 0, 0, loc)
 }
 
 func (s *AutoUpdateService) DirectoryUnits() []AutoUpdateDirectoryUnitView {
@@ -579,16 +587,24 @@ func autoUpdateFailureCode(err error) string {
 }
 
 type AutoUpdateScheduler struct {
-	svc    *AutoUpdateService
-	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
+	svc             *AutoUpdateService
+	intervalMinutes int
+	loc             *time.Location
+	now             func() time.Time
+	after           func(time.Duration) <-chan time.Time
+	scan            func(context.Context)
+	cancel          context.CancelFunc
+	done            chan struct{}
+	once            sync.Once
 }
 
-func NewAutoUpdateScheduler(service *AutoUpdateService) *AutoUpdateScheduler {
-	return &AutoUpdateScheduler{
-		svc: service, done: make(chan struct{}),
+func NewAutoUpdateScheduler(service *AutoUpdateService, intervalMinutes int) *AutoUpdateScheduler {
+	scheduler := &AutoUpdateScheduler{
+		svc: service, intervalMinutes: intervalMinutes, loc: service.loc,
+		now: service.now, after: time.After, done: make(chan struct{}),
 	}
+	scheduler.scan = scheduler.runOnce
+	return scheduler
 }
 
 func (s *AutoUpdateScheduler) Start(ctx context.Context) {
@@ -603,16 +619,16 @@ func (s *AutoUpdateScheduler) Start(ctx context.Context) {
 }
 
 func (s *AutoUpdateScheduler) run(ctx context.Context) {
-	s.runOnce(ctx)
+	s.scan(ctx)
 	for {
-		next := nextScanTime(s.svc.now())
-		timer := time.NewTimer(time.Until(next))
+		now := s.now()
+		next := nextScanTime(now, s.intervalMinutes, s.loc)
+		wait := next.Sub(now)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return
-		case <-timer.C:
-			s.runOnce(ctx)
+		case <-s.after(wait):
+			s.scan(ctx)
 		}
 	}
 }

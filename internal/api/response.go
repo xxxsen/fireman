@@ -39,6 +39,7 @@ func Fail(c *gin.Context, status int, code, message string, details map[string]a
 	})
 }
 
+//nolint:gocyclo // Centralized stable error-to-HTTP mapping is easier to audit as one switch.
 func FailErr(c *gin.Context, err error) {
 	var ae *service.AppError
 	if ok := asAppError(err, &ae); ok {
@@ -54,7 +55,7 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusBadRequest
 		case "market_provider_unavailable", "market_provider_timeout":
 			status = http.StatusBadGateway
-		case "plan_version_conflict", "instrument_version_conflict", "rule_version_conflict":
+		case "plan_version_conflict", "plan_config_conflict", "instrument_version_conflict", "rule_version_conflict":
 			status = http.StatusConflict
 		case "idempotency_conflict", "job_already_terminal", "system_profile_identity_conflict":
 			status = http.StatusConflict
@@ -72,6 +73,8 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusBadRequest
 		case "parameters_invalid", "foreign_cash_not_supported":
 			status = http.StatusBadRequest
+		case "scenario_comparison_unsupported":
+			status = http.StatusUnprocessableEntity
 		case "builtin_scenario_immutable", "scenario_in_use":
 			status = http.StatusBadRequest
 		default:

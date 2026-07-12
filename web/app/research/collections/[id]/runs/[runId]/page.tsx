@@ -15,6 +15,7 @@ import { getMarketAssetDetail } from "@/lib/api/market-assets";
 import { queryErrorMessage } from "@/lib/query-error";
 import {
   formatDateTimeFromMs,
+  formatMoneyScaled,
   formatNullablePercent,
   formatPercent,
 } from "@/lib/format";
@@ -309,6 +310,11 @@ export default function ResearchRunDetailPage() {
 
       {succeeded && summary && (
         <div className="space-y-6">
+          {run.engine_version !== "research_backtest_v4" && (
+            <p className="text-sm text-warning" role="note">
+              该历史回测版本未计研究交易成本；与新版本结果比较时请先统一引擎版本。
+            </p>
+          )}
           <div
             className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
             data-testid="metric-cards"
@@ -386,6 +392,26 @@ export default function ResearchRunDetailPage() {
               value={`当前 ${summary.current_drawdown_days} 天 / 最长 ${summary.max_drawdown_duration_days} 天`}
               help="当前回撤已持续天数与历史最长回撤持续期（峰值到收复）。"
             />
+            {run.engine_version === "research_backtest_v4" && (
+              <>
+                <MetricCard
+                  label="累计单边换手"
+                  value={formatPercent(summary.total_turnover ?? 0)}
+                  help="每次再平衡的 0.5 × Σ|扣费前漂移权重 − 目标权重| 之和。"
+                />
+                <MetricCard
+                  label="累计交易成本"
+                  value={formatMoneyScaled(summary.total_transaction_cost_minor ?? 0, run.base_currency)}
+                  help="按运行输入中的初始资金和交易费率逐次四舍五入后的实际费用合计。"
+                />
+                <MetricCard
+                  label="交易成本拖累"
+                  value={formatPercent(summary.transaction_cost_drag ?? 0)}
+                  help="同一调仓路径下，不计费用终值与计费后终值的差额，占初始净值的比例。"
+                  tone={(summary.transaction_cost_drag ?? 0) > 0 ? "danger" : undefined}
+                />
+              </>
+            )}
             {summary.tail_risk && (
               <>
                 <MetricCard

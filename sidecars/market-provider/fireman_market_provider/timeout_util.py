@@ -61,6 +61,13 @@ def dispatch_upstream_call(call: UpstreamCall) -> Any:
         _time.sleep(call.args[0])
         return None
 
+    # Custom Eastmoney fund history parser (avoids executing upstream JS and
+    # follows the fund page's explicit canonical-code redirect).
+    if call.operation == "em_fund_open_history":
+        from .adapters import em_fund_history
+
+        return em_fund_history.em_fund_open_history(*call.args, **_kwargs_dict(call))
+
     # Custom Eastmoney directory listings (categories AKShare does not expose).
     if call.operation.startswith("em_"):
         from .adapters import em_directory

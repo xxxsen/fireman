@@ -24,9 +24,12 @@ func (s *InflationState) ClearOverrideAnnual() {
 	s.overrideAnnual = nil
 }
 
-func NewInflationState(mode string, fixedAnnual, mu, phi, sigma float64, rng *RNG) InflationState {
+func NewInflationState(engineVersion, mode string, fixedAnnual, mu, phi, sigma float64, rng *RNG) InflationState {
 	st := InflationState{
 		Mode: mode, Mu: mu, Phi: phi, Sigma: sigma, Cumulative: 1, lastYear: -1, rng: rng,
+	}
+	if mode == "random_ar1" && UsesStationaryInflationInitialState(engineVersion) {
+		st.AnnualPi = mu
 	}
 	if mode == "fixed" || mode == "fixed_real" {
 		st.FixedMonthly = math.Pow(1+fixedAnnual, 1.0/12) - 1

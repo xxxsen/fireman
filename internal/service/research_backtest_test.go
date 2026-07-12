@@ -189,6 +189,67 @@ func TestShouldRebalanceCalendarBoundaries(t *testing.T) {
 	}
 }
 
+func TestResearchTransactionCostKnownMonthlyRebalance(t *testing.T) {
+	lo, _ := parseResearchDate("2020-01-30")
+	hi, _ := parseResearchDate("2020-02-03")
+	values := [][]float64{{1, 2, 2, 2, 2}, {1, 1, 1, 1, 1}}
+	effective := []bool{true, true, false, false, true}
+	targets := []float64{0.5, 0.5}
+	walk := walkResearchPortfolio(BacktestInput{
+		InitialAmountMinor: 1_000_000,
+		RebalancePolicy:    ResearchRebalanceMonthly, TransactionCostRate: 0.01,
+	}, values, effective, targets, lo, hi)
+
+	// Jan 31: pre-cost NAV=1.5, drift weights=2/3 and 1/3,
+	// one-way turnover=1/6, so cost=round(1_000_000*1.5*1/6*1%)=2,500.
+	if math.Abs(walk.totalTurnover-1.0/6.0) > 1e-12 {
+		t.Fatalf("turnover=%v, want %v", walk.totalTurnover, 1.0/6.0)
+	}
+	if walk.totalTransactionCostMinor != 2_500 {
+		t.Fatalf("cost=%d, want 2500", walk.totalTransactionCostMinor)
+	}
+	if math.Abs(walk.navs[1]-1.4975) > 1e-12 || math.Abs(walk.periodReturns[1]-0.4975) > 1e-12 {
+		t.Fatalf("cost-adjusted path nav=%v return=%v", walk.navs[1], walk.periodReturns[1])
+	}
+	if math.Abs(walk.weightRows[1][0]-0.5) > 1e-12 || math.Abs(walk.weightRows[1][1]-0.5) > 1e-12 {
+		t.Fatalf("weights not reset after cost: %v", walk.weightRows[1])
+	}
+	contributionSum := walk.contribRows[1][0] + walk.contribRows[1][1]
+	if math.Abs(contributionSum-walk.periodReturns[1]) > 1e-12 {
+		t.Fatalf("cost attribution sum=%v return=%v", contributionSum, walk.periodReturns[1])
+	}
+	if math.Abs(walk.grossNAVs[len(walk.grossNAVs)-1]-walk.navs[len(walk.navs)-1]-0.0025) > 1e-12 {
+		t.Fatalf("transaction-cost drag path mismatch: gross=%v net=%v", walk.grossNAVs, walk.navs)
+	}
+}
+
+func TestResearchTransactionCostSkipsWeekendsAndBuyHold(t *testing.T) {
+	lo, _ := parseResearchDate("2020-01-30")
+	hi, _ := parseResearchDate("2020-02-03")
+	values := [][]float64{{1, 2, 2, 2, 2}, {1, 1, 1, 1, 1}}
+	effective := []bool{true, true, false, false, true}
+	targets := []float64{0.5, 0.5}
+
+	monthly := walkResearchPortfolio(BacktestInput{
+		InitialAmountMinor: 1_000_000,
+		RebalancePolicy:    ResearchRebalanceMonthly, TransactionCostRate: 0.01,
+	}, values, effective, targets, lo, hi)
+	if monthly.totalTransactionCostMinor != 2_500 {
+		t.Fatalf("month-end weekend must not add charges: %d", monthly.totalTransactionCostMinor)
+	}
+
+	buyHold := walkResearchPortfolio(BacktestInput{
+		InitialAmountMinor: 1_000_000,
+		RebalancePolicy:    ResearchRebalanceBuyHold, TransactionCostRate: 0.50,
+	}, values, effective, targets, lo, hi)
+	if buyHold.totalTurnover != 0 || buyHold.totalTransactionCostMinor != 0 {
+		t.Fatalf("buy_hold charged costs: turnover=%v cost=%d", buyHold.totalTurnover, buyHold.totalTransactionCostMinor)
+	}
+	if math.Abs(buyHold.navs[len(buyHold.navs)-1]-1.5) > 1e-12 {
+		t.Fatalf("buy_hold nav=%v, want 1.5", buyHold.navs)
+	}
+}
+
 // --- input validation errors ---
 
 func TestRunBacktestWeightValidation(t *testing.T) {

@@ -373,6 +373,12 @@ export default function OptimizationDetailPage() {
         </div>
       </dl>
 
+      {opt.engine_version !== "research_optimizer_v5" && (
+        <p className="mb-4 text-sm text-warning" role="note">
+          该历史调优版本未计研究交易成本；候选排序不可与新版本直接比较。
+        </p>
+      )}
+
       {(opt.status === "queued" || opt.status === "running") && (
         <div
           className="rounded-lg border border-info/25 bg-info/5 px-4 py-6 text-center"

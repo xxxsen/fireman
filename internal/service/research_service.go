@@ -17,6 +17,8 @@ import (
 	"github.com/google/uuid"
 
 	fdb "github.com/fireman/fireman/internal/db"
+	"github.com/fireman/fireman/internal/domain"
+	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
@@ -34,6 +36,10 @@ type ResearchService struct {
 	marketData  *repository.MarketDataRepo
 	plans       *repository.PlanRepo
 	holdings    *repository.HoldingsRepo
+	params      *repository.ParametersRepo
+	alloc       *repository.AllocationRepo
+	holdingSvc  *HoldingsService
+	portfolio   *repository.PortfolioSnapshotRepo
 	marketSvc   *MarketAssetService
 	now         func() time.Time
 }
@@ -50,6 +56,7 @@ func NewResearchService(
 	holdings *repository.HoldingsRepo,
 	marketSvc *MarketAssetService,
 ) *ResearchService {
+	snapshotSvc := marketdata.NewSnapshotService(repository.NewSnapshotRepo(sqlDB), assets)
 	return &ResearchService{
 		sql:         sqlDB,
 		research:    research,
@@ -60,6 +67,10 @@ func NewResearchService(
 		marketData:  marketData,
 		plans:       plans,
 		holdings:    holdings,
+		params:      repository.NewParametersRepo(sqlDB),
+		alloc:       repository.NewAllocationRepo(sqlDB),
+		holdingSvc:  NewHoldingsService(sqlDB, plans, holdings, snapshotSvc, assets),
+		portfolio:   repository.NewPortfolioSnapshotRepo(sqlDB),
 		marketSvc:   marketSvc,
 		now:         time.Now,
 	}
@@ -2208,112 +2219,416 @@ func (s *ResearchService) ExportRunCSV(ctx context.Context, runID string) (strin
 
 // --- copy to plan ---
 
-// ResearchCopyToPlanRequest is the POST /collections/{id}/copy-to-plan body.
-type ResearchCopyToPlanRequest struct {
+const researchPlanWeightTolerance = 1e-9
+
+type ResearchPlanPreviewRequest struct {
 	PlanID string `json:"plan_id"`
 }
 
-// ResearchPlanDraftHolding is one prefilled holding row for the plan holding
-// correction flow.
-type ResearchPlanDraftHolding struct {
+type ResearchPlanApplyRequest struct {
+	PlanID                  string `json:"plan_id"`
+	ExpectedConfigVersion   int    `json:"expected_config_version"`
+	ExpectedReplacementHash string `json:"expected_replacement_hash"`
+	Mode                    string `json:"mode"`
+}
+
+type ResearchPlanReplacementHolding struct {
 	AssetKey           string  `json:"asset_key"`
 	Name               string  `json:"name"`
 	Symbol             string  `json:"symbol"`
 	Weight             float64 `json:"weight"`
 	AssetClass         string  `json:"asset_class"`
 	Region             string  `json:"region"`
+	WeightWithinGroup  float64 `json:"weight_within_group"`
 	CurrentAmountMinor int64   `json:"current_amount_minor"`
 }
 
-// ResearchCopyToPlanResult is the draft payload the frontend carries into the
-// plan holding editor. The collection itself never writes plan_holdings.
-type ResearchCopyToPlanResult struct {
-	PlanID       string                     `json:"plan_id"`
-	PlanName     string                     `json:"plan_name"`
-	CollectionID string                     `json:"collection_id"`
-	Holdings     []ResearchPlanDraftHolding `json:"holdings"`
+type ResearchPlanRemovedHolding struct {
+	AssetKey string `json:"asset_key"`
+	Name     string `json:"name"`
+	Symbol   string `json:"symbol"`
 }
 
-// CopyToPlan validates asset_class/region completeness and returns a draft
-// payload (td/099 §9.3). Incomplete items are rejected with the exact fields
-// the user must fill.
-func (s *ResearchService) CopyToPlan(
-	ctx context.Context, collectionID string, req ResearchCopyToPlanRequest,
-) (ResearchCopyToPlanResult, error) {
-	var zero ResearchCopyToPlanResult
+type ResearchPlanReplacementPreview struct {
+	PlanID                     string                           `json:"plan_id"`
+	PlanName                   string                           `json:"plan_name"`
+	CollectionID               string                           `json:"collection_id"`
+	BaseCurrency               string                           `json:"base_currency"`
+	TargetTotalAssetsMinor     int64                            `json:"target_total_assets_minor"`
+	ExpectedConfigVersion      int                              `json:"expected_config_version"`
+	ReplacementHash            string                           `json:"replacement_hash"`
+	BeforeHoldingCount         int                              `json:"before_holding_count"`
+	AfterHoldingCount          int                              `json:"after_holding_count"`
+	ExistingHoldingsWillChange bool                             `json:"existing_holdings_will_change"`
+	RoundingAdjustmentMinor    int64                            `json:"rounding_adjustment_minor"`
+	Allocation                 repository.PlanAllocation        `json:"allocation"`
+	Holdings                   []ResearchPlanReplacementHolding `json:"holdings"`
+	RemovedHoldings            []ResearchPlanRemovedHolding     `json:"removed_holdings"`
+	Warnings                   []string                         `json:"warnings,omitempty"`
+}
+
+type ResearchPlanApplyResult struct {
+	PlanID              string `json:"plan_id"`
+	CollectionID        string `json:"collection_id"`
+	ConfigVersion       int    `json:"config_version"`
+	HoldingCount        int    `json:"holding_count"`
+	PortfolioSnapshotID string `json:"portfolio_snapshot_id"`
+}
+
+type researchPlanReplacement struct {
+	preview       ResearchPlanReplacementPreview
+	writes        []HoldingWriteItem
+	valuationDate string
+}
+
+func (s *ResearchService) PreviewPlanReplacement(
+	ctx context.Context, collectionID string, req ResearchPlanPreviewRequest,
+) (ResearchPlanReplacementPreview, error) {
 	if strings.TrimSpace(req.PlanID) == "" {
-		return zero, newErr("invalid_request", "plan_id is required", nil)
+		return ResearchPlanReplacementPreview{}, newErr("invalid_request", "plan_id is required", nil)
 	}
-	collection, err := s.research.GetCollection(ctx, collectionID)
+	replacement, err := s.buildResearchPlanReplacement(ctx, nil, collectionID, req.PlanID)
 	if err != nil {
-		if errors.Is(err, repository.ErrResearchCollectionNotFound) {
-			return zero, newErr("research_collection_not_found", "research collection not found", nil)
-		}
-		return zero, wrapRepo("load research collection", err)
+		return ResearchPlanReplacementPreview{}, err
 	}
-	plan, err := s.plans.GetByID(ctx, req.PlanID)
-	if err != nil {
-		if errors.Is(err, repository.ErrPlanNotFound) {
-			return zero, newErr("plan_not_found", "plan not found", nil)
-		}
-		return zero, wrapRepo("load plan", err)
-	}
-	items, err := s.research.ListItems(ctx, collectionID)
-	if err != nil {
-		return zero, wrapRepo("list research items", err)
-	}
+	return replacement.preview, nil
+}
 
-	enabled, err := enabledResearchItemsForPlan(items)
+//nolint:gocognit,gocyclo,funlen // Atomic replacement keeps validation and writes in one transaction.
+func (s *ResearchService) ApplyPlanReplacement(
+	ctx context.Context, collectionID string, req ResearchPlanApplyRequest,
+) (ResearchPlanApplyResult, error) {
+	if strings.TrimSpace(req.PlanID) == "" || req.Mode != "replace_all" ||
+		strings.TrimSpace(req.ExpectedReplacementHash) == "" {
+		return ResearchPlanApplyResult{}, newErr(
+			"invalid_request", "plan_id, expected_replacement_hash and mode=replace_all are required", nil,
+		)
+	}
+	portfolioSnapshotID := "psnap_" + uuid.New().String()
+	var result ResearchPlanApplyResult
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		replacement, err := s.buildResearchPlanReplacement(ctx, tx, collectionID, req.PlanID)
+		if err != nil {
+			return err
+		}
+		if replacement.preview.ExpectedConfigVersion != req.ExpectedConfigVersion {
+			return newErr("plan_config_conflict", "plan configuration version mismatch", map[string]any{
+				"expected": replacement.preview.ExpectedConfigVersion, "provided": req.ExpectedConfigVersion,
+			})
+		}
+		if replacement.preview.ReplacementHash != req.ExpectedReplacementHash {
+			return newErr("research_collection_changed", "research collection changed after preview", nil)
+		}
+		prep, err := s.holdingSvc.prepareHoldingsUpdateWithPendingBumps(
+			ctx, tx, req.PlanID, HoldingsUpdateRequest{
+				ConfigVersion: req.ExpectedConfigVersion, Holdings: replacement.writes,
+			}, 0, replacement.preview.Allocation,
+		)
+		if err != nil {
+			return err
+		}
+		if err := s.alloc.Replace(ctx, tx, req.PlanID, replacement.preview.Allocation); err != nil {
+			return fmt.Errorf("replace plan allocation: %w", err)
+		}
+		for _, pending := range prep.pendingSnaps {
+			if !pending.skip {
+				if err := s.holdingSvc.snapSvc.CreatePlanSnapshotTx(ctx, tx, pending.snap); err != nil {
+					return fmt.Errorf("create holding simulation snapshot: %w", err)
+				}
+			}
+		}
+		if err := s.holdings.Replace(ctx, tx, req.PlanID, prep.built); err != nil {
+			return fmt.Errorf("replace plan holdings: %w", err)
+		}
+		items := make([]repository.PortfolioSnapshotItem, 0, len(prep.built))
+		for _, holding := range prep.built {
+			items = append(items, repository.PortfolioSnapshotItem{
+				AssetKey: holding.AssetKey, AmountMinor: holding.CurrentAmountMinor,
+			})
+		}
+		if err := s.portfolio.CreateTx(ctx, tx, repository.PortfolioSnapshot{
+			ID: portfolioSnapshotID, PlanID: req.PlanID,
+			SnapshotDate:     replacement.valuationDate,
+			TotalAmountMinor: replacement.preview.TargetTotalAssetsMinor,
+			Note:             "研究组合完整替换", Items: items,
+		}); err != nil {
+			return fmt.Errorf("create research replacement portfolio snapshot: %w", err)
+		}
+		newVersion, err := s.plans.BumpVersionTx(ctx, tx, req.PlanID, req.ExpectedConfigVersion)
+		if err != nil {
+			return fmt.Errorf("bump plan version after research replacement: %w", err)
+		}
+		result = ResearchPlanApplyResult{
+			PlanID: req.PlanID, CollectionID: collectionID, ConfigVersion: newVersion,
+			HoldingCount: len(prep.built), PortfolioSnapshotID: portfolioSnapshotID,
+		}
+		return nil
+	})
 	if err != nil {
-		return zero, err
-	}
-
-	result := ResearchCopyToPlanResult{
-		PlanID:       plan.ID,
-		PlanName:     plan.Name,
-		CollectionID: collection.ID,
-		Holdings:     make([]ResearchPlanDraftHolding, 0, len(enabled)),
-	}
-	for _, item := range enabled {
-		holding := ResearchPlanDraftHolding{
-			AssetKey:   item.AssetKey,
-			Weight:     item.Weight,
-			AssetClass: item.AssetClass,
-			Region:     item.Region,
-			CurrentAmountMinor: int64(
-				math.Round(item.Weight * float64(collection.InitialAmountMinor)),
-			),
+		var appErr *AppError
+		if errors.As(err, &appErr) {
+			return ResearchPlanApplyResult{}, appErr
 		}
-		if asset, err := s.assets.GetByKey(ctx, item.AssetKey); err == nil {
-			holding.Name = asset.Name
-			holding.Symbol = asset.Symbol
+		if errors.Is(err, repository.ErrVersionConflict) {
+			return ResearchPlanApplyResult{}, newErr("plan_config_conflict", "plan configuration version mismatch", nil)
 		}
-		result.Holdings = append(result.Holdings, holding)
+		return ResearchPlanApplyResult{}, newErr(
+			"research_plan_apply_failed", "failed to apply research portfolio to plan", nil,
+		)
 	}
 	return result, nil
 }
 
-func enabledResearchItemsForPlan(
+//nolint:gocognit,gocyclo,funlen // Preview validates the complete allocation and holdings write-set in one pass.
+func (s *ResearchService) buildResearchPlanReplacement(
+	ctx context.Context, tx *sql.Tx, collectionID, planID string,
+) (researchPlanReplacement, error) {
+	var collection repository.ResearchCollection
+	var plan repository.Plan
+	var params repository.PlanParameters
+	var items []repository.ResearchCollectionItem
+	var existing []repository.PlanHolding
+	var err error
+	if tx == nil {
+		collection, err = s.research.GetCollection(ctx, collectionID)
+	} else {
+		collection, err = s.research.GetCollectionTx(ctx, tx, collectionID)
+	}
+	if err != nil {
+		if errors.Is(err, repository.ErrResearchCollectionNotFound) {
+			return researchPlanReplacement{}, newErr("research_collection_not_found", "research collection not found", nil)
+		}
+		return researchPlanReplacement{}, wrapRepo("load research collection", err)
+	}
+	if tx == nil {
+		plan, err = s.plans.GetByID(ctx, planID)
+	} else {
+		plan, err = s.plans.GetByIDTx(ctx, tx, planID)
+	}
+	if err != nil {
+		if errors.Is(err, repository.ErrPlanNotFound) {
+			return researchPlanReplacement{}, newErr("plan_not_found", "plan not found", nil)
+		}
+		return researchPlanReplacement{}, wrapRepo("load plan", err)
+	}
+	if collection.BaseCurrency != plan.BaseCurrency {
+		return researchPlanReplacement{}, newErr(
+			"research_plan_currency_mismatch", "research and FIRE plan base currencies must match",
+			map[string]any{"research_currency": collection.BaseCurrency, "plan_currency": plan.BaseCurrency},
+		)
+	}
+	if tx == nil {
+		params, err = s.params.Get(ctx, planID)
+	} else {
+		params, err = s.params.GetTx(ctx, tx, planID)
+	}
+	if err != nil {
+		return researchPlanReplacement{}, wrapRepo("load plan parameters", err)
+	}
+	if params.TotalAssetsMinor <= 0 {
+		return researchPlanReplacement{}, newErr("invalid_request", "target plan total assets must be positive", nil)
+	}
+	if tx == nil {
+		items, err = s.research.ListItems(ctx, collectionID)
+	} else {
+		items, err = s.research.ListItemsTx(ctx, tx, collectionID)
+	}
+	if err != nil {
+		return researchPlanReplacement{}, wrapRepo("list research items", err)
+	}
+	if tx == nil {
+		existing, err = s.holdings.ListByPlan(ctx, planID)
+	} else {
+		existing, err = s.holdings.ListByPlanTx(ctx, tx, planID)
+	}
+	if err != nil {
+		return researchPlanReplacement{}, wrapRepo("list plan holdings", err)
+	}
+
+	enabled, err := enabledResearchItemsForReplacement(items)
+	if err != nil {
+		return researchPlanReplacement{}, err
+	}
+	sort.Slice(enabled, func(i, j int) bool {
+		a, b := enabled[i], enabled[j]
+		if a.AssetClass != b.AssetClass {
+			return a.AssetClass < b.AssetClass
+		}
+		if a.Region != b.Region {
+			return a.Region < b.Region
+		}
+		if a.AssetKey != b.AssetKey {
+			return a.AssetKey < b.AssetKey
+		}
+		return a.ID < b.ID
+	})
+
+	type groupKey struct{ assetClass, region string }
+	classWeight := make(map[string]float64)
+	groupWeight := make(map[groupKey]float64)
+	seenAssets := make(map[string]struct{}, len(enabled))
+	positive := make([]repository.ResearchCollectionItem, 0, len(enabled))
+	for _, item := range enabled {
+		if _, duplicate := seenAssets[item.AssetKey]; duplicate {
+			return researchPlanReplacement{}, newErr(
+				"holding_duplicate", "research collection contains duplicate asset", map[string]any{
+					"asset_key": item.AssetKey,
+				})
+		}
+		seenAssets[item.AssetKey] = struct{}{}
+		if item.Weight <= researchPlanWeightTolerance {
+			continue
+		}
+		positive = append(positive, item)
+		classWeight[item.AssetClass] += item.Weight
+		groupWeight[groupKey{item.AssetClass, item.Region}] += item.Weight
+	}
+	if len(positive) == 0 {
+		return researchPlanReplacement{}, newErr("research_collection_empty", "集合没有正权重资产", nil)
+	}
+
+	allocation := repository.PlanAllocation{}
+	for _, assetClass := range domain.AssetClasses {
+		allocation.AssetClassTargets = append(allocation.AssetClassTargets, repository.AssetClassTarget{
+			AssetClass: assetClass, Weight: classWeight[assetClass],
+		})
+		for _, region := range domain.Regions {
+			weight := 0.0
+			if classWeight[assetClass] > researchPlanWeightTolerance {
+				weight = groupWeight[groupKey{assetClass, region}] / classWeight[assetClass]
+			} else if region == domain.RegionDomestic {
+				weight = 1
+			}
+			allocation.RegionTargets = append(allocation.RegionTargets, repository.RegionTarget{
+				AssetClass: assetClass, Region: region, WeightWithinClass: weight,
+			})
+		}
+	}
+
+	writes := make([]HoldingWriteItem, 0, len(positive))
+	previewHoldings := make([]ResearchPlanReplacementHolding, 0, len(positive))
+	roundedTotal := int64(0)
+	for i, item := range positive {
+		var asset repository.MarketAsset
+		if tx == nil {
+			asset, err = s.assets.GetByKey(ctx, item.AssetKey)
+		} else {
+			asset, err = s.assets.GetByKeyTx(ctx, tx, item.AssetKey)
+		}
+		if err != nil {
+			return researchPlanReplacement{}, newErr(
+				"market_asset_not_found", "research asset is not in the market directory", map[string]any{
+					"asset_key": item.AssetKey,
+				})
+		}
+		if !asset.Active {
+			return researchPlanReplacement{}, newErr("market_asset_inactive", "research asset is inactive", map[string]any{
+				"asset_key": item.AssetKey,
+			})
+		}
+		amount := int64(math.Round(float64(params.TotalAssetsMinor) * item.Weight))
+		roundedTotal += amount
+		withinGroup := item.Weight / groupWeight[groupKey{item.AssetClass, item.Region}]
+		writes = append(writes, HoldingWriteItem{
+			AssetKey: item.AssetKey, AssetClass: item.AssetClass, Region: item.Region,
+			Enabled: true, WeightWithinGroup: withinGroup, CurrentAmountMinor: amount,
+			SortOrder: i * 10,
+		})
+		previewHoldings = append(previewHoldings, ResearchPlanReplacementHolding{
+			AssetKey: item.AssetKey, Name: asset.Name, Symbol: asset.Symbol, Weight: item.Weight,
+			AssetClass: item.AssetClass, Region: item.Region, WeightWithinGroup: withinGroup,
+			CurrentAmountMinor: amount,
+		})
+	}
+	roundingAdjustment := params.TotalAssetsMinor - roundedTotal
+	last := len(writes) - 1
+	if writes[last].CurrentAmountMinor+roundingAdjustment < 0 {
+		return researchPlanReplacement{}, newErr(
+			"invalid_request", "target plan total assets are too small for deterministic amount rounding", nil,
+		)
+	}
+	writes[last].CurrentAmountMinor += roundingAdjustment
+	previewHoldings[last].CurrentAmountMinor += roundingAdjustment
+
+	domainHoldings := make([]domain.HoldingWeightInput, 0, len(writes))
+	for _, item := range writes {
+		domainHoldings = append(domainHoldings, domain.HoldingWeightInput{
+			AssetClass: item.AssetClass, Region: item.Region, Enabled: true,
+			WeightWithinGroup: item.WeightWithinGroup, CurrentAmountMinor: item.CurrentAmountMinor,
+		})
+	}
+	if checks := domain.ValidateAllWeights(toDomainAllocation(allocation), domainHoldings); !checks.Passed {
+		return researchPlanReplacement{}, newErr("plan_weights_invalid", "derived plan weights are invalid", map[string]any{
+			"checks": checks.Checks,
+		})
+	}
+
+	identityJSON, err := json.Marshal(struct {
+		CollectionID string                    `json:"collection_id"`
+		PlanID       string                    `json:"plan_id"`
+		Total        int64                     `json:"total_assets_minor"`
+		Allocation   repository.PlanAllocation `json:"allocation"`
+		Holdings     []HoldingWriteItem        `json:"holdings"`
+	}{collectionID, planID, params.TotalAssetsMinor, allocation, writes})
+	if err != nil {
+		return researchPlanReplacement{}, wrapRepo("encode research plan replacement", err)
+	}
+	replacementHashBytes := sha256.Sum256(identityJSON)
+	replacementHash := hex.EncodeToString(replacementHashBytes[:])
+
+	newKeys := make(map[string]struct{}, len(writes))
+	for _, item := range writes {
+		newKeys[item.AssetKey] = struct{}{}
+	}
+	removed := make([]ResearchPlanRemovedHolding, 0)
+	for _, holding := range existing {
+		if _, kept := newKeys[holding.AssetKey]; !kept {
+			removed = append(removed, ResearchPlanRemovedHolding{
+				AssetKey: holding.AssetKey, Name: holding.InstrumentName, Symbol: holding.InstrumentCode,
+			})
+		}
+	}
+	warnings := []string(nil)
+	if len(existing) > 0 {
+		warnings = append(warnings, "现有目标配置和全部持仓将被完整替换")
+	}
+	preview := ResearchPlanReplacementPreview{
+		PlanID: planID, PlanName: plan.Name, CollectionID: collectionID,
+		BaseCurrency: plan.BaseCurrency, TargetTotalAssetsMinor: params.TotalAssetsMinor,
+		ExpectedConfigVersion: plan.ConfigVersion, ReplacementHash: replacementHash,
+		BeforeHoldingCount: len(existing), AfterHoldingCount: len(writes),
+		ExistingHoldingsWillChange: len(existing) > 0, RoundingAdjustmentMinor: roundingAdjustment,
+		Allocation: allocation, Holdings: previewHoldings, RemovedHoldings: removed, Warnings: warnings,
+	}
+	return researchPlanReplacement{preview: preview, writes: writes, valuationDate: plan.ValuationDate}, nil
+}
+
+func enabledResearchItemsForReplacement(
 	items []repository.ResearchCollectionItem,
 ) ([]repository.ResearchCollectionItem, error) {
 	enabled := make([]repository.ResearchCollectionItem, 0, len(items))
 	incomplete := make([]map[string]any, 0)
+	weightSum := 0.0
 	for _, item := range items {
 		if !item.Enabled {
 			continue
 		}
 		enabled = append(enabled, item)
-		missing := make([]string, 0, 2)
-		if strings.TrimSpace(item.AssetClass) == "" {
-			missing = append(missing, "asset_class")
+		weightSum += item.Weight
+		invalid := make([]string, 0, 2)
+		if !isValidHoldingAssetClass(strings.TrimSpace(item.AssetClass)) {
+			invalid = append(invalid, "asset_class")
 		}
-		if strings.TrimSpace(item.Region) == "" {
-			missing = append(missing, "region")
+		if !isValidHoldingRegion(strings.TrimSpace(item.Region)) {
+			invalid = append(invalid, "region")
 		}
-		if len(missing) > 0 {
+		if len(invalid) > 0 {
 			incomplete = append(incomplete, map[string]any{
-				"item_id": item.ID, "asset_key": item.AssetKey, "missing_fields": missing,
+				"item_id": item.ID, "asset_key": item.AssetKey, "missing_fields": invalid,
 			})
+		}
+		if math.IsNaN(item.Weight) || math.IsInf(item.Weight, 0) || item.Weight < 0 {
+			return nil, newErr("research_weights_not_normalized", "research weights must be finite and non-negative", nil)
 		}
 	}
 	if len(enabled) == 0 {
@@ -2321,9 +2636,14 @@ func enabledResearchItemsForPlan(
 	}
 	if len(incomplete) > 0 {
 		return nil, newErr(
-			"research_items_incomplete", "部分资产缺少 FIRE 资产大类或区域，复制到计划前必须补齐",
+			"research_item_classification_incomplete", "部分资产缺少有效的 FIRE 资产大类或区域",
 			map[string]any{"items": incomplete},
 		)
+	}
+	if math.Abs(weightSum-1) > researchPlanWeightTolerance {
+		return nil, newErr("research_weights_not_normalized", "enabled research weights must sum to 100%", map[string]any{
+			"actual": weightSum, "target": 1,
+		})
 	}
 	return enabled, nil
 }

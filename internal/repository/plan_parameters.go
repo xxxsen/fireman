@@ -12,15 +12,28 @@ type ParametersRepo struct {
 	db *sql.DB
 }
 
+type parametersRowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func NewParametersRepo(db *sql.DB) *ParametersRepo {
 	return &ParametersRepo{db: db}
 }
 
 func (r *ParametersRepo) Get(ctx context.Context, planID string) (PlanParameters, error) {
+	return r.get(ctx, r.db, planID)
+}
+
+// GetTx reads parameters inside a caller-owned transaction.
+func (r *ParametersRepo) GetTx(ctx context.Context, tx *sql.Tx, planID string) (PlanParameters, error) {
+	return r.get(ctx, tx, planID)
+}
+
+func (r *ParametersRepo) get(ctx context.Context, q parametersRowQuerier, planID string) (PlanParameters, error) {
 	var p PlanParameters
 	var scenario sql.NullString
 	var seed sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT plan_id, current_age, retirement_age, end_age,
 			total_assets_minor, annual_savings_minor, annual_savings_growth_rate,
 			annual_spending_minor, annual_retirement_income_minor, annual_retirement_income_growth_rate,

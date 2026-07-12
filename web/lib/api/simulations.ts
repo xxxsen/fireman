@@ -35,8 +35,8 @@ export function getPathDetail(runId: string, pathNo: number): Promise<PathDetail
   return apiGet(`/api/v1/simulations/${runId}/paths/${pathNo}`);
 }
 
-export function getScenarioComparison(planId: string): Promise<ScenarioComparison> {
-  return apiGet(`/api/v1/plans/${planId}/scenario-comparison`);
+export function getScenarioComparison(planId: string, runId: string): Promise<ScenarioComparison> {
+  return apiGet(`/api/v1/plans/${planId}/simulations/${runId}/scenario-comparison`);
 }
 
 export function getReturnOverrides(

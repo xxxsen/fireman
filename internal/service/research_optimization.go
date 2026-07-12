@@ -30,8 +30,9 @@ var (
 // No I/O: the service layer feeds inputs and the job runner orchestrates.
 
 const (
-	OptimizationEngineVersion       = "research_optimizer_v4"
+	OptimizationEngineVersion       = "research_optimizer_v5"
 	OptimizationTailRiskV3Version   = "research_optimizer_v3"
+	OptimizationTailRiskV4Version   = "research_optimizer_v4"
 	OptimizationDefaultWeightStep   = 0.05
 	OptimizationDefaultTopK         = 20
 	OptimizationDefaultMaxCandidate = 20000
@@ -40,7 +41,8 @@ const (
 )
 
 func optimizationEngineHasTailRiskSnapshot(version string) bool {
-	return version == OptimizationEngineVersion || version == OptimizationTailRiskV3Version
+	return version == OptimizationEngineVersion || version == OptimizationTailRiskV4Version ||
+		version == OptimizationTailRiskV3Version
 }
 
 // OptimizationObjective identifies which metric to rank by.

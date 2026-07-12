@@ -165,6 +165,28 @@ func AssembleFactorModelDetailed(
 	}, true
 }
 
+// RebuildFactorModelWithFrozenCorrelation replaces drift and volatility while
+// preserving the exact factor order and PSD correlation audit of a frozen run.
+// Scenario comparison uses it so no mutable market history is reread.
+func RebuildFactorModelWithFrozenCorrelation(
+	base FactorModel, mu, sigma []float64,
+) (FactorModel, bool) {
+	if len(mu) != len(base.Factors) || len(sigma) != len(base.Factors) ||
+		len(base.Audit.RPSD) != len(base.Factors) {
+		return FactorModel{}, false
+	}
+	cov := covarianceFromCorrelation(base.Audit.RPSD, sigma)
+	l, ok := cholesky(cov)
+	if !ok {
+		return FactorModel{}, false
+	}
+	return FactorModel{
+		Factors: append([]string(nil), base.Factors...),
+		Mu:      append([]float64(nil), mu...), MonthlySigma: append([]float64(nil), sigma...),
+		Sigma: cov, L: l, Audit: base.Audit,
+	}, true
+}
+
 // PairKey returns the canonical sorted "a|b" identifier for a factor pair so the
 // service and engine record audit entries under the same key.
 func PairKey(a, b string) string { return pairKey(a, b) }

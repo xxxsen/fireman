@@ -5,10 +5,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { listPlans } from "@/lib/api/plans";
 import {
-  copyToPlan,
+  applyPlanReplacement,
+  previewPlanReplacement,
   updateCollectionItem,
   type ResearchCollectionDetail,
-  type ResearchCopyToPlanResult,
+  type ResearchPlanApplyResult,
+  type ResearchPlanReplacementPreview,
 } from "@/lib/api/research";
 import { ApiError } from "@/lib/api/client";
 import { queryErrorMessage } from "@/lib/query-error";
@@ -24,10 +26,11 @@ interface IncompleteItem {
 }
 
 function parseIncompleteItems(error: unknown): IncompleteItem[] | null {
-  if (!(error instanceof ApiError) || error.code !== "research_items_incomplete") return null;
+  if (!(error instanceof ApiError) || error.code !== "research_item_classification_incomplete") {
+    return null;
+  }
   const items = error.details?.items;
-  if (!Array.isArray(items)) return [];
-  return items as IncompleteItem[];
+  return Array.isArray(items) ? (items as IncompleteItem[]) : [];
 }
 
 export interface CopyToPlanDialogProps {
@@ -36,18 +39,16 @@ export interface CopyToPlanDialogProps {
   detail: ResearchCollectionDetail;
 }
 
-/**
- * Copy the collection into a FIRE plan holdings draft: pick a plan, backfill
- * missing asset_class/region on items, preview the draft and jump to the
- * plan's holdings correction flow.
- */
+/** Preview and atomically replace a FIRE plan with the research allocation. */
 export function CopyToPlanDialog({ open, onClose, detail }: CopyToPlanDialogProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [incomplete, setIncomplete] = useState<IncompleteItem[] | null>(null);
   const [fixes, setFixes] = useState<Record<string, { asset_class: string; region: string }>>({});
-  const [result, setResult] = useState<ResearchCopyToPlanResult | null>(null);
+  const [preview, setPreview] = useState<ResearchPlanReplacementPreview | null>(null);
+  const [applied, setApplied] = useState<ResearchPlanApplyResult | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
 
   const plansQuery = useQuery({
     queryKey: ["plans"],
@@ -55,30 +56,64 @@ export function CopyToPlanDialog({ open, onClose, detail }: CopyToPlanDialogProp
     enabled: open,
   });
 
-  const itemsByID = useMemo(() => {
-    const map = new Map(detail.items.map((it) => [it.id, it]));
-    return map;
-  }, [detail.items]);
+  const itemsByID = useMemo(
+    () => new Map(detail.items.map((item) => [item.id, item])),
+    [detail.items],
+  );
 
-  const copyMutation = useMutation({
-    mutationFn: () => copyToPlan(detail.id, selectedPlanId),
-    onSuccess: (res) => {
+  const previewMutation = useMutation({
+    mutationFn: () => previewPlanReplacement(detail.id, selectedPlanId),
+    onSuccess: (result) => {
       setIncomplete(null);
-      setResult(res);
+      setConflictMessage(null);
+      setPreview(result);
     },
-    onError: (err) => {
-      const items = parseIncompleteItems(err);
-      if (items) {
-        setIncomplete(items);
-        const seed: Record<string, { asset_class: string; region: string }> = {};
-        for (const it of items) {
-          const item = itemsByID.get(it.item_id);
-          seed[it.item_id] = {
-            asset_class: item?.asset_class ?? "",
-            region: item?.region ?? "",
-          };
-        }
-        setFixes(seed);
+    onError: (error) => {
+      const items = parseIncompleteItems(error);
+      if (!items) return;
+      setIncomplete(items);
+      const seed: Record<string, { asset_class: string; region: string }> = {};
+      for (const incompleteItem of items) {
+        const item = itemsByID.get(incompleteItem.item_id);
+        seed[incompleteItem.item_id] = {
+          asset_class: item?.asset_class ?? "",
+          region: item?.region ?? "",
+        };
+      }
+      setFixes(seed);
+    },
+  });
+
+  const applyMutation = useMutation({
+    mutationFn: () => {
+      if (!preview) throw new Error("缺少替换预览");
+      return applyPlanReplacement(detail.id, {
+        plan_id: preview.plan_id,
+        expected_config_version: preview.expected_config_version,
+        expected_replacement_hash: preview.replacement_hash,
+        mode: "replace_all",
+      });
+    },
+    onSuccess: (result) => {
+      setApplied(result);
+      for (const key of [
+        ["plans"],
+        ["plan", result.plan_id],
+        ["parameters", result.plan_id],
+        ["allocation", result.plan_id],
+        ["holdings", result.plan_id],
+        ["simulations", result.plan_id],
+      ]) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
+    },
+    onError: (error) => {
+      if (
+        error instanceof ApiError &&
+        (error.code === "plan_config_conflict" || error.code === "research_collection_changed")
+      ) {
+        setPreview(null);
+        setConflictMessage("计划或研究组合已发生变化，请重新生成预览后再确认替换。");
       }
     },
   });
@@ -86,173 +121,199 @@ export function CopyToPlanDialog({ open, onClose, detail }: CopyToPlanDialogProp
   const fixMutation = useMutation({
     mutationFn: async () => {
       for (const [itemId, fix] of Object.entries(fixes)) {
-        await updateCollectionItem(detail.id, itemId, {
-          asset_class: fix.asset_class,
-          region: fix.region,
-        });
+        await updateCollectionItem(detail.id, itemId, fix);
       }
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["research", "collection", detail.id] });
       setIncomplete(null);
-      copyMutation.mutate();
+      previewMutation.mutate();
     },
   });
 
   const allFixed = useMemo(
     () =>
-      (incomplete ?? []).every((it) => {
-        const fix = fixes[it.item_id];
-        return fix && fix.asset_class && fix.region;
+      (incomplete ?? []).every((item) => {
+        const fix = fixes[item.item_id];
+        return Boolean(fix?.asset_class && fix?.region);
       }),
     [incomplete, fixes],
   );
 
   function handleClose() {
     setIncomplete(null);
-    setResult(null);
-    copyMutation.reset();
+    setPreview(null);
+    setApplied(null);
+    setConflictMessage(null);
+    previewMutation.reset();
+    applyMutation.reset();
     onClose();
   }
 
   const plans = plansQuery.data ?? [];
-  const copyError =
-    copyMutation.isError && !incomplete ? queryErrorMessage(copyMutation.error) : null;
+  const previewError =
+    previewMutation.isError && !incomplete ? queryErrorMessage(previewMutation.error) : null;
+  const applyError =
+    applyMutation.isError && !conflictMessage ? queryErrorMessage(applyMutation.error) : null;
 
   return (
     <Dialog
       open={open}
       onClose={handleClose}
-      title="复制到 FIRE 计划"
-      className="max-w-2xl"
+      title="应用到 FIRE 计划"
+      className="max-w-3xl"
       footer={
-        result ? (
+        applied && preview ? (
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={handleClose}>
-              关闭
-            </Button>
+            <Button variant="secondary" onClick={handleClose}>关闭</Button>
             <Button
-              onClick={() => router.push(`/plans/${result.plan_id}/holdings`)}
-              data-testid="goto-plan-holdings"
+              onClick={() => router.push(`/plans/${applied.plan_id}/overview?source=research`)}
+              data-testid="goto-plan-overview"
             >
-              前往「{result.plan_name}」持仓校正
+              查看「{preview.plan_name}」
+            </Button>
+          </div>
+        ) : preview ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" onClick={() => setPreview(null)}>返回</Button>
+            <Button
+              variant="danger"
+              pending={applyMutation.isPending}
+              onClick={() => applyMutation.mutate()}
+              data-testid="apply-plan-replacement"
+            >
+              确认完整替换
             </Button>
           </div>
         ) : incomplete ? (
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={handleClose}>
-              取消
-            </Button>
+            <Button variant="secondary" onClick={handleClose}>取消</Button>
             <Button
               disabled={!allFixed}
-              pending={fixMutation.isPending || copyMutation.isPending}
+              pending={fixMutation.isPending || previewMutation.isPending}
               onClick={() => fixMutation.mutate()}
               data-testid="fix-and-retry"
             >
-              保存并重试
+              保存并重新预览
             </Button>
           </div>
         ) : (
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={handleClose}>
-              取消
-            </Button>
+            <Button variant="secondary" onClick={handleClose}>取消</Button>
             <Button
               disabled={!selectedPlanId}
-              pending={copyMutation.isPending}
-              onClick={() => copyMutation.mutate()}
-              data-testid="copy-to-plan-confirm"
+              pending={previewMutation.isPending}
+              onClick={() => previewMutation.mutate()}
+              data-testid="preview-plan-replacement"
             >
-              生成持仓草稿
+              查看替换预览
             </Button>
           </div>
         )
       }
     >
-      {result ? (
-        <div className="space-y-3" data-testid="copy-result">
-          <p className="text-sm text-ink">
-            已根据集合权重生成持仓草稿（目标计划「{result.plan_name}」）。研究集合不会直接改写计划持仓，
-            请在计划持仓页按草稿校正金额。
+      {applied && preview ? (
+        <div className="space-y-2" data-testid="apply-result">
+          <p className="text-sm font-medium text-ink">研究组合已完整应用到「{preview.plan_name}」。</p>
+          <p className="text-sm text-ink-muted">
+            已写入 {applied.holding_count} 项持仓、目标配置和组合快照；计划配置版本为 {applied.config_version}。
           </p>
+        </div>
+      ) : preview ? (
+        <div className="space-y-4" data-testid="replacement-preview">
+          <div className="border-b border-line pb-3">
+            <p className="text-sm font-medium text-danger">此操作会完整替换计划当前的目标配置和全部持仓。</p>
+            <p className="mt-1 text-sm text-ink-muted">
+              「{preview.plan_name}」持仓将从 {preview.before_holding_count} 项变为 {preview.after_holding_count} 项，
+              目标资产总额为 {formatMoneyScaled(preview.target_total_assets_minor, preview.base_currency)}。
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+            {preview.allocation.asset_class_targets
+              .filter((target) => target.weight > 0)
+              .map((target) => (
+                <span key={target.asset_class}>
+                  {assetClassLabel(target.asset_class)} {formatPercent(target.weight)}
+                </span>
+              ))}
+          </div>
+
+          {preview.removed_holdings.length > 0 && (
+            <div>
+              <h3 className="mb-1 text-sm font-medium text-ink">将移除的持仓</h3>
+              <p className="text-sm text-ink-muted">
+                {preview.removed_holdings.map((item) => item.name || item.symbol || item.asset_key).join("、")}
+              </p>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs text-ink-muted">
-                  <th className="px-2 py-1.5 font-medium">资产</th>
-                  <th className="px-2 py-1.5 font-medium">权重</th>
+                  <th className="px-2 py-1.5 font-medium">替换后资产</th>
+                  <th className="px-2 py-1.5 font-medium">组合权重</th>
                   <th className="px-2 py-1.5 font-medium">大类 / 区域</th>
                   <th className="px-2 py-1.5 text-right font-medium">目标金额</th>
                 </tr>
               </thead>
               <tbody>
-                {result.holdings.map((h) => (
-                  <tr key={h.asset_key} className="border-b border-line/60 last:border-0">
+                {preview.holdings.map((holding) => (
+                  <tr key={holding.asset_key} className="border-b border-line/60 last:border-0">
                     <td className="px-2 py-1.5">
                       <span className="block max-w-52 truncate font-medium text-ink">
-                        {h.name || h.asset_key}
+                        {holding.name || holding.asset_key}
                       </span>
-                      <span className="block text-xs text-ink-muted">{h.symbol}</span>
+                      <span className="block text-xs text-ink-muted">{holding.symbol}</span>
                     </td>
-                    <td className="px-2 py-1.5 font-mono-numeric text-xs">
-                      {formatPercent(h.weight)}
-                    </td>
+                    <td className="px-2 py-1.5 font-mono-numeric text-xs">{formatPercent(holding.weight)}</td>
                     <td className="px-2 py-1.5 text-xs">
-                      {assetClassLabel(h.asset_class)} / {regionLabel(h.region)}
+                      {assetClassLabel(holding.asset_class)} / {regionLabel(holding.region)}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono-numeric text-xs">
-                      {formatMoneyScaled(h.current_amount_minor, detail.base_currency)}
+                      {formatMoneyScaled(holding.current_amount_minor, preview.base_currency)}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {applyError && <p className="text-sm text-danger" role="alert">替换失败：{applyError}</p>}
         </div>
       ) : incomplete ? (
         <div className="space-y-3" data-testid="copy-incomplete">
-          <p className="text-sm text-warning">
-            以下资产缺少 FIRE 资产大类或区域，必须补齐后才能复制到计划。
-          </p>
+          <p className="text-sm text-warning">以下资产缺少 FIRE 资产大类或区域，补齐后才能生成替换预览。</p>
           <ul className="space-y-2">
-            {incomplete.map((it) => {
-              const item = itemsByID.get(it.item_id);
-              const fix = fixes[it.item_id] ?? { asset_class: "", region: "" };
+            {incomplete.map((item) => {
+              const source = itemsByID.get(item.item_id);
+              const fix = fixes[item.item_id] ?? { asset_class: "", region: "" };
               return (
-                <li
-                  key={it.item_id}
-                  className="flex flex-wrap items-center gap-2 rounded-md border border-line px-3 py-2 text-sm"
-                >
+                <li key={item.item_id} className="flex flex-wrap items-center gap-2 border-b border-line px-1 py-2 text-sm">
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-ink">
-                      {item?.name ?? it.asset_key}
-                    </span>
-                    <span className="block text-xs text-ink-muted">{it.asset_key}</span>
+                    <span className="block truncate font-medium text-ink">{source?.name ?? item.asset_key}</span>
+                    <span className="block text-xs text-ink-muted">{item.asset_key}</span>
                   </span>
                   <select
                     value={fix.asset_class}
-                    onChange={(e) =>
-                      setFixes({ ...fixes, [it.item_id]: { ...fix, asset_class: e.target.value } })
-                    }
+                    onChange={(event) => setFixes({ ...fixes, [item.item_id]: { ...fix, asset_class: event.target.value } })}
                     className="rounded-md border border-line bg-surface px-2 py-1 text-xs"
                     aria-label="资产大类"
-                    data-testid={`fix-class-${it.item_id}`}
+                    data-testid={`fix-class-${item.item_id}`}
                   >
-                    <option value="">大类…</option>
+                    <option value="">大类...</option>
                     <option value="equity">权益</option>
                     <option value="bond">债券</option>
                     <option value="cash">现金/其他</option>
                   </select>
                   <select
                     value={fix.region}
-                    onChange={(e) =>
-                      setFixes({ ...fixes, [it.item_id]: { ...fix, region: e.target.value } })
-                    }
+                    onChange={(event) => setFixes({ ...fixes, [item.item_id]: { ...fix, region: event.target.value } })}
                     className="rounded-md border border-line bg-surface px-2 py-1 text-xs"
                     aria-label="区域"
-                    data-testid={`fix-region-${it.item_id}`}
+                    data-testid={`fix-region-${item.item_id}`}
                   >
-                    <option value="">区域…</option>
+                    <option value="">区域...</option>
                     <option value="domestic">国内</option>
                     <option value="foreign">国外</option>
                   </select>
@@ -260,32 +321,20 @@ export function CopyToPlanDialog({ open, onClose, detail }: CopyToPlanDialogProp
               );
             })}
           </ul>
-          {fixMutation.isError && (
-            <p className="text-sm text-danger" role="alert">
-              保存失败：{queryErrorMessage(fixMutation.error)}
-            </p>
-          )}
+          {fixMutation.isError && <p className="text-sm text-danger" role="alert">保存失败：{queryErrorMessage(fixMutation.error)}</p>}
         </div>
       ) : (
         <div className="space-y-3">
           <p className="text-sm text-ink-muted">
-            选择目标计划。集合权重将按初始资金折算为目标金额，进入计划持仓草稿。
+            选择目标计划后核对完整替换内容。目标金额按计划当前总资产计算，不使用研究组合初始资金。
           </p>
-          {plansQuery.isLoading && <LoadingState label="加载计划…" />}
-          {plansQuery.isError && (
-            <p className="text-sm text-danger" role="alert">
-              加载计划失败：{queryErrorMessage(plansQuery.error)}
-            </p>
-          )}
-          {!plansQuery.isLoading && plans.length === 0 && (
-            <p className="text-sm text-ink-muted">暂无计划，请先创建 FIRE 计划。</p>
-          )}
+          {conflictMessage && <p className="text-sm text-warning" role="alert">{conflictMessage}</p>}
+          {plansQuery.isLoading && <LoadingState label="加载计划..." />}
+          {plansQuery.isError && <p className="text-sm text-danger" role="alert">加载计划失败：{queryErrorMessage(plansQuery.error)}</p>}
+          {!plansQuery.isLoading && plans.length === 0 && <p className="text-sm text-ink-muted">暂无计划，请先创建 FIRE 计划。</p>}
           <div className="space-y-2" role="radiogroup" aria-label="选择目标计划">
             {plans.map((plan) => (
-              <label
-                key={plan.id}
-                className="flex cursor-pointer items-center gap-3 rounded-md border border-line px-3 py-2 text-sm hover:bg-surface-muted has-[:checked]:border-brand has-[:checked]:bg-brand/5"
-              >
+              <label key={plan.id} className="flex cursor-pointer items-center gap-3 border-b border-line px-1 py-2 text-sm hover:bg-surface-muted">
                 <input
                   type="radio"
                   name="copy-to-plan"
@@ -295,18 +344,12 @@ export function CopyToPlanDialog({ open, onClose, detail }: CopyToPlanDialogProp
                 />
                 <span className="flex-1">
                   <span className="font-medium text-ink">{plan.name}</span>
-                  <span className="ml-2 text-xs text-ink-muted">
-                    {plan.base_currency} · 估值日 {plan.valuation_date}
-                  </span>
+                  <span className="ml-2 text-xs text-ink-muted">{plan.base_currency} · 估值日 {plan.valuation_date}</span>
                 </span>
               </label>
             ))}
           </div>
-          {copyError && (
-            <p className="text-sm text-danger" role="alert">
-              复制失败：{copyError}
-            </p>
-          )}
+          {previewError && <p className="text-sm text-danger" role="alert">预览失败：{previewError}</p>}
         </div>
       )}
     </Dialog>

@@ -309,6 +309,41 @@ class TestHistorySync:
         ]
         assert "no_new_data" not in result
 
+    def test_pinned_structural_mutual_fund_source_is_replayable(self) -> None:
+        captured: dict = {}
+
+        def fund_history(**kwargs):
+            captured.update(kwargs)
+            return pd.DataFrame(
+                {
+                    "净值日期": ["2024-01-08", "2024-01-09"],
+                    "累计净值": [1.1, 1.2],
+                }
+            )
+
+        register_test_dispatch("em_fund_open_history", fund_history)
+        result = execute_history_sync(
+            {
+                "asset_key": "CN|cn_mutual_fund||000157",
+                "market": "CN",
+                "instrument_type": "cn_mutual_fund",
+                "symbol": "000157",
+                "adjust_policy": "none",
+                "point_type": "total_return_index",
+                "required_source_name": "em.fund_open_history:累计净值走势",
+                "replacement_mode": "merge",
+                "start_date": "2024-01-08",
+            }
+        )
+
+        assert captured == {"symbol": "000157", "indicator": "累计净值走势"}
+        assert result["source_name"] == "em.fund_open_history:累计净值走势"
+        assert result["point_type"] == "total_return_index"
+        assert result["points"] == [
+            {"date": "2024-01-08", "value": 1.1},
+            {"date": "2024-01-09", "value": 1.2},
+        ]
+
     def test_pinned_source_empty_window_is_no_new_data(self) -> None:
         register_test_dispatch(
             "fund_etf_hist_em",

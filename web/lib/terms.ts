@@ -13,6 +13,8 @@ export const TERMS: Record<string, string> = {
     "参与模拟的完整自然年度内月度对数收益的样本标准差，按 √12 年化",
   rebalance_threshold:
     "当前权重与目标权重相差多少个百分点时触发调仓",
+  guardrail_withdrawal_rate:
+    "护栏初始提取率由退休时的年度生活支出减去税后稳定收入，再除以退休财富自动计算；上下限约束总生活支出",
   weight_within_group:
     "标的在同一「大类 + 地区」内部的占比，不是全组合占比",
   simulation_snapshot_sync:
@@ -107,6 +109,7 @@ export const TERM_LABELS: Record<string, string> = {
   annual_return: "年化收益",
   annual_volatility: "年化波动率",
   rebalance_threshold: "调仓阈值",
+  guardrail_withdrawal_rate: "护栏提取率",
   weight_within_group: "组内占比",
   simulation_snapshot_sync: "模拟快照同步",
   portfolio_weight: "全组合权重",

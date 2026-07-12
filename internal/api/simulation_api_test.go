@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -271,10 +272,8 @@ func TestCreateSimulationRejectsPersistedInvalidTransactionCost(t *testing.T) {
 	}
 }
 
-// TestScenarioComparisonEndpoint verifies that the comparison
-// runs the same frozen plan input under conservative/baseline/optimistic with one
-// shared seed, so the forward return and headline P50 must increase strictly from
-// conservative to optimistic and real wealth must stay below nominal.
+// TestScenarioComparisonEndpoint verifies that comparison is bound to one
+// immutable run and remains unchanged after the current plan is edited.
 func TestScenarioComparisonEndpoint(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
@@ -285,10 +284,18 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 	}
 
 	services := buildServices(db)
+	runner := jobs.NewSimulationRunner(db, repository.NewSimulationRepo(db))
+	worker := jobs.NewWorker(db, repository.NewJobRepo(db), repository.NewSimulationRepo(db), runner,
+		jobs.NewAnalysisRunner(repository.NewAnalysisRepo(db)), services.Research, services.EventHub, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Start(ctx, 1)
 	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
 	defer srv.Close()
+	runID := createSimulationAndWait(t, srv, planID, "42")
 
-	resp, err := http.DefaultClient.Get(srv.URL + "/api/v1/plans/" + planID + "/scenario-comparison")
+	endpoint := srv.URL + "/api/v1/plans/" + planID + "/simulations/" + runID + "/scenario-comparison"
+	resp, err := http.DefaultClient.Get(endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,6 +304,9 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 	}
 	env := decodeEnvelope(t, mustRead(t, resp))
 	data := env["data"].(map[string]any)
+	if data["base_run_id"] != runID {
+		t.Fatalf("comparison base run = %v, want %s", data["base_run_id"], runID)
+	}
 	scenarios, ok := data["scenarios"].([]any)
 	if !ok || len(scenarios) != 3 {
 		t.Fatalf("expected 3 scenarios, got %+v", data["scenarios"])
@@ -319,6 +329,39 @@ func TestScenarioComparisonEndpoint(t *testing.T) {
 	if !(p50["conservative"] < p50["baseline"] && p50["baseline"] < p50["optimistic"]) {
 		t.Fatalf("terminal P50 must increase conservative<baseline<optimistic: %+v", p50)
 	}
+
+	if _, err := db.Exec(`UPDATE plan_parameters SET annual_spending_minor=? WHERE plan_id=?`, 500_000_00, planID); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Get(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated := decodeEnvelope(t, mustRead(t, resp))["data"]
+	if !reflect.DeepEqual(data, repeated) {
+		t.Fatalf("current plan edit changed frozen comparison\nfirst=%+v\nsecond=%+v", data, repeated)
+	}
+
+	oldJobID, oldRunID := "job_old_compare", "run_old_compare"
+	if _, err := db.Exec(`INSERT INTO jobs (id, plan_id, type, status, input_hash, created_at)
+		VALUES (?, ?, 'simulation', 'succeeded', 'old', 1)`, oldJobID, planID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewSimulationRepo(db).CreatePending(context.Background(), nil, repository.SimulationRun{
+		ID: oldRunID, JobID: oldJobID, PlanID: planID, InputHash: "old", InputSnapshotJSON: `{}`,
+		MarketSnapshotHash: "old", EngineVersion: "3.3.0", Runs: 1, Seed: 1, HorizonMonths: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/plans/" + planID + "/simulations/" + oldRunID + "/scenario-comparison")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := mustRead(t, resp)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("legacy comparison status=%d body=%s", resp.StatusCode, body)
+	}
+	assertErrorCode(t, body, "scenario_comparison_unsupported")
 }
 
 // TestReturnOverrideEndpoint verifies that an asset-level override is
@@ -686,6 +729,9 @@ func TestFailedSimulationJobDoesNotExposeSuccessfulSummary(t *testing.T) {
 	runView := runEnv["data"].(map[string]any)
 	if int(runView["success_count"].(float64)) != 0 || int(runView["failure_count"].(float64)) != 0 {
 		t.Fatalf("API must not expose successful run counts: %+v", runView)
+	}
+	if runView["job_status"] != "failed" {
+		t.Fatalf("simulation run must expose failed job status: %+v", runView)
 	}
 
 	resp, err = http.DefaultClient.Get(srv.URL + "/api/v1/jobs/" + jobID)

@@ -419,9 +419,15 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
         {showAdvanced && (
           <div className="mt-2 grid gap-3 sm:grid-cols-3">
             <label className="block">
-              <span className={labelCls()}>交易费率（%，预留暂不参与计算）</span>
+              <span className={labelCls()}>
+                交易费率（%）
+                <MetricHelp text="再平衡时按单边换手计费：0.5 × Σ|漂移权重 − 目标权重| × 扣费前组合净值 × 交易费率。首次建仓和买入并持有不收费。" />
+              </span>
               <input
                 type="number"
+                min="0"
+                max="100"
+                step="0.01"
                 value={txCost}
                 onChange={(e) => setTxCost(e.target.value)}
                 className={inputCls()}

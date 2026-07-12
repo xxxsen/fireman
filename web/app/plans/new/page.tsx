@@ -103,8 +103,8 @@ function advancedIsDefault(a: AdvancedFireParams): boolean {
 
 /**
  * Client mirror of the server's validateParameterAdvanced ranges. All
- * fields are checked unconditionally so a value edited in one withdrawal/inflation
- * mode and then hidden by switching modes cannot slip past to a server rejection.
+ * Only fields active in the selected withdrawal/inflation mode are validated,
+ * matching the server's canonical simulation identity.
  */
 function validateAdvancedParams(a: AdvancedFireParams): string[] {
   const errs: string[] = [];
@@ -112,16 +112,23 @@ function validateAdvancedParams(a: AdvancedFireParams): string[] {
 	if (!within(a.annual_savings_growth_rate, -0.5, 0.5)) errs.push("储蓄增长率需在 -50% 到 50% 之间。");
 	if (!within(a.annual_retirement_income_growth_rate, -0.5, 0.5)) errs.push("稳定收入增长率需在 -50% 到 50% 之间。");
 	if (a.terminal_wealth_floor_minor < 0) errs.push("期末最低资产不能为负。");
-  if (!within(a.fixed_inflation_rate, -0.02, 0.2)) errs.push("固定通胀率需在 -2% 到 20% 之间。");
-  if (!within(a.inflation_mu, -0.02, 0.2)) errs.push("通胀均值 μ 需在 -2% 到 20% 之间。");
-  if (!within(a.inflation_sigma, 0, 0.2)) errs.push("通胀波动 σ 需在 0% 到 20% 之间。");
-  if (!within(a.inflation_phi, 0, 1)) errs.push("通胀自回归 φ 需在 0 到 1 之间。");
-  if (!within(a.withdrawal_rate, 0, 1)) errs.push("提取率需在 0% 到 100% 之间。");
-  if (!(a.withdrawal_floor_ratio > 0 && a.withdrawal_floor_ratio <= 1))
-    errs.push("护栏下限比例需大于 0% 且不超过 100%。");
-  if (!within(a.withdrawal_ceiling_ratio, 1, 2)) errs.push("护栏上限比例需在 100% 到 200% 之间。");
-  if (a.withdrawal_floor_ratio >= a.withdrawal_ceiling_ratio)
-    errs.push("护栏下限比例需小于上限比例。");
+  if (a.inflation_mode === "fixed_real") {
+    if (!within(a.fixed_inflation_rate, -0.02, 0.2)) errs.push("固定通胀率需在 -2% 到 20% 之间。");
+  } else {
+    if (!within(a.inflation_mu, -0.02, 0.2)) errs.push("通胀均值 μ 需在 -2% 到 20% 之间。");
+    if (!within(a.inflation_sigma, 0, 0.2)) errs.push("通胀波动 σ 需在 0% 到 20% 之间。");
+    if (!within(a.inflation_phi, 0, 1)) errs.push("通胀自回归 φ 需在 0 到 1 之间。");
+  }
+  if (a.withdrawal_type === "fixed_portfolio" && !within(a.withdrawal_rate, 0, 1)) {
+    errs.push("提取率需在 0% 到 100% 之间。");
+  }
+  if (a.withdrawal_type === "guardrail") {
+    if (!(a.withdrawal_floor_ratio > 0 && a.withdrawal_floor_ratio <= 1))
+      errs.push("护栏下限比例需大于 0% 且不超过 100%。");
+    if (!within(a.withdrawal_ceiling_ratio, 1, 2)) errs.push("护栏上限比例需在 100% 到 200% 之间。");
+    if (a.withdrawal_floor_ratio >= a.withdrawal_ceiling_ratio)
+      errs.push("护栏下限比例需小于上限比例。");
+  }
   if (!within(a.withdrawal_tax_rate, 0, 1)) errs.push("有效提取税率需在 0% 到 100% 之间。");
   if (!within(a.taxable_withdrawal_ratio, 0, 1)) errs.push("应税提取比例需在 0% 到 100% 之间。");
   if (a.withdrawal_tax_rate * a.taxable_withdrawal_ratio >= 1)
@@ -256,7 +263,9 @@ export default function NewPlanWizardPage() {
   const endAge = retirementAge + fireDurationYears;
 
   const advancedErrors = useMemo(() => validateAdvancedParams(advanced), [advanced]);
-  const needsHighInflationConfirm = advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION;
+  const needsHighInflationConfirm =
+    advanced.inflation_mode === "fixed_real" &&
+    advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION;
   const advancedBlocked =
     advancedErrors.length > 0 || (needsHighInflationConfirm && !highInflationConfirmed);
 
@@ -1152,12 +1161,15 @@ function AdvancedFireParamsSection({
             <option value="random_ar1">随机通胀</option>
           </select>
         </label>
-        <PercentInput
-          label="固定通胀率"
-          value={advanced.fixed_inflation_rate}
-          onChange={(v) => onChange("fixed_inflation_rate", v)}
-        />
-        {advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION && (
+        {advanced.inflation_mode === "fixed_real" && (
+          <PercentInput
+            label="固定通胀率"
+            value={advanced.fixed_inflation_rate}
+            onChange={(v) => onChange("fixed_inflation_rate", v)}
+          />
+        )}
+        {advanced.inflation_mode === "fixed_real" &&
+          advanced.fixed_inflation_rate > HIGH_FIXED_INFLATION && (
           <label className="flex items-center gap-2 text-sm sm:col-span-full">
             <input
               type="checkbox"
@@ -1194,7 +1206,12 @@ function AdvancedFireParamsSection({
           </>
         )}
         <label className="block text-sm">
-          <span className="mb-1 block text-ink">提取策略</span>
+          <span className="mb-1 flex items-center text-ink">
+            提取策略
+            {advanced.withdrawal_type === "guardrail" && (
+              <MetricHelp termKey="guardrail_withdrawal_rate" />
+            )}
+          </span>
           <select
             className="input-base"
             value={advanced.withdrawal_type}
@@ -1205,8 +1222,7 @@ function AdvancedFireParamsSection({
             <option value="guardrail">动态提取（护栏）</option>
           </select>
         </label>
-        {(advanced.withdrawal_type === "fixed_portfolio" ||
-          advanced.withdrawal_type === "guardrail") && (
+        {advanced.withdrawal_type === "fixed_portfolio" && (
           <PercentInput
             label="提取率"
             value={advanced.withdrawal_rate}
@@ -1225,9 +1241,6 @@ function AdvancedFireParamsSection({
               value={advanced.withdrawal_ceiling_ratio}
               onChange={(v) => onChange("withdrawal_ceiling_ratio", v)}
             />
-            <p className="text-xs text-ink-muted sm:col-span-full">
-              系统在退休周年按当前提取率相对初始提取率调整年度支出（过高下调、过低上调），再受上下限约束。
-            </p>
           </>
         )}
         <PercentInput

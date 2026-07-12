@@ -24,6 +24,9 @@ type SimulationRun struct {
 	FailureCount       int             `json:"failure_count"`
 	SummaryJSON        json.RawMessage `json:"summary_json"`
 	CreatedAt          int64           `json:"created_at"`
+	JobStatus          string          `json:"job_status"`
+	JobErrorCode       string          `json:"job_error_code,omitempty"`
+	JobErrorMessage    string          `json:"job_error_message,omitempty"`
 }
 
 // PathIndexRow is one path summary in simulation_path_index.
@@ -91,20 +94,12 @@ func (r *SimulationRepo) Complete(ctx context.Context, tx *sql.Tx, runID string,
 }
 
 func (r *SimulationRepo) GetByJobID(ctx context.Context, jobID string) (SimulationRun, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, job_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
-			engine_version, runs, seed, horizon_months, success_count, failure_count,
-			summary_json, created_at
-		FROM simulation_runs WHERE job_id=?`, jobID)
+	row := r.db.QueryRowContext(ctx, simulationRunSelect+` WHERE sr.job_id=?`, jobID)
 	return scanSimulationRun(row)
 }
 
 func (r *SimulationRepo) GetByID(ctx context.Context, id string) (SimulationRun, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, job_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
-			engine_version, runs, seed, horizon_months, success_count, failure_count,
-			summary_json, created_at
-		FROM simulation_runs WHERE id=?`, id)
+	row := r.db.QueryRowContext(ctx, simulationRunSelect+` WHERE sr.id=?`, id)
 	return scanSimulationRun(row)
 }
 
@@ -112,11 +107,8 @@ func (r *SimulationRepo) ListByPlan(ctx context.Context, planID string, limit in
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, job_id, plan_id, input_hash, input_snapshot_json, market_snapshot_hash,
-			engine_version, runs, seed, horizon_months, success_count, failure_count,
-			summary_json, created_at
-		FROM simulation_runs WHERE plan_id=? ORDER BY created_at DESC LIMIT ?`, planID, limit)
+	rows, err := r.db.QueryContext(ctx, simulationRunSelect+`
+		WHERE sr.plan_id=? ORDER BY sr.created_at DESC LIMIT ?`, planID, limit)
 	if err != nil {
 		return nil, wrapSQL("list simulation runs by plan", err)
 	}
@@ -131,6 +123,15 @@ func (r *SimulationRepo) ListByPlan(ctx context.Context, planID string, limit in
 	}
 	return out, wrapSQL("iterate simulation runs", rows.Err())
 }
+
+const simulationRunSelect = `
+	SELECT sr.id, sr.job_id, sr.plan_id, sr.input_hash, sr.input_snapshot_json,
+		sr.market_snapshot_hash, sr.engine_version, sr.runs, sr.seed,
+		sr.horizon_months, sr.success_count, sr.failure_count, sr.summary_json,
+		sr.created_at, COALESCE(j.status, 'unknown'), COALESCE(j.error_code, ''),
+		COALESCE(j.error_message, '')
+	FROM simulation_runs sr
+	LEFT JOIN jobs j ON j.id=sr.job_id`
 
 // PruneByPlan keeps the newest `keep` simulation runs of a plan and deletes the
 // rest, returning the deleted run IDs. Path index and quantile series rows are
@@ -336,7 +337,7 @@ func scanSimulationRun(row *sql.Row) (SimulationRun, error) {
 	err := row.Scan(
 		&run.ID, &run.JobID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
 		&run.EngineVersion, &run.Runs, &run.Seed, &run.HorizonMonths, &run.SuccessCount, &run.FailureCount,
-		&summary, &run.CreatedAt,
+		&summary, &run.CreatedAt, &run.JobStatus, &run.JobErrorCode, &run.JobErrorMessage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SimulationRun{}, ErrSimulationNotFound
@@ -354,7 +355,7 @@ func scanSimulationRunRows(rows *sql.Rows) (SimulationRun, error) {
 	err := rows.Scan(
 		&run.ID, &run.JobID, &run.PlanID, &run.InputHash, &run.InputSnapshotJSON, &run.MarketSnapshotHash,
 		&run.EngineVersion, &run.Runs, &run.Seed, &run.HorizonMonths, &run.SuccessCount, &run.FailureCount,
-		&summary, &run.CreatedAt,
+		&summary, &run.CreatedAt, &run.JobStatus, &run.JobErrorCode, &run.JobErrorMessage,
 	)
 	if err != nil {
 		return SimulationRun{}, wrapSQL("scan simulation run row", err)

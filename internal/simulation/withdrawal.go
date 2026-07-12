@@ -23,7 +23,81 @@ type WithdrawalPlanner struct {
 	// of compounding on last year's spending. It must be set from the input
 	// snapshot's engine version so stored runs replay with the exact semantics
 	// their persisted summaries were computed with.
-	LegacyAnnualReset bool
+	LegacyAnnualReset  bool
+	stableIncomeAnnual float64
+}
+
+// RetirementSettlement is the requested cash-flow contract for one retirement
+// month before the portfolio is touched. Stable income is already after tax, so
+// only PortfolioNetNeededMinor is grossed up for withdrawal tax.
+type RetirementSettlement struct {
+	SpendingRequestedMinor   int64
+	StableIncomeMinor        int64
+	PortfolioNetNeededMinor  int64
+	GrossWithdrawalMinor     int64
+	WithdrawalTaxMinor       int64
+	StableIncomeSurplusMinor int64
+}
+
+// WithdrawalResult records what the portfolio could actually fund. Failed
+// paths use these values for their final-month ledger instead of recording the
+// full requested spending.
+type WithdrawalResult struct {
+	Sufficient              bool
+	GrossRequestedMinor     int64
+	GrossFundedMinor        int64
+	PortfolioNetFundedMinor int64
+	TaxFundedMinor          int64
+	TransactionCostMinor    int64
+}
+
+// SettleRetirementMonth nets after-tax stable income against living spending
+// before calculating the taxable portfolio withdrawal.
+func SettleRetirementMonth(
+	spendingRequested, stableIncome int64,
+	taxRate, taxableRatio float64,
+) RetirementSettlement {
+	spendingRequested = max(spendingRequested, 0)
+	stableIncome = max(stableIncome, 0)
+	netNeeded := max(spendingRequested-stableIncome, 0)
+	gross, tax := GrossWithdrawal(netNeeded, taxRate, taxableRatio)
+	return RetirementSettlement{
+		SpendingRequestedMinor:   spendingRequested,
+		StableIncomeMinor:        stableIncome,
+		PortfolioNetNeededMinor:  netNeeded,
+		GrossWithdrawalMinor:     gross,
+		WithdrawalTaxMinor:       tax,
+		StableIncomeSurplusMinor: max(stableIncome-spendingRequested, 0),
+	}
+}
+
+func fundedWithdrawalResult(
+	grossRequested, grossFunded, netNeeded int64,
+	taxRate, taxableRatio float64,
+	txCost int64,
+) WithdrawalResult {
+	effectiveTaxRate := taxRate * taxableRatio
+	if effectiveTaxRate < 0 || effectiveTaxRate >= 1 {
+		effectiveTaxRate = 0
+	}
+	portfolioNetFunded := int64(math.Floor(float64(grossFunded) * (1 - effectiveTaxRate)))
+	portfolioNetFunded = min(max(portfolioNetFunded, 0), netNeeded)
+	taxFunded := max(grossFunded-portfolioNetFunded, 0)
+	return WithdrawalResult{
+		Sufficient:              grossFunded >= grossRequested && portfolioNetFunded >= netNeeded,
+		GrossRequestedMinor:     grossRequested,
+		GrossFundedMinor:        grossFunded,
+		PortfolioNetFundedMinor: portfolioNetFunded,
+		TaxFundedMinor:          taxFunded,
+		TransactionCostMinor:    txCost,
+	}
+}
+
+// SetStableIncomeAnnual sets the current nominal annual after-tax retirement
+// income used only by guardrail rate checks. It does not change total living
+// spending or the floor/ceiling contract.
+func (w *WithdrawalPlanner) SetStableIncomeAnnual(income int64) {
+	w.stableIncomeAnnual = float64(max(income, 0))
 }
 
 func NewWithdrawalPlanner(wType string, annualSpending int64, rate, floor, ceiling float64) WithdrawalPlanner {
@@ -36,7 +110,8 @@ func NewWithdrawalPlanner(wType string, annualSpending int64, rate, floor, ceili
 func (w *WithdrawalPlanner) InitAtRetirement(wealth int64) {
 	w.WealthAtRetire = wealth
 	if w.WealthAtRetire > 0 {
-		w.InitialRate = float64(w.AnnualSpending) / float64(w.WealthAtRetire)
+		netNeed := math.Max(float64(w.AnnualSpending)-w.stableIncomeAnnual, 0)
+		w.InitialRate = netNeed / float64(w.WealthAtRetire)
 	}
 	w.lastAnnualReal = float64(w.AnnualSpending)
 }
@@ -64,7 +139,7 @@ func (w *WithdrawalPlanner) MonthlySpending(month, retirementMonth int, monthSta
 			proposed := w.lastAnnualReal * inflCumulative
 			yearStartWealth := float64(monthStartWealth)
 			if yearStartWealth > 0 {
-				currentRate := proposed / yearStartWealth
+				currentRate := math.Max(proposed-w.stableIncomeAnnual, 0) / yearStartWealth
 				switch {
 				case currentRate > 1.2*w.InitialRate:
 					proposed *= 0.90

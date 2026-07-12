@@ -20,6 +20,7 @@ type ScenarioResult struct {
 	TerminalP95Minor      int64   `json:"terminal_p95_minor"`
 	MaxDrawdownP95        float64 `json:"max_drawdown_p95"`
 	FailureYearP50        float64 `json:"failure_year_p50,omitempty"`
+	FailureAgeP50         float64 `json:"failure_age_p50,omitempty"`
 	RecoveryMonthP50      *int    `json:"recovery_month_p50,omitempty"`
 	RecoveryNotWithinPlan bool    `json:"recovery_not_within_plan"`
 }
@@ -93,11 +94,12 @@ type pathBatch struct {
 	terminals      []float64
 	drawdowns      []float64
 	failureYears   []float64
+	failureAges    bool
 	recoveryMonths []float64
 }
 
 func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSchedule, opt RunOptions) pathBatch {
-	var batch pathBatch
+	batch := pathBatch{failureAges: simulation.UsesMonthPrecisionFailureAge(in.EngineVersion)}
 	batch.terminals = make([]float64, runs)
 	batch.drawdowns = make([]float64, runs)
 	if sched != nil {
@@ -128,7 +130,13 @@ func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSche
 		batch.terminals[i] = float64(ps.TerminalWealthMinor)
 		batch.drawdowns[i] = ps.MaxDrawdown
 		if !ps.Succeeded && ps.FailureMonth != nil {
-			batch.failureYears = append(batch.failureYears, float64(in.Parameters.CurrentAge+*ps.FailureMonth/12))
+			if batch.failureAges {
+				batch.failureYears = append(batch.failureYears,
+					simulation.FailureAgeAtMonthEnd(in.Parameters.CurrentAge, *ps.FailureMonth))
+			} else {
+				batch.failureYears = append(batch.failureYears,
+					float64(in.Parameters.CurrentAge+*ps.FailureMonth/12))
+			}
 		}
 		recordPathRecovery(&batch, i, in, ps, sched, shockStart, shockEnd)
 	}
@@ -200,7 +208,11 @@ func aggregateScenario(sc Scenario, batch pathBatch, baselineSuccess float64, _ 
 	}
 	if len(batch.failureYears) > 0 {
 		sort.Float64s(batch.failureYears)
-		sr.FailureYearP50 = simulation.Quantile(batch.failureYears, 0.50)
+		if batch.failureAges {
+			sr.FailureAgeP50 = simulation.Quantile(batch.failureYears, 0.50)
+		} else {
+			sr.FailureYearP50 = simulation.Quantile(batch.failureYears, 0.50)
+		}
 	}
 	if len(batch.recoveryMonths) > 0 {
 		rec, withinPlan := recoveryP50(batch.recoveryMonths)

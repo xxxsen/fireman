@@ -461,6 +461,9 @@ type SimulationRunView struct {
 	AssetParticipation []AssetParticipationView `json:"asset_participation,omitempty"`
 	Assumption         *RunAssumptionView       `json:"assumption,omitempty"`
 	CreatedAt          int64                    `json:"created_at"`
+	JobStatus          string                   `json:"job_status"`
+	JobErrorCode       string                   `json:"job_error_code,omitempty"`
+	JobErrorMessage    string                   `json:"job_error_message,omitempty"`
 }
 
 // RunAssumptionView exposes the frozen return-calibration and risk-model audit of
@@ -487,6 +490,7 @@ type RunAssetAssumptionView struct {
 	IsCash                          bool     `json:"is_cash"`
 	HistoricalAnnualGeometricReturn float64  `json:"historical_annual_geometric_return"`
 	ForwardAnnualGeometricReturn    float64  `json:"forward_annual_geometric_return"`
+	BaseCurrencyForwardReturn       float64  `json:"base_currency_forward_return"`
 	AnnualVolatilityUsed            float64  `json:"annual_volatility_used"`
 	Source                          string   `json:"source"`
 	SampleYears                     int      `json:"sample_years"`
@@ -495,12 +499,12 @@ type RunAssetAssumptionView struct {
 	// FX forward-calibration audit (present only for cross-currency
 	// holdings). FXForwardReturn is the FX drift the engine consumes.
 	HasFX              bool     `json:"has_fx"`
-	FXForwardReturn    float64  `json:"fx_forward_return,omitempty"`
-	FXHistoricalReturn float64  `json:"fx_historical_return,omitempty"`
-	FXPriorReturn      float64  `json:"fx_prior_return,omitempty"`
-	FXAnnualVolatility float64  `json:"fx_annual_volatility,omitempty"`
-	FXHistoricalWeight float64  `json:"fx_historical_weight,omitempty"`
-	FXSource           string   `json:"fx_source,omitempty"`
+	FXForwardReturn    float64  `json:"fx_forward_return"`
+	FXHistoricalReturn float64  `json:"fx_historical_return"`
+	FXPriorReturn      float64  `json:"fx_prior_return"`
+	FXAnnualVolatility float64  `json:"fx_annual_volatility"`
+	FXHistoricalWeight float64  `json:"fx_historical_weight"`
+	FXSource           string   `json:"fx_source"`
 	FXWarnings         []string `json:"fx_warnings,omitempty"`
 }
 
@@ -511,14 +515,12 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 	view := &RunAssumptionView{
 		EngineVersion:     snap.EngineVersion,
 		RandomFactorModel: snap.RandomFactorModel,
+		Mode:              snap.ReturnAssumptionMode,
+		Scenario:          snap.ReturnAssumptionScenario,
+		ProfileID:         snap.ReturnAssumptionSetID,
+		ProfileVersion:    snap.ReturnAssumptionSetVersion,
 	}
 	for _, a := range snap.Assets {
-		if view.Mode == "" && a.ReturnAssumptionSource != "" {
-			view.Mode = a.ReturnAssumptionSource
-			view.Scenario = a.ReturnAssumptionScenario
-			view.ProfileID = a.ReturnAssumptionSetID
-			view.ProfileVersion = a.ReturnAssumptionSetVersion
-		}
 		av := RunAssetAssumptionView{
 			HoldingID: a.HoldingID, InstrumentName: a.InstrumentName, InstrumentCode: a.InstrumentCode,
 			IsCash:                          a.IsCash,
@@ -530,6 +532,7 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 			HistoricalWeight:                a.ReturnHistoricalWeight,
 			Warnings:                        a.ReturnWarnings,
 		}
+		av.BaseCurrencyForwardReturn = av.ForwardAnnualGeometricReturn
 		if a.FXSnapshotID != "" {
 			av.HasFX = true
 			av.FXForwardReturn = a.FXModeledReturn
@@ -539,6 +542,9 @@ func buildRunAssumptionView(snap simulation.InputSnapshot) *RunAssumptionView {
 			av.FXHistoricalWeight = a.FXHistoricalWeight
 			av.FXSource = a.FXReturnSource
 			av.FXWarnings = a.FXReturnWarnings
+			av.BaseCurrencyForwardReturn = simulation.CompositeBaseReturn(
+				av.ForwardAnnualGeometricReturn, av.FXForwardReturn,
+			)
 		}
 		view.Assets = append(view.Assets, av)
 	}
@@ -575,6 +581,7 @@ func toRunView(r repository.SimulationRun, currentHash string) SimulationRunView
 		SuccessCount: r.SuccessCount, FailureCount: r.FailureCount,
 		Summary: r.SummaryJSON, AssetParticipation: participation,
 		Assumption: assumption, CreatedAt: r.CreatedAt,
+		JobStatus: r.JobStatus, JobErrorCode: r.JobErrorCode, JobErrorMessage: r.JobErrorMessage,
 	}
 }
 

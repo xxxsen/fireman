@@ -29,6 +29,32 @@ def _nav_frame() -> pd.DataFrame:
     )
 
 
+def test_structural_eastmoney_history_is_preferred() -> None:
+    register_test_dispatch(
+        "em_fund_open_history",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "净值日期": ["2024-01-02", "2024-01-03"],
+                "累计净值": [1.01, 1.02],
+            }
+        ),
+    )
+
+    def unexpected(*args: object, **kwargs: object) -> pd.DataFrame:
+        raise AssertionError(
+            "AKShare fallbacks must not run after structural history succeeds"
+        )
+
+    register_test_dispatch("fund_open_fund_info_em", unexpected)
+
+    data = fetch_instrument(_request("测试基金"))
+
+    assert data.source_name == "em.fund_open_history:累计净值走势"
+    assert data.source_kind == "open_fund"
+    assert data.point_type == "total_return_index"
+    assert len(data.points) == 2
+
+
 @pytest.mark.parametrize("resolved_name", ["长城短债A", "普通基金A", None])
 def test_cn_mutual_fund_source_candidates_do_not_depend_on_name_keywords(
     resolved_name: str | None,
@@ -52,6 +78,7 @@ def test_cn_mutual_fund_source_candidates_do_not_depend_on_name_keywords(
         raise AssertionError("later candidates must not run after a success")
 
     register_test_dispatch("fund_open_fund_info_em", open_fund)
+    register_test_dispatch("em_fund_open_history", lambda **kwargs: pd.DataFrame())
     register_test_dispatch("fund_money_fund_info_em", unexpected)
     register_test_dispatch("fund_financial_fund_info_em", unexpected)
 
@@ -83,6 +110,7 @@ def test_money_fund_source_reached_without_name_keyword() -> None:
         )
 
     register_test_dispatch("fund_open_fund_info_em", empty)
+    register_test_dispatch("em_fund_open_history", empty)
     register_test_dispatch("fund_money_fund_info_em", money_fund)
 
     data = fetch_instrument(_request("某某基金B"))

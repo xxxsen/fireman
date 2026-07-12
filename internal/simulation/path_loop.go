@@ -14,6 +14,7 @@ type pathSimState struct {
 	yearAcc    yearAccumulator
 }
 
+//nolint:funlen,gocognit,gocyclo,nestif // Version-gated ledgers intentionally retain legacy replay.
 func runPathMonths(
 	in *InputSnapshot,
 	slots []assetSlot,
@@ -26,6 +27,7 @@ func runPathMonths(
 	state pathSimState,
 ) pathSimState {
 	p := in.Parameters
+	useNetSettlement := UsesNetRetirementSettlement(in.EngineVersion)
 	for month := 0; month < horizon; month++ {
 		if month == retire {
 			withdraw.InitAtRetirement(totalWealth(slots))
@@ -44,25 +46,95 @@ func runPathMonths(
 			state.yearAcc.startCumInfl = infl.Cumulative
 		}
 
-		income := pathMonthIncome(in, p, month, retire, slots, cashIdx)
-		netSpend, tax, grossWithdrawal := pathMonthSpending(
-			p, month, retire, monthStart, infl, withdraw, monthShock, hasShock, &state.summary,
+		income := pathMonthIncomeAmount(p, month, retire)
+		if month < retire || !useNetSettlement {
+			addPathIncome(in, slots, cashIdx, income)
+		}
+		if useNetSettlement && month >= retire {
+			withdraw.SetStableIncomeAnnual(pathAnnualRetirementIncome(p, month, retire))
+		}
+		requestedSpend := pathMonthSpendingRequest(
+			month, retire, monthStart, infl, withdraw, monthShock, hasShock,
 		)
 
-		txCost := int64(0)
-		if grossWithdrawal > 0 {
-			ok, cost := withdrawPathAmount(
-				in, slots, cashIdx, float64(grossWithdrawal), p.TransactionCostRate,
+		actualSpend, tax, txCost := requestedSpend, int64(0), int64(0)
+		if useNetSettlement {
+			settlement := RetirementSettlement{
+				SpendingRequestedMinor:  requestedSpend,
+				PortfolioNetNeededMinor: requestedSpend,
+				GrossWithdrawalMinor:    requestedSpend,
+			}
+			if month >= retire {
+				settlement = SettleRetirementMonth(
+					requestedSpend, income, p.WithdrawalTaxRate, p.TaxableWithdrawalRatio,
+				)
+			}
+			withdrawalTaxRate, taxableRatio := 0.0, 0.0
+			if month >= retire {
+				withdrawalTaxRate = p.WithdrawalTaxRate
+				taxableRatio = p.TaxableWithdrawalRatio
+			}
+			funded := fundPathAmount(
+				in, slots, cashIdx, settlement.GrossWithdrawalMinor,
+				settlement.PortfolioNetNeededMinor, withdrawalTaxRate,
+				taxableRatio, p.TransactionCostRate,
 			)
-			txCost = cost
-			state.summary.TransactionCostMinor += cost
-			if !ok {
+			tax = funded.TaxFundedMinor
+			txCost = funded.TransactionCostMinor
+			stableIncomeSpent := int64(0)
+			if month >= retire {
+				stableIncomeSpent = min(income, requestedSpend)
+				addPathIncome(in, slots, cashIdx, settlement.StableIncomeSurplusMinor)
+			}
+			actualSpend = stableIncomeSpent + funded.PortfolioNetFundedMinor
+			state.summary.TotalSpendingMinor += actualSpend
+			state.summary.TransactionCostMinor += txCost
+			if !funded.Sufficient {
+				infl.Advance(month)
+				endWealth := totalWealth(slots)
+				state.peak, state.maxDD = updatePeakDrawdown(endWealth, state.peak, state.maxDD)
+				if opts.CollectMonthlyWealth {
+					state.summary.MonthlyWealthMinor = append(state.summary.MonthlyWealthMinor, endWealth)
+					state.summary.MonthlyCumInflation = append(
+						state.summary.MonthlyCumInflation, infl.Cumulative,
+					)
+				}
+				if opts.CollectDetail {
+					state = appendPathDetail(
+						state, month, horizon, p, endWealth, actualSpend, requestedSpend, income, tax, txCost,
+						false, slots, infl.Cumulative, true,
+					)
+				}
 				state.failed = true
 				state.failMonth = month
 				state.failReason = pathFailureReason(
 					in, FailureInsufficientFunds, month, retire, horizon, infl.Cumulative,
 				)
 				break
+			}
+		} else {
+			grossWithdrawal, legacyTax := requestedSpend, int64(0)
+			if month >= retire {
+				grossWithdrawal, legacyTax = GrossWithdrawal(
+					requestedSpend, p.WithdrawalTaxRate, p.TaxableWithdrawalRatio,
+				)
+			}
+			tax = legacyTax
+			state.summary.TotalSpendingMinor += requestedSpend
+			if grossWithdrawal > 0 {
+				ok, cost := withdrawPathAmount(
+					in, slots, cashIdx, float64(grossWithdrawal), p.TransactionCostRate,
+				)
+				txCost = cost
+				state.summary.TransactionCostMinor += cost
+				if !ok {
+					state.failed = true
+					state.failMonth = month
+					state.failReason = pathFailureReason(
+						in, FailureInsufficientFunds, month, retire, horizon, infl.Cumulative,
+					)
+					break
+				}
 			}
 		}
 
@@ -78,12 +150,13 @@ func runPathMonths(
 			state.summary.MonthlyWealthMinor = append(state.summary.MonthlyWealthMinor, endWealth)
 			state.summary.MonthlyCumInflation = append(state.summary.MonthlyCumInflation, infl.Cumulative)
 		}
+		depleted := endWealth <= 0
 		if opts.CollectDetail {
-			state = appendPathDetail(state, month, horizon, p, endWealth, netSpend, income, tax, txCost,
-				rebalanced, slots, infl.Cumulative)
+			state = appendPathDetail(state, month, horizon, p, endWealth, actualSpend, requestedSpend, income, tax, txCost,
+				rebalanced, slots, infl.Cumulative, depleted && useNetSettlement)
 		}
 
-		if endWealth <= 0 {
+		if depleted {
 			state.failed = true
 			state.failMonth = month
 			state.failReason = pathFailureReason(
@@ -95,24 +168,28 @@ func runPathMonths(
 	return state
 }
 
-func pathMonthIncome(
-	in *InputSnapshot,
-	p SnapshotParameters,
-	month, retire int,
-	slots []assetSlot,
-	cashIdx int,
-) int64 {
-	income := int64(0)
+func pathMonthIncomeAmount(p SnapshotParameters, month, retire int) int64 {
 	if month < retire {
 		yearIdx := month / 12
 		saving := float64(p.AnnualSavingsMinor) * math.Pow(1+p.AnnualSavingsGrowthRate, float64(yearIdx)) / 12
-		income += int64(math.Round(saving))
-	} else {
-		retiredYear := (month - retire) / 12
-		retirementIncome := float64(p.AnnualRetirementIncomeMinor) *
-			math.Pow(1+p.AnnualRetirementIncomeGrowthRate, float64(retiredYear)) / 12
-		income += int64(math.Round(retirementIncome))
+		return int64(math.Round(saving))
 	}
+	retiredYear := (month - retire) / 12
+	retirementIncome := float64(p.AnnualRetirementIncomeMinor) *
+		math.Pow(1+p.AnnualRetirementIncomeGrowthRate, float64(retiredYear)) / 12
+	return int64(math.Round(retirementIncome))
+}
+
+func pathAnnualRetirementIncome(p SnapshotParameters, month, retire int) int64 {
+	if month < retire {
+		return 0
+	}
+	retiredYear := (month - retire) / 12
+	return int64(math.Round(float64(p.AnnualRetirementIncomeMinor) *
+		math.Pow(1+p.AnnualRetirementIncomeGrowthRate, float64(retiredYear))))
+}
+
+func addPathIncome(in *InputSnapshot, slots []assetSlot, cashIdx int, income int64) {
 	if income > 0 {
 		if in.AggregateCashLiquidity {
 			addCash(slots, float64(income))
@@ -120,6 +197,20 @@ func pathMonthIncome(
 			addLegacyCash(slots, cashIdx, float64(income))
 		}
 	}
+}
+
+// pathMonthIncome retains the legacy helper contract for focused tests and
+// historical-path reasoning. New path execution separates calculation from
+// deposit so retirement income can first offset spending.
+func pathMonthIncome(
+	in *InputSnapshot,
+	p SnapshotParameters,
+	month, retire int,
+	slots []assetSlot,
+	cashIdx int,
+) int64 {
+	income := pathMonthIncomeAmount(p, month, retire)
+	addPathIncome(in, slots, cashIdx, income)
 	return income
 }
 
@@ -147,16 +238,14 @@ func pathFailureReason(
 	return legacyFailureReason(month, retire, horizon, cumulativeInflation)
 }
 
-func pathMonthSpending(
-	p SnapshotParameters,
+func pathMonthSpendingRequest(
 	month, retire int,
 	monthStart int64,
 	infl *InflationState,
 	withdraw *WithdrawalPlanner,
 	monthShock MonthShock,
 	hasShock bool,
-	summary *PathSummary,
-) (int64, int64, int64) {
+) int64 {
 	if month >= retire {
 		isAnniv := month > retire && (month-retire)%12 == 0
 		net := withdraw.MonthlySpending(month, retire, monthStart, infl.Cumulative, isAnniv)
@@ -166,15 +255,13 @@ func pathMonthSpending(
 			}
 			net += monthShock.ExtraSpendingMinor
 		}
-		gross, t := GrossWithdrawal(net, p.WithdrawalTaxRate, p.TaxableWithdrawalRatio)
-		summary.TotalSpendingMinor += net
-		return net, t, gross
+		return max(net, 0)
 	}
 	netSpend := int64(0)
 	if hasShock {
 		netSpend += monthShock.ExtraSpendingMinor
 	}
-	return netSpend, 0, netSpend
+	return max(netSpend, 0)
 }
 
 func pathMonthRebalance(slots []assetSlot, month int, p SnapshotParameters, summary *PathSummary, txCost *int64) bool {
@@ -395,14 +482,17 @@ func appendPathDetail(
 	state pathSimState,
 	month, horizon int,
 	p SnapshotParameters,
-	endWealth, netSpend, income, tax, txCost int64,
+	endWealth, netSpend, spendingRequested, income, tax, txCost int64,
 	rebalanced bool,
 	slots []assetSlot,
 	cumInfl float64,
+	forceYearEnd bool,
 ) pathSimState {
 	mr := MonthRecord{
 		MonthOffset: month, TotalWealthMinor: endWealth, SpendingMinor: netSpend,
-		IncomeMinor: income, TaxMinor: tax, TransactionCost: txCost,
+		SpendingRequestedMinor: spendingRequested,
+		UnfundedSpendingMinor:  max(spendingRequested-netSpend, 0),
+		IncomeMinor:            income, TaxMinor: tax, TransactionCost: txCost,
 		Rebalanced: rebalanced, CumInflation: cumInfl,
 		RealTotalWealthMinor: deflate(endWealth, cumInfl),
 	}
@@ -411,7 +501,7 @@ func appendPathDetail(
 	}
 	state.detail.Monthly = append(state.detail.Monthly, mr)
 	state.yearAcc.accum(netSpend, income, tax, txCost, endWealth, mr.Drawdown, rebalanced, cumInfl)
-	if month%12 == 11 || month == horizon-1 {
+	if month%12 == 11 || month == horizon-1 || forceYearEnd {
 		state.detail.Yearly = append(state.detail.Yearly, state.yearAcc.finish(month/12, p.CurrentAge, slotWeights(slots)))
 		state.yearAcc = yearAccumulator{start: endWealth, startCumInfl: cumInfl}
 	}

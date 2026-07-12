@@ -319,7 +319,7 @@ func TestAutoUpdateSchedulerRunsImmediatelyAndStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = time.Date(2026, 1, 1, 1, 10, 0, 0, cst)
-	scheduler := NewAutoUpdateScheduler(svc)
+	scheduler := NewAutoUpdateScheduler(svc, 60)
 	scheduler.Start(context.Background())
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -425,31 +425,89 @@ func TestNextAlignedSlot(t *testing.T) {
 
 func TestNextScanTime(t *testing.T) {
 	cases := []struct {
-		now  time.Time
-		want time.Time
+		now      time.Time
+		interval int
+		want     time.Time
 	}{
 		{
-			now:  time.Date(2026, 1, 1, 0, 5, 0, 0, cst),
+			now: time.Date(2026, 1, 1, 0, 5, 0, 0, cst), interval: 60,
 			want: time.Date(2026, 1, 1, 0, 10, 0, 0, cst),
 		},
 		{
-			now:  time.Date(2026, 1, 1, 0, 10, 0, 0, cst),
+			now: time.Date(2026, 1, 1, 0, 10, 0, 0, cst), interval: 60,
+			want: time.Date(2026, 1, 1, 1, 10, 0, 0, cst),
+		},
+		{
+			now: time.Date(2026, 1, 1, 0, 15, 0, 0, cst), interval: 10,
 			want: time.Date(2026, 1, 1, 0, 20, 0, 0, cst),
 		},
 		{
-			now:  time.Date(2026, 1, 1, 0, 15, 0, 0, cst),
-			want: time.Date(2026, 1, 1, 0, 20, 0, 0, cst),
-		},
-		{
-			now:  time.Date(2026, 1, 1, 23, 55, 0, 0, cst),
-			want: time.Date(2026, 1, 2, 0, 0, 0, 0, cst),
+			now: time.Date(2026, 1, 1, 23, 55, 0, 0, cst), interval: 60,
+			want: time.Date(2026, 1, 2, 0, 10, 0, 0, cst),
 		},
 	}
 	for _, tc := range cases {
-		got := nextScanTime(tc.now)
+		got := nextScanTime(tc.now, tc.interval, cst)
 		if !got.Equal(tc.want) {
 			t.Fatalf("nextScanTime(%v) = %v, want %v", tc.now, got, tc.want)
 		}
+	}
+}
+
+func TestNextScanTimeDSTWallClock(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 3, 8, 1, 40, 0, 0, loc)
+	got := nextScanTime(now, 60, loc)
+	// 02:10 does not exist on spring-forward day; time.Date normalizes it to
+	// the next valid local instant without switching to elapsed-time cadence.
+	if !got.After(now) || got.Location() != loc || got.Minute() != 10 {
+		t.Fatalf("DST next slot=%v", got)
+	}
+}
+
+func TestAutoUpdateSchedulerUsesConfiguredWallClockIntervalAndStops(t *testing.T) {
+	svc, _, _ := newAutoUpdateServiceForTest(t)
+	current := time.Date(2026, 1, 1, 0, 10, 0, 0, cst)
+	scheduler := NewAutoUpdateScheduler(svc, 60)
+	scheduler.now = func() time.Time { return current }
+	ticks := make(chan time.Time, 2)
+	waits := make(chan time.Duration, 2)
+	scheduler.after = func(wait time.Duration) <-chan time.Time {
+		waits <- wait
+		return ticks
+	}
+	scans := make(chan struct{}, 3)
+	scheduler.scan = func(context.Context) { scans <- struct{}{} }
+	scheduler.Start(context.Background())
+	select {
+	case <-scans:
+	case <-time.After(time.Second):
+		t.Fatal("missing immediate catch-up scan")
+	}
+	select {
+	case wait := <-waits:
+		if wait != time.Hour {
+			t.Fatalf("configured wait=%v, want 1h", wait)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not request next timer")
+	}
+	current = current.Add(time.Hour)
+	ticks <- current
+	select {
+	case <-scans:
+	case <-time.After(time.Second):
+		t.Fatal("missing configured interval scan")
+	}
+	scheduler.Stop()
+	ticks <- current.Add(time.Hour)
+	select {
+	case <-scans:
+		t.Fatal("scheduler scanned after Stop")
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

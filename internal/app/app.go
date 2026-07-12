@@ -79,7 +79,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		pool, jobRepo, simRepo, runner, analysisRunner, services.Research,
 		services.EventHub, logger, maintenance.Active,
 	)
-	autoScheduler := service.NewAutoUpdateScheduler(services.AutoUpdates)
+	autoScheduler := service.NewAutoUpdateScheduler(
+		services.AutoUpdates, cfg.AutoUpdateScanIntervalMinutes,
+	)
 	autoScheduler.Start(ctx)
 
 	resourcedb.StartCleanup(ctx, resources, resourceCleanupInterval, logger.Warn)

@@ -10,7 +10,8 @@ const getTaskMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/research", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/research")>()),
-  syncCollectionHistory: (...args: unknown[]) => syncCollectionHistoryMock(...args),
+  syncCollectionHistory: (...args: unknown[]) =>
+    syncCollectionHistoryMock(...args),
 }));
 
 vi.mock("@/lib/api/market-assets", async (importOriginal) => ({
@@ -34,7 +35,9 @@ function task(overrides: Partial<WorkerTask> = {}): WorkerTask {
   } as WorkerTask;
 }
 
-function readiness(overrides: Partial<ResearchReadiness> = {}): ResearchReadiness {
+function readiness(
+  overrides: Partial<ResearchReadiness> = {},
+): ResearchReadiness {
   return {
     ready: true,
     weight_sum: 1,
@@ -51,21 +54,23 @@ function readiness(overrides: Partial<ResearchReadiness> = {}): ResearchReadines
   };
 }
 
-function renderPanel(props: Partial<Parameters<typeof DataStatusPanel>[0]> = {}) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const onReadinessRefresh = vi.fn();
+function renderPanel(
+  props: Partial<Parameters<typeof DataStatusPanel>[0]> = {},
+) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   const utils = render(
     <QueryClientProvider client={client}>
       <DataStatusPanel
         collectionId="rc_1"
         readiness={readiness()}
         readinessLoading={false}
-        onReadinessRefresh={onReadinessRefresh}
         {...props}
       />
     </QueryClientProvider>,
   );
-  return { ...utils, onReadinessRefresh };
+  return { ...utils, client };
 }
 
 describe("syncFailureSuggestion", () => {
@@ -103,8 +108,12 @@ describe("DataStatusPanel", () => {
       }),
     });
     expect(screen.getByText("1 项阻断")).toBeInTheDocument();
-    expect(screen.getByTestId("blocking-reasons")).toHaveTextContent("缺少历史数据");
-    expect(screen.getByTestId("warnings")).toHaveTextContent("历史长度不足 3 年");
+    expect(screen.getByTestId("blocking-reasons")).toHaveTextContent(
+      "缺少历史数据",
+    );
+    expect(screen.getByTestId("warnings")).toHaveTextContent(
+      "历史长度不足 3 年",
+    );
   });
 
   it("hides weight-sum blocking from the data status panel", () => {
@@ -119,8 +128,12 @@ describe("DataStatusPanel", () => {
       }),
     });
     expect(screen.getByText("1 项阻断")).toBeInTheDocument();
-    expect(screen.getByTestId("blocking-reasons")).toHaveTextContent("缺少历史数据");
-    expect(screen.getByTestId("blocking-reasons")).not.toHaveTextContent("权重合计不是 100%");
+    expect(screen.getByTestId("blocking-reasons")).toHaveTextContent(
+      "缺少历史数据",
+    );
+    expect(screen.getByTestId("blocking-reasons")).not.toHaveTextContent(
+      "权重合计不是 100%",
+    );
   });
 
   it("shows ready when only the weight-sum block exists", () => {
@@ -128,7 +141,9 @@ describe("DataStatusPanel", () => {
       readiness: readiness({
         ready: false,
         weight_sum: 0.5,
-        blocking_reasons: [{ reason: "weight_sum_invalid", message: "权重合计不是 100%" }],
+        blocking_reasons: [
+          { reason: "weight_sum_invalid", message: "权重合计不是 100%" },
+        ],
       }),
     });
     expect(screen.getByText("数据就绪")).toBeInTheDocument();
@@ -140,10 +155,16 @@ describe("DataStatusPanel", () => {
       assets: [
         { asset_key: "CN|a", status: "created", task: task({ id: "wt_a" }) },
         { asset_key: "CN|b", status: "existed", task: task({ id: "wt_b" }) },
-        { asset_key: "SYS|cash||CNY", status: "skipped", reason: "现金资产无需历史" },
+        {
+          asset_key: "SYS|cash||CNY",
+          status: "skipped",
+          reason: "现金资产无需历史",
+        },
       ],
       fx: [{ pair: "USDCNY", status: "created", task: task({ id: "wt_fx" }) }],
-      blocked: [{ asset_key: "CN|c", code: "asset_inactive", message: "资产已停用" }],
+      blocked: [
+        { asset_key: "CN|c", code: "asset_inactive", message: "资产已停用" },
+      ],
     });
     renderPanel();
     fireEvent.click(screen.getByTestId("sync-collection"));
@@ -156,18 +177,60 @@ describe("DataStatusPanel", () => {
     expect(screen.getByText("无法同步")).toBeInTheDocument();
   });
 
-  it("refreshes readiness after all active tasks settle", async () => {
+  it("refreshes collection data when an individual task settles", async () => {
     syncCollectionHistoryMock.mockResolvedValue({
-      assets: [{ asset_key: "CN|a", status: "created", task: task({ id: "wt_a" }) }],
+      assets: [
+        { asset_key: "CN|a", status: "created", task: task({ id: "wt_a" }) },
+      ],
       fx: [],
       blocked: [],
     });
     getTaskMock.mockResolvedValue(task({ id: "wt_a", status: "complete" }));
-    const { onReadinessRefresh } = renderPanel();
+    const { client } = renderPanel();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
     fireEvent.click(screen.getByTestId("sync-collection"));
     await screen.findByTestId("sync-task-panel");
-    await waitFor(() => expect(onReadinessRefresh).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["research", "readiness", "rc_1"],
+      });
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["research", "optimization-readiness", "rc_1"],
+      });
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["research", "collection", "rc_1"],
+      });
+    });
     expect(await screen.findByText("完成")).toBeInTheDocument();
+  });
+
+  it("refreshes a successful asset while a sibling task is still running", async () => {
+    syncCollectionHistoryMock.mockResolvedValue({
+      assets: [
+        { asset_key: "CN|a", status: "created", task: task({ id: "wt_a" }) },
+        { asset_key: "CN|b", status: "created", task: task({ id: "wt_b" }) },
+      ],
+      fx: [],
+      blocked: [],
+    });
+    getTaskMock.mockImplementation((id: string) =>
+      Promise.resolve(
+        task({ id, status: id === "wt_a" ? "complete" : "running" }),
+      ),
+    );
+    const { client } = renderPanel();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByTestId("sync-collection"));
+    await screen.findByTestId("sync-task-panel");
+
+    await waitFor(() => {
+      expect(screen.getByText("完成")).toBeInTheDocument();
+      expect(screen.getByText("同步中")).toBeInTheDocument();
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["research", "collection", "rc_1"],
+      });
+    });
   });
 
   it("shows failure suggestion and retries a single asset", async () => {

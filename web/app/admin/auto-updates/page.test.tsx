@@ -44,8 +44,11 @@ function rule(overrides: Partial<AdminAutoUpdateRule> = {}): AdminAutoUpdateRule
   };
 }
 
-function page(items: AdminAutoUpdateRule[]): AdminPage<AdminAutoUpdateRule> {
-  return { items, total: items.length, limit: 100, offset: 0 };
+function page(
+  items: AdminAutoUpdateRule[],
+  overrides: Partial<AdminPage<AdminAutoUpdateRule>> = {},
+): AdminPage<AdminAutoUpdateRule> {
+  return { items, total: items.length, limit: 100, offset: 0, ...overrides };
 }
 
 function renderPage() {
@@ -157,5 +160,46 @@ describe("AutoUpdatesPage", () => {
     renderPage();
     expect(await screen.findByText("中国神华")).toBeInTheDocument();
     expect(screen.getByText("后复权 · 复权收盘价")).toBeInTheDocument();
+  });
+
+  it("paginates asset history rules in pages of 50", async () => {
+    listMock.mockImplementation((params: { targetType: string; limit?: number; offset?: number }) => {
+      if (params.targetType === "directory_unit") return Promise.resolve(page([]));
+      const offset = params.offset ?? 0;
+      const count = offset === 100 ? 1 : 50;
+      const items = Array.from({ length: count }, (_, index) => rule({
+        id: `history-${offset + index}`,
+        target_type: "asset_history",
+        asset_key: `ASSET-${offset + index}`,
+        sync_key: "",
+        target_label: `资产 ${offset + index}`,
+      }));
+      return Promise.resolve(page(items, { total: 101, limit: 50, offset }));
+    });
+    renderPage();
+    expect(await screen.findByText("第 1 / 3 页")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("admin-page-next"));
+    expect(await screen.findByText("第 2 / 3 页")).toBeInTheDocument();
+    await waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({
+      targetType: "asset_history", limit: 50, offset: 50,
+    })));
+    fireEvent.click(screen.getByTestId("admin-page-next"));
+    expect(await screen.findByText("第 3 / 3 页")).toBeInTheDocument();
+    expect(await screen.findByText("资产 100")).toBeInTheDocument();
+  });
+
+  it("debounces search for 300ms and resets pagination", async () => {
+    renderPage();
+    await waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({
+      targetType: "asset_history", q: "", offset: 0,
+    })));
+    listMock.mockClear();
+    fireEvent.change(screen.getByPlaceholderText("搜索资产代码或名称"), {
+      target: { value: "601088" },
+    });
+    expect(listMock).not.toHaveBeenCalledWith(expect.objectContaining({ q: "601088" }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({
+      targetType: "asset_history", q: "601088", limit: 50, offset: 0,
+    })), { timeout: 1000 });
   });
 });

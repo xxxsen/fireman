@@ -18,7 +18,7 @@ import (
 
 // ResearchEngineVersion participates in input_hash so engine changes never
 // silently reuse old runs.
-const ResearchEngineVersion = "research_backtest_v3"
+const ResearchEngineVersion = "research_backtest_v4"
 
 // Rebalance policies (td/099 §3.6).
 const (
@@ -62,12 +62,15 @@ const (
 
 // Engine errors. The service maps them onto stable API error codes.
 var (
-	ErrResearchNoAssets        = errors.New("research backtest requires at least one enabled asset")
-	ErrResearchNoCommonWindow  = errors.New("research backtest has no common usable window")
-	ErrResearchWindowTooShort  = errors.New("research backtest window is shorter than the minimum length")
-	ErrResearchFXMissing       = errors.New("research backtest is missing FX history for a foreign-currency asset")
-	ErrResearchBadPoint        = errors.New("research backtest input contains a non-positive point value")
-	ErrResearchWeightInvalid   = errors.New("research backtest weights do not sum to 100%")
+	ErrResearchNoAssets             = errors.New("research backtest requires at least one enabled asset")
+	ErrResearchNoCommonWindow       = errors.New("research backtest has no common usable window")
+	ErrResearchWindowTooShort       = errors.New("research backtest window is shorter than the minimum length")
+	ErrResearchFXMissing            = errors.New("research backtest is missing FX history for a foreign-currency asset")
+	ErrResearchBadPoint             = errors.New("research backtest input contains a non-positive point value")
+	ErrResearchWeightInvalid        = errors.New("research backtest weights do not sum to 100%")
+	ErrResearchInitialAmountInvalid = errors.New(
+		"research backtest initial amount must be positive when transaction costs are enabled",
+	)
 	ErrResearchNoEffectiveDays = errors.New(
 		"research backtest window has fewer than 2 effective valuation days",
 	)
@@ -109,6 +112,7 @@ type BacktestBenchmarkInput struct {
 // BacktestInput is the full engine input.
 type BacktestInput struct {
 	BaseCurrency        string
+	InitialAmountMinor  int64
 	RebalancePolicy     string
 	RebalanceThreshold  float64
 	RiskFreeRate        float64
@@ -208,28 +212,31 @@ type BacktestBenchmarkSummary struct {
 // BacktestSummary is the run overview block (td/099 §3.7). Metrics that can
 // be undefined are pointers and are never written as 0.
 type BacktestSummary struct {
-	CumulativeReturn        float64                     `json:"cumulative_return"`
-	CAGR                    float64                     `json:"cagr"`
-	AnnualVolatility        *float64                    `json:"annual_volatility,omitempty"`
-	MaxDrawdown             float64                     `json:"max_drawdown"`
-	Sharpe                  *float64                    `json:"sharpe,omitempty"`
-	Calmar                  *float64                    `json:"calmar,omitempty"`
-	BestYear                *YearExtreme                `json:"best_year,omitempty"`
-	WorstYear               *YearExtreme                `json:"worst_year,omitempty"`
-	BestMonth               *MonthExtreme               `json:"best_month,omitempty"`
-	WorstMonth              *MonthExtreme               `json:"worst_month,omitempty"`
-	PositiveMonthRatio      *float64                    `json:"positive_month_ratio,omitempty"`
-	CurrentDrawdownDays     int                         `json:"current_drawdown_days"`
-	MaxDrawdownDurationDays int                         `json:"max_drawdown_duration_days"`
-	MaxDrawdownStart        string                      `json:"max_drawdown_start,omitempty"`
-	MaxDrawdownTrough       string                      `json:"max_drawdown_trough,omitempty"`
-	MaxDrawdownRecovery     string                      `json:"max_drawdown_recovery,omitempty"`
-	EffectiveReturnDays     int                         `json:"effective_return_days"`
-	RiskFreeRate            float64                     `json:"risk_free_rate"`
-	TailRisk                *BacktestTailRisk           `json:"tail_risk,omitempty"`
-	Contributions           []BacktestAssetContribution `json:"contributions"`
-	Correlations            *BacktestCorrelations       `json:"correlations,omitempty"`
-	Benchmark               *BacktestBenchmarkSummary   `json:"benchmark,omitempty"`
+	CumulativeReturn          float64                     `json:"cumulative_return"`
+	CAGR                      float64                     `json:"cagr"`
+	AnnualVolatility          *float64                    `json:"annual_volatility,omitempty"`
+	MaxDrawdown               float64                     `json:"max_drawdown"`
+	Sharpe                    *float64                    `json:"sharpe,omitempty"`
+	Calmar                    *float64                    `json:"calmar,omitempty"`
+	BestYear                  *YearExtreme                `json:"best_year,omitempty"`
+	WorstYear                 *YearExtreme                `json:"worst_year,omitempty"`
+	BestMonth                 *MonthExtreme               `json:"best_month,omitempty"`
+	WorstMonth                *MonthExtreme               `json:"worst_month,omitempty"`
+	PositiveMonthRatio        *float64                    `json:"positive_month_ratio,omitempty"`
+	CurrentDrawdownDays       int                         `json:"current_drawdown_days"`
+	MaxDrawdownDurationDays   int                         `json:"max_drawdown_duration_days"`
+	MaxDrawdownStart          string                      `json:"max_drawdown_start,omitempty"`
+	MaxDrawdownTrough         string                      `json:"max_drawdown_trough,omitempty"`
+	MaxDrawdownRecovery       string                      `json:"max_drawdown_recovery,omitempty"`
+	EffectiveReturnDays       int                         `json:"effective_return_days"`
+	RiskFreeRate              float64                     `json:"risk_free_rate"`
+	TotalTurnover             float64                     `json:"total_turnover"`
+	TotalTransactionCostMinor int64                       `json:"total_transaction_cost_minor"`
+	TransactionCostDrag       float64                     `json:"transaction_cost_drag"`
+	TailRisk                  *BacktestTailRisk           `json:"tail_risk,omitempty"`
+	Contributions             []BacktestAssetContribution `json:"contributions"`
+	Correlations              *BacktestCorrelations       `json:"correlations,omitempty"`
+	Benchmark                 *BacktestBenchmarkSummary   `json:"benchmark,omitempty"`
 }
 
 // BacktestSeriesQuality reports data-quality facts for one input series.
@@ -528,6 +535,9 @@ func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
 	if math.Abs(weightSum-1) > ResearchWeightTolerance {
 		return nil, fmt.Errorf("%w: sum %v", ErrResearchWeightInvalid, weightSum)
 	}
+	if in.TransactionCostRate > 0 && in.RebalancePolicy != ResearchRebalanceBuyHold && in.InitialAmountMinor <= 0 {
+		return nil, ErrResearchInitialAmountInvalid
+	}
 
 	fxSeries := make(map[string]preparedSeries, len(in.FX))
 	for pair, pts := range in.FX {
@@ -747,7 +757,7 @@ func simulatePortfolio(
 		return nil, err
 	}
 	targets := normalizedResearchTargets(assets)
-	walk := walkResearchPortfolio(in, values, targets, lo, hi)
+	walk := walkResearchPortfolio(in, values, effective, targets, lo, hi)
 	effReturns, effAssetReturns, effContribReturns := collectEffectiveResearchReturns(
 		effective, walk.periodReturns, walk.assetReturns, walk.contribRows,
 	)
@@ -778,6 +788,11 @@ func simulatePortfolio(
 		return nil, err
 	}
 	summary.Benchmark = benchSummary
+	summary.TotalTurnover = walk.totalTurnover
+	summary.TotalTransactionCostMinor = walk.totalTransactionCostMinor
+	if len(walk.grossNAVs) > 0 {
+		summary.TransactionCostDrag = math.Max(0, walk.grossNAVs[len(walk.grossNAVs)-1]-walk.navs[len(walk.navs)-1])
+	}
 
 	dq := buildDataQuality(assets, fxSeries, fxTolerance, lo, hi)
 	dq.Benchmark = benchQuality
@@ -794,11 +809,14 @@ func simulatePortfolio(
 }
 
 type researchPortfolioWalk struct {
-	navs          []float64
-	periodReturns []float64
-	weightRows    [][]float64
-	contribRows   [][]float64
-	assetReturns  [][]float64
+	navs                      []float64
+	grossNAVs                 []float64
+	periodReturns             []float64
+	weightRows                [][]float64
+	contribRows               [][]float64
+	assetReturns              [][]float64
+	totalTurnover             float64
+	totalTransactionCostMinor int64
 }
 
 func buildResearchValueGrid(
@@ -888,11 +906,11 @@ func normalizedResearchTargets(assets []preparedAsset) []float64 {
 }
 
 func walkResearchPortfolio(
-	in BacktestInput, values [][]float64, targets []float64, lo, hi int,
+	in BacktestInput, values [][]float64, effective []bool, targets []float64, lo, hi int,
 ) researchPortfolioWalk {
 	n, numAssets := hi-lo+1, len(values)
 	walk := researchPortfolioWalk{
-		navs: make([]float64, n), periodReturns: make([]float64, n),
+		navs: make([]float64, n), grossNAVs: make([]float64, n), periodReturns: make([]float64, n),
 		weightRows: make([][]float64, n), contribRows: make([][]float64, n),
 		assetReturns: make([][]float64, numAssets),
 	}
@@ -901,6 +919,7 @@ func walkResearchPortfolio(
 	}
 	weights := append([]float64(nil), targets...)
 	walk.navs[0] = 1
+	walk.grossNAVs[0] = 1
 	walk.weightRows[0] = append([]float64(nil), weights...)
 	walk.contribRows[0] = make([]float64, numAssets)
 	for t := 1; t < n; t++ {
@@ -909,16 +928,69 @@ func walkResearchPortfolio(
 		for i := range weights {
 			contributions[i] = weights[i] * walk.assetReturns[i][t]
 		}
-		walk.navs[t] = walk.navs[t-1] * (1 + portfolioReturn)
-		walk.periodReturns[t] = portfolioReturn
-		walk.contribRows[t] = contributions
+		navBeforeRebalance := walk.navs[t-1] * (1 + portfolioReturn)
+		walk.grossNAVs[t] = walk.grossNAVs[t-1] * (1 + portfolioReturn)
 		driftResearchWeights(weights, walk.assetReturns, portfolioReturn, t)
-		if shouldRebalance(in.RebalancePolicy, in.RebalanceThreshold, lo+t, hi, weights, targets) {
+		if shouldRebalanceOnEffectiveDay(
+			in.RebalancePolicy, in.RebalanceThreshold, lo+t, hi, t, effective, weights, targets,
+		) {
+			turnover := researchTurnover(weights, targets)
+			walk.totalTurnover += turnover
+			costMinor := int64(math.Round(
+				float64(in.InitialAmountMinor) * navBeforeRebalance * turnover * in.TransactionCostRate,
+			))
+			if costMinor < 0 {
+				costMinor = 0
+			}
+			costNAV := 0.0
+			if in.InitialAmountMinor > 0 {
+				costNAV = float64(costMinor) / float64(in.InitialAmountMinor)
+			}
+			if costNAV > navBeforeRebalance {
+				costNAV = navBeforeRebalance
+				costMinor = int64(math.Round(float64(in.InitialAmountMinor) * navBeforeRebalance))
+			}
+			walk.totalTransactionCostMinor += costMinor
+			attributeResearchTransactionCost(contributions, weights, targets, costNAV, walk.navs[t-1])
+			navBeforeRebalance -= costNAV
 			copy(weights, targets)
 		}
+		walk.navs[t] = navBeforeRebalance
+		if walk.navs[t-1] > 0 {
+			walk.periodReturns[t] = walk.navs[t]/walk.navs[t-1] - 1
+		}
+		walk.contribRows[t] = contributions
 		walk.weightRows[t] = append([]float64(nil), weights...)
 	}
 	return walk
+}
+
+func researchTurnover(weights, targets []float64) float64 {
+	total := 0.0
+	for i := range weights {
+		total += math.Abs(weights[i] - targets[i])
+	}
+	return 0.5 * total
+}
+
+func attributeResearchTransactionCost(
+	contributions, weights, targets []float64, costNAV, previousNAV float64,
+) {
+	if costNAV <= 0 || previousNAV <= 0 {
+		return
+	}
+	totalDifference := 0.0
+	for i := range weights {
+		totalDifference += math.Abs(weights[i] - targets[i])
+	}
+	if totalDifference <= 0 {
+		return
+	}
+	costReturn := costNAV / previousNAV
+	for i := range contributions {
+		share := math.Abs(weights[i]-targets[i]) / totalDifference
+		contributions[i] -= costReturn * share
+	}
 }
 
 func researchPeriodReturn(values [][]float64, weights []float64, returns [][]float64, t int) float64 {
@@ -1048,6 +1120,45 @@ func shouldRebalance(policy string, threshold float64, day, lastDay int, weights
 		return y1 != y2
 	default:
 		// Unknown policy behaves like monthly (validated upstream).
+		return y1 != y2 || m1 != m2
+	}
+}
+
+func shouldRebalanceOnEffectiveDay(
+	policy string, threshold float64, day, lastDay, index int, effective []bool,
+	weights, targets []float64,
+) bool {
+	if index >= len(effective) || !effective[index] {
+		return false
+	}
+	switch policy {
+	case ResearchRebalanceBuyHold:
+		return false
+	case ResearchRebalanceFixed:
+		return true
+	case ResearchRebalanceThreshold:
+		return shouldRebalance(policy, threshold, day, lastDay, weights, targets)
+	}
+	nextEffectiveDay := lastDay
+	foundNext := false
+	for next := index + 1; next < len(effective); next++ {
+		if effective[next] {
+			nextEffectiveDay = day + (next - index)
+			foundNext = true
+			break
+		}
+	}
+	if !foundNext {
+		return false
+	}
+	y1, m1, _ := researchDayYMD(day)
+	y2, m2, _ := researchDayYMD(nextEffectiveDay)
+	switch policy {
+	case ResearchRebalanceQuarterly:
+		return y1 != y2 || (int(m1)-1)/3 != (int(m2)-1)/3
+	case ResearchRebalanceYearly:
+		return y1 != y2
+	default:
 		return y1 != y2 || m1 != m2
 	}
 }

@@ -17,7 +17,7 @@ func (s Services) registerSimulationRoutes(rg *gin.RouterGroup) {
 	rg.GET("/plans/:plan_id/simulations", s.listSimulations)
 	rg.GET("/plans/:plan_id/simulation-readiness", s.getSimulationReadiness)
 	rg.POST("/plans/:plan_id/sync-missing-asset-history", s.syncMissingAssetHistory)
-	rg.GET("/plans/:plan_id/scenario-comparison", s.compareScenarios)
+	rg.GET("/plans/:plan_id/simulations/:run_id/scenario-comparison", s.compareScenarios)
 	rg.GET("/plans/:plan_id/return-overrides", s.listReturnOverrides)
 	rg.PUT("/plans/:plan_id/return-overrides/:asset_key", s.setReturnOverride)
 	rg.DELETE("/plans/:plan_id/return-overrides/:asset_key", s.deleteReturnOverride)
@@ -102,7 +102,9 @@ func (s Services) listSimulations(c *gin.Context) {
 }
 
 func (s Services) compareScenarios(c *gin.Context) {
-	out, err := s.Simulations.CompareScenarios(c.Request.Context(), c.Param("plan_id"))
+	out, err := s.Simulations.CompareScenarios(
+		c.Request.Context(), c.Param("plan_id"), c.Param("run_id"),
+	)
 	if err != nil {
 		FailErr(c, err)
 		return

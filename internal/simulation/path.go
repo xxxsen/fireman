@@ -49,14 +49,16 @@ type PathSummary struct {
 
 // MonthRecord captures one month of path detail.
 type MonthRecord struct {
-	MonthOffset      int     `json:"month_offset"`
-	TotalWealthMinor int64   `json:"total_wealth_minor"`
-	SpendingMinor    int64   `json:"spending_minor"`
-	IncomeMinor      int64   `json:"income_minor"`
-	TaxMinor         int64   `json:"tax_minor"`
-	TransactionCost  int64   `json:"transaction_cost"`
-	Drawdown         float64 `json:"drawdown"`
-	Rebalanced       bool    `json:"rebalanced"`
+	MonthOffset            int     `json:"month_offset"`
+	TotalWealthMinor       int64   `json:"total_wealth_minor"`
+	SpendingMinor          int64   `json:"spending_minor"`
+	SpendingRequestedMinor int64   `json:"spending_requested_minor"`
+	UnfundedSpendingMinor  int64   `json:"unfunded_spending_minor"`
+	IncomeMinor            int64   `json:"income_minor"`
+	TaxMinor               int64   `json:"tax_minor"`
+	TransactionCost        int64   `json:"transaction_cost"`
+	Drawdown               float64 `json:"drawdown"`
+	Rebalanced             bool    `json:"rebalanced"`
 	// This path's realized cumulative inflation at month end and the
 	// wealth deflated into start-of-plan purchasing power, so the UI can toggle
 	// the amount caliber without re-deriving the inflation process.
@@ -140,9 +142,13 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 		total += slots[i].balance
 	}
 
-	infl := NewInflationState(p.InflationMode, p.FixedInflationRate, p.InflationMu, p.InflationPhi, p.InflationSigma, rng)
+	infl := NewInflationState(in.EngineVersion, p.InflationMode, p.FixedInflationRate, p.InflationMu,
+		p.InflationPhi, p.InflationSigma, rng)
 	withdraw := NewWithdrawalPlanner(p.WithdrawalType, p.AnnualSpendingMinor, p.WithdrawalRate, p.WithdrawalFloorRatio,
 		p.WithdrawalCeilingRatio)
+	if UsesNetRetirementSettlement(in.EngineVersion) {
+		withdraw.SetStableIncomeAnnual(p.AnnualRetirementIncomeMinor)
+	}
 	// Guardrail semantics are frozen per snapshot: replays of runs created
 	// before the compounding fix keep their original annual-reset behavior so
 	// regenerated paths stay consistent with the stored summary metrics.
@@ -164,7 +170,8 @@ func RunPath(in *InputSnapshot, pathNo int, opts PathRunOpts) (PathSummary, *Pat
 	detail = state.detail
 
 	if opts.CollectMonthlyWealth {
-		summary.MonthlyWealthMinor = padMonthlyWealth(summary.MonthlyWealthMinor, horizon)
+		zeroPad := state.failed && UsesZeroPaddedFailureSeries(in.EngineVersion)
+		summary.MonthlyWealthMinor = padMonthlyWealth(summary.MonthlyWealthMinor, horizon, zeroPad)
 		summary.MonthlyCumInflation = padCumInflation(summary.MonthlyCumInflation, horizon)
 	}
 	summary.RealTerminalWealthMinor = deflate(summary.TerminalWealthMinor, infl.Cumulative)
@@ -195,14 +202,14 @@ func slotWeights(slots []assetSlot) map[string]float64 {
 	return out
 }
 
-func padMonthlyWealth(series []int64, horizon int) []int64 {
+func padMonthlyWealth(series []int64, horizon int, zeroPad bool) []int64 {
 	if len(series) >= horizon {
 		return series
 	}
 	out := make([]int64, horizon)
 	copy(out, series)
 	last := int64(0)
-	if len(series) > 0 {
+	if len(series) > 0 && !zeroPad {
 		last = series[len(series)-1]
 	}
 	for i := len(series); i < horizon; i++ {
@@ -358,6 +365,85 @@ func withdrawAmount(slots []assetSlot, amount float64, txRate float64) (bool, in
 	}
 	liquidateRiskProRata(slots, grossNeeded, riskTotal)
 	return true, int64(math.Round(grossNeeded * txRate))
+}
+
+// fundPathAmount implements the 3.4.0 actual-funding contract. It always
+// records the gross amount delivered after liquidation costs and drains all
+// available assets on insufficiency so the terminal balance is unambiguously
+// zero.
+func fundPathAmount(
+	in *InputSnapshot,
+	slots []assetSlot,
+	cashIdx int,
+	grossRequested, netNeeded int64,
+	taxRate, taxableRatio, txRate float64,
+) WithdrawalResult {
+	if grossRequested <= 0 {
+		return fundedWithdrawalResult(0, 0, netNeeded, taxRate, taxableRatio, 0)
+	}
+	if txRate < 0 || txRate >= 1 {
+		return fundedWithdrawalResult(grossRequested, 0, netNeeded, taxRate, taxableRatio, 0)
+	}
+
+	requested := float64(grossRequested)
+	cashUsed := 0.0
+	if in.AggregateCashLiquidity {
+		remaining := consumeCashLiquidity(slots, requested)
+		cashUsed = requested - remaining
+	} else if cashIdx >= 0 && cashIdx < len(slots) && slots[cashIdx].balance > 0 {
+		cashUsed = math.Min(requested, slots[cashIdx].balance)
+		slots[cashIdx].balance -= cashUsed
+	}
+
+	remaining := requested - cashUsed
+	riskSold := 0.0
+	if remaining > 0 {
+		riskTotal := availableRiskBalance(in, slots, cashIdx)
+		neededSale := remaining / (1 - txRate)
+		riskSold = math.Min(riskTotal, neededSale)
+		liquidateAvailableRisk(in, slots, cashIdx, riskSold, riskTotal)
+	}
+	txCost := int64(math.Round(riskSold * txRate))
+	grossFunded := int64(math.Round(cashUsed+riskSold)) - txCost
+	grossFunded = min(max(grossFunded, 0), grossRequested)
+	result := fundedWithdrawalResult(
+		grossRequested, grossFunded, netNeeded, taxRate, taxableRatio, txCost,
+	)
+	if !result.Sufficient && totalWealth(slots) <= 1 {
+		clearBalances(slots)
+	}
+	return result
+}
+
+func availableRiskBalance(in *InputSnapshot, slots []assetSlot, cashIdx int) float64 {
+	if in.AggregateCashLiquidity {
+		return positiveRiskBalance(slots)
+	}
+	total := 0.0
+	for i, slot := range slots {
+		if i != cashIdx && slot.balance > 0 {
+			total += slot.balance
+		}
+	}
+	return total
+}
+
+func liquidateAvailableRisk(
+	in *InputSnapshot, slots []assetSlot, cashIdx int, amount, available float64,
+) {
+	if amount <= 0 || available <= 0 {
+		return
+	}
+	for i := range slots {
+		if slots[i].balance <= 0 || (in.AggregateCashLiquidity && slots[i].isCash) ||
+			(!in.AggregateCashLiquidity && i == cashIdx) {
+			continue
+		}
+		slots[i].balance -= amount * slots[i].balance / available
+		if math.Abs(slots[i].balance) < 1e-9 {
+			slots[i].balance = 0
+		}
+	}
 }
 
 func consumeCashLiquidity(slots []assetSlot, amount float64) float64 {

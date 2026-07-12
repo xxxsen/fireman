@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   syncCollectionHistory,
   type ResearchReadiness,
@@ -83,10 +83,16 @@ function SyncTaskRow({
     <li className="flex items-start gap-3 rounded-md border border-line bg-surface px-3 py-2 text-sm">
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium text-ink">{label}</span>
-        {sublabel && <span className="block text-xs text-ink-muted">{sublabel}</span>}
-        {existed && <span className="block text-xs text-info">已有同步任务，复用中</span>}
+        {sublabel && (
+          <span className="block text-xs text-ink-muted">{sublabel}</span>
+        )}
+        {existed && (
+          <span className="block text-xs text-info">已有同步任务，复用中</span>
+        )}
         {skippedReason && (
-          <span className="block text-xs text-ink-muted">跳过：{skippedReason}</span>
+          <span className="block text-xs text-ink-muted">
+            跳过：{skippedReason}
+          </span>
         )}
         {failed && (
           <span className="mt-0.5 block text-xs text-danger">
@@ -97,11 +103,17 @@ function SyncTaskRow({
           </span>
         )}
         {polling.pollError && (
-          <span className="block text-xs text-warning">状态查询失败：{polling.pollError}</span>
+          <span className="block text-xs text-warning">
+            状态查询失败：{polling.pollError}
+          </span>
         )}
       </span>
       <span className="flex shrink-0 items-center gap-2">
-        {skippedReason ? <Badge variant="neutral">跳过</Badge> : taskStatusBadge(current)}
+        {skippedReason ? (
+          <Badge variant="neutral">跳过</Badge>
+        ) : (
+          taskStatusBadge(current)
+        )}
         {failed && onRetry && (
           <button
             type="button"
@@ -120,17 +132,29 @@ export interface DataStatusPanelProps {
   collectionId: string;
   readiness?: ResearchReadiness;
   readinessLoading: boolean;
-  onReadinessRefresh: () => void;
 }
 
 export function DataStatusPanel({
   collectionId,
   readiness,
   readinessLoading,
-  onReadinessRefresh,
 }: DataStatusPanelProps) {
+  const queryClient = useQueryClient();
   const [syncResult, setSyncResult] = useState<ResearchSyncResult | null>(null);
-  const pendingSettles = useRef(0);
+
+  const refreshCollectionData = useCallback(() => {
+    void Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["research", "collection", collectionId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["research", "readiness", collectionId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["research", "optimization-readiness", collectionId],
+      }),
+    ]);
+  }, [collectionId, queryClient]);
 
   const syncMutation = useMutation({
     mutationFn: (body?: { asset_keys?: string[]; force?: boolean }) =>
@@ -141,7 +165,10 @@ export function DataStatusPanel({
         // Single-asset retry: merge the new rows into the previous panel.
         const replaced = new Set(result.assets.map((a) => a.asset_key));
         return {
-          assets: [...prev.assets.filter((a) => !replaced.has(a.asset_key)), ...result.assets],
+          assets: [
+            ...prev.assets.filter((a) => !replaced.has(a.asset_key)),
+            ...result.assets,
+          ],
           fx: result.fx.length > 0 ? result.fx : prev.fx,
           blocked: [
             ...prev.blocked.filter((b) => !replaced.has(b.asset_key)),
@@ -150,22 +177,23 @@ export function DataStatusPanel({
         };
       });
       const active =
-        result.assets.filter((a) => a.task && isTaskActive(a.task.status)).length +
+        result.assets.filter((a) => a.task && isTaskActive(a.task.status))
+          .length +
         result.fx.filter((f) => f.task && isTaskActive(f.task.status)).length;
-      pendingSettles.current += active;
-      if (active === 0) onReadinessRefresh();
+      if (active === 0) refreshCollectionData();
     },
   });
 
   const handleSettled = useCallback(() => {
-    pendingSettles.current = Math.max(0, pendingSettles.current - 1);
-    if (pendingSettles.current === 0) {
-      onReadinessRefresh();
-    }
-  }, [onReadinessRefresh]);
+    // Refresh each asset independently. A slow or failed sibling task must
+    // not hide the history range/status already persisted by this task.
+    refreshCollectionData();
+  }, [refreshCollectionData]);
 
   const rawBlocking = readiness?.blocking_reasons ?? [];
-  const blocking = rawBlocking.filter((issue) => issue.reason !== "weight_sum_invalid");
+  const blocking = rawBlocking.filter(
+    (issue) => issue.reason !== "weight_sum_invalid",
+  );
   const warnings = readiness?.warnings ?? [];
 
   const readinessBadge = useMemo(() => {
@@ -179,13 +207,20 @@ export function DataStatusPanel({
   }, [readiness, readinessLoading, blocking.length]);
 
   return (
-    <section className="rounded-lg border border-line bg-surface p-4" data-testid="data-status">
+    <section
+      className="rounded-lg border border-line bg-surface p-4"
+      data-testid="data-status"
+    >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-base font-semibold text-ink">
           数据状态 {readinessBadge}
         </h2>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={onReadinessRefresh} disabled={readinessLoading}>
+          <Button
+            variant="secondary"
+            onClick={refreshCollectionData}
+            disabled={readinessLoading}
+          >
             重新检查
           </Button>
           <Button
@@ -205,13 +240,27 @@ export function DataStatusPanel({
       )}
 
       {blocking.length > 0 && (
-        <div className="mb-3 rounded-md border border-danger/25 bg-danger/5 px-3 py-2" role="alert">
-          <p className="mb-1 text-xs font-semibold text-danger">阻断条件（无法运行回测）</p>
-          <ul className="space-y-0.5 text-xs text-ink" data-testid="blocking-reasons">
+        <div
+          className="mb-3 rounded-md border border-danger/25 bg-danger/5 px-3 py-2"
+          role="alert"
+        >
+          <p className="mb-1 text-xs font-semibold text-danger">
+            阻断条件（无法运行回测）
+          </p>
+          <ul
+            className="space-y-0.5 text-xs text-ink"
+            data-testid="blocking-reasons"
+          >
             {blocking.map((issue, idx) => (
-              <li key={`${issue.reason}-${issue.asset_key}-${issue.pair}-${idx}`}>
-                {issue.asset_key && <code className="mr-1 text-ink-muted">{issue.asset_key}</code>}
-                {issue.pair && <code className="mr-1 text-ink-muted">{issue.pair}</code>}
+              <li
+                key={`${issue.reason}-${issue.asset_key}-${issue.pair}-${idx}`}
+              >
+                {issue.asset_key && (
+                  <code className="mr-1 text-ink-muted">{issue.asset_key}</code>
+                )}
+                {issue.pair && (
+                  <code className="mr-1 text-ink-muted">{issue.pair}</code>
+                )}
                 {issue.message}
               </li>
             ))}
@@ -221,12 +270,20 @@ export function DataStatusPanel({
 
       {warnings.length > 0 && (
         <div className="mb-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2">
-          <p className="mb-1 text-xs font-semibold text-warning">警告（可运行，谨慎解读）</p>
+          <p className="mb-1 text-xs font-semibold text-warning">
+            警告（可运行，谨慎解读）
+          </p>
           <ul className="space-y-0.5 text-xs text-ink" data-testid="warnings">
             {warnings.map((issue, idx) => (
-              <li key={`${issue.reason}-${issue.asset_key}-${issue.pair}-${idx}`}>
-                {issue.asset_key && <code className="mr-1 text-ink-muted">{issue.asset_key}</code>}
-                {issue.pair && <code className="mr-1 text-ink-muted">{issue.pair}</code>}
+              <li
+                key={`${issue.reason}-${issue.asset_key}-${issue.pair}-${idx}`}
+              >
+                {issue.asset_key && (
+                  <code className="mr-1 text-ink-muted">{issue.asset_key}</code>
+                )}
+                {issue.pair && (
+                  <code className="mr-1 text-ink-muted">{issue.pair}</code>
+                )}
                 {issue.message}
               </li>
             ))}
@@ -244,7 +301,9 @@ export function DataStatusPanel({
         <dl className="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
           <div>
             <dt className="text-ink-muted">依赖资产</dt>
-            <dd className="font-medium text-ink">{readiness.data_dependencies.asset_count}</dd>
+            <dd className="font-medium text-ink">
+              {readiness.data_dependencies.asset_count}
+            </dd>
           </div>
           <div>
             <dt className="text-ink-muted">FX 依赖</dt>
@@ -256,7 +315,9 @@ export function DataStatusPanel({
           </div>
           <div>
             <dt className="text-ink-muted">过期资产</dt>
-            <dd className="font-medium text-ink">{readiness.data_dependencies.stale_asset_count}</dd>
+            <dd className="font-medium text-ink">
+              {readiness.data_dependencies.stale_asset_count}
+            </dd>
           </div>
           <div>
             <dt className="text-ink-muted">缺历史资产</dt>
@@ -277,10 +338,17 @@ export function DataStatusPanel({
                 label={row.asset_key}
                 task={row.task}
                 existed={row.status === "existed"}
-                skippedReason={row.status === "skipped" ? (row.reason ?? "无需同步") : undefined}
+                skippedReason={
+                  row.status === "skipped"
+                    ? (row.reason ?? "无需同步")
+                    : undefined
+                }
                 onSettled={handleSettled}
                 onRetry={() =>
-                  syncMutation.mutate({ asset_keys: [row.asset_key], force: true })
+                  syncMutation.mutate({
+                    asset_keys: [row.asset_key],
+                    force: true,
+                  })
                 }
               />
             ))}
@@ -290,7 +358,9 @@ export function DataStatusPanel({
                 label={`汇率 ${row.pair}`}
                 task={row.task}
                 existed={row.status === "existed"}
-                skippedReason={row.status === "skipped" ? "无需同步" : undefined}
+                skippedReason={
+                  row.status === "skipped" ? "无需同步" : undefined
+                }
                 onSettled={handleSettled}
                 onRetry={() => syncMutation.mutate({ force: true })}
               />
@@ -301,8 +371,12 @@ export function DataStatusPanel({
                 className="flex items-start justify-between gap-3 rounded-md border border-danger/25 bg-danger/5 px-3 py-2 text-sm"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-ink">{row.asset_key}</span>
-                  <span className="block text-xs text-danger">{row.message}</span>
+                  <span className="block truncate font-medium text-ink">
+                    {row.asset_key}
+                  </span>
+                  <span className="block text-xs text-danger">
+                    {row.message}
+                  </span>
                 </span>
                 <Badge variant="danger">无法同步</Badge>
               </li>

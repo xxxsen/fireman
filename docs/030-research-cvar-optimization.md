@@ -2,7 +2,8 @@
 
 - 状态：已完整实施
 - 适用范围：组合研究普通回测、寻找最优组合、结果应用及复制到 FIRE 计划后的验证
-- 目标版本：`research_backtest_v3`、`research_optimizer_v4`
+- 初始版本：`research_backtest_v3`、`research_optimizer_v4`
+- 当前版本：`research_backtest_v4`、`research_optimizer_v5`（在扣除研究交易成本后的 NAV/收益序列上计算与排序）
 - CVaR 算法版本：`empirical_cvar_v1`
 
 ## 0. 实施与验证状态
@@ -338,7 +339,7 @@ CVaR 按当前实施优先级占用：
 migrations/0029_research_cvar.sql
 ```
 
-后续 Black-Litterman migration 使用 `0030_plan_black_litterman_views.sql`，避免编号冲突。
+迁移编号只描述已实施能力；不得为暂缓的 Black-Litterman 预留或绑定编号。当前 `0030` 已用于模拟快照复权口径。
 
 ### 5.2 research_collections
 
@@ -611,6 +612,10 @@ RunResearchBacktest(buildBacktestInputForCandidate(...))
 ```text
 research_optimizer_v4
 ```
+
+上述为 CVaR 首次发布版本。当前 `research_optimizer_v5` 继续使用相同
+`empirical_cvar_v1`，但候选回测先按单边换手扣除交易成本；CVaR、minimum CAGR 和
+四组 Top K 均基于扣费后的 `effReturns`，不再允许使用未扣费收益另行排序。
 
 ### 6.6 稳定 Top K 与 Apply
 

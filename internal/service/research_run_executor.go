@@ -206,6 +206,7 @@ func backtestInputFromDataset(
 ) BacktestInput {
 	input := BacktestInput{
 		BaseCurrency:        snapshot.Collection.BaseCurrency,
+		InitialAmountMinor:  snapshot.Collection.InitialAmountMinor,
 		RebalancePolicy:     snapshot.Collection.RebalancePolicy,
 		RebalanceThreshold:  snapshot.Collection.RebalanceThreshold,
 		RiskFreeRate:        snapshot.Collection.RiskFreeRate,

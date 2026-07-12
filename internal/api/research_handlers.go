@@ -38,7 +38,9 @@ func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 	research.GET("/runs/:run_id/points", s.getResearchRunPoints)
 	research.GET("/runs/:run_id/export.csv", s.exportResearchRunCSV)
 
-	research.POST("/collections/:collection_id/copy-to-plan", s.copyResearchToPlan)
+	research.POST("/collections/:collection_id/plan-preview", s.previewResearchPlanReplacement)
+	research.POST("/collections/:collection_id/apply-to-plan", s.applyResearchPlanReplacement)
+	research.POST("/collections/:collection_id/copy-to-plan", s.deprecatedCopyResearchToPlan)
 
 	research.GET("/collections/:collection_id/optimization-readiness", s.getOptimizationReadiness)
 	research.POST("/collections/:collection_id/optimizations", s.createOptimization)
@@ -429,16 +431,35 @@ func (s Services) applyOptimization(c *gin.Context) {
 
 // --- plan interop ---
 
-func (s Services) copyResearchToPlan(c *gin.Context) {
-	var req service.ResearchCopyToPlanRequest
+func (s Services) previewResearchPlanReplacement(c *gin.Context) {
+	var req service.ResearchPlanPreviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	out, err := s.Research.CopyToPlan(c.Request.Context(), c.Param("collection_id"), req)
+	out, err := s.Research.PreviewPlanReplacement(c.Request.Context(), c.Param("collection_id"), req)
 	if err != nil {
 		FailErr(c, err)
 		return
 	}
 	OK(c, out)
+}
+
+func (s Services) applyResearchPlanReplacement(c *gin.Context) {
+	var req service.ResearchPlanApplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Research.ApplyPlanReplacement(c.Request.Context(), c.Param("collection_id"), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) deprecatedCopyResearchToPlan(c *gin.Context) {
+	Fail(c, http.StatusGone, "copy_to_plan_deprecated",
+		"use plan-preview followed by apply-to-plan", nil)
 }

@@ -2,11 +2,59 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
+
+	"github.com/fireman/fireman/internal/repository"
 )
+
+func TestAdminAutoUpdateHistoryPaginationAndFilteredTotal(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+	ctx := context.Background()
+	assets := repository.NewSnapshotRepo(db)
+	rules := repository.NewMarketDataAutoUpdateRepo(db)
+	for index := 0; index < 101; index++ {
+		assetKey := fmt.Sprintf("CN|test|sh|PAGE%03d", index)
+		name := fmt.Sprintf("分页资产 %03d", index)
+		if index < 3 {
+			name = fmt.Sprintf("筛选专用 %03d", index)
+		}
+		if err := assets.EnsureMarketAsset(ctx, repository.MarketAsset{
+			AssetKey: assetKey, Symbol: fmt.Sprintf("PAGE%03d", index), Name: name,
+			Market: "CN", Currency: "CNY",
+		}); err != nil {
+			t.Fatalf("seed asset %d: %v", index, err)
+		}
+		if _, err := rules.EnableHistory(ctx, assetKey, "hfq", "adjusted_close", int64(index+1), 2_000); err != nil {
+			t.Fatalf("seed rule %d: %v", index, err)
+		}
+	}
+
+	resp, body := getJSON(t, client, srv.URL+"/api/v1/admin/auto-updates?target_type=asset_history&limit=50&offset=100")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("last page status=%d body=%s", resp.StatusCode, body)
+	}
+	page := decodeEnvelope(t, body)["data"].(map[string]any)
+	if page["total"] != float64(101) || page["limit"] != float64(50) || page["offset"] != float64(100) {
+		t.Fatalf("last page metadata=%v", page)
+	}
+	if items := page["items"].([]any); len(items) != 1 {
+		t.Fatalf("last page items=%d, want 1", len(items))
+	}
+
+	resp, body = getJSON(t, client, srv.URL+"/api/v1/admin/auto-updates?target_type=asset_history&limit=50&q="+url.QueryEscape("筛选专用"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("filtered status=%d body=%s", resp.StatusCode, body)
+	}
+	filtered := decodeEnvelope(t, body)["data"].(map[string]any)
+	if filtered["total"] != float64(3) || len(filtered["items"].([]any)) != 3 {
+		t.Fatalf("filtered page=%v", filtered)
+	}
+}
 
 func putAutoUpdate(t *testing.T, client *http.Client, url string, body any) (int, []byte) {
 	t.Helper()

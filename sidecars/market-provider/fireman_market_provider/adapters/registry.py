@@ -333,6 +333,8 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
 # the successful source decides source_kind. Name keywords must never route
 # or gate these attempts.
 _CN_MUTUAL_FUND_ATTEMPTS: tuple[tuple[CnMutualFundSourceKind, str, str], ...] = (
+    ("open_fund", "total_return_index", "em.fund_open_history:累计净值走势"),
+    ("open_fund", "nav", "em.fund_open_history:单位净值走势"),
     ("open_fund", "total_return_index", "ak.fund_open_fund_info_em:累计净值走势"),
     ("open_fund", "nav", "ak.fund_open_fund_info_em:单位净值走势"),
     ("money_fund", "nav", "ak.fund_money_fund_info_em"),
@@ -341,6 +343,16 @@ _CN_MUTUAL_FUND_ATTEMPTS: tuple[tuple[CnMutualFundSourceKind, str, str], ...] = 
 
 
 def _cn_mutual_fund_call(source_name: str, symbol: str) -> UpstreamCall:
+    if source_name == "em.fund_open_history:累计净值走势":
+        return UpstreamCall(
+            "em_fund_open_history",
+            kwargs=(("symbol", symbol), ("indicator", "累计净值走势")),
+        )
+    if source_name == "em.fund_open_history:单位净值走势":
+        return UpstreamCall(
+            "em_fund_open_history",
+            kwargs=(("symbol", symbol), ("indicator", "单位净值走势")),
+        )
     if source_name == "ak.fund_open_fund_info_em:累计净值走势":
         return UpstreamCall(
             "fund_open_fund_info_em",

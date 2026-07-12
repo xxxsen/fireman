@@ -151,9 +151,9 @@ func TestRebalanceToTargetProperties(t *testing.T) {
 	}
 }
 
-// Golden regression for the current engine semantics. The closed-form
-// rebalance must reproduce these fixed-seed paths exactly; semantic changes
-// require an EngineVersion bump and an intentional baseline update.
+// Golden regression for the 3.3.0 engine semantics. The closed-form rebalance
+// and the 3.4.0 version gates must preserve these historical fixed-seed paths
+// exactly when an old snapshot is replayed.
 func TestRebalanceToTargetGoldenPaths(t *testing.T) {
 	type golden struct {
 		seed          int
@@ -194,7 +194,7 @@ func TestRebalanceToTargetGoldenPaths(t *testing.T) {
 
 func goldenRebalanceInput() *InputSnapshot {
 	return &InputSnapshot{
-		EngineVersion:          EngineVersion,
+		EngineVersion:          "3.3.0",
 		BaseCurrency:           "CNY",
 		AggregateCashLiquidity: true,
 		Parameters: SnapshotParameters{

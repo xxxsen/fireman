@@ -1,5 +1,6 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
 import type { WorkerTask } from "./market-assets";
+import type { AssetClassTarget, RegionTarget } from "@/types/api";
 
 // --- screener ---
 
@@ -161,6 +162,9 @@ export interface ResearchRunSummary {
   max_drawdown_recovery?: string;
   effective_return_days: number;
   risk_free_rate: number;
+  total_turnover?: number;
+  total_transaction_cost_minor?: number;
+  transaction_cost_drag?: number;
   tail_risk?: ResearchTailRisk | null;
   contributions: ResearchAssetContribution[];
   correlations?: ResearchCorrelations | null;
@@ -618,30 +622,68 @@ export function runExportCSVUrl(runId: string): string {
 
 // --- plan interop ---
 
-export interface ResearchPlanDraftHolding {
+export interface ResearchPlanReplacementHolding {
   asset_key: string;
   name: string;
   symbol: string;
   weight: number;
   asset_class: string;
   region: string;
+  weight_within_group: number;
   current_amount_minor: number;
 }
 
-export interface ResearchCopyToPlanResult {
+export interface ResearchPlanReplacementPreview {
   plan_id: string;
   plan_name: string;
   collection_id: string;
-  holdings: ResearchPlanDraftHolding[];
+  base_currency: string;
+  target_total_assets_minor: number;
+  expected_config_version: number;
+  replacement_hash: string;
+  before_holding_count: number;
+  after_holding_count: number;
+  existing_holdings_will_change: boolean;
+  rounding_adjustment_minor: number;
+  allocation: {
+    asset_class_targets: AssetClassTarget[];
+    region_targets: RegionTarget[];
+  };
+  holdings: ResearchPlanReplacementHolding[];
+  removed_holdings: Array<{ asset_key: string; name: string; symbol: string }>;
+  warnings?: string[];
 }
 
-export function copyToPlan(
+export interface ResearchPlanApplyResult {
+  plan_id: string;
+  collection_id: string;
+  config_version: number;
+  holding_count: number;
+  portfolio_snapshot_id: string;
+}
+
+export function previewPlanReplacement(
   collectionId: string,
   planId: string,
-): Promise<ResearchCopyToPlanResult> {
+): Promise<ResearchPlanReplacementPreview> {
   return apiPost(
-    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/copy-to-plan`,
+    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/plan-preview`,
     { plan_id: planId },
+  );
+}
+
+export function applyPlanReplacement(
+  collectionId: string,
+  request: {
+    plan_id: string;
+    expected_config_version: number;
+    expected_replacement_hash: string;
+    mode: "replace_all";
+  },
+): Promise<ResearchPlanApplyResult> {
+  return apiPost(
+    `/api/v1/research/collections/${encodeURIComponent(collectionId)}/apply-to-plan`,
+    request,
   );
 }
 
