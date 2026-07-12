@@ -133,7 +133,7 @@ def _cn_em_adjust(adjust_policy: str) -> str:
         return "hfq"
     if adjust_policy == "none":
         return ""
-    return "qfq"
+    raise ValueError(f"unsupported adjust policy {adjust_policy}")
 
 
 def _cn_identity(payload: dict[str, Any]) -> CNExchangeCode:

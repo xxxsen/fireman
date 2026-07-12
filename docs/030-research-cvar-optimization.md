@@ -2,7 +2,7 @@
 
 - 状态：已完整实施
 - 适用范围：组合研究普通回测、寻找最优组合、结果应用及复制到 FIRE 计划后的验证
-- 目标版本：`research_backtest_v3`、`research_optimizer_v3`
+- 目标版本：`research_backtest_v3`、`research_optimizer_v4`
 - CVaR 算法版本：`empirical_cvar_v1`
 
 ## 0. 实施与验证状态
@@ -14,12 +14,17 @@
 完成门禁：
 
 - `make ci`：Go build/test/lint、Web lint/test/build、sidecar test、integration test 全部通过；
-- Web：79 个测试文件、584 个用例通过；
+- Web：80 个测试文件、587 个用例通过；
 - sidecar：187 个用例通过，12 个按既有配置 deselect；
 - 性能 fixture：10 个资产、2,000 个候选、2,520 个有效收益日；开启 CVaR 后完整候选回测耗时增加
   约 `1.44%`，分配内存增加约 `0.31%`，采样峰值堆内存未增加，低于 `25% / 20%` 门槛；
 - 浏览器：`1440x900` 与 `390x844` 验证集合参数、优化结果、普通回测，无重叠或异常裁切；
-- 端到端测试：优化结果应用后立即运行普通回测，VaR/CVaR 在 `1e-12` 容差内复现。
+- 端到端测试：所有优化候选使用相同有效收益日和尾部场景数；应用后普通回测继续按正权重资产生成自身样本。
+
+`research_optimizer_v4` 针对集合 `rc_0111ff60-fd0c-41e7-8f57-d8b53870c6c7` 的同数据副本完成
+861 个候选实测：成功 861、跳过 0，四个榜单 Top 20 均为 `1006` 个有效收益日和 `987` 个
+20 日场景。最低尾部损失组合的 CVaR 为 `5.1769%`，低于最低回撤组合的 `5.3537%`；前者
+年化收益和最大回撤更差，符合两个目标函数衡量不同风险维度的定义。
 
 ## 1. 结论与实施决策
 
@@ -47,7 +52,7 @@ CVaR 应成为这条链路中的第四个目标“最低尾部损失”。它使
 4. 普通回测和自动调优必须调用同一个 CVaR 纯函数，不能分别计算。
 5. CVaR 口径由“置信度 + 持有期”唯一确定并持久化到研究集合；新集合默认 `95% + 20 个有效交易日`。
 6. CVaR 优化只产生研究结果，不自动修改研究集合或 FIRE 计划；用户点击“应用”后才原子写回集合。
-7. 应用任何该次调优结果时，同时同步调优冻结的回测窗口和 CVaR 口径，保证随后普通回测可复现结果页数字。
+7. 应用任何该次调优结果时，同时同步调优冻结的回测窗口和 CVaR 口径；优化结果保留其冻结样本口径，随后普通回测按应用后的正权重资产重新生成有效日。
 8. FIRE 模拟不新增一个名为 CVaR 的随机过程。用户把结果复制到计划后，仍使用现有 FIRE 成功率、真实财富分位数和失败时间验证长期效果。
 
 ## 2. 使用 CVaR 的位置
@@ -125,18 +130,18 @@ CVaR 只能使用 `RunResearchBacktest` 生成的 `effReturns`：
 
 不得从原始价格另算一套收益，也不得直接对各资产 CVaR 做权重加总。CVaR 是组合损失分布的非线性指标，必须从组合路径计算。
 
-当前 v2 的 `effective` mask 会被输入中的任意资产行情触发，即使该候选给该资产的权重为 0。优化结果应用后，零权重资产会被禁用，从而可能改变普通回测的有效日序列。v3 必须同步修正：
+普通回测与优化候选具有不同的资产集合语义，必须明确区分：
 
-- `target weight > ResearchWeightTolerance` 的资产才是 CVaR relevant asset；
-- relevant asset 的本地价格或其所需 FX 在该日有真实 observation 时，该日为 effective；
-- target weight 为 0 的资产、其价格和其专属 FX 均不得触发 effective；
-- relevant 的基准币种现金没有行情；若组合全部为此类现金，使用窗口内周一至周五作为 effective dates，收益固定为 0；
-- relevant 的外币现金由其 FX 真实 observation 触发 effective；
-- annual volatility、risk contribution 等现有指标继续使用同一修正后的 `effReturns`，不再保留第二个 effective mask。
+- 普通回测仅由正权重资产及其 FX 触发 `effective`，零权重资产不得改变波动率或 CVaR；
+- `research_optimizer_v4` 的每个候选必须保留优化快照中的全部启用资产，即使候选权重为 0；
+- 优化专用 `FreezeEffectiveCalendar` 使全部冻结资产及其 FX 的真实 observation 共同触发 `effective`；
+- 零权重资产在自身不可用日期使用中性 value-grid 占位，不影响 NAV，只影响所有候选共享的样本日期；
+- 优化循环以第一个成功候选冻结 `effective_return_days` 和 `scenario_count`，后续候选不一致时以 `candidate_sample_mismatch` 失败，禁止在不同样本上排名；
+- relevant 的基准币种现金没有行情；全现金普通回测使用窗口内工作日，外币现金由其 FX observation 触发。
 
-这一修正属于 `research_backtest_v3` 语义。它保证候选中零权重资产被应用流程移除后，在相同窗口和配置下收益指标与 CVaR 均可复现。
+因此，优化结果页中的所有候选可以直接横向比较。应用结果后，零权重资产会被禁用，普通回测的有效日可能减少，波动率、VaR/CVaR 等依赖有效收益样本的指标不保证与优化结果逐位相同；这不是公式误差。CAGR、最大回撤等基于完整 NAV 路径的指标仍按各自定义计算。需要复核优化排名时应查看该次不可变优化结果，而不是要求应用后的普通回测重建已丢弃资产的冻结日历。
 
-全基准币种现金还需要明确窗口来源：若没有任何正权重 bounded asset，`WindowStart` 和 `WindowEnd` 必须同时非空，engine 直接使用该显式窗口并继续执行现有最少 365 天校验；缺少任一边界时返回 `research_no_common_window`。优化候选已有冻结窗口，应用后又会同步为 `custom_range`，因此该规则不会阻塞“风险资产候选 -> 全现金结果 -> 应用后复现”的流程。
+全基准币种现金还需要明确窗口来源：若没有任何正权重 bounded asset，`WindowStart` 和 `WindowEnd` 必须同时非空，engine 直接使用该显式窗口并继续执行现有最少 365 天校验；缺少任一边界时返回 `research_no_common_window`。优化候选已有冻结窗口，应用后又会同步为 `custom_range`，因此该规则不会阻塞全现金结果运行。
 
 ### 3.2 持有期场景
 
@@ -597,14 +602,14 @@ RunResearchBacktest(buildBacktestInputForCandidate(...))
 其中 `BacktestInput.TailRisk=snapshot.Config.TailRisk`。回测成功后：
 
 1. 三个旧 tracker 始终正常评分；
-2. `summary.TailRisk == nil` 视为候选失败，不允许进入任何 v3 tracker；
+2. `summary.TailRisk == nil` 视为候选失败，不允许进入任何 v4 tracker；
 3. minimum CAGR 未启用或候选达到门槛时，进入 CVaR tracker 并增加 eligible count；
 4. 全部候选完成后 eligible count 为 0，写 warning，不将 run 置为 failed。
 
 `OptimizationEngineVersion` 升为：
 
 ```text
-research_optimizer_v3
+research_optimizer_v4
 ```
 
 ### 6.6 稳定 Top K 与 Apply
@@ -884,8 +889,9 @@ O(1)   取 VaR/CVaR
 
 - 固定 `effReturns` 的 summary tail risk 等于纯函数结果；
 - 前值填充的无效日不增加场景数；
-- 零权重资产及其 FX 不改变 effective dates、CVaR 或波动率；
-- 移除候选中的零权重资产后指标逐位相同；
+- 普通回测中零权重资产及其 FX 不改变 effective dates、CVaR 或波动率；
+- 优化候选保留全部冻结资产，改变权重不会改变 effective return days 或 scenario count；
+- 人为移除优化候选中的零权重资产会破坏冻结日历，必须由输入构造测试阻止；
 - 全基准币种现金组合使用工作日零收益并得到 `VaR=CVaR=0`；
 - 全现金且有显式窗口可运行，缺少显式窗口仍返回 `research_no_common_window`；
 - FX 变化日进入有效序列；
@@ -945,7 +951,7 @@ O(1)   取 VaR/CVaR
 - readiness/create/get/apply 全链路；
 - result JSON 包含 `best_by_cvar`、eligible count 和 frozen summary；
 - source hash 不因 spec 变化，input hash 必须变化；
-- 应用后普通 backtest tail risk 与选中优化结果一致，容差 `1e-12`。
+- 所有成功候选的 effective return days 与 scenario count 完全一致；不一致时 run 以 `candidate_sample_mismatch` 失败。
 
 ## 10. 实施顺序与完成门禁
 
@@ -974,7 +980,7 @@ O(1)   取 VaR/CVaR
 
 门禁：现有 v2 fixture 数值不变，新 v3 fixture CVaR 金标准确。
 
-### 步骤 4：自动调优 v3
+### 步骤 4：自动调优 v4
 
 - config/hash/snapshot；
 - CVaR tracker 和排序；
@@ -1027,7 +1033,7 @@ go test ./internal/service -run '^$' -bench 'BenchmarkResearchOptimizationCVaR' 
 7. 开启 minimum CAGR 并设置高于全部候选的值重跑，确认 CVaR 空榜单而其他榜单仍存在；
 8. 使用合理 minimum CAGR 重跑，应用 CVaR 第一名；
 9. 回到集合核对权重、启用/锁定、窗口和 CVaR spec 一次性同步；
-10. 立即运行普通回测，确认 CVaR 与优化结果相同，容差 `1e-12`；
+10. 核对四个榜单中所有结果的 effective return days 与 scenario count 完全相同；应用后运行普通回测，若样本数因零权重资产禁用而变化，确认页面指标按普通回测口径展示且不宣称逐位复现；
 11. 修改集合后尝试应用旧结果，确认返回并发/stale 错误且没有部分写入；
 12. 将应用后的集合复制到 FIRE 计划草稿，确认没有隐式运行模拟；
 13. 在计划中确认资产映射后运行 FIRE 模拟，对比原组合与 CVaR 组合的成功率和真实财富分位数；
@@ -1042,6 +1048,7 @@ go test ./internal/service -run '^$' -bench 'BenchmarkResearchOptimizationCVaR' 
 - [x] 90/95/99% 与 1/20 日枚举和样本门槛无静默 fallback
 - [x] 普通回测与优化复用同一纯函数
 - [x] `min_cvar` 在现有离散候选域中稳定排序
+- [x] 所有优化候选冻结相同有效收益日与尾部场景数
 - [x] minimum CAGR 只影响 CVaR 榜单，null 语义正确
 - [x] collection、snapshot、config/input hash 完整冻结
 - [x] apply 原子同步权重、窗口和 CVaR spec
@@ -1055,7 +1062,7 @@ go test ./internal/service -run '^$' -bench 'BenchmarkResearchOptimizationCVaR' 
 
 - 在相同历史窗口和再平衡规则下，哪个候选组合的尾部平均损失更低；
 - 收益门槛存在时，哪个候选在满足门槛的集合中 CVaR 最低；
-- 应用候选后，普通回测是否复现相同的尾部风险指标；
+- 同一冻结样本上，哪个候选的历史尾部平均损失更低；
 - 该权重进入 FIRE 前瞻模拟后，成功率和财富分位数如何变化。
 
 系统不能据此断言：

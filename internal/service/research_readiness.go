@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
 )
 
@@ -40,7 +39,7 @@ const (
 	ResearchReasonTooFewEffectiveDays = "too_few_effective_days"
 	ResearchReasonCVARSample          = "cvar_sample_insufficient"
 	ResearchReasonUnadjustedSeries    = "unadjusted_price_series"
-	ResearchReasonAdjustmentBreak     = "adjustment_discontinuity"
+	ResearchReasonUnsupportedSeries   = "unsupported_return_series"
 )
 
 // Warning reason codes.
@@ -316,9 +315,10 @@ func (s *ResearchService) loadBenchmarkData(
 	}
 	bestPoints := -1
 	for _, st := range states {
-		if isExchangeTradedResearchAsset(asset) &&
-			(st.AdjustPolicy == "none" || st.PointType != "adjusted_close") {
-			continue
+		if isExchangeTradedResearchAsset(asset) {
+			if st.AdjustPolicy != adjustPolicy || st.PointType != pointType {
+				continue
+			}
 		}
 		if st.PointCount > bestPoints {
 			bestPoints = st.PointCount
@@ -714,28 +714,17 @@ func evaluateResearchAssetDataQuality(
 			Message: "历史点位来自多个数据源，无法确认口径：" + strings.Join(asset.SourceNames, ", "),
 		})
 	}
-	if isExchangeTradedResearchAsset(asset.Asset) &&
-		(asset.Item.AdjustPolicy == "none" || asset.Item.PointType == "close") {
-		block(ResearchReadinessIssue{
-			AssetKey: asset.Item.AssetKey, Reason: ResearchReasonUnadjustedSeries,
-			Message: "未复权收盘价不能用于收益回测，请切换到前复权并刷新历史数据",
-		})
-	}
-	if asset.Asset.Market == "CN" &&
-		(asset.Asset.InstrumentType == "cn_exchange_stock" || asset.Asset.InstrumentType == "cn_exchange_fund") &&
-		asset.Item.AdjustPolicy != "none" && asset.Item.PointType == "adjusted_close" {
-		points := make([]marketdata.DataPoint, len(asset.Points))
-		for i, point := range asset.Points {
-			points[i] = marketdata.DataPoint{TradeDate: point.TradeDate, Value: point.Value}
-		}
-		discontinuity, found := marketdata.FindPriceDiscontinuity(
-			points, marketdata.CNAdjustedPriceMaxDailyMove,
-		)
-		if found {
+	if isExchangeTradedResearchAsset(asset.Asset) {
+		switch {
+		case asset.Item.AdjustPolicy == "none" || asset.Item.PointType == "close":
 			block(ResearchReadinessIssue{
-				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonAdjustmentBreak,
-				Message: fmt.Sprintf("复权序列在 %s 至 %s 间跳变 %.2f%%，需要全量刷新",
-					discontinuity.PreviousDate, discontinuity.Date, discontinuity.Return*100),
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonUnadjustedSeries,
+				Message: "未复权收盘价不能用于收益回测，请同步后复权历史数据",
+			})
+		case asset.Item.AdjustPolicy != "hfq" || asset.Item.PointType != "adjusted_close":
+			block(ResearchReadinessIssue{
+				AssetKey: asset.Item.AssetKey, Reason: ResearchReasonUnsupportedSeries,
+				Message: "场内资产收益回测只支持后复权收盘价",
 			})
 		}
 	}

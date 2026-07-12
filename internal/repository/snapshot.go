@@ -52,15 +52,16 @@ func (r *SnapshotRepo) CreatePlanSnapshot(ctx context.Context, tx *sql.Tx, snap 
 			volatility_method, metrics_version, history_depth,
 			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
 			expense_ratio, expense_ratio_status, fee_treatment,
-			source_mode, quality_status, warnings_json, source_hash, created_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			source_mode, adjust_policy, quality_status, warnings_json, source_hash, created_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		snap.ID, snap.AssetKey, snap.PlanID, snap.InclusionDate, snap.AsOfDate,
 		snap.WindowStart, snap.WindowEnd, snap.CompleteYearStart, snap.CompleteYearEnd,
 		snap.CompleteYearCount, snap.DailyObservationCount, snap.MonthlyReturnCount,
 		snap.VolatilityMethod, snap.MetricsVersion, snap.HistoryDepth,
 		snap.HistoricalCAGR, snap.ModeledAnnualReturn, snap.AnnualVolatility, snap.MaxDrawdown,
 		snap.ExpenseRatio, snap.ExpenseRatioStatus, snap.FeeTreatment,
-		snap.SourceMode, snap.QualityStatus, snap.WarningsJSON, snap.SourceHash, snap.CreatedAt); err != nil {
+		snap.SourceMode, snap.AdjustPolicy, snap.QualityStatus, snap.WarningsJSON,
+		snap.SourceHash, snap.CreatedAt); err != nil {
 		return wrapSQL("insert simulation snapshot", err)
 	}
 	if err := r.replaceSnapshotYears(ctx, tx, snap.ID, snap.Years); err != nil {
@@ -173,6 +174,7 @@ type SimulationSnapshot struct {
 	ExpenseRatioStatus    string         `json:"expense_ratio_status"`
 	FeeTreatment          string         `json:"fee_treatment"`
 	SourceMode            string         `json:"source_mode"`
+	AdjustPolicy          string         `json:"adjust_policy"`
 	QualityStatus         string         `json:"quality_status"`
 	WarningsJSON          string         `json:"warnings_json"`
 	SourceHash            string         `json:"source_hash"`
@@ -207,7 +209,7 @@ func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapsh
 			volatility_method, metrics_version, history_depth,
 			historical_cagr, modeled_annual_return, annual_volatility, max_drawdown,
 			expense_ratio, expense_ratio_status, fee_treatment,
-			source_mode, quality_status, warnings_json, source_hash, created_at
+			source_mode, adjust_policy, quality_status, warnings_json, source_hash, created_at
 		FROM market_asset_simulation_snapshots WHERE id=?`, id)
 	snap, err := scanSnapshot(row)
 	if err != nil {
@@ -254,7 +256,7 @@ func scanSnapshot(row *sql.Row) (SimulationSnapshot, error) {
 		&snap.VolatilityMethod, &snap.MetricsVersion, &snap.HistoryDepth,
 		&snap.HistoricalCAGR, &snap.ModeledAnnualReturn, &snap.AnnualVolatility, &snap.MaxDrawdown,
 		&expenseRatio, &snap.ExpenseRatioStatus, &snap.FeeTreatment,
-		&snap.SourceMode, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,
+		&snap.SourceMode, &snap.AdjustPolicy, &snap.QualityStatus, &snap.WarningsJSON, &snap.SourceHash, &snap.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SimulationSnapshot{}, ErrSnapshotNotFound

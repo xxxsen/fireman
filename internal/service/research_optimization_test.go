@@ -602,6 +602,57 @@ func optimizationTestPoints(start string, count int) []repository.MarketAssetPoi
 	return out
 }
 
+func TestBuildBacktestInputForCandidateRetainsZeroWeightAssetsAndFreezesCalendar(t *testing.T) {
+	ds := &researchDataset{
+		Enabled: []researchAssetData{
+			{Item: repository.ResearchCollectionItem{AssetKey: "A"}, Asset: repository.MarketAsset{Name: "A", Currency: "CNY"}},
+			{Item: repository.ResearchCollectionItem{AssetKey: "B"}, Asset: repository.MarketAsset{Name: "B", Currency: "CNY"}},
+		},
+		FX: map[string]*researchFXData{},
+	}
+	snapshot := optimizationInputSnapshot{
+		Collection: researchSnapshotParams{BaseCurrency: "CNY"},
+		Config:     OptimizationConfig{TailRisk: TailRiskSpec{Confidence: 0.95, HorizonDays: 20}},
+	}
+	input := buildBacktestInputForCandidate(snapshot, ds, OptimizationWeightVector{
+		Weights: []OptimizationWeightEntry{{AssetKey: "A", Weight: 1}, {AssetKey: "B", Weight: 0}},
+	})
+	if !input.FreezeEffectiveCalendar || len(input.Assets) != 2 || input.Assets[1].Weight != 0 {
+		t.Fatalf("optimization input did not preserve its frozen asset universe: %+v", input)
+	}
+}
+
+func TestOptimizationTailRiskSnapshotVersionCompatibility(t *testing.T) {
+	for _, version := range []string{OptimizationTailRiskV3Version, OptimizationEngineVersion} {
+		if !optimizationEngineHasTailRiskSnapshot(version) {
+			t.Fatalf("tail-risk optimization version %q was not recognized", version)
+		}
+	}
+	if optimizationEngineHasTailRiskSnapshot("research_optimizer_v2") {
+		t.Fatal("v2 optimization must not be treated as carrying a tail-risk snapshot")
+	}
+}
+
+func TestValidateOptimizationCandidateSamplesRejectsMismatch(t *testing.T) {
+	expectedDays, expectedScenarios := -1, -1
+	first := BacktestSummary{
+		EffectiveReturnDays: 1006,
+		TailRisk:            &BacktestTailRisk{ScenarioCount: 987},
+	}
+	if err := validateOptimizationCandidateSamples(first, &expectedDays, &expectedScenarios); err != nil {
+		t.Fatal(err)
+	}
+	if expectedDays != 1006 || expectedScenarios != 987 {
+		t.Fatalf("first candidate did not freeze samples: %d/%d", expectedDays, expectedScenarios)
+	}
+	second := first
+	second.EffectiveReturnDays = 1003
+	second.TailRisk = &BacktestTailRisk{ScenarioCount: 984}
+	if err := validateOptimizationCandidateSamples(second, &expectedDays, &expectedScenarios); !errors.Is(err, errOptimizationSampleMismatch) {
+		t.Fatalf("sample mismatch error = %v", err)
+	}
+}
+
 func TestOptimizationTailRiskReadinessChecksEveryPotentialPositiveAsset(t *testing.T) {
 	ds := &researchDataset{
 		Enabled: []researchAssetData{

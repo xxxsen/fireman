@@ -17,7 +17,7 @@ def _fetch(kind: str | None):
         "instrument_type": "cn_exchange_fund",
         "source_code": "sh510300",
         "end_date": "2026-06-09",
-        "adjust_policy": "qfq",
+        "adjust_policy": "hfq",
     }
     if kind is not None:
         payload["instrument_kind"] = kind

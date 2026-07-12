@@ -46,7 +46,7 @@ func rdAsset(t *testing.T, key string, weight float64, start string, days int) r
 	return researchAssetData{
 		Item: repository.ResearchCollectionItem{
 			ID: "item_" + key, AssetKey: key, Enabled: true, Weight: weight,
-			AdjustPolicy: "qfq", PointType: "adjusted_close",
+			AdjustPolicy: "hfq", PointType: "adjusted_close",
 		},
 		Asset: repository.MarketAsset{
 			AssetKey: key, Market: "CN", InstrumentType: "cn_exchange_fund",
@@ -54,7 +54,7 @@ func rdAsset(t *testing.T, key string, weight float64, start string, days int) r
 		},
 		HasState: true,
 		State: repository.MarketAssetHistoryState{
-			AssetKey: key, AdjustPolicy: "qfq", PointType: "adjusted_close",
+			AssetKey: key, AdjustPolicy: "hfq", PointType: "adjusted_close",
 			DataAsOf: points[len(points)-1].TradeDate, PointCount: len(points),
 		},
 		Points:      points,
@@ -186,7 +186,7 @@ func TestReadinessBlocksMissingHistory(t *testing.T) {
 	}
 }
 
-func TestReadinessBlocksUnadjustedAndDiscontinuousSeries(t *testing.T) {
+func TestReadinessBlocksUnsupportedSeriesButNotLargeHFQMove(t *testing.T) {
 	raw := rdAsset(t, "RAW", 1, "2020-01-01", 1642)
 	raw.Item.AdjustPolicy = "none"
 	raw.Item.PointType = "close"
@@ -195,11 +195,18 @@ func TestReadinessBlocksUnadjustedAndDiscontinuousSeries(t *testing.T) {
 		t.Fatalf("expected unadjusted series block, got %+v", r.BlockingReasons)
 	}
 
-	broken := rdAsset(t, "BROKEN", 1, "2020-01-01", 1642)
-	broken.Points[500].Value = broken.Points[499].Value * 2.0094
-	r = evaluateResearchReadiness(rdDataset(broken), rdNow(t))
-	if !hasBlock(r, ResearchReasonAdjustmentBreak) {
-		t.Fatalf("expected adjustment discontinuity block, got %+v", r.BlockingReasons)
+	qfq := rdAsset(t, "QFQ", 1, "2020-01-01", 1642)
+	qfq.Item.AdjustPolicy = "qfq"
+	r = evaluateResearchReadiness(rdDataset(qfq), rdNow(t))
+	if !hasBlock(r, ResearchReasonUnsupportedSeries) {
+		t.Fatalf("expected unsupported return series block, got %+v", r.BlockingReasons)
+	}
+
+	largeMove := rdAsset(t, "LARGE", 1, "2020-01-01", 1642)
+	largeMove.Points[500].Value = largeMove.Points[499].Value * 2.0094
+	r = evaluateResearchReadiness(rdDataset(largeMove), rdNow(t))
+	if hasBlock(r, ResearchReasonUnsupportedSeries) || hasBlock(r, ResearchReasonUnadjustedSeries) {
+		t.Fatalf("large hfq move must not be blocked by magnitude alone: %+v", r.BlockingReasons)
 	}
 }
 

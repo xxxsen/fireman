@@ -71,7 +71,7 @@ func insertResearchFixtureAsset(
 		points := make([]repository.MarketAssetPoint, 0, days)
 		for i := 0; i < days; i++ {
 			points = append(points, repository.MarketAssetPoint{
-				AssetKey: key, AdjustPolicy: "qfq", PointType: "adjusted_close",
+				AssetKey: key, AdjustPolicy: "hfq", PointType: "adjusted_close",
 				TradeDate: st.AddDate(0, 0, i).Format("2006-01-02"),
 				Value:     value(i), SourceName: "test_source", FetchedAt: now,
 			})
@@ -84,7 +84,7 @@ func insertResearchFixtureAsset(
 			INSERT INTO market_asset_history_state
 				(asset_key, adjust_policy, point_type, data_as_of, point_count, source_name, updated_at)
 			VALUES (?,?,?,?,?,?,?)`,
-			key, "qfq", "adjusted_close", last, days, "test_source", now); err != nil {
+			key, "hfq", "adjusted_close", last, days, "test_source", now); err != nil {
 			t.Fatalf("insert history state: %v", err)
 		}
 	}
@@ -161,15 +161,11 @@ func TestResearchCollectionCRUDAndNormalize(t *testing.T) {
 		t.Fatal("duplicate item should fail")
 	}
 
-	legacyAdded, err := svc.AddItem(ctx, detail.ID, ResearchCollectionItemInput{
+	_, err = svc.AddItem(ctx, detail.ID, ResearchCollectionItemInput{
 		AssetKey: "A4", AdjustPolicy: "none", PointType: "adjusted_close",
 	})
-	if err != nil {
-		t.Fatalf("legacy screener dimension should be canonicalized: %v", err)
-	}
-	legacyItem := legacyAdded.Items[len(legacyAdded.Items)-1]
-	if legacyItem.AdjustPolicy != "qfq" || legacyItem.PointType != "adjusted_close" {
-		t.Fatalf("legacy dimension not canonicalized: %+v", legacyItem.ResearchCollectionItem)
+	if err == nil {
+		t.Fatal("none + adjusted_close must be rejected instead of canonicalized")
 	}
 
 	// Update + delete item.
@@ -196,8 +192,8 @@ func TestResearchCollectionCRUDAndNormalize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delete item: %v", err)
 	}
-	if len(afterDelete.Items) != 3 {
-		t.Fatalf("expected 3 items after delete, got %d", len(afterDelete.Items))
+	if len(afterDelete.Items) != 2 {
+		t.Fatalf("expected 2 items after delete, got %d", len(afterDelete.Items))
 	}
 
 	// Archive and hard delete.

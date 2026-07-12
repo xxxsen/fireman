@@ -102,7 +102,7 @@ function runDetail(overrides: Partial<ResearchRunDetail> = {}): ResearchRunDetai
         {
           asset_key: "CN|a",
           name: "资产A",
-          adjust_policy: "qfq",
+          adjust_policy: "hfq",
           point_type: "adjusted_close",
           source_name: "eastmoney",
           points_hash: "c".repeat(16),

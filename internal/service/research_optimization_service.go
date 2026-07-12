@@ -814,7 +814,7 @@ func (s *ResearchService) applyOptimizationSelection(
 		}
 		collection.StartPolicy = ResearchStartPolicyCustom
 		collection.WindowStart, collection.WindowEnd = run.WindowStart, run.WindowEnd
-		if run.EngineVersion == OptimizationEngineVersion {
+		if optimizationEngineHasTailRiskSnapshot(run.EngineVersion) {
 			var snapshot optimizationInputSnapshot
 			if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snapshot); err != nil {
 				return newErr("research_optimization_result_stale", "调优快照无法读取", nil)
@@ -1054,6 +1054,7 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 ) (OptimizationResult, error) {
 	trackers := newOptimizationCandidateTrackers(snapshot.Config.TopK)
 	evaluated, skipped, cvarEligible := 0, 0, 0
+	expectedEffectiveDays, expectedScenarioCount := -1, -1
 	progressInterval := maxInt(1, len(candidates)/100)
 	for i, candidate := range candidates {
 		if cancelCheck != nil && cancelCheck() {
@@ -1064,6 +1065,12 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 		if err != nil || result.Summary.TailRisk == nil {
 			skipped++
 		} else {
+			if sampleErr := validateOptimizationCandidateSamples(
+				result.Summary, &expectedEffectiveDays, &expectedScenarioCount,
+			); sampleErr != nil {
+				s.failOptimization(ctx, runID, "candidate_sample_mismatch", sampleErr.Error())
+				return OptimizationResult{}, sampleErr
+			}
 			evaluated++
 			if trackOptimizationCandidate(trackers, candidate, result.Summary, snapshot.Config.MinimumCAGR) {
 				cvarEligible++
@@ -1091,6 +1098,25 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 		})
 	}
 	return result, nil
+}
+
+func validateOptimizationCandidateSamples(
+	summary BacktestSummary, expectedEffectiveDays, expectedScenarioCount *int,
+) error {
+	effectiveDays := summary.EffectiveReturnDays
+	scenarioCount := summary.TailRisk.ScenarioCount
+	if *expectedEffectiveDays < 0 {
+		*expectedEffectiveDays, *expectedScenarioCount = effectiveDays, scenarioCount
+		return nil
+	}
+	if effectiveDays == *expectedEffectiveDays && scenarioCount == *expectedScenarioCount {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: 候选组合使用了不一致的有效样本：期望 %d 个有效收益日/%d 个尾部场景，实际 %d/%d",
+		errOptimizationSampleMismatch, *expectedEffectiveDays, *expectedScenarioCount,
+		effectiveDays, scenarioCount,
+	)
 }
 
 func trackOptimizationCandidate(
@@ -1145,21 +1171,19 @@ func buildBacktestInputForCandidate(
 	}
 
 	input := BacktestInput{
-		BaseCurrency:        snapshot.Collection.BaseCurrency,
-		RebalancePolicy:     snapshot.Collection.RebalancePolicy,
-		RebalanceThreshold:  snapshot.Collection.RebalanceThreshold,
-		RiskFreeRate:        snapshot.Collection.RiskFreeRate,
-		TransactionCostRate: snapshot.Collection.TransactionCostRate,
-		TailRisk:            &snapshot.Config.TailRisk,
-		WindowStart:         snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
+		BaseCurrency:            snapshot.Collection.BaseCurrency,
+		RebalancePolicy:         snapshot.Collection.RebalancePolicy,
+		RebalanceThreshold:      snapshot.Collection.RebalanceThreshold,
+		RiskFreeRate:            snapshot.Collection.RiskFreeRate,
+		TransactionCostRate:     snapshot.Collection.TransactionCostRate,
+		TailRisk:                &snapshot.Config.TailRisk,
+		FreezeEffectiveCalendar: true,
+		WindowStart:             snapshot.WindowStart, WindowEnd: snapshot.WindowEnd,
 		FX: map[string][]ResearchSeriesPoint{},
 	}
 
 	for _, a := range ds.Enabled {
 		weight := weightByKey[a.Item.AssetKey]
-		if weight <= 0 {
-			continue
-		}
 		input.Assets = append(input.Assets, BacktestAssetInput{
 			AssetKey: a.Item.AssetKey, Name: a.Asset.Name,
 			Currency: a.Asset.Currency, Weight: weight, IsCash: a.IsCash,

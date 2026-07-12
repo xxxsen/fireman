@@ -800,6 +800,52 @@ func TestRunBacktestZeroWeightAssetDoesNotChangeEffectiveMetrics(t *testing.T) {
 	}
 }
 
+func TestRunBacktestFrozenEffectiveCalendarIsIdenticalAcrossWeights(t *testing.T) {
+	start, _ := time.Parse("2006-01-02", "2020-01-01")
+	even, odd := make([]ResearchSeriesPoint, 0, 301), make([]ResearchSeriesPoint, 0, 300)
+	for i := 0; i <= 600; i++ {
+		point := ResearchSeriesPoint{
+			Date: start.AddDate(0, 0, i).Format("2006-01-02"), Value: 100 + float64(i)/10,
+		}
+		if i%2 == 0 {
+			even = append(even, point)
+		}
+		if i%2 == 1 {
+			odd = append(odd, point)
+		}
+	}
+	base := BacktestInput{
+		BaseCurrency: "CNY", RebalancePolicy: ResearchRebalanceBuyHold,
+		WindowStart:             start.AddDate(0, 0, 1).Format("2006-01-02"),
+		WindowEnd:               start.AddDate(0, 0, 599).Format("2006-01-02"),
+		TailRisk:                &TailRiskSpec{Confidence: 0.95, HorizonDays: 20},
+		FreezeEffectiveCalendar: true,
+		Assets: []BacktestAssetInput{
+			{AssetKey: "EVEN", Name: "Even", Currency: "CNY", Weight: 1, Points: even},
+			{AssetKey: "ODD", Name: "Odd", Currency: "CNY", Weight: 0, Points: odd},
+		},
+	}
+	one, err := RunResearchBacktest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := base
+	mixed.Assets = append([]BacktestAssetInput(nil), base.Assets...)
+	mixed.Assets[0].Weight, mixed.Assets[1].Weight = 0.8, 0.2
+	two, err := RunResearchBacktest(mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Summary.EffectiveReturnDays != two.Summary.EffectiveReturnDays ||
+		one.Summary.TailRisk == nil || two.Summary.TailRisk == nil ||
+		one.Summary.TailRisk.ScenarioCount != two.Summary.TailRisk.ScenarioCount {
+		t.Fatalf("frozen calendar changed across weights: one=%+v two=%+v", one.Summary, two.Summary)
+	}
+	if one.Summary.EffectiveReturnDays != 598 || one.Summary.TailRisk.ScenarioCount != 579 {
+		t.Fatalf("unexpected frozen sample counts: %+v", one.Summary)
+	}
+}
+
 func TestRunBacktestBaseCashUsesExplicitWeekdayWindow(t *testing.T) {
 	in := BacktestInput{
 		BaseCurrency: "CNY", RebalancePolicy: ResearchRebalanceBuyHold,

@@ -127,7 +127,7 @@ func seedMarketAssetWithHistory(t *testing.T, db *sql.DB, seed marketAssetSeed) 
 	adjustPolicy := "none"
 	switch seed.InstrumentType {
 	case "cn_exchange_stock", "cn_exchange_fund", "hk_stock", "hk_etf", "us_stock", "us_etf":
-		adjustPolicy = "qfq"
+		adjustPolicy = "hfq"
 	}
 	for _, p := range seed.Points {
 		if _, err := db.ExecContext(ctx, `

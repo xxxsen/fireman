@@ -192,8 +192,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 29 {
-		t.Errorf("expected 29 migration records after idempotent re-run, got %d", migrationCount)
+	if migrationCount != 30 {
+		t.Errorf("expected 30 migration records after idempotent re-run, got %d", migrationCount)
 	}
 }
 

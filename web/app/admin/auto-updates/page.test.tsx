@@ -140,4 +140,22 @@ describe("AutoUpdatesPage", () => {
       q: "US|us_stock|nasdaq|AAPL",
     })));
   });
+
+  it("shows the fixed backward-adjusted history policy", async () => {
+    const historyRule = rule({
+      id: "aur_601088",
+      target_type: "asset_history",
+      sync_key: "",
+      asset_key: "CN|cn_exchange_stock|sh|601088",
+      adjust_policy: "hfq",
+      point_type: "adjusted_close",
+      target_label: "中国神华",
+    });
+    listMock.mockImplementation((params: { targetType: string }) =>
+      Promise.resolve(page(params.targetType === "asset_history" ? [historyRule] : [])),
+    );
+    renderPage();
+    expect(await screen.findByText("中国神华")).toBeInTheDocument();
+    expect(screen.getByText("后复权 · 复权收盘价")).toBeInTheDocument();
+  });
 });

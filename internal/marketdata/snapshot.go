@@ -70,7 +70,8 @@ func (s *SnapshotService) BuildSnapshotForHoldingTx(
 	}
 	pointType, sourceName := pointMeta(points)
 	metrics := BuildSnapshotMetrics(points, valuationDate, pointType, sourceName)
-	snap := metricsToRepositorySnapshot("", assetKey, &planID, valuationDate, metrics)
+	adjustPolicy, _ := defaultSnapshotDimension(asset)
+	snap := metricsToRepositorySnapshot("", assetKey, &planID, valuationDate, adjustPolicy, metrics)
 	if err := ValidateSimulationSnapshot(snap); err != nil {
 		if !metrics.SimulationEligible {
 			return repository.SimulationSnapshot{}, insufficientHistoryError(metrics)
@@ -93,13 +94,14 @@ func (s *SnapshotService) BuildSnapshotForHoldingTx(
 
 	snapID := "sim_snap_" + uuid.New().String()
 	planRef := planID
-	return metricsToRepositorySnapshot(snapID, assetKey, &planRef, valuationDate, metrics), nil
+	return metricsToRepositorySnapshot(snapID, assetKey, &planRef, valuationDate, adjustPolicy, metrics), nil
 }
 
 func metricsToRepositorySnapshot(
 	id, assetKey string,
 	planID *string,
 	valuationDate string,
+	adjustPolicy string,
 	metrics SnapshotMetrics,
 ) repository.SimulationSnapshot {
 	return repository.SimulationSnapshot{
@@ -122,6 +124,7 @@ func metricsToRepositorySnapshot(
 		ExpenseRatioStatus: "unavailable",
 		FeeTreatment:       "embedded",
 		SourceMode:         "market_asset_history",
+		AdjustPolicy:       adjustPolicy,
 		QualityStatus:      metrics.QualityStatus,
 		WarningsJSON:       repository.WarningsToJSON(metrics.Warnings),
 		SourceHash:         metrics.SourceHash,
@@ -213,9 +216,10 @@ func (s *SnapshotService) LoadAssetPointsTx(
 	}
 	bestCount := 0
 	for _, st := range states {
-		if isExchangeTradedAsset(asset) &&
-			(st.AdjustPolicy == "none" || st.PointType != "adjusted_close") {
-			continue
+		if isExchangeTradedAsset(asset) {
+			if st.AdjustPolicy != adjustPolicy || st.PointType != pointType {
+				continue
+			}
 		}
 		if st.PointCount > bestCount {
 			bestCount = st.PointCount
@@ -224,8 +228,8 @@ func (s *SnapshotService) LoadAssetPointsTx(
 	}
 	if isExchangeTradedAsset(asset) && bestCount == 0 && len(states) > 0 {
 		return nil, &SnapshotError{
-			Code:    "unadjusted_price_series",
-			Message: "未复权收盘价不能用于 FIRE 模拟，请先同步前复权历史数据",
+			Code:    "return_history_missing",
+			Message: "场内资产缺少后复权收盘价，请先同步后复权历史数据",
 			Details: map[string]any{"asset_key": asset.AssetKey},
 		}
 	}
@@ -240,30 +244,14 @@ func (s *SnapshotService) LoadAssetPointsTx(
 			PointType: r.PointType, SourceName: r.SourceName, FetchedAt: r.FetchedAt,
 		}
 	}
-	if asset.Market == "CN" && isCNExchangeTradedAsset(asset) {
-		if discontinuity, found := FindPriceDiscontinuity(out, CNAdjustedPriceMaxDailyMove); found {
-			return nil, &SnapshotError{
-				Code:    "adjustment_discontinuity",
-				Message: "复权价格序列存在异常断点，请全量刷新历史数据",
-				Details: map[string]any{
-					"asset_key": asset.AssetKey, "previous_date": discontinuity.PreviousDate,
-					"date": discontinuity.Date, "return": discontinuity.Return,
-				},
-			}
-		}
-	}
 	return out, nil
 }
 
 func defaultSnapshotDimension(asset repository.MarketAsset) (string, string) {
 	if isExchangeTradedAsset(asset) {
-		return "qfq", "adjusted_close"
+		return "hfq", "adjusted_close"
 	}
 	return "none", defaultPointTypeForAsset(asset)
-}
-
-func isCNExchangeTradedAsset(asset repository.MarketAsset) bool {
-	return asset.InstrumentType == "cn_exchange_stock" || asset.InstrumentType == "cn_exchange_fund"
 }
 
 func isExchangeTradedAsset(asset repository.MarketAsset) bool {

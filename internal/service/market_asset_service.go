@@ -830,15 +830,19 @@ func DefaultAdjustPolicy(instrumentType string) string {
 	if instrumentType == "cn_mutual_fund" || instrumentType == "cash" || instrumentType == "fx_rate" {
 		return "none"
 	}
-	return "qfq"
+	return "hfq"
 }
 
 // ValidateHistoryDimension prevents raw and adjusted prices from sharing a key.
 func ValidateHistoryDimension(asset repository.MarketAsset, adjustPolicy, pointType string) error {
+	if adjustPolicy == "qfq" {
+		return newErr("unsupported_adjust_policy",
+			"qfq is not supported; use hfq + adjusted_close for return analysis", nil)
+	}
 	switch adjustPolicy {
-	case "none", "qfq", "hfq":
+	case "none", "hfq":
 	default:
-		return newErr("invalid_request", "adjust_policy must be none, qfq or hfq", nil)
+		return newErr("invalid_request", "adjust_policy must be none or hfq", nil)
 	}
 	if asset.InstrumentType == "cn_mutual_fund" {
 		if adjustPolicy != "none" {
@@ -876,6 +880,14 @@ func ValidateHistoryDimension(asset repository.MarketAsset, adjustPolicy, pointT
 	return nil
 }
 
+func validateHistoryDimensionPair(adjustPolicy, pointType string) error {
+	if (adjustPolicy == "") != (pointType == "") {
+		return newErr("invalid_request",
+			"adjust_policy and point_type must be provided together", nil)
+	}
+	return nil
+}
+
 func isExchangeInstrumentType(instrumentType string) bool {
 	switch instrumentType {
 	case "cn_exchange_stock", "cn_exchange_fund", "hk_stock", "hk_etf", "us_stock", "us_etf":
@@ -902,8 +914,11 @@ func (s *MarketAssetService) GetDetail(
 		return MarketAssetDetail{}, wrapRepo("load market asset", err)
 	}
 
-	adjustPolicy, pointType, err = s.resolveHistoryDimension(ctx, asset, adjustPolicy, pointType)
+	adjustPolicy, pointType, err = resolveHistoryDimension(asset, adjustPolicy, pointType)
 	if err != nil {
+		return MarketAssetDetail{}, err
+	}
+	if err := ValidateHistoryDimension(asset, adjustPolicy, pointType); err != nil {
 		return MarketAssetDetail{}, err
 	}
 
@@ -980,45 +995,21 @@ func applyDetailProjection(detail *MarketAssetDetail, proj repository.MarketAsse
 	}
 }
 
-// resolveHistoryDimension picks the history dimension: explicit params win,
-// then the asset's existing history state, then type defaults.
-func (s *MarketAssetService) resolveHistoryDimension(
-	ctx context.Context, asset repository.MarketAsset, adjustPolicy, pointType string,
+// resolveHistoryDimension uses the canonical type default when both parameters
+// are omitted. Existing history states never redefine the calculation policy.
+func resolveHistoryDimension(
+	asset repository.MarketAsset, adjustPolicy, pointType string,
 ) (string, string, error) {
 	adjustPolicy = strings.TrimSpace(adjustPolicy)
 	pointType = strings.TrimSpace(pointType)
+	if err := validateHistoryDimensionPair(adjustPolicy, pointType); err != nil {
+		return "", "", err
+	}
 	if adjustPolicy != "" && pointType != "" {
 		return adjustPolicy, pointType, nil
 	}
-	states, err := s.assets.ListHistoryStatesByAsset(ctx, asset.AssetKey)
-	if err != nil {
-		return "", "", wrapRepo("list history states", err)
-	}
-	if len(states) > 0 {
-		st := states[0]
-		defaultAdjust := DefaultAdjustPolicy(asset.InstrumentType)
-		defaultPoint := DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
-		for _, candidate := range states {
-			if candidate.AdjustPolicy == defaultAdjust && candidate.PointType == defaultPoint {
-				st = candidate
-				break
-			}
-		}
-		if adjustPolicy == "" {
-			adjustPolicy = st.AdjustPolicy
-		}
-		if pointType == "" {
-			pointType = st.PointType
-		}
-		return adjustPolicy, pointType, nil
-	}
-	if adjustPolicy == "" {
-		adjustPolicy = DefaultAdjustPolicy(asset.InstrumentType)
-	}
-	if pointType == "" {
-		pointType = DefaultPointType(asset.InstrumentType, asset.InstrumentKind)
-	}
-	return adjustPolicy, pointType, nil
+	return DefaultAdjustPolicy(asset.InstrumentType),
+		DefaultPointType(asset.InstrumentType, asset.InstrumentKind), nil
 }
 
 // canSwitchSource reports whether the failed task permits the
@@ -1092,16 +1083,10 @@ func (s *MarketAssetService) SyncHistoryWithTaskHook(
 func (s *MarketAssetService) syncHistory(
 	ctx context.Context, req HistorySyncRequest, hook func(context.Context, *sql.Tx, string) error,
 ) (TaskCreateResult, error) {
-	req.AssetKey = strings.TrimSpace(req.AssetKey)
-	req.AdjustPolicy = strings.TrimSpace(req.AdjustPolicy)
-	req.PointType = strings.TrimSpace(req.PointType)
-	req.Mode = strings.TrimSpace(req.Mode)
-	if req.AssetKey == "" {
-		return TaskCreateResult{}, newErr("invalid_request", "asset_key is required", nil)
-	}
-	if req.Mode != historyModeDefaultRefresh && req.Mode != historyModeSwitchSourceFull {
-		return TaskCreateResult{}, newErr("invalid_request",
-			"mode must be default_refresh or switch_source_full", nil)
+	var err error
+	req, err = normalizeHistorySyncRequest(req)
+	if err != nil {
+		return TaskCreateResult{}, err
 	}
 
 	asset, err := s.assets.GetByKey(ctx, req.AssetKey)
@@ -1147,6 +1132,24 @@ func (s *MarketAssetService) syncHistory(
 			}
 			return nil
 		})
+}
+
+func normalizeHistorySyncRequest(req HistorySyncRequest) (HistorySyncRequest, error) {
+	req.AssetKey = strings.TrimSpace(req.AssetKey)
+	req.AdjustPolicy = strings.TrimSpace(req.AdjustPolicy)
+	req.PointType = strings.TrimSpace(req.PointType)
+	req.Mode = strings.TrimSpace(req.Mode)
+	if req.AssetKey == "" {
+		return HistorySyncRequest{}, newErr("invalid_request", "asset_key is required", nil)
+	}
+	if err := validateHistoryDimensionPair(req.AdjustPolicy, req.PointType); err != nil {
+		return HistorySyncRequest{}, err
+	}
+	if req.Mode != historyModeDefaultRefresh && req.Mode != historyModeSwitchSourceFull {
+		return HistorySyncRequest{}, newErr("invalid_request",
+			"mode must be default_refresh or switch_source_full", nil)
+	}
+	return req, nil
 }
 
 // requireDirectoryIdentity rejects history sync for assets whose directory

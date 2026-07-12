@@ -36,7 +36,7 @@ function item(
     enabled: true,
     weight: 0,
     weight_locked: false,
-    adjust_policy: "qfq",
+    adjust_policy: "hfq",
     point_type: "adjusted_close",
     asset_class: "equity",
     region: "cn",
@@ -102,7 +102,7 @@ function optimization(): ResearchOptimizationRun {
     rebalance_policy: "monthly",
     window_start: "2020-01-01",
     window_end: "2026-07-01",
-    engine_version: "research_optimizer_v3",
+    engine_version: "research_optimizer_v4",
     created_at: 1750000000000,
     result: {
       candidate_count: 10,
@@ -220,6 +220,9 @@ describe("OptimizationDetailPage", () => {
   it("renders the CVaR ranking with frozen loss metrics", async () => {
     renderPage();
     expect(await screen.findByText("20 日 / 95%")).toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByLabelText("最低尾部损失说明"));
+    expect(await screen.findByText(/最差 5% 场景的平均损失/)).toBeInTheDocument();
+    expect(screen.getByText(/不保证年化收益更高/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("tab-cvar"));
     expect(await screen.findByTestId("result-table-cvar")).toBeInTheDocument();
     expect(screen.getAllByText("7%").length).toBeGreaterThan(0);

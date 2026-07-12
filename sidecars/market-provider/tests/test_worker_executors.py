@@ -243,7 +243,7 @@ HISTORY_PAYLOAD = {
     "instrument_type": "cn_exchange_fund",
     "region_code": "sh",
     "symbol": "510300",
-    "adjust_policy": "qfq",
+    "adjust_policy": "hfq",
     "point_type": "adjusted_close",
 }
 

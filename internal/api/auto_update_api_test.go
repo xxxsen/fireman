@@ -38,7 +38,7 @@ func TestHistoryAutoUpdateEnableAndAdminList(t *testing.T) {
 	if value, exists := history["auto_update"]; !exists || value != nil {
 		t.Fatalf("auto_update before enable=%v exists=%v, want explicit null", value, exists)
 	}
-	status, body := putAutoUpdate(t, client, srv.URL+"/api/v1/market-assets/history-auto-update", map[string]any{"asset_key": seed.AssetKey, "adjust_policy": "qfq", "point_type": seed.PointType, "enabled": true})
+	status, body := putAutoUpdate(t, client, srv.URL+"/api/v1/market-assets/history-auto-update", map[string]any{"asset_key": seed.AssetKey, "adjust_policy": "hfq", "point_type": seed.PointType, "enabled": true})
 	if status != http.StatusOK {
 		t.Fatalf("enable status=%d body=%s", status, body)
 	}
@@ -155,6 +155,16 @@ func TestHistoryAutoUpdateRejectsUnsupportedDimension(t *testing.T) {
 	if code := decodeErrorBody(t, body)["code"]; code != "invalid_request" {
 		t.Fatalf("code=%v", code)
 	}
+
+	status, body = putAutoUpdate(t, client, srv.URL+"/api/v1/market-assets/history-auto-update", map[string]any{
+		"asset_key": seed.AssetKey, "adjust_policy": "qfq", "point_type": "adjusted_close", "enabled": true,
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("qfq status=%d body=%s", status, body)
+	}
+	if code := decodeErrorBody(t, body)["code"]; code != "unsupported_adjust_policy" {
+		t.Fatalf("qfq code=%v", code)
+	}
 }
 
 func TestHistoryAutoUpdateDimensionsAreUniqueAndIdempotent(t *testing.T) {
@@ -164,7 +174,7 @@ func TestHistoryAutoUpdateDimensionsAreUniqueAndIdempotent(t *testing.T) {
 	endpoint := srv.URL + "/api/v1/market-assets/history-auto-update"
 	for _, dimension := range []struct{ adjust, point string }{
 		{adjust: "none", point: "close"},
-		{adjust: "qfq", point: "adjusted_close"},
+		{adjust: "hfq", point: "adjusted_close"},
 		{adjust: "none", point: "close"},
 	} {
 		status, body := putAutoUpdate(t, client, endpoint, map[string]any{

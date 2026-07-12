@@ -453,7 +453,7 @@ func historySyncResult(assetKey, source string, dates []string, values []float64
 	raw, _ := json.Marshal(map[string]any{
 		"type":          "asset_history_sync",
 		"asset_key":     assetKey,
-		"adjust_policy": "qfq",
+		"adjust_policy": "hfq",
 		"point_type":    "adjusted_close",
 		"source_name":   source,
 		"points":        points,
@@ -505,7 +505,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	var pointCount int
 	if err := st.db.QueryRow(`
 		SELECT data_as_of, source_name, point_count FROM market_asset_history_state
-			WHERE asset_key=? AND adjust_policy='qfq' AND point_type='adjusted_close'`, assetKey).
+			WHERE asset_key=? AND adjust_policy='hfq' AND point_type='adjusted_close'`, assetKey).
 		Scan(&dataAsOf, &sourceName, &pointCount); err != nil {
 		t.Fatal(err)
 	}
@@ -525,8 +525,8 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	}
 	finishTask(t, st.db, fullTaskID, "complete")
 
-	// A discontinuity in an adjusted incremental series rolls the entire
-	// transaction back, including overlapping upserts and projections.
+	// A large positive adjusted move is valid input. Magnitude alone is not
+	// sufficient evidence of an adjustment error.
 	created, err = st.assets.SyncHistory(ctx, service.HistorySyncRequest{
 		AssetKey: assetKey, Mode: "default_refresh",
 	})
@@ -538,20 +538,20 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	env = uploadResult(t, st, historySyncResult(assetKey, "ak_primary", discontinuityDates,
 		[]float64{103.9, 210}))
 	markPreComplete(t, st.db, discontinuityTaskID, env)
-	assertOutcome(t, notifyPostProcess(t, st, discontinuityTaskID),
-		"permanent_error", "adjustment_discontinuity")
+	assertOutcome(t, notifyPostProcess(t, st, discontinuityTaskID), "success", "")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 40 {
-		t.Fatalf("discontinuous merge mutated points: %d", n)
+		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 41 {
+		t.Fatalf("large-move merge point count = %d, want 41", n)
 	}
 	var maxDate string
 	if err := st.db.QueryRow(`SELECT MAX(trade_date) FROM market_asset_points WHERE asset_key=?`, assetKey).Scan(&maxDate); err != nil {
 		t.Fatal(err)
 	}
-	if maxDate != dataAsOf {
-		t.Fatalf("discontinuous merge changed max date to %s", maxDate)
+	if maxDate != discontinuityDates[1] {
+		t.Fatalf("large-move merge max date = %s, want %s", maxDate, discontinuityDates[1])
 	}
-	finishTask(t, st.db, discontinuityTaskID, "failed")
+	finishTask(t, st.db, discontinuityTaskID, "complete")
+	dataAsOf = maxDate
 
 	// 2) Same-source merge with no_new_data: only success metadata moves.
 	created, err = st.assets.SyncHistory(ctx, service.HistorySyncRequest{
@@ -563,7 +563,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	mergeTaskID := created.Task.ID
 	noNew, _ := json.Marshal(map[string]any{
 		"type": "asset_history_sync", "asset_key": assetKey,
-		"adjust_policy": "qfq", "point_type": "adjusted_close",
+		"adjust_policy": "hfq", "point_type": "adjusted_close",
 		"source_name": "ak_primary", "no_new_data": true,
 		"points": []any{},
 	})
@@ -573,7 +573,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	var lastSuccess string
 	if err := st.db.QueryRow(`
 		SELECT last_success_task_id FROM market_asset_history_state
-			WHERE asset_key=? AND adjust_policy='qfq' AND point_type='adjusted_close'`, assetKey).
+			WHERE asset_key=? AND adjust_policy='hfq' AND point_type='adjusted_close'`, assetKey).
 		Scan(&lastSuccess); err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 		t.Fatalf("no_new_data did not record success task, got %s", lastSuccess)
 	}
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 40 {
+		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 41 {
 		t.Fatalf("no_new_data mutated points: %d", n)
 	}
 	finishTask(t, st.db, mergeTaskID, "complete")
@@ -618,7 +618,7 @@ func TestInternalPostProcess_HistoryFullMergeAndGap(t *testing.T) {
 	assertOutcome(t, notifyPostProcess(t, st, gapTaskID),
 		"permanent_error", "provider_data_incomplete")
 	if n := countRows(t, st.db,
-		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 40 {
+		`SELECT COUNT(*) FROM market_asset_points WHERE asset_key=?`, assetKey); n != 41 {
 		t.Fatalf("rejected merge mutated points: %d", n)
 	}
 }

@@ -23,7 +23,7 @@ function item(
     enabled: true,
     weight: 0.5,
     weight_locked: false,
-    adjust_policy: "qfq",
+    adjust_policy: "hfq",
     point_type: "adjusted_close",
     asset_class: "equity",
     region: "cn",
@@ -263,7 +263,7 @@ describe("WeightEditor", () => {
               is_cash: false,
               enabled: true,
               weight: 0.5,
-              adjust_policy: "qfq",
+              adjust_policy: "hfq",
               point_type: "adjusted_close",
               listing_status: "active",
               has_history: false,
@@ -278,7 +278,7 @@ describe("WeightEditor", () => {
               is_cash: false,
               enabled: true,
               weight: 0.5,
-              adjust_policy: "qfq",
+              adjust_policy: "hfq",
               point_type: "adjusted_close",
               listing_status: "active",
               has_history: true,
@@ -305,6 +305,13 @@ describe("WeightEditor", () => {
       />,
     );
     expect(screen.getByTestId("common-window")).toHaveTextContent("2018-01-01 ~ 2026-07-01");
+  });
+
+  it("shows the fixed backward-adjusted return series without a policy selector", () => {
+    render(<WeightEditor detail={detail([item("a")])} {...baseHandlers} />);
+    expect(screen.getByTestId("return-series-a")).toHaveTextContent("后复权 · 复权收盘价");
+    expect(screen.queryByLabelText("复权口径")).not.toBeInTheDocument();
+    expect(screen.queryByText("前复权")).not.toBeInTheDocument();
   });
 
   it("does not render draggable asset rows or a drag handle", () => {

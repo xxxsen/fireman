@@ -17,6 +17,7 @@ var (
 	errOptimizationTooManyAssets     = errors.New("too many enabled assets")
 	errOptimizationLockedWeight      = errors.New("locked weight exceeds 100%")
 	errOptimizationAllCandidates     = errors.New("all optimization candidates failed")
+	errOptimizationSampleMismatch    = errors.New("optimization candidates used inconsistent effective samples")
 	errOptimizationInvalidEntry      = errors.New("调优结果包含无效资产身份或权重，请重新运行调优")
 	errOptimizationAssetMismatch     = errors.New("调优结果与当前组合资产不一致，请重新运行调优")
 	errOptimizationDuplicateAsset    = errors.New("调优结果包含重复资产，请重新运行调优")
@@ -29,13 +30,18 @@ var (
 // No I/O: the service layer feeds inputs and the job runner orchestrates.
 
 const (
-	OptimizationEngineVersion       = "research_optimizer_v3"
+	OptimizationEngineVersion       = "research_optimizer_v4"
+	OptimizationTailRiskV3Version   = "research_optimizer_v3"
 	OptimizationDefaultWeightStep   = 0.05
 	OptimizationDefaultTopK         = 20
 	OptimizationDefaultMaxCandidate = 20000
 	OptimizationMaxEnabledAssets    = 10
 	OptimizationHardMaxCandidate    = 20000
 )
+
+func optimizationEngineHasTailRiskSnapshot(version string) bool {
+	return version == OptimizationEngineVersion || version == OptimizationTailRiskV3Version
+}
 
 // OptimizationObjective identifies which metric to rank by.
 type OptimizationObjective string

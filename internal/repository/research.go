@@ -1155,7 +1155,7 @@ func (r *ResearchRepo) SearchResearchAssets(
 			WHERE h1.point_count > 0 AND (
 				(a1.instrument_type IN (
 					'cn_exchange_stock', 'cn_exchange_fund', 'hk_stock', 'hk_etf', 'us_stock', 'us_etf'
-				) AND h1.adjust_policy = 'qfq' AND h1.point_type = 'adjusted_close')
+				) AND h1.adjust_policy = 'hfq' AND h1.point_type = 'adjusted_close')
 				OR (a1.instrument_type = 'cn_mutual_fund'
 					AND h1.adjust_policy = 'none'
 					AND h1.point_type IN ('nav', 'total_return_index'))

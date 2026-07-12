@@ -91,7 +91,7 @@ def _cn_em_adjust(adjust_policy: str) -> str:
         return "hfq"
     if adjust_policy == "none":
         return ""
-    return "qfq"
+    raise ValueError(f"unsupported adjust policy {adjust_policy}")
 
 
 def _cn_stock_em_adjust(adjust_policy: str) -> str:
@@ -113,7 +113,7 @@ def _fetch_cn_exchange_stock(req: FetchRequest, start: str, end: str) -> Adapter
     canonical = identity.canonical_code
     em_symbol = identity.eastmoney_symbol
     prefixed = identity.prefixed_symbol
-    policy = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
+    policy = req.adjust_policy if req.adjust_policy in ("hfq", "none") else "hfq"
     em_adjust = _cn_stock_em_adjust(policy)
     tx_adjust = tx_adjust_policy(policy)
     sina_adjust = sina_adjust_policy(policy)
@@ -211,7 +211,7 @@ def _fetch_cn_exchange_fund(req: FetchRequest, start: str, end: str) -> AdapterR
     identity = require_explicit_cn_code(req.source_code)
     em_symbol = identity.eastmoney_symbol
     prefixed = identity.prefixed_symbol
-    adjust = req.adjust_policy if req.adjust_policy in ("qfq", "hfq", "none") else "qfq"
+    adjust = req.adjust_policy if req.adjust_policy in ("hfq", "none") else "hfq"
     em_adjust = _cn_em_adjust(adjust)
     tx_adjust = tx_adjust_policy(adjust)
 

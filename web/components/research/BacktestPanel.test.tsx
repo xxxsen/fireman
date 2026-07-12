@@ -201,7 +201,7 @@ describe("runDisabledReason", () => {
           is_cash: false,
           enabled: true,
           weight: 0.5,
-          adjust_policy: "qfq",
+          adjust_policy: "hfq",
           point_type: "adjusted_close",
           listing_status: "active",
           has_history: true,

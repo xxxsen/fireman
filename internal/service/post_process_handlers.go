@@ -628,13 +628,6 @@ func (s *PostProcessService) finishHistoryCommit(
 	if len(series) == 0 {
 		return permanentErr("provider_data_incomplete", "history series is empty after commit")
 	}
-	asset, err := s.assets.GetByKeyTx(ctx, tx, payload.AssetKey)
-	if err != nil {
-		return wrapRepo("load history asset for continuity validation", err)
-	}
-	if err := validateHistoryContinuity(asset, payload, series); err != nil {
-		return err
-	}
 	dataAsOf := series[len(series)-1].TradeDate
 	projection, err := buildHistoryProjection(payload, result, series, dataAsOf, now)
 	if err != nil {
@@ -676,28 +669,6 @@ func (s *PostProcessService) finishHistoryCommit(
 		return wrapRepo("set history data version", err)
 	}
 	return nil
-}
-
-func validateHistoryContinuity(
-	asset repository.MarketAsset,
-	payload AssetHistorySyncPayload,
-	series []repository.MarketAssetPoint,
-) error {
-	if asset.Market != "CN" ||
-		(asset.InstrumentType != "cn_exchange_stock" && asset.InstrumentType != "cn_exchange_fund") ||
-		payload.AdjustPolicy == "none" || payload.PointType != "adjusted_close" {
-		return nil
-	}
-	discontinuity, found := marketdata.FindPriceDiscontinuity(
-		historyDataPoints(series), marketdata.CNAdjustedPriceMaxDailyMove,
-	)
-	if !found {
-		return nil
-	}
-	return permanentErr("adjustment_discontinuity", fmt.Sprintf(
-		"adjusted history for %s jumps %.2f%% from %s to %s",
-		payload.AssetKey, discontinuity.Return*100, discontinuity.PreviousDate, discontinuity.Date,
-	))
 }
 
 func historyDataPoints(series []repository.MarketAssetPoint) []marketdata.DataPoint {

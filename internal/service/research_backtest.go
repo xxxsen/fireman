@@ -116,6 +116,10 @@ type BacktestInput struct {
 	// TailRisk is required for v3 production runs. Nil is retained only for
 	// focused legacy engine tests and snapshots that predate CVaR.
 	TailRisk *TailRiskSpec
+	// FreezeEffectiveCalendar makes every supplied asset contribute its real
+	// observation dates to the effective-return calendar, even at zero weight.
+	// Optimization uses this so every candidate is ranked on identical samples.
+	FreezeEffectiveCalendar bool
 	// WindowStart/WindowEnd optionally narrow the window; empty means the
 	// full common intersection.
 	WindowStart string
@@ -736,7 +740,9 @@ func simulatePortfolio(
 	fxTolerance int,
 	lo, hi int,
 ) (*BacktestResult, error) {
-	values, effective, err := buildResearchValueGrid(assets, fxSeries, lo, hi)
+	values, effective, err := buildResearchValueGrid(
+		assets, fxSeries, lo, hi, in.FreezeEffectiveCalendar,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -797,6 +803,7 @@ type researchPortfolioWalk struct {
 
 func buildResearchValueGrid(
 	assets []preparedAsset, fxSeries map[string]preparedSeries, lo, hi int,
+	freezeEffectiveCalendar bool,
 ) ([][]float64, []bool, error) {
 	n := hi - lo + 1
 	values := make([][]float64, len(assets))
@@ -804,17 +811,20 @@ func buildResearchValueGrid(
 		values[i] = make([]float64, n)
 	}
 	effective := make([]bool, n)
-	relevant, usedPairs, allBaseCash := researchEffectiveDependencies(assets)
+	valueRelevant, _, _ := researchEffectiveDependencies(assets, false)
+	calendarRelevant, usedPairs, allBaseCash := researchEffectiveDependencies(
+		assets, freezeEffectiveCalendar,
+	)
 	for t := 0; t < n; t++ {
 		day := lo + t
 		for i, asset := range assets {
-			value, ok := researchGridValue(asset, relevant[i], day)
+			value, ok := researchGridValue(asset, valueRelevant[i], day)
 			if !ok {
 				return nil, nil, fmt.Errorf("%w: asset %s at %s",
 					ErrResearchNoCommonWindow, asset.input.AssetKey, researchDayToDate(day))
 			}
 			values[i][t] = value
-			if relevant[i] && !asset.input.IsCash && asset.series.hasObservation(day) {
+			if calendarRelevant[i] && !asset.input.IsCash && asset.series.hasObservation(day) {
 				effective[t] = true
 			}
 		}
@@ -829,12 +839,14 @@ func buildResearchValueGrid(
 	return values, effective, nil
 }
 
-func researchEffectiveDependencies(assets []preparedAsset) ([]bool, map[string]bool, bool) {
+func researchEffectiveDependencies(
+	assets []preparedAsset, includeZeroWeight bool,
+) ([]bool, map[string]bool, bool) {
 	relevant := make([]bool, len(assets))
 	usedPairs := map[string]bool{}
 	allBaseCash := true
 	for i, asset := range assets {
-		if asset.input.Weight <= ResearchWeightTolerance {
+		if !includeZeroWeight && asset.input.Weight <= ResearchWeightTolerance {
 			continue
 		}
 		relevant[i] = true

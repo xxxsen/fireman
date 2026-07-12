@@ -27,7 +27,7 @@ function asset(overrides: Partial<ResearchAssetView> = {}): ResearchAssetView {
     listing_status: "active",
     is_cash: false,
     has_history: true,
-    adjust_policy: "qfq",
+    adjust_policy: "hfq",
     point_type: "adjusted_close",
     point_count: 1000,
     stale: false,

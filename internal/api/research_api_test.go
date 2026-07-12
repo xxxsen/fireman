@@ -42,7 +42,7 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name string, days int, bas
 		for i := 0; i < days; i++ {
 			d := end.AddDate(0, 0, i-days+1)
 			points = append(points, repository.MarketAssetPoint{
-				AssetKey: key, AdjustPolicy: "qfq", PointType: "adjusted_close",
+				AssetKey: key, AdjustPolicy: "hfq", PointType: "adjusted_close",
 				TradeDate:  d.Format("2006-01-02"),
 				Value:      base * (1 + 0.03*math.Sin(float64(i)/9)) * math.Pow(1.0002, float64(i)),
 				SourceName: "test_source", FetchedAt: now,
@@ -55,7 +55,7 @@ func seedResearchAsset(t *testing.T, db *sql.DB, key, name string, days int, bas
 			INSERT INTO market_asset_history_state
 				(asset_key, adjust_policy, point_type, data_as_of, point_count, source_name, updated_at)
 			VALUES (?,?,?,?,?,?,?)`,
-			key, "qfq", "adjusted_close",
+			key, "hfq", "adjusted_close",
 			points[len(points)-1].TradeDate, days, "test_source", now); err != nil {
 			t.Fatalf("insert history state: %v", err)
 		}

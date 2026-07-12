@@ -20,7 +20,7 @@ def test_fetch_hk_stock_mocked() -> None:
                 "source_code": "00700",
                 "resolved_name": "腾讯控股",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -43,7 +43,7 @@ def test_fetch_hk_stock_normalizes_code_and_name() -> None:
                 "source_code": "700",
                 "resolved_name": "腾讯控股",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -87,7 +87,7 @@ def test_fetch_hk_etf_mocked() -> None:
                 "source_code": "02800",
                 "resolved_name": "盈富基金",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -113,7 +113,7 @@ def test_fetch_cn_exchange_fund_mocked() -> None:
             "source_code": "sh510300",
             "start_date": None,
             "end_date": "2026-06-09",
-            "adjust_policy": "qfq",
+            "adjust_policy": "hfq",
         }
         response = fetch(payload)
         assert response.status_code == 200
@@ -135,7 +135,7 @@ def test_fetch_cn_exchange_fund_resolves_display_name() -> None:
             "resolved_name": "沪深300ETF华泰柏瑞",
             "start_date": None,
             "end_date": "2026-06-09",
-            "adjust_policy": "qfq",
+            "adjust_policy": "hfq",
         }
         response = fetch(payload)
         assert response.status_code == 200
@@ -163,7 +163,7 @@ def test_fetch_fallback_second_source() -> None:
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -191,7 +191,7 @@ def test_fetch_cn_stock_fallback_tx() -> None:
                 "source_code": "sh600519",
                 "start_date": "2024-01-01",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -220,7 +220,7 @@ def test_fetch_cn_stock_fallback_sina() -> None:
                 "instrument_type": "cn_exchange_stock",
                 "source_code": "sz000001",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -228,20 +228,20 @@ def test_fetch_cn_stock_fallback_sina() -> None:
         assert body["data"]["source_name"] == "ak.stock_zh_a_daily"
 
 
-def test_fetch_cn_exchange_fund_qfq_skips_sina() -> None:
+def test_fetch_cn_exchange_fund_hfq_skips_sina() -> None:
     df = pd.DataFrame({"日期": ["2024-06-01"], "收盘": [1.2]})
     with patch("akshare.fund_etf_hist_em", side_effect=RuntimeError("em blocked")), patch(
         "akshare.stock_zh_a_hist_tx", side_effect=RuntimeError("tx blocked")
     ), patch(
         "akshare.fund_etf_hist_sina",
-        side_effect=AssertionError("sina must be skipped for qfq cn_exchange_fund"),
+        side_effect=AssertionError("sina must be skipped for hfq cn_exchange_fund"),
     ), patch("akshare.fund_lof_hist_em", return_value=df):
         response = fetch({
                 "market": "CN",
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -259,7 +259,7 @@ def test_fetch_cn_exchange_fund_third_source() -> None:
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 200
@@ -416,7 +416,7 @@ def test_fetch_timeout_returns_provider_error_envelope() -> None:
                 "instrument_type": "cn_exchange_fund",
                 "source_code": "sh510300",
                 "end_date": "2026-06-09",
-                "adjust_policy": "qfq",
+                "adjust_policy": "hfq",
             },
         )
         assert response.status_code == 504

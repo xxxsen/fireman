@@ -601,13 +601,8 @@ func (s *ResearchService) buildResearchItem(
 	}
 	adjustPolicy := strings.TrimSpace(in.AdjustPolicy)
 	pointType := strings.TrimSpace(in.PointType)
-	// Older screener clients echoed the legacy impossible dimension
-	// none+adjusted_close. Treat it as an omitted dimension so adding an asset
-	// uses the return-analysis-safe default instead of failing the workflow.
-	if isExchangeInstrumentType(asset.InstrumentType) &&
-		adjustPolicy == "none" && pointType == "adjusted_close" {
-		adjustPolicy = ""
-		pointType = ""
+	if err := validateHistoryDimensionPair(adjustPolicy, pointType); err != nil {
+		return zero, "", err
 	}
 	if adjustPolicy == "" {
 		adjustPolicy = DefaultAdjustPolicy(asset.InstrumentType)

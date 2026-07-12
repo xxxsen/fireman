@@ -247,6 +247,13 @@ export default function OptimizationDetailPage() {
   const detail = collectionQuery.data;
   const collectionName = detail?.name ?? "研究集合";
 
+  const cvarHelp = useMemo(() => {
+    const confidence = opt?.config?.tail_risk?.confidence ?? 0.95;
+    const horizon = opt?.config?.tail_risk?.horizon_days ?? 20;
+    const tailPercent = Math.round((1 - confidence) * 100);
+    return `按本次设置，最小化历史滚动 ${horizon} 日收益中最差 ${tailPercent}% 场景的平均损失（CVaR）。它用于衡量短期尾部风险，不保证年化收益更高、最大回撤更小或回撤恢复更快；请结合“最低回撤”和“收益回撤平衡”结果比较。`;
+  }, [opt]);
+
   const activeItems = useMemo(() => {
     if (!opt?.result) return [];
     switch (activeTab) {
@@ -419,22 +426,40 @@ export default function OptimizationDetailPage() {
           ))}
 
           <div className="flex gap-1 overflow-x-auto border-b border-line">
-            {TABS.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setActiveTab(tab.key)}
-                className={
-                  "shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors " +
-                  (activeTab === tab.key
-                    ? "border-b-2 border-brand text-brand"
-                    : "text-ink-muted hover:text-ink")
-                }
-                data-testid={`tab-${tab.key}`}
-              >
-                {tab.label}
-              </button>
-            ))}
+            {TABS.map((tab) => {
+              const active = activeTab === tab.key;
+              return (
+                <div
+                  key={tab.key}
+                  className={
+                    "flex shrink-0 items-center whitespace-nowrap border-b-2 px-4 transition-colors " +
+                    (active
+                      ? "border-brand text-brand"
+                      : "text-ink-muted hover:text-ink")
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab(tab.key)}
+                    className="py-2 text-sm font-medium"
+                    data-testid={`tab-${tab.key}`}
+                  >
+                    {tab.label}
+                  </button>
+                  {tab.key === "cvar" && (
+                    <Tooltip content={cvarHelp} contentClassName="max-w-80">
+                      <button
+                        type="button"
+                        className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px]"
+                        aria-label="最低尾部损失说明"
+                      >
+                        ?
+                      </button>
+                    </Tooltip>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <ResultTable

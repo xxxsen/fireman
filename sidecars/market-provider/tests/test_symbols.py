@@ -1,16 +1,19 @@
 """Tests for symbol normalization."""
 
+import pytest
+from pydantic import ValidationError
+
 from fireman_market_provider.adapters.symbols import (
     hk_exchange_symbol,
     sina_adjust_policy,
     tx_adjust_policy,
 )
+from fireman_market_provider.schemas import FetchRequest
 
 
 def test_hk_adjust_policy() -> None:
     from fireman_market_provider.adapters.symbols import hk_adjust_policy
 
-    assert hk_adjust_policy("qfq") == "qfq"
     assert hk_adjust_policy("hfq") == "hfq"
     assert hk_adjust_policy("none") == ""
 
@@ -29,7 +32,18 @@ def test_cn_prefix_guessing_removed() -> None:
 
 
 def test_adjust_policy_mapping() -> None:
-    assert tx_adjust_policy("qfq") == "qfq"
+    assert tx_adjust_policy("hfq") == "hfq"
     assert tx_adjust_policy("none") == ""
     assert sina_adjust_policy("hfq") == "hfq"
     assert sina_adjust_policy("none") == ""
+
+
+def test_forward_adjustment_is_not_part_of_the_provider_contract() -> None:
+    with pytest.raises(ValidationError):
+        FetchRequest(
+            market="CN",
+            instrument_type="cn_exchange_stock",
+            source_code="sh601088",
+            end_date="2026-07-12",
+            adjust_policy="qfq",  # type: ignore[arg-type]
+        )
