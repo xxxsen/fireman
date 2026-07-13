@@ -288,6 +288,52 @@ CREATE TABLE fire_plan_improvement_applications (
 );
 CREATE INDEX idx_fire_plan_improvement_applications_plan
 ON fire_plan_improvement_applications(plan_id, applied_at DESC);
+CREATE TABLE fire_frontier_runs (
+  id                       TEXT    PRIMARY KEY,
+  task_id                  TEXT    NOT NULL UNIQUE,
+  plan_id                  TEXT    NOT NULL,
+  source_simulation_run_id TEXT    NOT NULL,
+  input_hash               TEXT    NOT NULL,
+  algorithm_version        TEXT    NOT NULL,
+  frontier_type            TEXT    NOT NULL CHECK(frontier_type IN (
+    'retirement_age_max_spending',
+    'retirement_age_min_savings',
+    'required_current_assets',
+    'coast_required_assets'
+  )),
+  source_engine_version    TEXT    NOT NULL,
+  source_config_hash       TEXT    NOT NULL,
+  source_market_hash       TEXT    NOT NULL,
+  evaluation_runs          INTEGER NOT NULL CHECK(evaluation_runs BETWEEN 1000 AND 20000),
+  config_json              TEXT    NOT NULL CHECK(json_valid(config_json)),
+  input_snapshot_json      TEXT    NOT NULL CHECK(json_valid(input_snapshot_json)),
+  result_json              TEXT    NOT NULL DEFAULT '{}' CHECK(json_valid(result_json)),
+  created_at               INTEGER NOT NULL,
+  completed_at             INTEGER,
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT,
+  FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_fire_frontier_runs_plan
+ON fire_frontier_runs(plan_id, created_at DESC);
+CREATE INDEX idx_fire_frontier_runs_input
+ON fire_frontier_runs(plan_id, input_hash, created_at DESC);
+CREATE TABLE fire_frontier_applications (
+  id                    TEXT PRIMARY KEY,
+  frontier_run_id       TEXT NOT NULL UNIQUE,
+  point_id              TEXT NOT NULL,
+  plan_id               TEXT NOT NULL,
+  before_config_version INTEGER NOT NULL,
+  after_config_version  INTEGER NOT NULL,
+  preview_hash          TEXT NOT NULL,
+  before_json           TEXT NOT NULL CHECK(json_valid(before_json)),
+  after_json            TEXT NOT NULL CHECK(json_valid(after_json)),
+  applied_at            INTEGER NOT NULL,
+  CHECK(after_config_version = before_config_version + 1),
+  FOREIGN KEY(frontier_run_id) REFERENCES fire_frontier_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_fire_frontier_applications_plan
+ON fire_frontier_applications(plan_id, applied_at DESC);
 CREATE TABLE worker_task_idempotency_keys (
   scope_type      TEXT NOT NULL,
   scope_id        TEXT NOT NULL,

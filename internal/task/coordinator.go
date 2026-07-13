@@ -30,6 +30,11 @@ type Coordinator struct {
 	now      func() time.Time
 }
 
+// TerminalHook participates in the same transaction that changes an owned
+// attempt to failed/canceled. Business tables use it to avoid a terminal task
+// with still-active metadata (or the reverse) after a process crash.
+type TerminalHook func(context.Context, *sql.Tx, repository.WorkerTask, int64) error
+
 func NewCoordinator(db *sql.DB, repo *repository.WorkerTaskRepo, registry *Registry, events *EventHub) *Coordinator {
 	if registry == nil {
 		registry = DefaultRegistry()
@@ -248,11 +253,21 @@ func (c *Coordinator) Release(ctx context.Context, id string, req OwnedRequest) 
 	if err := validateOwner(req.WorkerType, req.WorkerID, req.ClaimToken); err != nil {
 		return repository.WorkerTask{}, err
 	}
-	return c.finishOrRetryOwned(ctx, id, req, "released", "worker_shutdown", "worker released task", true)
+	return c.finishOrRetryOwned(ctx, id, req, "released", "worker_shutdown", "worker released task", true, nil)
 }
 
 //nolint:gocognit,gocyclo,lll,wrapcheck // Acceptance keeps validation, idempotency and CAS together.
 func (c *Coordinator) Report(ctx context.Context, id string, req ResultRequest) (repository.WorkerTask, error) {
+	return c.ReportWithTerminalHook(ctx, id, req, nil)
+}
+
+// ReportWithTerminalHook is Report plus an atomic business-metadata hook for
+// failed/canceled terminal transitions. Retry scheduling never invokes it.
+//
+//nolint:gocognit,gocyclo,lll,wrapcheck // Acceptance keeps validation, idempotency and CAS together.
+func (c *Coordinator) ReportWithTerminalHook(ctx context.Context, id string, req ResultRequest,
+	hook TerminalHook,
+) (repository.WorkerTask, error) {
 	if err := validateOwner(req.WorkerType, req.WorkerID, req.ClaimToken); err != nil {
 		return repository.WorkerTask{}, err
 	}
@@ -261,7 +276,7 @@ func (c *Coordinator) Report(ctx context.Context, id string, req ResultRequest) 
 			return repository.WorkerTask{}, err
 		}
 		return c.finishOrRetryOwned(ctx, id, OwnedRequest{WorkerType: req.WorkerType, WorkerID: req.WorkerID, ClaimToken: req.ClaimToken},
-			req.Outcome, req.ErrorCode, req.ErrorMessage, req.Retryable)
+			req.Outcome, req.ErrorCode, req.ErrorMessage, req.Retryable, hook)
 	}
 	tokenHash := repository.HashClaimToken(req.ClaimToken)
 	now := c.now().UnixMilli()
@@ -330,7 +345,9 @@ func (c *Coordinator) Report(ctx context.Context, id string, req ResultRequest) 
 }
 
 //nolint:gocognit,gocritic,gocyclo,lll,nestif,wrapcheck // Terminal and retry states commit atomically.
-func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req OwnedRequest, outcome, code, message string, retryable bool) (repository.WorkerTask, error) {
+func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req OwnedRequest,
+	outcome, code, message string, retryable bool, hook TerminalHook,
+) (repository.WorkerTask, error) {
 	tokenHash := repository.HashClaimToken(req.ClaimToken)
 	now := c.now().UnixMilli()
 	if len(message) > maxErrorMessage {
@@ -402,7 +419,13 @@ func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req Own
 			return err
 		}
 		updated, err = c.repo.GetByIDTx(ctx, tx, id)
-		return err
+		if err != nil {
+			return err
+		}
+		if hook != nil && repository.IsTerminalWorkerTaskStatus(updated.Status) {
+			return hook(ctx, tx, updated, now)
+		}
+		return nil
 	})
 	if err != nil {
 		return repository.WorkerTask{}, err

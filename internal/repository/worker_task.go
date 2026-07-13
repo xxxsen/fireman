@@ -21,6 +21,7 @@ const (
 	WorkerTaskTypeStress               = "stress"
 	WorkerTaskTypeSensitivity          = "sensitivity"
 	WorkerTaskTypeFirePlanImprovement  = "fire_plan_improvement"
+	WorkerTaskTypeFireFrontier         = "fire_frontier"
 	WorkerTaskTypeResearchBacktest     = "research_backtest"
 	WorkerTaskTypeResearchOptimization = "research_optimization_backtest"
 	WorkerTaskTypeAutoUpdateScan       = "market_data_auto_update_scan"

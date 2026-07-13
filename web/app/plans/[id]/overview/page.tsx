@@ -299,21 +299,39 @@ export default function OverviewPage() {
                   `，95% 区间 ${formatPercent(data.latest_simulation.summary_json.success_wilson_low)} - ${formatPercent(data.latest_simulation.summary_json.success_wilson_high)}`}
               </p>
             </div>
-            <Button
-              href={`/plans/${planId}/improvement?simulation_run_id=${encodeURIComponent(data.latest_simulation.id)}`}
-              disabled={
-                data.latest_simulation.result_stale ||
-                data.latest_simulation.task_status !== "complete"
-              }
-              title={
-                data.latest_simulation.result_stale ||
-                data.latest_simulation.task_status !== "complete"
-                  ? "先运行当前计划模拟"
-                  : undefined
-              }
-            >
-              改善计划
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                href={`/plans/${planId}/improvement?simulation_run_id=${encodeURIComponent(data.latest_simulation.id)}`}
+                disabled={
+                  data.latest_simulation.result_stale ||
+                  data.latest_simulation.task_status !== "complete"
+                }
+                title={
+                  data.latest_simulation.result_stale ||
+                  data.latest_simulation.task_status !== "complete"
+                    ? "先运行当前计划模拟"
+                    : undefined
+                }
+              >
+                改善计划
+              </Button>
+              <Button
+                variant="secondary"
+                href={`/plans/${planId}/frontier?simulation_run_id=${encodeURIComponent(data.latest_simulation.id)}`}
+                disabled={
+                  data.latest_simulation.result_stale ||
+                  data.latest_simulation.task_status !== "complete"
+                }
+                title={
+                  data.latest_simulation.result_stale ||
+                  data.latest_simulation.task_status !== "complete"
+                    ? "先运行当前计划模拟"
+                    : undefined
+                }
+              >
+                达标前沿
+              </Button>
+            </div>
           </div>
         </section>
       )}

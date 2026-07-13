@@ -24,6 +24,7 @@ func TestStableActiveTaskAdmissionForEveryRegisteredType(t *testing.T) {
 		{repository.WorkerTypeGo, repository.WorkerTaskTypeStress, "stress|simulation_run:sim_1"},
 		{repository.WorkerTypeGo, repository.WorkerTaskTypeSensitivity, "sensitivity|simulation_run:sim_1"},
 		{repository.WorkerTypeGo, repository.WorkerTaskTypeFirePlanImprovement, "fire_plan_improvement|plan:plan_1"},
+		{repository.WorkerTypeGo, repository.WorkerTaskTypeFireFrontier, "fire_frontier|plan:plan_1"},
 		{repository.WorkerTypeGo, repository.WorkerTaskTypeResearchBacktest, "research_backtest|collection:rc_1"},
 		{repository.WorkerTypeGo, repository.WorkerTaskTypeResearchOptimization, "research_optimization_backtest|collection:rc_1"},
 		{repository.WorkerTypeGo, repository.WorkerTaskTypeAutoUpdateScan, "market_data_auto_update_scan|system"},

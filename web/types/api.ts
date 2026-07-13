@@ -529,6 +529,220 @@ export interface ImprovementParameterValues {
   annual_retirement_income_minor: number;
 }
 
+export type FrontierType =
+  | "retirement_age_max_spending"
+  | "retirement_age_min_savings"
+  | "required_current_assets"
+  | "coast_required_assets";
+
+export type FrontierPointStatus =
+  | "boundary_found"
+  | "entire_domain_feasible"
+  | "no_feasible_value";
+
+export interface FrontierSearch {
+  min_minor: number;
+  max_minor: number;
+  step_minor: number;
+}
+
+export interface FrontierConfig {
+  frontier_type: FrontierType;
+  target_success_probability: number;
+  evaluation_runs: number;
+  retirement_age_range?: { min: number; max: number } | null;
+  search: FrontierSearch;
+  money_levels: number;
+  age_points: number;
+  per_point_budget: number;
+  evaluation_budget: number;
+  path_month_budget: number;
+}
+
+export interface FrontierEvaluation {
+  retirement_age: number;
+  value_minor: number;
+  runs: number;
+  success_count: number;
+  success_probability: number;
+  success_wilson_low: number;
+  success_wilson_high: number;
+  terminal_wealth_p50_minor: number;
+  max_drawdown_p95: number;
+  improved_path_count: number;
+  regressed_path_count: number;
+  meets_target: boolean;
+  outcome_hash: string;
+  snapshot_hash: string;
+  candidate_config_hash: string;
+}
+
+export interface FrontierPoint {
+  id: string;
+  retirement_age: number;
+  value_minor: number;
+  status: FrontierPointStatus;
+  applicable: boolean;
+  evaluation: FrontierEvaluation;
+  worse_neighbor?: FrontierEvaluation | null;
+  source_current_assets_minor?: number;
+  gap_minor?: number;
+  achieved?: boolean;
+  coast_achieved?: boolean;
+}
+
+export interface FrontierResult {
+  algorithm_version: string;
+  frontier_type: FrontierType;
+  target_probability: number;
+  evaluation_runs: number;
+  baseline: FrontierEvaluation;
+  points: FrontierPoint[];
+  evaluations: FrontierEvaluation[];
+  distinct_evaluations: number;
+  actual_path_months: number;
+  evaluation_budget: number;
+  path_month_budget: number;
+  discrete_connection_note: string;
+}
+
+export interface FrontierIssue {
+  code: string;
+  message: string;
+}
+
+export interface FrontierReadiness {
+  ready: boolean;
+  issues: FrontierIssue[];
+  config?: FrontierConfig;
+  money_levels: number;
+  age_points: number;
+  evaluation_budget: number;
+  path_month_budget: number;
+  source_baseline?: {
+    id: string;
+    engine_version: string;
+    runs: number;
+    evaluation_runs: number;
+    success_count: number;
+    success_probability: number;
+    success_wilson_low: number;
+    success_wilson_high: number;
+    created_at: number;
+  };
+  reusable_run_id?: string;
+}
+
+export interface FrontierApplication {
+  id: string;
+  frontier_run_id: string;
+  point_id: string;
+  plan_id: string;
+  before_config_version: number;
+  after_config_version: number;
+  preview_hash: string;
+  before_json: string;
+  after_json: string;
+  applied_at: number;
+}
+
+export interface FrontierFrozenBasis {
+  base_currency: string;
+  current_age: number;
+  retirement_age: number;
+  end_age: number;
+  total_assets_minor: number;
+  annual_savings_minor: number;
+  annual_savings_growth_rate: number;
+  annual_spending_minor: number;
+  annual_retirement_income_minor: number;
+  annual_retirement_income_growth_rate: number;
+  inflation_mode: string;
+  withdrawal_type: string;
+  rebalance_frequency: string;
+  asset_count: number;
+  random_factor_model: string;
+  return_assumption_mode: string;
+  return_assumption_scenario: string;
+  source_simulation_runs: number;
+  seed: string;
+  asset_scaling_basis: "source_amount_proportions" | "frozen_target_weights";
+}
+
+export interface FrontierRun {
+  id: string;
+  task_id: string;
+  plan_id: string;
+  source_simulation_run_id: string;
+  input_hash: string;
+  algorithm_version: string;
+  frontier_type: FrontierType;
+  source_engine_version: string;
+  source_config_hash: string;
+  source_market_hash: string;
+  evaluation_runs: number;
+  config: FrontierConfig;
+  result?: FrontierResult;
+  status: WorkerTaskStatus;
+  progress_current: number;
+  progress_total: number;
+  phase: string;
+  attempt_count: number;
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  completed_at?: number | null;
+  source_available: boolean;
+  current_plan_changed: boolean;
+  frozen_basis: FrontierFrozenBasis;
+  application?: FrontierApplication | null;
+}
+
+export interface FrontierRunSummary {
+  id: string;
+  task_id: string;
+  source_simulation_run_id: string;
+  frontier_type: FrontierType;
+  target_probability: number;
+  evaluation_runs: number;
+  status: WorkerTaskStatus;
+  progress_current: number;
+  progress_total: number;
+  phase: string;
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  completed_at?: number | null;
+}
+
+export interface FrontierParameterValues {
+  retirement_age: number;
+  annual_savings_minor: number;
+  annual_spending_minor: number;
+}
+
+export interface FrontierPreview {
+  run_id: string;
+  point_id: string;
+  expected_plan_config_version: number;
+  before: FrontierParameterValues;
+  after: FrontierParameterValues;
+  unchanged: string[];
+  source_run_id: string;
+  algorithm_version: string;
+  target_probability: number;
+  runs: number;
+  success_probability: number;
+  success_wilson_low: number;
+  success_wilson_high: number;
+  improved_path_count: number;
+  regressed_path_count: number;
+  current_config_hash: string;
+  current_market_hash: string;
+  preview_hash: string;
+  preview_expires_at: number;
+}
+
 /** RunAssumption is the frozen return-calibration + risk-model audit of a run. */
 export interface RunAssumption {
   engine_version: string;

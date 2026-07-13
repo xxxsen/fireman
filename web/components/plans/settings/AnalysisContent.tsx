@@ -1156,6 +1156,14 @@ export function AnalysisContent() {
             >
               改善计划
             </Button>
+            <Button
+              variant="secondary"
+              href={`/plans/${planId}/frontier?simulation_run_id=${encodeURIComponent(latest.id)}`}
+              disabled={latest.result_stale}
+              title={latest.result_stale ? "先运行当前计划模拟" : undefined}
+            >
+              达标前沿
+            </Button>
           </div>
 
           {latest.assumption && (

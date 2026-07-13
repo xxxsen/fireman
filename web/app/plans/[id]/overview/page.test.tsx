@@ -173,6 +173,10 @@ describe("OverviewPage", () => {
       "href",
       "/plans/plan_1/improvement?simulation_run_id=sim_1",
     );
+    expect(screen.getByRole("link", { name: "达标前沿" })).toHaveAttribute(
+      "href",
+      "/plans/plan_1/frontier?simulation_run_id=sim_1",
+    );
     expect(screen.getByText(/95% 区间 69% - 75%/)).toBeInTheDocument();
   });
 

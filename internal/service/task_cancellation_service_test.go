@@ -19,7 +19,8 @@ func TestTaskCancellationClosesBusinessRunMetadata(t *testing.T) {
 	coordinator := taskcore.NewCoordinator(db, tasks, taskcore.DefaultRegistry(), taskcore.NewEventHub())
 	research := repository.NewResearchRepo(db)
 	improvements := repository.NewFirePlanImprovementRepo(db)
-	cancellation := NewTaskCancellationService(db, coordinator, research, improvements)
+	frontiers := repository.NewFireFrontierRepo(db)
+	cancellation := NewTaskCancellationService(db, coordinator, research, improvements, frontiers)
 	cancellation.now = func() time.Time { return time.UnixMilli(123456) }
 
 	if _, err := db.ExecContext(ctx, `
@@ -36,6 +37,19 @@ func TestTaskCancellationClosesBusinessRunMetadata(t *testing.T) {
 		table    string
 	}
 	fixtures := []fixture{
+		{
+			taskID: "task_cancel_frontier", taskType: repository.WorkerTaskTypeFireFrontier,
+			table: "fire_frontier_runs",
+			insert: func(tx *sql.Tx) error {
+				return frontiers.CreateTx(ctx, tx, &repository.FireFrontierRun{
+					ID: "frontier_cancel", TaskID: "task_cancel_frontier", PlanID: "plan_cancel",
+					SourceSimulationRunID: "simulation", InputHash: "input", AlgorithmVersion: "v1",
+					FrontierType: "required_current_assets", SourceEngineVersion: "v1",
+					SourceConfigHash: "config", SourceMarketHash: "market", EvaluationRuns: 1000,
+					ConfigJSON: `{}`, InputSnapshotJSON: `{}`, CreatedAt: 1,
+				})
+			},
+		},
 		{
 			taskID: "task_cancel_improvement", taskType: repository.WorkerTaskTypeFirePlanImprovement,
 			table: "fire_plan_improvement_runs",

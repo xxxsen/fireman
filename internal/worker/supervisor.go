@@ -189,11 +189,11 @@ func (s *Supervisor) execute(parent context.Context, item repository.WorkerTask,
 		return
 	}
 	if state.cancelRequested.Load() || errors.Is(err, context.Canceled) {
-		_, reportErr := s.coordinator.Report(writeCtx, item.ID, taskcore.ResultRequest{
+		_, reportErr := s.coordinator.ReportWithTerminalHook(writeCtx, item.ID, taskcore.ResultRequest{
 			WorkerType: repository.WorkerTypeGo, WorkerID: s.workerID, ClaimToken: token,
 			Outcome: "canceled", ErrorCode: repository.WorkerTaskErrorCanceled,
 			ErrorMessage: "task canceled by user",
-		})
+		}, s.processors.finalizeTerminalFrontier)
 		if reportErr != nil {
 			s.logger.Error("report canceled go worker task failed", "task_id", item.ID, "error", reportErr)
 		}
@@ -205,10 +205,10 @@ func (s *Supervisor) execute(parent context.Context, item repository.WorkerTask,
 	code, message, classifiedRetryable := classifyProcessorError(err)
 	definition, definitionErr := s.coordinator.Registry().Require(item.WorkerType, item.Type)
 	retryable := classifiedRetryable && definitionErr == nil && definition.RetryClassifier(err)
-	_, reportErr := s.coordinator.Report(writeCtx, item.ID, taskcore.ResultRequest{
+	_, reportErr := s.coordinator.ReportWithTerminalHook(writeCtx, item.ID, taskcore.ResultRequest{
 		WorkerType: repository.WorkerTypeGo, WorkerID: s.workerID, ClaimToken: token,
 		Outcome: "failed", Retryable: retryable, ErrorCode: code, ErrorMessage: message,
-	})
+	}, s.processors.finalizeTerminalFrontier)
 	if reportErr != nil {
 		s.logger.Error("report failed go worker task failed", "task_id", item.ID, "error", reportErr)
 	}

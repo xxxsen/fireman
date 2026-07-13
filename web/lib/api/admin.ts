@@ -139,6 +139,7 @@ export function getAdminOverview(): Promise<AdminOverview> {
 export type WorkerTaskType =
   | "simulation"
   | "fire_plan_improvement"
+  | "fire_frontier"
   | "stress"
   | "sensitivity"
   | "research_backtest"
@@ -151,6 +152,7 @@ export type WorkerTaskType =
 export const WORKER_TASK_TYPE_LABELS: Record<WorkerTaskType, string> = {
   simulation: "FIRE 模拟",
   fire_plan_improvement: "FIRE 计划改善",
+  fire_frontier: "FIRE 达标前沿",
   stress: "压力测试",
   sensitivity: "敏感性分析",
   research_backtest: "组合回测",

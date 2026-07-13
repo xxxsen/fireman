@@ -37,6 +37,7 @@ func NewTaskCancellationService(
 	coordinator *taskcore.Coordinator,
 	research *repository.ResearchRepo,
 	improvements *repository.FirePlanImprovementRepo,
+	frontiers *repository.FireFrontierRepo,
 ) *TaskCancellationService {
 	noop := func(context.Context, *sql.Tx, string, int64) error { return nil }
 	handlers := map[string]taskCancellationHandler{
@@ -51,6 +52,11 @@ func NewTaskCancellationService(
 			ctx context.Context, tx *sql.Tx, taskID string, at int64,
 		) error {
 			return improvements.MarkCanceledByTaskTx(ctx, tx, taskID, at)
+		},
+		repository.WorkerTaskTypeFireFrontier: func(
+			ctx context.Context, tx *sql.Tx, taskID string, at int64,
+		) error {
+			return frontiers.MarkCanceledAndPruneByTaskTx(ctx, tx, taskID, at, 20)
 		},
 		repository.WorkerTaskTypeResearchBacktest: func(
 			ctx context.Context, tx *sql.Tx, taskID string, at int64,

@@ -33,6 +33,7 @@ type Services struct {
 	Stress              *service.StressService
 	Sensitivity         *service.SensitivityService
 	Improvements        *service.FirePlanImprovementService
+	Frontiers           *service.FireFrontierService
 	Tasks               *service.TaskService
 	TaskCoordinator     *taskcore.Coordinator
 	Research            *service.ResearchService
@@ -72,6 +73,7 @@ func NewServices(
 	simRepo := repository.NewSimulationRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
 	improvementRepo := repository.NewFirePlanImprovementRepo(db)
+	frontierRepo := repository.NewFireFrontierRepo(db)
 	researchRepo := repository.NewResearchRepo(db)
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
@@ -96,6 +98,10 @@ func NewServices(
 		db, plans, params, simRepo, workerTaskRepo, taskCoordinator,
 		improvementRepo, hash, simSvc,
 	)
+	frontierSvc := service.NewFireFrontierService(
+		db, plans, params, simRepo, workerTaskRepo, taskCoordinator,
+		frontierRepo, hash, simSvc,
+	)
 	dashboardSvc := service.NewDashboardService(
 		plans, params, alloc, scenario, holdings, simRepo, analysisRepo, hash,
 		targetSvc, rebalanceSvc, simSvc, stressSvc, sensitivitySvc, executionRepo,
@@ -108,7 +114,7 @@ func NewServices(
 		instRepo, marketRepo, plans, holdings, marketAssetSvc,
 	)
 	taskCancellationSvc := service.NewTaskCancellationService(
-		db, taskCoordinator, researchRepo, improvementRepo,
+		db, taskCoordinator, researchRepo, improvementRepo, frontierRepo,
 	)
 	adminSvc := service.NewAdminService(
 		workerTaskRepo, repository.NewWorkerTaskFinalizeRecordRepo(db),
@@ -135,6 +141,7 @@ func NewServices(
 		Stress:              stressSvc,
 		Sensitivity:         sensitivitySvc,
 		Improvements:        improvementSvc,
+		Frontiers:           frontierSvc,
 		Tasks:               service.NewTaskService(taskCoordinator, taskCancellationSvc),
 		TaskCoordinator:     taskCoordinator,
 		Research:            researchSvc,

@@ -36,6 +36,7 @@ var (
 	errMigrationNameFormat       = errors.New("migration filename must start with NNNN_")
 	errDuplicateMigrationVersion = errors.New("duplicate migration version")
 	errMigrationNotDDL           = errors.New("migration SQL must contain DDL only")
+	errSchemaDrift               = errors.New("database schema differs from registered migrations")
 )
 
 var blockSQLComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
@@ -78,7 +79,7 @@ func Migrate(ctx context.Context, pool *sql.DB, dbPath string, logger *slog.Logg
 		return err
 	}
 	if len(pending) == 0 {
-		return nil
+		return validateMigratedSchema(ctx, pool, files, dbPath)
 	}
 
 	// Only back up an already-populated database. A brand new install whose
@@ -102,7 +103,91 @@ func Migrate(ctx context.Context, pool *sql.DB, dbPath string, logger *slog.Logg
 		logger.Info("applied migration", "version", m.version, "filename", m.filename)
 	}
 
+	return validateMigratedSchema(ctx, pool, files, dbPath)
+}
+
+type schemaObject struct {
+	typeName string
+	name     string
+	sql      string
+}
+
+// validateMigratedSchema catches consolidated-baseline drift. Before the first
+// production release we intentionally edit 0001_init.sql in place and rebuild
+// development databases; an older database therefore may claim version 1 while
+// lacking newer tables. Refusing startup here turns a later opaque HTTP 500 into
+// an actionable rebuild error.
+func validateMigratedSchema(ctx context.Context, pool *sql.DB, files []migrationFile,
+	dbPath string,
+) error {
+	expected, err := expectedSchemaObjects(ctx, files)
+	if err != nil {
+		return err
+	}
+	var drift []string
+	for _, object := range expected {
+		var actualSQL string
+		err := pool.QueryRowContext(ctx, `SELECT COALESCE(sql,'') FROM sqlite_master
+			WHERE type=? AND name=?`, object.typeName, object.name).Scan(&actualSQL)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			drift = append(drift, object.typeName+":"+object.name+" (missing)")
+		case err != nil:
+			return fmt.Errorf("db: inspect schema object %s %s: %w", object.typeName, object.name, err)
+		case normalizeSchemaSQL(actualSQL) != normalizeSchemaSQL(object.sql):
+			drift = append(drift, object.typeName+":"+object.name+" (definition changed)")
+		}
+	}
+	if len(drift) > 0 {
+		return fmt.Errorf("db: schema drift in %q: %s; rebuild this development database: %w",
+			dbPath, strings.Join(drift, ", "), errSchemaDrift)
+	}
 	return nil
+}
+
+func expectedSchemaObjects(ctx context.Context, files []migrationFile) ([]schemaObject, error) {
+	expected, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return nil, fmt.Errorf("db: open expected schema: %w", err)
+	}
+	expected.SetMaxOpenConns(1)
+	expected.SetMaxIdleConns(1)
+	defer func() { _ = expected.Close() }()
+	for _, migration := range files {
+		body, readErr := fs.ReadFile(migrationsFS, migration.filename)
+		if readErr != nil {
+			return nil, fmt.Errorf("db: read expected schema %s: %w", migration.filename, readErr)
+		}
+		if ddlErr := validateMigrationDDL(migration.filename, string(body)); ddlErr != nil {
+			return nil, ddlErr
+		}
+		if _, execErr := expected.ExecContext(ctx, string(body)); execErr != nil {
+			return nil, fmt.Errorf("db: build expected schema from %s: %w", migration.filename, execErr)
+		}
+	}
+	rows, err := expected.QueryContext(ctx, `SELECT type,name,COALESCE(sql,'') FROM sqlite_master
+		WHERE type IN ('table','index','view','trigger') AND name NOT LIKE 'sqlite_%'
+		ORDER BY type,name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: list expected schema: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var objects []schemaObject
+	for rows.Next() {
+		var object schemaObject
+		if err := rows.Scan(&object.typeName, &object.name, &object.sql); err != nil {
+			return nil, fmt.Errorf("db: scan expected schema: %w", err)
+		}
+		objects = append(objects, object)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: iterate expected schema: %w", err)
+	}
+	return objects, nil
+}
+
+func normalizeSchemaSQL(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 type migrationFile struct {

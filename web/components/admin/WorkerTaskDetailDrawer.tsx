@@ -260,5 +260,8 @@ function taskResultHref(task: AdminWorkerTaskFull): string | null {
   if (resultKey.startsWith("fire_plan_improvement_run:")) {
     return `/plans/${encodeURIComponent(task.scope_id)}/improvement`;
   }
+  if (resultKey.startsWith("fire_frontier_run:")) {
+    return `/plans/${encodeURIComponent(task.scope_id)}/frontier?run_id=${encodeURIComponent(resultID)}`;
+  }
   return null;
 }

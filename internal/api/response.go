@@ -33,6 +33,15 @@ func OK(c *gin.Context, data any) {
 	})
 }
 
+func Accepted(c *gin.Context, data any) {
+	if data != nil {
+		jsonutil.NonNilSlices(data)
+	}
+	c.JSON(http.StatusAccepted, envelope{
+		Code: "ok", Message: "accepted", Data: data, RequestID: requestID(c),
+	})
+}
+
 func Fail(c *gin.Context, status int, code, message string, details map[string]any) {
 	c.JSON(status, errorBody{
 		Code: code, Message: message, Details: details, RequestID: requestID(c),
@@ -64,7 +73,8 @@ func FailErr(c *gin.Context, err error) {
 		case "simulation_not_found", "path_not_found",
 			"task_not_found", "market_asset_not_found", "auto_update_rule_not_found",
 			"improvement_source_run_not_found", "improvement_run_not_found",
-			"improvement_proposal_not_found":
+			"improvement_proposal_not_found", "frontier_run_not_found",
+			"frontier_point_not_found", "frontier_source_not_found":
 			status = http.StatusNotFound
 		case "improvement_source_run_not_complete", "improvement_source_run_stale",
 			"improvement_source_engine_legacy", "improvement_source_paths_incomplete",
@@ -74,6 +84,13 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusConflict
 		case "improvement_config_invalid", "improvement_no_enabled_lever":
 			status = http.StatusBadRequest
+		case "frontier_config_invalid", "frontier_budget_exceeded", "frontier_compute_budget_exceeded",
+			"frontier_point_not_applicable", "frontier_point_no_change":
+			status = http.StatusBadRequest
+		case "frontier_source_incomplete", "frontier_source_stale", "frontier_source_market_changed",
+			"frontier_preview_stale", "frontier_run_already_applied", "frontier_candidate_invalid",
+			"frontier_monotonicity_violated", "frontier_result_inconsistent":
+			status = http.StatusConflict
 		case "improvement_result_inconsistent", "improvement_monotonicity_violation":
 			status = http.StatusInternalServerError
 		case "research_collection_not_found", "research_item_not_found",

@@ -57,7 +57,11 @@ func ValidateDatabaseFile(ctx context.Context, path string) error {
 	if count == 0 {
 		return errMissingSchemaMigrations
 	}
-	return nil
+	files, err := listMigrationFiles()
+	if err != nil {
+		return err
+	}
+	return validateMigratedSchema(ctx, pool, files, path)
 }
 
 // ReadDatabaseFile returns the raw SQLite file bytes after optional checkpoint.

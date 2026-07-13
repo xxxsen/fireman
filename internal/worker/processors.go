@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	fdb "github.com/fireman/fireman/internal/db"
+	"github.com/fireman/fireman/internal/frontier"
 	"github.com/fireman/fireman/internal/improvement"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/resourcedb"
@@ -32,10 +34,12 @@ type ProcessorSet struct {
 	sims                   *repository.SimulationRepo
 	analysis               *repository.AnalysisRepo
 	improvements           *repository.FirePlanImprovementRepo
+	frontiers              *repository.FireFrontierRepo
 	research               *service.ResearchService
 	autoUpdates            *service.AutoUpdateService
 	resources              *resourcedb.DB
 	improvementParallelism int
+	frontierParallelism    int
 	processors             map[string]func(context.Context, repository.WorkerTask, Attempt) error
 }
 
@@ -50,14 +54,17 @@ func NewProcessorSet(
 	set := &ProcessorSet{
 		db: db, coordinator: coordinator, sims: repository.NewSimulationRepo(db),
 		analysis: repository.NewAnalysisRepo(db), improvements: repository.NewFirePlanImprovementRepo(db),
-		research: research, autoUpdates: autoUpdates, resources: resourceStore,
+		frontiers: repository.NewFireFrontierRepo(db),
+		research:  research, autoUpdates: autoUpdates, resources: resourceStore,
 		improvementParallelism: 4,
+		frontierParallelism:    4,
 	}
 	set.processors = map[string]func(context.Context, repository.WorkerTask, Attempt) error{
 		repository.WorkerTaskTypeSimulation:           set.simulation,
 		repository.WorkerTaskTypeStress:               set.stress,
 		repository.WorkerTaskTypeSensitivity:          set.sensitivity,
 		repository.WorkerTaskTypeFirePlanImprovement:  set.firePlanImprovement,
+		repository.WorkerTaskTypeFireFrontier:         set.fireFrontier,
 		repository.WorkerTaskTypeResearchBacktest:     set.researchBacktest,
 		repository.WorkerTaskTypeResearchOptimization: set.researchOptimization,
 		repository.WorkerTaskTypeAutoUpdateScan:       set.autoUpdateScan,
@@ -77,6 +84,12 @@ func NewProcessorSet(
 func (p *ProcessorSet) SetImprovementParallelism(value int) {
 	if value >= 1 && value <= 16 {
 		p.improvementParallelism = value
+	}
+}
+
+func (p *ProcessorSet) SetFrontierParallelism(value int) {
+	if value >= 1 && value <= 16 {
+		p.frontierParallelism = value
 	}
 }
 
@@ -138,6 +151,98 @@ func (p *ProcessorSet) firePlanImprovement(
 		return p.complete(ctx, tx, item, attempt, "fire_plan_improvement_run:"+run.ID,
 			map[string]any{"run_id": run.ID, "target_reached": result.TargetReached})
 	})
+}
+
+//nolint:wrapcheck // Typed frontier errors are mapped to stable public task codes.
+func (p *ProcessorSet) fireFrontier(
+	ctx context.Context, item repository.WorkerTask, attempt Attempt,
+) error {
+	run, err := p.frontiers.GetByTaskID(ctx, item.ID)
+	if err != nil {
+		return fmt.Errorf("load fire frontier input: %w", err)
+	}
+	slog.Info("fire_frontier_worker_started", "task_id", item.ID, "run_id", run.ID,
+		"source_run_id", run.SourceSimulationRunID, "input_hash", run.InputHash)
+	var frozen frontier.FrozenInput
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &frozen); err != nil {
+		return taskcore.NewError(taskcore.ErrPayloadInvalid,
+			"decode fire frontier input: "+err.Error(), nil)
+	}
+	identityHash, identityErr := frontier.HashFrozenIdentity(run.SourceSimulationRunID, frozen)
+	if identityErr != nil || identityHash != run.InputHash ||
+		run.AlgorithmVersion != frontier.AlgorithmVersion ||
+		run.FrontierType != frozen.Config.FrontierType || run.EvaluationRuns != frozen.Config.EvaluationRuns ||
+		run.SourceEngineVersion != frozen.SourceSnapshot.EngineVersion ||
+		run.SourceConfigHash != frozen.SourceSnapshot.ConfigHash ||
+		run.SourceMarketHash != frozen.SourceSnapshot.MarketSnapshotHash {
+		return p.failFrontier(ctx, run, "frontier_result_inconsistent",
+			frontier.ErrResultInconsistent)
+	}
+	attempt.Progress(0, frozen.Config.EvaluationBudget, "validating")
+	result, err := frontier.Search(ctx, frozen, frontier.SearchOptions{
+		Parallelism: p.frontierParallelism, Progress: attempt.Progress,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			return context.Canceled
+		case errors.Is(err, frontier.ErrCandidateInvalid):
+			return p.failFrontier(ctx, run, "frontier_candidate_invalid", err)
+		case errors.Is(err, frontier.ErrMonotonicityViolated):
+			return p.failFrontier(ctx, run, "frontier_monotonicity_violated", err)
+		case errors.Is(err, frontier.ErrResultInconsistent):
+			return p.failFrontier(ctx, run, "frontier_result_inconsistent", err)
+		default:
+			return err
+		}
+	}
+	if attempt.Canceled() {
+		return context.Canceled
+	}
+	raw, err := frontier.MarshalResult(result)
+	if err != nil {
+		return fmt.Errorf("marshal fire frontier result: %w", err)
+	}
+	completedAt := time.Now().UnixMilli()
+	err = fdb.WithTx(ctx, p.db, func(tx *sql.Tx) error {
+		if err := p.frontiers.CompleteTx(ctx, tx, item.ID, raw, completedAt); err != nil {
+			return err
+		}
+		if err := p.complete(ctx, tx, item, attempt, "fire_frontier_run:"+run.ID,
+			map[string]any{"run_id": run.ID, "distinct_evaluations": result.DistinctEvaluations}); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE worker_tasks SET phase='complete' WHERE id=? AND status='complete'`,
+			item.ID); err != nil {
+			return err
+		}
+		return p.frontiers.PruneTx(ctx, tx, run.PlanID, 20)
+	})
+	if err == nil {
+		slog.Info("fire_frontier_worker_completed", "task_id", item.ID, "run_id", run.ID,
+			"source_run_id", run.SourceSimulationRunID, "input_hash", run.InputHash,
+			"distinct_evaluations", result.DistinctEvaluations)
+	}
+	return err
+}
+
+func (p *ProcessorSet) failFrontier(_ context.Context, run repository.FireFrontierRun,
+	code string, cause error,
+) error {
+	slog.Error("fire_frontier_worker_failed", "task_id", run.TaskID, "run_id", run.ID,
+		"source_run_id", run.SourceSimulationRunID, "input_hash", run.InputHash, "error_code", code)
+	return service.NewPublicError(code, cause.Error(), nil)
+}
+
+// finalizeTerminalFrontier closes business metadata inside the coordinator's
+// failed/canceled task transaction. Retry scheduling does not invoke this hook.
+func (p *ProcessorSet) finalizeTerminalFrontier(ctx context.Context, tx *sql.Tx,
+	item repository.WorkerTask, at int64,
+) error {
+	if item.Type != repository.WorkerTaskTypeFireFrontier {
+		return nil
+	}
+	return p.frontiers.MarkTerminalAndPruneByTaskTx(ctx, tx, item.ID, at, 20)
 }
 
 //nolint:wrapcheck // Coordinator errors retain lease and cancellation codes for the supervisor.

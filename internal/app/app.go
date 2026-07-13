@@ -89,6 +89,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		pool, services.TaskCoordinator, services.Research, services.AutoUpdates, resources,
 	)
 	processors.SetImprovementParallelism(cfg.FirePlanImprovementConcurrency)
+	processors.SetFrontierParallelism(cfg.FireFrontierConcurrency)
 	supervisor := workerpkg.NewSupervisor(
 		services.TaskCoordinator, processors, logger, maintenance.Active,
 	)

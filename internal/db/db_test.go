@@ -111,6 +111,7 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"simulation_quantile_series", "simulation_real_quantile_series",
 		"plan_return_assumption_overrides",
 		"analysis_results", "worker_task_idempotency_keys",
+		"fire_frontier_runs", "fire_frontier_applications",
 	}
 	for _, name := range expectedTables {
 		var got string
@@ -137,6 +138,15 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 	}
 	if businessRows != 0 {
 		t.Fatalf("DDL migration created %d business rows", businessRows)
+	}
+
+	var foreignKeyViolations int
+	if err := pool.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_foreign_key_check").
+		Scan(&foreignKeyViolations); err != nil {
+		t.Fatalf("run foreign key check: %v", err)
+	}
+	if foreignKeyViolations != 0 {
+		t.Fatalf("foreign key check returned %d rows", foreignKeyViolations)
 	}
 
 	var confidenceDefault, horizonDefault string
@@ -167,6 +177,31 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 	}
 	if migrationCount != 1 {
 		t.Errorf("expected 1 migration record after idempotent re-run, got %d", migrationCount)
+	}
+}
+
+func TestMigrateRejectsDatabaseWhoseRecordedBaselineHasDrifted(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fireman.db")
+	pool, err := Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ctx := context.Background()
+	if err := Migrate(ctx, pool, dbPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.ExecContext(ctx, `DROP TABLE fire_frontier_applications`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.ExecContext(ctx, `DROP TABLE fire_frontier_runs`); err != nil {
+		t.Fatal(err)
+	}
+	err = Migrate(ctx, pool, dbPath, nil)
+	if !errors.Is(err, errSchemaDrift) || !strings.Contains(err.Error(), "fire_frontier_runs (missing)") ||
+		!strings.Contains(err.Error(), "rebuild this development database") {
+		t.Fatalf("schema drift error=%v", err)
 	}
 }
 

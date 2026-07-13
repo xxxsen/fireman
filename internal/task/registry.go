@@ -92,6 +92,7 @@ func DefaultRegistry() *Registry {
 		goDefinition(repository.WorkerTaskTypeStress, "analysis_result:"),
 		goDefinition(repository.WorkerTaskTypeSensitivity, "analysis_result:"),
 		goDefinition(repository.WorkerTaskTypeFirePlanImprovement, "fire_plan_improvement_run:"),
+		frontierDefinition(),
 		goDefinition(repository.WorkerTaskTypeResearchBacktest, "research_backtest_run:"),
 		goDefinition(repository.WorkerTaskTypeResearchOptimization, "research_optimization_run:"),
 		{
@@ -120,6 +121,34 @@ func goDefinition(taskType, prefix string) Definition {
 		ValidateResult: validateResultRequest, RetryClassifier: defaultRetryClassifier,
 		ProcessorKey: taskType,
 	}
+}
+
+func frontierDefinition() Definition {
+	definition := goDefinition(repository.WorkerTaskTypeFireFrontier, "fire_frontier_run:")
+	definition.RetryClassifier = frontierRetryClassifier
+	return definition
+}
+
+// Frontier algorithm/input failures are deterministic. Only transient SQLite
+// contention and temporary I/O conditions may consume the second attempt.
+func frontierRetryClassifier(err error) bool {
+	if err == nil {
+		return false
+	}
+	var taskErr *Error
+	if errors.As(err, &taskErr) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, fragment := range []string{
+		"database is locked", "database table is locked", "database is busy",
+		"resource temporarily unavailable", "temporary i/o", "i/o timeout",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func sidecarDefinition(taskType string) Definition {
