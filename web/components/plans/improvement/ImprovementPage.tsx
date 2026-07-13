@@ -10,6 +10,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageSkeleton } from "@/components/ui/Skeleton";
+import { useActiveTaskRestore } from "@/hooks/useActiveTaskRestore";
 import { useTaskStatus } from "@/hooks/useTaskStatus";
 import {
   applyImprovementProposal,
@@ -21,6 +22,10 @@ import {
 } from "@/lib/api/improvements";
 import { getPlan } from "@/lib/api/plans";
 import { cancelTask, createSimulation, getSimulation } from "@/lib/api/simulations";
+import {
+  activeTaskConflictRef,
+  isTaskActive,
+} from "@/lib/api/tasks";
 import { formatDateTimeFromMs, formatMoney, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 import type {
@@ -310,6 +315,7 @@ export function ImprovementPage({ planId }: { planId: string }) {
   const qc = useQueryClient();
   const requestedSimulationRun = searchParams.get("simulation_run_id") ?? undefined;
   const [selectedRunID, setSelectedRunID] = useState<string | null>(null);
+  const [trackedTaskID, setTrackedTaskID] = useState<string | null>(null);
   const [targetDraft, setTargetDraft] = useState("90");
   const [delayEnabled, setDelayEnabled] = useState(true);
   const [maxDelay, setMaxDelay] = useState(3);
@@ -331,32 +337,44 @@ export function ImprovementPage({ planId }: { planId: string }) {
   });
   const planQ = useQuery({ queryKey: ["plan", planId], queryFn: () => getPlan(planId) });
 
-  const restoredRun = runsQ.data?.runs.find((run) =>
-    ["pending", "running", "pre_complete"].includes(run.status),
-  ) ?? runsQ.data?.runs[0];
+  const restoredActiveRun = runsQ.data?.runs.find((run) =>
+    isTaskActive(run.status),
+  );
+  const restoredRun = restoredActiveRun ?? runsQ.data?.runs[0];
   const effectiveRunID = selectedRunID ?? restoredRun?.id ?? null;
 
   const detailQ = useQuery({
     queryKey: ["improvement-run", effectiveRunID],
     queryFn: () => getImprovementRun(effectiveRunID!),
     enabled: Boolean(effectiveRunID),
+    refetchInterval: (query) =>
+      isTaskActive(query.state.data?.status) ? 2_000 : false,
   });
-  const activeTaskID = detailQ.data && ["pending", "running", "pre_complete"].includes(detailQ.data.status)
+  const detailTaskID = detailQ.data && isTaskActive(detailQ.data.status)
     ? detailQ.data.task_id
     : null;
+  const taskRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "fire_plan_improvement",
+    scopeType: "plan",
+    scopeId: planId,
+    businessTaskId: restoredActiveRun?.task_id ?? detailTaskID,
+    preferredTaskId: trackedTaskID,
+  });
+  const trackedTaskFallback =
+    taskRestore.restoring || taskRestore.restoreError ? trackedTaskID : null;
+  const activeTaskID = taskRestore.taskId ?? detailTaskID ?? trackedTaskFallback;
+  const invalidateImprovement = () => {
+    setTrackedTaskID(null);
+    void qc.invalidateQueries({ queryKey: ["improvement-run", effectiveRunID] });
+    void qc.invalidateQueries({ queryKey: ["improvement-runs", planId] });
+    void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+  };
   const taskState = useTaskStatus(activeTaskID, {
-    onComplete: () => {
-      void qc.invalidateQueries({ queryKey: ["improvement-run", effectiveRunID] });
-      void qc.invalidateQueries({ queryKey: ["improvement-runs", planId] });
-    },
-    onFailed: () => {
-      void qc.invalidateQueries({ queryKey: ["improvement-run", effectiveRunID] });
-      void qc.invalidateQueries({ queryKey: ["improvement-runs", planId] });
-    },
-    onCanceled: () => {
-      void qc.invalidateQueries({ queryKey: ["improvement-run", effectiveRunID] });
-      void qc.invalidateQueries({ queryKey: ["improvement-runs", planId] });
-    },
+    initialTask: taskRestore.task,
+    onComplete: invalidateImprovement,
+    onFailed: invalidateImprovement,
+    onCanceled: invalidateImprovement,
   });
 
   const target = parseTarget(targetDraft);
@@ -393,8 +411,17 @@ export function ImprovementPage({ planId }: { planId: string }) {
     },
     onSuccess: (response) => {
       setSelectedRunID(response.run_id);
+      setTrackedTaskID(response.task_id);
       setApplied(false);
       void qc.invalidateQueries({ queryKey: ["improvement-runs", planId] });
+    },
+    onError: (error) => {
+      const conflict = activeTaskConflictRef(error);
+      if (!conflict) return;
+      setTrackedTaskID(conflict.taskId);
+      if (conflict.resourceId) setSelectedRunID(conflict.resourceId);
+      void qc.invalidateQueries({ queryKey: ["improvement-runs", planId] });
+      void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
     },
   });
 
@@ -437,7 +464,10 @@ export function ImprovementPage({ planId }: { planId: string }) {
   const source = readinessQ.data.source_run;
   const alreadyMeets = source && target !== null && source.success_wilson_low >= target;
   const activeRun = detailQ.data;
-  const running = Boolean(activeRun && ["pending", "running", "pre_complete"].includes(activeRun.status));
+  const running = Boolean(activeTaskID) || isTaskActive(activeRun?.status);
+  const restorationBlocked =
+    runsQ.isPending || taskRestore.restoring || Boolean(taskRestore.restoreError);
+  const createConflict = activeTaskConflictRef(createM.error);
   return (
     <div>
       <PageHeader backHref={`/plans/${planId}/settings?section=simulation`} backLabel="返回分析中心" title="FIRE 计划改善器" />
@@ -500,16 +530,39 @@ export function ImprovementPage({ planId }: { planId: string }) {
             <div className="space-y-3"><LeverToggle checked={income.enabled} onChange={(enabled) => setIncome({ ...income, enabled })} label="增加可确认的退休稳定年收入" /><MoneyLeverFields value={income} onChange={setIncome} maximumLabel="最多增加" /></div>
           </div>
           <div className="mt-5 flex flex-wrap items-center gap-3">
-            <Button disabled={!source || Boolean(configError) || Boolean(alreadyMeets) || running} pending={createM.isPending} onClick={() => createM.mutate()}>开始分析</Button>
+            <Button
+              disabled={!source || Boolean(configError) || Boolean(alreadyMeets) || running || restorationBlocked}
+              pending={createM.isPending}
+              title={restorationBlocked ? "正在恢复任务状态" : undefined}
+              onClick={() => createM.mutate()}
+            >开始分析</Button>
+            {(runsQ.isPending || taskRestore.restoring) && <span className="text-sm text-ink-muted">正在恢复任务状态...</span>}
+            {taskRestore.restoreError && (
+              <>
+                <span className="text-sm text-danger">任务状态检查失败，请重试后再创建。</span>
+                <Button variant="ghost" onClick={() => void taskRestore.retryRestore()}>
+                  重试状态检查
+                </Button>
+              </>
+            )}
             {configError && <span className="text-sm text-danger">{configError}</span>}
-            {createM.isError && <span className="text-sm text-danger">{queryErrorMessage(createM.error)}</span>}
+            {createM.isError && !createConflict && <span className="text-sm text-danger">{queryErrorMessage(createM.error)}</span>}
+            {createConflict && <span className="text-sm text-ink-muted">已有任务正在执行，已继续跟踪该任务。</span>}
           </div>
         </section>
 
-        {activeRun && running && (
+        {running && (
           <section aria-live="polite" className="border-b border-line pb-6">
-            <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold text-ink">正在分析</h2><p className="mt-1 text-sm text-ink-muted">{taskState.task?.phase || activeRun.phase || "等待执行"} · {Math.round(taskState.progress * 100)}%</p></div><Button variant="danger" onClick={() => void cancelTask(activeRun.task_id)}>取消</Button></div>
+            <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold text-ink">正在分析</h2><p className="mt-1 text-sm text-ink-muted">{taskState.task?.status === "pre_complete" ? "正在保存结果" : taskState.task?.phase || activeRun?.phase || "等待执行"} · {Math.round(taskState.progress * 100)}%</p></div><Button variant="danger" onClick={() => void cancelTask(activeTaskID!)}>取消</Button></div>
             <div className="mt-3 h-2 overflow-hidden rounded bg-surface-muted"><div className="h-full bg-brand transition-[width]" style={{ width: `${Math.max(2, taskState.progress * 100)}%` }} /></div>
+            {taskState.pollError && (
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-warning">
+                状态更新暂时失败，正在重试
+                <Button variant="ghost" onClick={() => void taskState.refetch()}>
+                  立即重试
+                </Button>
+              </p>
+            )}
           </section>
         )}
         {activeRun?.status === "failed" && <Alert variant="danger" title="改善分析失败">{activeRun.error_message || "任务失败"}{activeRun.error_code && <span className="mt-1 block text-xs">{activeRun.error_code}</span>}</Alert>}

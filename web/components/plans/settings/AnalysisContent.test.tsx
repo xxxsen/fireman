@@ -18,6 +18,7 @@ const listSimulationsMock = vi.hoisted(() => vi.fn());
 const listStressTestsMock = vi.hoisted(() => vi.fn());
 const listSensitivityTestsMock = vi.hoisted(() => vi.fn());
 const getSimulationReadinessMock = vi.hoisted(() => vi.fn());
+const activeTaskRestoreMock = vi.hoisted(() => vi.fn());
 
 let jobStatusCallbacks: {
   onComplete?: () => void;
@@ -170,6 +171,9 @@ vi.mock("@/hooks/useTaskStatus", () => ({
     return useTaskStatusMock(jobId, options);
   },
 }));
+vi.mock("@/hooks/useActiveTaskRestore", () => ({
+  useActiveTaskRestore: (...args: unknown[]) => activeTaskRestoreMock(...args),
+}));
 
 vi.mock("@/components/charts/WealthPathChart", () => ({
   WealthPathChart: () => <div data-testid="wealth-chart" />,
@@ -192,6 +196,14 @@ describe("AnalysisPage zero success", () => {
     getHoldingsMock.mockReset();
     getHoldingsMock.mockResolvedValue(defaultHoldings);
     useTaskStatusMock.mockReset();
+    activeTaskRestoreMock.mockReset();
+    activeTaskRestoreMock.mockReturnValue({
+      task: null,
+      taskId: null,
+      restoring: false,
+      restoreError: null,
+      retryRestore: vi.fn(),
+    });
     createSimulation.mockReset();
     createStressTest.mockReset();
     createSensitivityTest.mockReset();
@@ -716,6 +728,40 @@ describe("AnalysisPage zero success", () => {
     );
     expect(await screen.findByText(/running… 40%/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+  });
+
+  it("locks creation immediately when scope recovery finds an active simulation", async () => {
+    listSimulationsMock.mockResolvedValue({ simulations: [] });
+    activeTaskRestoreMock.mockImplementation((options) =>
+      options.taskType === "simulation"
+        ? {
+            task: { id: "job_scope_restore", status: "running" },
+            taskId: "job_scope_restore",
+            restoring: false,
+            restoreError: null,
+            retryRestore: vi.fn(),
+          }
+        : {
+            task: null,
+            taskId: null,
+            restoring: false,
+            restoreError: null,
+            retryRestore: vi.fn(),
+          },
+    );
+
+    renderAnalysis();
+
+    await waitFor(() =>
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
+        "job_scope_restore",
+        expect.anything(),
+      ),
+    );
+    const runButton = await screen.findByRole("button", { name: "运行模拟" });
+    expect(runButton).toBeDisabled();
+    fireEvent.click(runButton);
+    expect(createSimulation).not.toHaveBeenCalled();
   });
 
   it("does not re-adopt an older failed run when the newest run already succeeded", async () => {

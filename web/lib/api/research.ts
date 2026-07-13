@@ -1,6 +1,10 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
 import type { WorkerTask } from "./market-assets";
-import type { AssetClassTarget, RegionTarget } from "@/types/api";
+import type {
+  AssetClassTarget,
+  RegionTarget,
+  WorkerTaskStatus,
+} from "@/types/api";
 
 // --- screener ---
 
@@ -239,11 +243,10 @@ export interface ResearchDataQuality {
   benchmark?: ResearchSeriesQuality | null;
 }
 
-export type ResearchRunStatus =
-  "pending" | "running" | "complete" | "failed" | "canceled";
+export type ResearchRunStatus = WorkerTaskStatus;
 
 export interface ResearchTaskView {
-  status: string;
+  status: WorkerTaskStatus;
   phase: string;
   progress_current: number;
   progress_total: number;

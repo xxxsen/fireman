@@ -8,6 +8,7 @@ import {
   createAdminDirectoryAutoUpdate,
   listAdminAutoUpdateDirectoryUnits,
   listAdminAutoUpdates,
+  listAdminWorkerTasks,
   updateAdminAutoUpdate,
 } from "@/lib/api/admin";
 import type { AdminAutoUpdateRule, AdminPage } from "@/lib/api/admin";
@@ -19,6 +20,7 @@ import {
 } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 import { AdminPagination } from "@/components/admin/AdminTable";
+import { isTaskActive } from "@/lib/api/tasks";
 
 const HOURS = [1, 6, 12, 24, 48, 72, 168];
 function formatInterval(hours: number): string {
@@ -27,6 +29,17 @@ function formatInterval(hours: number): string {
 }
 const DIRECTORY_QUERY_KEY = ["admin", "auto-updates", "directories"] as const;
 const HISTORY_PAGE_SIZE = 50;
+const ACTIVE_POLL_MS = 3000;
+const IDLE_POLL_MS = 30_000;
+
+export function autoUpdateRulesPollInterval(
+  page: AdminPage<AdminAutoUpdateRule> | undefined,
+  scanActive: boolean,
+): number {
+  return scanActive || page?.items.some((rule) => isTaskActive(rule.task?.status))
+    ? ACTIVE_POLL_MS
+    : IDLE_POLL_MS;
+}
 function TaskLink({ rule }: { rule: AdminAutoUpdateRule }) {
   if (!rule.last_task_id) return <>--</>;
   return (
@@ -47,10 +60,7 @@ function TaskLink({ rule }: { rule: AdminAutoUpdateRule }) {
 
 function ruleStatus(rule: AdminAutoUpdateRule): string {
   if (!rule.enabled) return "已暂停";
-  if (
-    rule.task &&
-    ["pending", "running", "pre_complete"].includes(rule.task.status)
-  ) {
+  if (isTaskActive(rule.task?.status)) {
     return "任务执行中";
   }
   if (rule.task && ["failed", "canceled"].includes(rule.task.status)) {
@@ -205,10 +215,29 @@ function AutoUpdatesContent() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [q, debouncedQ]);
+  const scanTasks = useQuery({
+    queryKey: ["admin", "auto-updates", "active-scan"],
+    queryFn: () =>
+      listAdminWorkerTasks({
+        workerType: "go_worker",
+        type: "market_data_auto_update_scan",
+        status: "active",
+        limit: 1,
+      }),
+    refetchInterval: (query) =>
+      query.state.data?.items.some((task) => isTaskActive(task.status))
+        ? ACTIVE_POLL_MS
+        : IDLE_POLL_MS,
+  });
+  const scanActive = Boolean(
+    scanTasks.data?.items.some((task) => isTaskActive(task.status)),
+  );
   const directories = useQuery({
     queryKey: DIRECTORY_QUERY_KEY,
     queryFn: () =>
       listAdminAutoUpdates({ targetType: "directory_unit", limit: 100 }),
+    refetchInterval: (query) =>
+      autoUpdateRulesPollInterval(query.state.data, scanActive),
   });
   const directoryUnits = useQuery({
     queryKey: ["admin", "auto-updates", "directory-units"],
@@ -225,6 +254,8 @@ function AutoUpdatesContent() {
         limit: HISTORY_PAGE_SIZE,
         offset: historyOffset,
       }),
+    refetchInterval: (query) =>
+      autoUpdateRulesPollInterval(query.state.data, scanActive),
   });
 
   useEffect(() => {

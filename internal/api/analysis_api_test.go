@@ -195,9 +195,9 @@ func seedSimulationRun(t *testing.T, db *sql.DB, planID string) string {
 	return runID
 }
 
-// TestStressRerunCancelsPriorQueuedJob verifies that re-running stress
-// on the same run cancels a still-queued prior job instead of orphaning it.
-func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
+// TestStressRerunReusesPriorQueuedJob verifies that repeated clicks attach to
+// the active task and never cancel work already queued for the same run.
+func TestStressRerunReusesPriorQueuedJob(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 	runID := seedSimulationRun(t, db, planID)
@@ -211,7 +211,9 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 		return tasksRepo.CreateTx(ctx, tx, &repository.WorkerTask{
 			ID: priorTaskID, WorkerType: repository.WorkerTypeGo,
 			Type: repository.WorkerTaskTypeStress, Status: repository.WorkerTaskStatusPending,
-			ScopeType: "plan", ScopeID: planID, InputHash: "run_ih", PayloadJSON: `{}`,
+			ScopeType: "plan", ScopeID: planID,
+			DedupeKey: repository.WorkerTaskTypeStress + "|simulation_run:" + runID,
+			InputHash: "run_ih", PayloadJSON: `{}`,
 			ProgressTotal: 8,
 		})
 	}); err != nil {
@@ -228,19 +230,16 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create stress: %v", err)
 	}
-	if resp.TaskID == priorTaskID {
-		t.Fatalf("expected a new job id, got the prior one")
+	if resp.TaskID != priorTaskID || !resp.Reused {
+		t.Fatalf("expected active task reuse, got %+v", resp)
 	}
 
 	prior, err := tasksRepo.GetByID(ctx, priorTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prior.Status != repository.WorkerTaskStatusCanceled {
-		t.Fatalf("prior queued job should be canceled, got %s", prior.Status)
-	}
-	if prior.ErrorCode != "superseded_by_newer_analysis" {
-		t.Fatalf("prior job error_code = %q", prior.ErrorCode)
+	if prior.Status != repository.WorkerTaskStatusPending || prior.CancelRequested {
+		t.Fatalf("prior queued job was modified: %+v", prior)
 	}
 
 	recs, err := analysisRepo.ListBySimulationRun(ctx, runID, repository.AnalysisTypeStress, 10)
@@ -252,10 +251,9 @@ func TestStressRerunCancelsPriorQueuedJob(t *testing.T) {
 	}
 }
 
-// TestSensitivityRerunRequestsCancelOfRunningJob covers the rerun-cancel behavior for a
-// prior job that is already running: it receives a cancel request, and its stale
-// analysis record is removed in favor of the new job.
-func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
+// TestSensitivityRerunReusesRunningJob covers the same contract after claim:
+// the running task remains untouched and the caller attaches to it.
+func TestSensitivityRerunReusesRunningJob(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	planID := seedSimulationReadyPlan(t, db)
 	runID := seedSimulationRun(t, db, planID)
@@ -269,7 +267,9 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 		return tasksRepo.CreateTx(ctx, tx, &repository.WorkerTask{
 			ID: priorTaskID, WorkerType: repository.WorkerTypeGo,
 			Type: repository.WorkerTaskTypeSensitivity, Status: repository.WorkerTaskStatusRunning,
-			ScopeType: "plan", ScopeID: planID, InputHash: "run_ih", PayloadJSON: `{}`,
+			ScopeType: "plan", ScopeID: planID,
+			DedupeKey: repository.WorkerTaskTypeSensitivity + "|simulation_run:" + runID,
+			InputHash: "run_ih", PayloadJSON: `{}`,
 			ProgressTotal: 50,
 		})
 	}); err != nil {
@@ -287,16 +287,16 @@ func TestSensitivityRerunRequestsCancelOfRunningJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sensitivity: %v", err)
 	}
+	if resp.TaskID != priorTaskID || !resp.Reused {
+		t.Fatalf("expected active task reuse, got %+v", resp)
+	}
 
 	prior, err := tasksRepo.GetByID(ctx, priorTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !prior.CancelRequested {
-		t.Fatalf("prior running job should have cancel_requested set, got %+v", prior)
-	}
-	if prior.ErrorCode != "superseded_by_newer_analysis" {
-		t.Fatalf("prior running job error_code = %q want superseded_by_newer_analysis", prior.ErrorCode)
+	if prior.CancelRequested || prior.Status != repository.WorkerTaskStatusRunning {
+		t.Fatalf("prior running job was modified: %+v", prior)
 	}
 
 	recs, err := analysisRepo.ListBySimulationRun(ctx, runID, repository.AnalysisTypeSensitivity, 10)

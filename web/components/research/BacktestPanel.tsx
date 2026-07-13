@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   createBacktest,
@@ -26,6 +26,19 @@ import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import { OptimizationConfigDialog } from "@/components/research/OptimizationConfigDialog";
 import type { OptimizationSubmitConfig } from "@/components/research/OptimizationConfigDialog";
+import { useActiveTaskRestore } from "@/hooks/useActiveTaskRestore";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
+import {
+  activeTaskConflictRef,
+  isTaskActive,
+  type WorkerTaskStatus,
+} from "@/lib/api/tasks";
+
+function activeStatusLabel(status: WorkerTaskStatus | undefined): string {
+  if (status === "pending") return "等待执行";
+  if (status === "pre_complete") return "正在保存结果";
+  return "正在执行";
+}
 
 /**
  * The run button's disabled explanation, derived from readiness in priority
@@ -118,8 +131,11 @@ export function BacktestPanel({
   latestRuns,
 }: BacktestPanelProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [reusedNotice, setReusedNotice] = useState(false);
   const [optDialogOpen, setOptDialogOpen] = useState(false);
+  const [conflictNotice, setConflictNotice] = useState<string | null>(null);
+  const latest = latestRuns[0];
 
   const disabledReason = useMemo(
     () => runDisabledReason(readiness),
@@ -145,6 +161,58 @@ export function BacktestPanel({
   const latestOptQuery = useQuery({
     queryKey: ["research", "latest-optimization", detail.id],
     queryFn: () => getLatestOptimization(detail.id),
+    refetchInterval: (query) =>
+      isTaskActive(query.state.data?.status) ? 2000 : false,
+  });
+
+  const backtestRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "research_backtest",
+    scopeType: "research_collection",
+    scopeId: detail.id,
+    businessTaskId: isTaskActive(latest?.status) ? latest?.task_id : null,
+  });
+  const optimizationRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "research_optimization_backtest",
+    scopeType: "research_collection",
+    scopeId: detail.id,
+    businessTaskId: isTaskActive(latestOptQuery.data?.status)
+      ? latestOptQuery.data?.task_id
+      : null,
+  });
+
+  const invalidateBacktest = () => {
+    void queryClient.invalidateQueries({ queryKey: ["research", "runs", detail.id] });
+    void queryClient.invalidateQueries({ queryKey: ["research", "collection", detail.id] });
+    void queryClient.invalidateQueries({ queryKey: ["research", "readiness", detail.id] });
+    void queryClient.invalidateQueries({ queryKey: ["research", "collections"] });
+    void queryClient.invalidateQueries({ queryKey: ["research", "recent-runs"] });
+    void queryClient.invalidateQueries({
+      queryKey: ["active-task-restore", "go_worker", "research_backtest"],
+    });
+  };
+  const invalidateOptimization = () => {
+    void queryClient.invalidateQueries({
+      queryKey: ["research", "latest-optimization", detail.id],
+    });
+    void queryClient.invalidateQueries({ queryKey: ["research", "collection", detail.id] });
+    void queryClient.invalidateQueries({ queryKey: ["research", "collections"] });
+    void queryClient.invalidateQueries({
+      queryKey: ["active-task-restore", "go_worker", "research_optimization_backtest"],
+    });
+  };
+  const backtestTask = useTaskStatus(backtestRestore.taskId, {
+    initialTask: backtestRestore.task,
+    onComplete: invalidateBacktest,
+    onFailed: invalidateBacktest,
+    onCanceled: invalidateBacktest,
+  });
+  const optimizationTask = useTaskStatus(optimizationRestore.taskId, {
+    initialTask: optimizationRestore.task,
+    onComplete: invalidateOptimization,
+    onFailed: invalidateOptimization,
+    onCanceled: invalidateOptimization,
   });
 
   const optDisabledReason = useMemo(
@@ -155,8 +223,19 @@ export function BacktestPanel({
   const runMutation = useMutation({
     mutationFn: () => createBacktest(detail.id),
     onSuccess: (result) => {
+      setConflictNotice(null);
       setReusedNotice(result.reused);
       router.push(`/research/collections/${detail.id}/runs/${result.run.id}`);
+    },
+    onError: (error) => {
+      const conflict = activeTaskConflictRef(error);
+      if (!conflict) return;
+      setConflictNotice("已有回测任务正在执行，已继续跟踪该任务。");
+      if (conflict.resourceId) {
+        router.push(`/research/collections/${detail.id}/runs/${conflict.resourceId}`);
+      } else {
+        void backtestRestore.retryRestore();
+      }
     },
   });
 
@@ -164,14 +243,45 @@ export function BacktestPanel({
     mutationFn: (config: OptimizationSubmitConfig) =>
       createOptimization(detail.id, config),
     onSuccess: (result) => {
+      setConflictNotice(null);
       setOptDialogOpen(false);
       router.push(
         `/research/collections/${detail.id}/optimizations/${result.optimization.id}`,
       );
     },
+    onError: (error) => {
+      const conflict = activeTaskConflictRef(error);
+      if (!conflict) return;
+      setConflictNotice("已有寻优任务正在执行，已继续跟踪该任务。");
+      setOptDialogOpen(false);
+      if (conflict.resourceId) {
+        router.push(
+          `/research/collections/${detail.id}/optimizations/${conflict.resourceId}`,
+        );
+      } else {
+        void optimizationRestore.retryRestore();
+      }
+    },
   });
 
-  const latest = latestRuns[0];
+  const backtestTrackingReason = backtestRestore.restoring
+    ? "正在恢复任务状态..."
+    : backtestRestore.restoreError
+      ? "任务状态恢复失败，请重试状态检查"
+      : backtestTask.isActive || isTaskActive(latest?.status)
+        ? activeStatusLabel(backtestTask.task?.status ?? latest?.status)
+        : null;
+  const optimizationTrackingReason = optimizationRestore.restoring
+    ? "正在恢复任务状态..."
+    : optimizationRestore.restoreError
+      ? "任务状态恢复失败，请重试状态检查"
+      : optimizationTask.isActive || isTaskActive(latestOptQuery.data?.status)
+        ? activeStatusLabel(
+            optimizationTask.task?.status ?? latestOptQuery.data?.status,
+          )
+        : null;
+  const runGateReason = backtestTrackingReason ?? disabledReason;
+  const optimizationGateReason = optimizationTrackingReason ?? optDisabledReason;
 
   return (
     <section
@@ -239,10 +349,10 @@ export function BacktestPanel({
 
       {/* Normal backtest button + its own disabled reason */}
       <div className="flex flex-wrap items-center gap-3">
-        <span className="inline-flex" title={disabledReason ?? undefined}>
+        <span className="inline-flex" title={runGateReason ?? undefined}>
           <Button
-            className={disabledReason ? "pointer-events-none w-32" : "w-32"}
-            disabled={disabledReason !== null}
+            className={runGateReason ? "pointer-events-none w-32" : "w-32"}
+            disabled={runGateReason !== null}
             pending={runMutation.isPending}
             onClick={() => runMutation.mutate()}
             data-testid="run-backtest"
@@ -250,10 +360,15 @@ export function BacktestPanel({
             运行回测
           </Button>
         </span>
-        {disabledReason && (
+        {runGateReason && (
           <p className="text-xs text-warning" data-testid="run-disabled-reason">
-            {disabledReason}
+            {runGateReason}
           </p>
+        )}
+        {backtestRestore.restoreError && (
+          <Button variant="ghost" onClick={() => void backtestRestore.retryRestore()}>
+            重试状态检查
+          </Button>
         )}
         {reusedNotice && (
           <p className="text-xs text-info" role="status">
@@ -262,7 +377,7 @@ export function BacktestPanel({
         )}
       </div>
 
-      {runMutation.isError && (
+      {runMutation.isError && !activeTaskConflictRef(runMutation.error) && (
         <p className="mt-2 text-sm text-danger" role="alert">
           创建回测失败：{queryErrorMessage(runMutation.error)}
         </p>
@@ -270,11 +385,11 @@ export function BacktestPanel({
 
       {/* Optimization button + its own disabled reason */}
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <span className="inline-flex" title={optDisabledReason ?? undefined}>
+        <span className="inline-flex" title={optimizationGateReason ?? undefined}>
           <Button
             variant="secondary"
-            className={optDisabledReason ? "pointer-events-none w-32" : "w-32"}
-            disabled={optDisabledReason !== null}
+            className={optimizationGateReason ? "pointer-events-none w-32" : "w-32"}
+            disabled={optimizationGateReason !== null}
             pending={optimizeMutation.isPending}
             onClick={() => setOptDialogOpen(true)}
             data-testid="find-optimal"
@@ -282,17 +397,41 @@ export function BacktestPanel({
             寻找最优组合
           </Button>
         </span>
-        {optDisabledReason && (
+        {optimizationGateReason && (
           <p className="text-xs text-warning" data-testid="opt-disabled-reason">
-            {optDisabledReason}
+            {optimizationGateReason}
           </p>
+        )}
+        {optimizationRestore.restoreError && (
+          <Button variant="ghost" onClick={() => void optimizationRestore.retryRestore()}>
+            重试状态检查
+          </Button>
         )}
       </div>
 
-      {optimizeMutation.isError && (
+      {optimizeMutation.isError && !activeTaskConflictRef(optimizeMutation.error) && (
         <p className="mt-2 text-sm text-danger" role="alert">
           创建调优失败：{queryErrorMessage(optimizeMutation.error)}
         </p>
+      )}
+
+      {conflictNotice && (
+        <p className="mt-2 text-xs text-info" role="status">{conflictNotice}</p>
+      )}
+      {(backtestTask.pollError || optimizationTask.pollError) && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-warning" role="status">
+          <span>状态更新暂时失败，正在重试。</span>
+          {backtestTask.pollError && (
+            <Button variant="ghost" onClick={() => void backtestTask.refetch()}>
+              重试回测状态
+            </Button>
+          )}
+          {optimizationTask.pollError && (
+            <Button variant="ghost" onClick={() => void optimizationTask.refetch()}>
+              重试寻优状态
+            </Button>
+          )}
+        </div>
       )}
 
       {/* Remount dialog on open so state resets to defaults */}

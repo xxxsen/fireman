@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from "./client";
+import type { WorkerTaskStatus } from "@/types/api";
 
 export interface AnalysisTaskView {
   task_id: string;
@@ -25,7 +26,7 @@ function listQuery(simulationRunId?: string): string {
 }
 
 export function createStressTest(planId: string, body?: CreateAnalysisBody) {
-	return apiPost<{ task_id: string; status: string }>(
+	return apiPost<{ task_id: string; status: WorkerTaskStatus; reused: boolean }>(
     `/api/v1/plans/${planId}/stress-tests`,
     body ?? {},
   );
@@ -42,7 +43,7 @@ export function getStressTest(taskId: string) {
 }
 
 export function createSensitivityTest(planId: string, body?: CreateAnalysisBody) {
-  return apiPost<{ task_id: string; status: string }>(
+  return apiPost<{ task_id: string; status: WorkerTaskStatus; reused: boolean }>(
     `/api/v1/plans/${planId}/sensitivity-tests`,
     body ?? {},
   );

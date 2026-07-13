@@ -55,7 +55,7 @@ export default function MarketAssetDetailPage() {
   const assetKey = decodeURIComponent(rawKey);
   const qc = useQueryClient();
   const [createError, setCreateError] = useState<string | null>(null);
-  const [manualTaskId, setManualTaskId] = useState<string | null>(null);
+  const [manualTask, setManualTask] = useState<WorkerTask | null>(null);
   const [autoUpdatePending, setAutoUpdatePending] = useState(false);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
@@ -69,20 +69,26 @@ export default function MarketAssetDetailPage() {
   // elsewhere), otherwise the task we just created locally.
   const serverActiveId =
     serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
-  const trackedTaskId = serverActiveId ?? manualTaskId;
+  const trackedTaskId = serverActiveId ?? manualTask?.id ?? null;
 
   const invalidateDetail = () => {
+    setManualTask(null);
     void qc.invalidateQueries({ queryKey: ["market-asset-detail", assetKey] });
   };
 
   const { task: polledTask, pollError } = useTaskStatus(trackedTaskId, {
     initialTask:
-      serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
+      serverTask && serverTask.id === trackedTaskId
+        ? serverTask
+        : manualTask?.id === trackedTaskId
+          ? manualTask
+          : undefined,
     onComplete: invalidateDetail,
     onFailed: invalidateDetail,
+    onCanceled: invalidateDetail,
   });
 
-  const task = polledTask ?? serverTask;
+  const task = polledTask ?? serverTask ?? manualTask;
   const taskActive = isTaskActive(task?.status);
 
   const rawPoints = useMemo(() => data?.points ?? [], [data?.points]);
@@ -156,7 +162,7 @@ export default function MarketAssetDetailPage() {
       mode,
     });
   };
-  const handleTask = (t: WorkerTask) => setManualTaskId(t.id);
+  const handleTask = (t: WorkerTask) => setManualTask(t);
 
   const toggleAutoUpdate = async () => {
     setAutoUpdatePending(true);

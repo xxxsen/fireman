@@ -29,6 +29,15 @@ const mockJobState = vi.hoisted(() => ({
 vi.mock("@/hooks/useTaskStatus", () => ({
   useTaskStatus: () => mockJobState.value,
 }));
+vi.mock("@/hooks/useActiveTaskRestore", () => ({
+  useActiveTaskRestore: () => ({
+    task: null,
+    taskId: null,
+    restoring: false,
+    restoreError: null,
+    retryRestore: vi.fn(),
+  }),
+}));
 
 vi.mock("@/components/charts/AllocationBarChart", () => ({
   AllocationBarChart: () => <div data-testid="allocation-chart" />,

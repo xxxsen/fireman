@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -176,7 +177,7 @@ func TestMarketAssetDirectorySync_SingleUnitAndDedupe(t *testing.T) {
 
 	// Re-syncing the active unit returns existed=true without inserting.
 	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
-		map[string]any{"sync_key": "cn_exchange_fund", "force": true})
+		map[string]any{"sync_key": "cn_exchange_fund"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("dup unit sync status=%d body=%s", resp.StatusCode, body)
 	}
@@ -190,6 +191,14 @@ func TestMarketAssetDirectorySync_SingleUnitAndDedupe(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("worker_tasks rows = %d, want 1", count)
+	}
+
+	// A force request changes the task input and must wait for the active
+	// non-force request rather than silently changing its semantics.
+	resp, body = postJSON(t, client, srv.URL+"/api/v1/market-assets/sync",
+		map[string]any{"sync_key": "cn_exchange_fund", "force": true})
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "task_already_active") {
+		t.Fatalf("different-input sync status=%d body=%s", resp.StatusCode, body)
 	}
 
 	// Batch sync while one unit is active: the active unit is returned as

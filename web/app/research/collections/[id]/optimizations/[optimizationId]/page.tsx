@@ -22,6 +22,8 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import type { ResearchRebalancePolicy } from "@/lib/api/research";
+import { isTaskActive } from "@/lib/api/tasks";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 
 type TabKey = "cagr" | "drawdown" | "cvar" | "calmar";
 const TABS: { key: TabKey; label: string }[] = [
@@ -244,7 +246,7 @@ export default function OptimizationDetailPage() {
     queryFn: () => getOptimization(optimizationId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "pending" || status === "running" ? 2000 : false;
+      return isTaskActive(status) ? 2000 : false;
     },
   });
 
@@ -255,6 +257,35 @@ export default function OptimizationDetailPage() {
 
   const opt = optQuery.data;
   const detail = collectionQuery.data;
+  const taskState = useTaskStatus(opt?.task_id, {
+    onComplete: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "optimization", optimizationId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "latest-optimization", collectionId],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["research", "collection", collectionId] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "collections"] });
+    },
+    onFailed: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "optimization", optimizationId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "latest-optimization", collectionId],
+      });
+    },
+    onCanceled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "optimization", optimizationId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["research", "latest-optimization", collectionId],
+      });
+    },
+  });
+  const effectiveStatus = taskState.task?.status ?? opt?.status;
   const collectionName = detail?.name ?? "研究集合";
 
   const cvarHelp = useMemo(() => {
@@ -389,12 +420,15 @@ export default function OptimizationDetailPage() {
         </p>
       )}
 
-      {(opt.status === "pending" || opt.status === "running") && (
+      {isTaskActive(effectiveStatus) && (
         <div
           className="rounded-lg border border-info/25 bg-info/5 px-4 py-6 text-center"
           role="status"
         >
           <LoadingState label={progressLabel(opt)} className="justify-center" />
+          {taskState.pollError && (
+            <p className="mt-2 text-xs text-warning">状态更新暂时失败，正在重试。</p>
+          )}
           {opt.candidate_count > 0 && opt.evaluated_count > 0 && (
             <div className="mt-2">
               <div className="mx-auto h-2 w-64 overflow-hidden rounded-full bg-surface-muted">

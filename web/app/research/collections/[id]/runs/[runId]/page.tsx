@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import {
   createCollection,
@@ -39,6 +44,8 @@ import { RunRollingCharts } from "@/components/research/RunRollingCharts";
 import { RunCompareDialog } from "@/components/research/RunCompareDialog";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import type { ResearchRebalancePolicy } from "@/lib/api/research";
+import { isTaskActive } from "@/lib/api/tasks";
+import { useTaskStatus } from "@/hooks/useTaskStatus";
 
 interface SnapshotAsset {
   asset_key: string;
@@ -100,6 +107,7 @@ export default function ResearchRunDetailPage() {
   const collectionId = params.id as string;
   const runId = params.runId as string;
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [showAssetSeries, setShowAssetSeries] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [showSnapshot, setShowSnapshot] = useState(false);
@@ -109,7 +117,7 @@ export default function ResearchRunDetailPage() {
     queryFn: () => getRun(runId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "pending" || status === "running" ? 2000 : false;
+      return isTaskActive(status) ? 2000 : false;
     },
   });
 
@@ -119,6 +127,24 @@ export default function ResearchRunDetailPage() {
   });
 
   const run = runQuery.data;
+  const taskState = useTaskStatus(run?.task_id, {
+    onComplete: () => {
+      void queryClient.invalidateQueries({ queryKey: ["research", "run", runId] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "runs", collectionId] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "collection", collectionId] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "collections"] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "recent-runs"] });
+    },
+    onFailed: () => {
+      void queryClient.invalidateQueries({ queryKey: ["research", "run", runId] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "runs", collectionId] });
+    },
+    onCanceled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["research", "run", runId] });
+      void queryClient.invalidateQueries({ queryKey: ["research", "runs", collectionId] });
+    },
+  });
+  const effectiveStatus = taskState.task?.status ?? run?.status;
   const succeeded = run?.status === "complete";
 
   const pointsQuery = useQuery({
@@ -275,7 +301,7 @@ export default function ResearchRunDetailPage() {
         }
       />
 
-      {(run.status === "pending" || run.status === "running") && (
+      {isTaskActive(effectiveStatus) && (
         <div className="rounded-lg border border-info/25 bg-info/5 px-4 py-6 text-center" role="status">
           <LoadingState
             label={
@@ -291,6 +317,9 @@ export default function ResearchRunDetailPage() {
             }
             className="justify-center"
           />
+          {taskState.pollError && (
+            <p className="mt-2 text-xs text-warning">状态更新暂时失败，正在重试。</p>
+          )}
         </div>
       )}
 

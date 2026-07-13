@@ -18,6 +18,7 @@ import {
   TornadoChart,
 } from "@/components/charts/SensitivityCharts";
 import { useTaskStatus } from "@/hooks/useTaskStatus";
+import { useActiveTaskRestore } from "@/hooks/useActiveTaskRestore";
 import {
   SimulationReadinessPanel,
   useSimulationReadiness,
@@ -38,6 +39,7 @@ import {
   listPaths,
   listSimulations,
 } from "@/lib/api/simulations";
+import { activeTaskConflictRef, isTaskActive } from "@/lib/api/tasks";
 import {
   formatDateTimeFromMs,
   formatMoney,
@@ -222,6 +224,7 @@ function simulationOptionLabel(run: SimulationRun): string {
   const statusLabels: Record<string, string> = {
     pending: "排队中",
     running: "运行中",
+    pre_complete: "正在保存结果",
     failed: "失败",
     canceled: "已取消",
     unknown: "状态未知",
@@ -242,6 +245,9 @@ function AnalysisJobPanel({
   onRetry,
   onRun,
   running,
+  restoring,
+  restoreError,
+  onRetryRestore,
   runDisabled,
   runDisabledHint,
   onCancel,
@@ -257,6 +263,9 @@ function AnalysisJobPanel({
   onRetry?: () => void;
   onRun: () => void;
   running: boolean;
+  restoring?: boolean;
+  restoreError?: unknown;
+  onRetryRestore?: () => void;
   runDisabled?: boolean;
   runDisabledHint?: string;
   onCancel?: () => void;
@@ -289,16 +298,24 @@ function AnalysisJobPanel({
         <MetricHelp termKey={termKey} />
       </h2>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Button disabled={running || jobBusy || runDisabled} onClick={onRun}>
+        <Button disabled={running || jobBusy || restoring || Boolean(restoreError) || runDisabled} onClick={onRun}>
           运行{title}
         </Button>
+        {restoring && <span className="text-sm text-ink-muted">正在恢复任务状态...</span>}
+        {Boolean(restoreError) && onRetryRestore && (
+          <Button variant="ghost" className="px-2 py-1" onClick={onRetryRestore}>
+            重试状态检查
+          </Button>
+        )}
         {runDisabled && runDisabledHint && (
           <span className="text-sm text-ink-muted">{runDisabledHint}</span>
         )}
         {activeTaskId && (
           <>
             <span className="text-sm text-ink-muted">
-              {taskState.task?.status ?? "连接中"}…{" "}
+              {taskState.task?.status === "pre_complete"
+                ? "正在保存结果"
+                : (taskState.task?.phase || taskState.task?.status || "连接中")}…{" "}
               {Math.round(taskState.progress * 100)}%
             </span>
             {onCancel && (
@@ -311,6 +328,14 @@ function AnalysisJobPanel({
               </Button>
             )}
           </>
+        )}
+        {taskState.pollError && (
+          <span className="flex items-center gap-2 text-sm text-warning">
+            状态更新暂时失败，正在重试
+            <Button variant="ghost" className="px-2 py-1" onClick={() => void taskState.refetch()}>
+              立即重试
+            </Button>
+          </span>
         )}
       </div>
       {panelError && (
@@ -546,10 +571,43 @@ export function AnalysisContent() {
   const latest = selectedRun;
   const latestStress = stressQ.data?.stress_tests[0];
   const latestSens = sensQ.data?.sensitivity_tests[0];
+  const persistedSimTaskID = simulations.find((run) =>
+    isTaskActive(run.task_status),
+  )?.task_id;
+  const persistedStressTaskID = stressQ.data?.stress_tests.find((item) =>
+    isTaskActive(item.status),
+  )?.task_id;
+  const persistedSensitivityTaskID = sensQ.data?.sensitivity_tests.find((item) =>
+    isTaskActive(item.status),
+  )?.task_id;
+  const simRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "simulation",
+    scopeType: "plan",
+    scopeId: planId,
+    businessTaskId: persistedSimTaskID,
+    preferredTaskId: activeTasks.sim,
+  });
+  const stressRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "stress",
+    scopeType: "plan",
+    scopeId: planId,
+    businessTaskId: persistedStressTaskID,
+    preferredTaskId: activeTasks.stress,
+  });
+  const sensitivityRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "sensitivity",
+    scopeType: "plan",
+    scopeId: planId,
+    businessTaskId: persistedSensitivityTaskID,
+    preferredTaskId: activeTasks.sensitivity,
+  });
 
   // A run is displayable once its summary is persisted: summary_json carries a
   // numeric success_probability only on success. Job status drives the
-  // pending/running indicator but never gates results already stored on the run.
+  // Active-task indicator never gates results already stored on the run.
   const simCompleted =
     !!latest && typeof latest.summary_json?.success_probability === "number";
 
@@ -593,6 +651,7 @@ export function AnalysisContent() {
       setTaskErrors((prev) => ({ ...prev, [kind]: message }));
     }
     invalidateAll();
+    void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
   };
 
   // Rebuild activeTasks from persisted records so that a page refresh does not
@@ -618,8 +677,7 @@ export function AnalysisContent() {
       adopt(
         "sim",
         newestSim?.task_id &&
-          (newestSim.task_status === "pending" ||
-            newestSim.task_status === "running")
+          isTaskActive(newestSim.task_status)
           ? newestSim.task_id
           : undefined,
       );
@@ -627,21 +685,42 @@ export function AnalysisContent() {
         "stress",
         (stressData?.stress_tests ?? []).find(
           (t) =>
-            t.task_id && (t.status === "pending" || t.status === "running"),
+            t.task_id && isTaskActive(t.status),
         )?.task_id,
       );
       adopt(
         "sensitivity",
         (sensData?.sensitivity_tests ?? []).find(
           (t) =>
-            t.task_id && (t.status === "pending" || t.status === "running"),
+            t.task_id && isTaskActive(t.status),
         )?.task_id,
       );
+      adopt("sim", simRestore.taskId ?? undefined);
+      adopt("stress", stressRestore.taskId ?? undefined);
+      adopt("sensitivity", sensitivityRestore.taskId ?? undefined);
       return changed ? next : prev;
     });
-  }, [simsData, stressData, sensData]);
+  }, [
+    simsData,
+    stressData,
+    sensData,
+    simRestore.taskId,
+    stressRestore.taskId,
+    sensitivityRestore.taskId,
+  ]);
 
-  const simTaskState = useTaskStatus(activeTasks.sim ?? null, {
+  const trackedSimTaskID =
+    activeTasks.sim ?? simRestore.taskId ?? persistedSimTaskID ?? null;
+  const trackedStressTaskID =
+    activeTasks.stress ?? stressRestore.taskId ?? persistedStressTaskID ?? null;
+  const trackedSensitivityTaskID =
+    activeTasks.sensitivity ??
+    sensitivityRestore.taskId ??
+    persistedSensitivityTaskID ??
+    null;
+
+  const simTaskState = useTaskStatus(trackedSimTaskID, {
+    initialTask: simRestore.task,
     onComplete: () => {
       clearJobError("sim");
       finishJob("sim");
@@ -650,11 +729,12 @@ export function AnalysisContent() {
     onCanceled: () => finishJob("sim"),
   });
 
-  const stressTaskState = useTaskStatus(activeTasks.stress ?? null, {
+  const stressTaskState = useTaskStatus(trackedStressTaskID, {
+    initialTask: stressRestore.task,
     onComplete: async () => {
       clearJobError("stress");
-      if (activeTasks.stress) {
-        await getStressTest(activeTasks.stress).catch(() => null);
+      if (trackedStressTaskID) {
+        await getStressTest(trackedStressTaskID).catch(() => null);
       }
       finishJob("stress");
     },
@@ -662,11 +742,12 @@ export function AnalysisContent() {
     onCanceled: () => finishJob("stress"),
   });
 
-  const sensTaskState = useTaskStatus(activeTasks.sensitivity ?? null, {
+  const sensTaskState = useTaskStatus(trackedSensitivityTaskID, {
+    initialTask: sensitivityRestore.task,
     onComplete: async () => {
       clearJobError("sensitivity");
-      if (activeTasks.sensitivity) {
-        await getSensitivityTest(activeTasks.sensitivity).catch(() => null);
+      if (trackedSensitivityTaskID) {
+        await getSensitivityTest(trackedSensitivityTaskID).catch(() => null);
       }
       finishJob("sensitivity");
     },
@@ -674,6 +755,49 @@ export function AnalysisContent() {
       finishJob("sensitivity", task.error_message || "任务失败"),
     onCanceled: () => finishJob("sensitivity"),
   });
+
+  const availableTaskID = (
+    localTaskID: string | undefined,
+    notFound: boolean,
+    restoring: boolean,
+    restoreError: unknown,
+    restoredTaskID: string | null,
+    persistedTaskID: string | undefined,
+  ) =>
+    localTaskID &&
+    !(
+      notFound &&
+      !restoring &&
+      !restoreError &&
+      !restoredTaskID &&
+      !persistedTaskID
+    )
+      ? localTaskID
+      : null;
+  const activeSimTaskID = availableTaskID(
+    trackedSimTaskID ?? undefined,
+    simTaskState.notFound,
+    simRestore.restoring,
+    simRestore.restoreError,
+    simRestore.taskId,
+    persistedSimTaskID,
+  );
+  const activeStressTaskID = availableTaskID(
+    trackedStressTaskID ?? undefined,
+    stressTaskState.notFound,
+    stressRestore.restoring,
+    stressRestore.restoreError,
+    stressRestore.taskId,
+    persistedStressTaskID,
+  );
+  const activeSensitivityTaskID = availableTaskID(
+    trackedSensitivityTaskID ?? undefined,
+    sensTaskState.notFound,
+    sensitivityRestore.restoring,
+    sensitivityRestore.restoreError,
+    sensitivityRestore.taskId,
+    persistedSensitivityTaskID,
+  );
 
   const startMut = useMutation({
     mutationFn: () => createSimulation(planId, { runs }),
@@ -715,11 +839,20 @@ export function AnalysisContent() {
         setSelectedRunId(res.run_id);
       }
     },
-    onError: (e) =>
+    onError: (error) => {
+      const conflict = activeTaskConflictRef(error);
+      if (conflict) {
+        clearJobError("sim");
+        setActiveTasks((prev) => ({ ...prev, sim: conflict.taskId }));
+        if (conflict.resourceId) setSelectedRunId(conflict.resourceId);
+        void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+        return;
+      }
       setTaskErrors((prev) => ({
         ...prev,
-        sim: e instanceof Error ? e.message : "启动失败",
-      })),
+        sim: error instanceof Error ? error.message : "启动失败",
+      }));
+    },
   });
 
   const stressMut = useMutation({
@@ -734,11 +867,19 @@ export function AnalysisContent() {
       clearJobError("stress");
       setActiveTasks((prev) => ({ ...prev, stress: res.task_id }));
     },
-    onError: (e) =>
+    onError: (error) => {
+      const conflict = activeTaskConflictRef(error);
+      if (conflict) {
+        clearJobError("stress");
+        setActiveTasks((prev) => ({ ...prev, stress: conflict.taskId }));
+        void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+        return;
+      }
       setTaskErrors((prev) => ({
         ...prev,
-        stress: e instanceof Error ? e.message : "启动失败",
-      })),
+        stress: error instanceof Error ? error.message : "启动失败",
+      }));
+    },
   });
 
   const sensMut = useMutation({
@@ -753,11 +894,19 @@ export function AnalysisContent() {
       clearJobError("sensitivity");
       setActiveTasks((prev) => ({ ...prev, sensitivity: res.task_id }));
     },
-    onError: (e) =>
+    onError: (error) => {
+      const conflict = activeTaskConflictRef(error);
+      if (conflict) {
+        clearJobError("sensitivity");
+        setActiveTasks((prev) => ({ ...prev, sensitivity: conflict.taskId }));
+        void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+        return;
+      }
       setTaskErrors((prev) => ({
         ...prev,
-        sensitivity: e instanceof Error ? e.message : "启动失败",
-      })),
+        sensitivity: error instanceof Error ? error.message : "启动失败",
+      }));
+    },
   });
 
   const attachDisabled = !selectedRun || !simCompleted;
@@ -781,7 +930,14 @@ export function AnalysisContent() {
       ? latest?.summary_json?.real_monthly_wealth_quantiles
       : latest?.summary_json?.monthly_wealth_quantiles;
 
-  const simBusy = !!activeTasks.sim;
+  const simBusy = !!activeSimTaskID;
+  const simRestoring = simsQ.isPending || simRestore.restoring;
+  const simRestoreBlocked = simRestoring || Boolean(simRestore.restoreError);
+  const stressRestoring = stressQ.isPending || stressRestore.restoring;
+  const stressRestoreBlocked = stressRestoring || Boolean(stressRestore.restoreError);
+  const sensitivityRestoring = sensQ.isPending || sensitivityRestore.restoring;
+  const sensitivityRestoreBlocked =
+    sensitivityRestoring || Boolean(sensitivityRestore.restoreError);
 
   const simPanelError = taskErrors.sim ?? simTaskState.error;
 
@@ -879,10 +1035,14 @@ export function AnalysisContent() {
           </div>
           <Button
             disabled={
-              startMut.isPending || simBusy || !readinessReady || !runsValid
+              startMut.isPending || simBusy || simRestoreBlocked || !readinessReady || !runsValid
             }
             title={
-              !runsValid
+              simRestoring
+                ? "正在恢复任务状态"
+                : simRestore.restoreError
+                  ? "任务状态检查失败，请重试"
+              : !runsValid
                 ? "模拟次数必须是 1000 至 100000 之间的整数"
                 : readinessQ.isLoading || readinessQ.isFetching
                   ? "正在检查模拟就绪状态"
@@ -896,20 +1056,36 @@ export function AnalysisContent() {
           >
             运行模拟
           </Button>
-          {activeTasks.sim && (
+          {simRestoring && <span className="text-sm text-ink-muted">正在恢复任务状态...</span>}
+          {simRestore.restoreError && (
+            <Button variant="ghost" className="px-2 py-1" onClick={() => void simRestore.retryRestore()}>
+              重试状态检查
+            </Button>
+          )}
+          {activeSimTaskID && (
             <>
               <span className="text-sm text-ink-muted">
-                {simTaskState.task?.status ?? "连接中"}…{" "}
+                {simTaskState.task?.status === "pre_complete"
+                  ? "正在保存结果"
+                  : (simTaskState.task?.phase || simTaskState.task?.status || "连接中")}…{" "}
                 {Math.round(simTaskState.progress * 100)}%
               </span>
               <Button
                 variant="ghost"
                 className="px-2 py-1 text-danger"
-                onClick={() => void cancelTask(activeTasks.sim!)}
+                onClick={() => void cancelTask(activeSimTaskID)}
               >
                 取消
               </Button>
             </>
+          )}
+          {simTaskState.pollError && (
+            <span className="flex items-center gap-2 text-sm text-warning">
+              状态更新暂时失败，正在重试
+              <Button variant="ghost" className="px-2 py-1" onClick={() => void simTaskState.refetch()}>
+                立即重试
+              </Button>
+            </span>
           )}
         </div>
         {!runsValid && (
@@ -1056,7 +1232,7 @@ export function AnalysisContent() {
       <AnalysisJobPanel
         title="压力测试"
         termKey="stress_test"
-        activeTaskId={activeTasks.stress ?? null}
+        activeTaskId={activeStressTaskID}
         taskState={stressTaskState}
         panelError={taskErrors.stress ?? stressTaskState.error}
         onRetry={() => {
@@ -1065,11 +1241,14 @@ export function AnalysisContent() {
         }}
         onRun={() => stressMut.mutate()}
         running={stressMut.isPending}
-        runDisabled={attachDisabled}
+        restoring={stressRestoring}
+        restoreError={stressRestore.restoreError}
+        onRetryRestore={() => void stressRestore.retryRestore()}
+        runDisabled={attachDisabled || stressRestoreBlocked}
         runDisabledHint={attachHint}
         onCancel={
-          activeTasks.stress
-            ? () => void cancelTask(activeTasks.stress!)
+          activeStressTaskID
+            ? () => void cancelTask(activeStressTaskID)
             : undefined
         }
         latest={latestStress}
@@ -1084,7 +1263,7 @@ export function AnalysisContent() {
       <AnalysisJobPanel
         title="敏感性测试"
         termKey="sensitivity_test"
-        activeTaskId={activeTasks.sensitivity ?? null}
+        activeTaskId={activeSensitivityTaskID}
         taskState={sensTaskState}
         panelError={taskErrors.sensitivity ?? sensTaskState.error}
         onRetry={() => {
@@ -1093,11 +1272,14 @@ export function AnalysisContent() {
         }}
         onRun={() => sensMut.mutate()}
         running={sensMut.isPending}
-        runDisabled={attachDisabled}
+        restoring={sensitivityRestoring}
+        restoreError={sensitivityRestore.restoreError}
+        onRetryRestore={() => void sensitivityRestore.retryRestore()}
+        runDisabled={attachDisabled || sensitivityRestoreBlocked}
         runDisabledHint={attachHint}
         onCancel={
-          activeTasks.sensitivity
-            ? () => void cancelTask(activeTasks.sensitivity!)
+          activeSensitivityTaskID
+            ? () => void cancelTask(activeSensitivityTaskID)
             : undefined
         }
         latest={latestSens}

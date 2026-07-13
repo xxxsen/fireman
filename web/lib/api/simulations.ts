@@ -5,13 +5,15 @@ import type {
   ReturnOverride,
   ScenarioComparison,
   SimulationRun,
+  WorkerTaskStatus,
 } from "@/types/api";
 import { apiDelete, apiGet, apiPost, apiPut } from "./client";
+export { listTasks } from "./tasks";
 
 export function createSimulation(
   planId: string,
   body?: { runs?: number; seed?: string },
-): Promise<{ task_id: string; run_id: string; status: string }> {
+): Promise<{ task_id: string; run_id: string; status: WorkerTaskStatus; reused: boolean }> {
   return apiPost(
     `/api/v1/plans/${planId}/simulations`,
     body ?? {},

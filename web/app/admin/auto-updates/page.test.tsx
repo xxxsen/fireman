@@ -8,12 +8,13 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdminAutoUpdateRule, AdminPage } from "@/lib/api/admin";
-import AutoUpdatesPage from "./page";
+import AutoUpdatesPage, { autoUpdateRulesPollInterval } from "./page";
 
 const listMock = vi.hoisted(() => vi.fn());
 const createMock = vi.hoisted(() => vi.fn());
 const updateMock = vi.hoisted(() => vi.fn());
 const unitsMock = vi.hoisted(() => vi.fn());
+const workerTasksMock = vi.hoisted(() => vi.fn());
 const searchParamsMock = vi.hoisted(() => ({ value: new URLSearchParams() }));
 
 vi.mock("next/navigation", () => ({
@@ -26,6 +27,7 @@ vi.mock("@/lib/api/admin", async (importOriginal) => ({
   createAdminDirectoryAutoUpdate: (...args: unknown[]) => createMock(...args),
   updateAdminAutoUpdate: (...args: unknown[]) => updateMock(...args),
   listAdminAutoUpdateDirectoryUnits: () => unitsMock(),
+  listAdminWorkerTasks: (...args: unknown[]) => workerTasksMock(...args),
 }));
 
 function rule(
@@ -79,6 +81,8 @@ describe("AutoUpdatesPage", () => {
     createMock.mockReset();
     updateMock.mockReset();
     unitsMock.mockReset();
+    workerTasksMock.mockReset();
+    workerTasksMock.mockResolvedValue({ items: [], total: 0, limit: 1, offset: 0 });
     searchParamsMock.value = new URLSearchParams();
     listMock.mockImplementation((params: { targetType: string }) =>
       Promise.resolve(
@@ -292,5 +296,35 @@ describe("AutoUpdatesPage", () => {
         ),
       { timeout: 1000 },
     );
+  });
+
+  it("uses active and idle refresh cadences", () => {
+    expect(autoUpdateRulesPollInterval(page([]), false)).toBe(30_000);
+    expect(autoUpdateRulesPollInterval(page([]), true)).toBe(3_000);
+    expect(
+      autoUpdateRulesPollInterval(
+        page([
+          rule({
+            task: {
+              id: "scan_child",
+              worker_type: "sidecar_worker",
+              type: "asset_history_sync",
+              status: "pre_complete",
+              scope_type: "market_asset",
+              scope_id: "asset_1",
+              progress_current: 1,
+              progress_total: 1,
+              phase: "finalizing",
+              cancel_requested: false,
+              attempt_count: 1,
+              max_attempts: 2,
+              created_at: 1,
+              updated_at: 1,
+            },
+          }),
+        ]),
+        false,
+      ),
+    ).toBe(3_000);
   });
 });

@@ -104,6 +104,7 @@ function DirectoryUnitRow({
       serverTask && serverTask.id === activeTaskId ? serverTask : undefined,
     onComplete: onChanged,
     onFailed: onChanged,
+    onCanceled: onChanged,
   });
 
   const task = polledTask ?? serverTask;
@@ -158,16 +159,29 @@ function DirectoryScopeRow({
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [localTasks, setLocalTasks] = useState<Record<string, WorkerTask>>({});
 
   const submit = async (body: Parameters<typeof syncMarketAssets>[0]) => {
     if (submitting) return;
     setSubmitting(true);
     setCreateError(null);
     try {
-      await syncMarketAssets(body);
+      const result = await syncMarketAssets(body);
+      setLocalTasks((current) => {
+        const next = { ...current };
+        for (const item of result.tasks) {
+          if (isTaskActive(item.task.status)) next[item.sync_key] = item.task;
+        }
+        return next;
+      });
       // The backend recomputes the aggregation; refetch instead of guessing.
       onChanged();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "task_already_active") {
+        setCreateError("已有同步任务正在执行，已继续跟踪该任务。");
+        onChanged();
+        return;
+      }
       const message =
         err instanceof ApiError
           ? err.message
@@ -181,6 +195,26 @@ function DirectoryScopeRow({
   };
 
   const anySuccess = view.units.some((u) => u.last_success_at);
+  const visibleUnits = view.units.map((unit) => ({
+    ...unit,
+    task: isTaskActive(localTasks[unit.sync_key]?.status)
+      ? localTasks[unit.sync_key]
+      : unit.task,
+  }));
+  const visibleScopeStatus = visibleUnits.some((unit) =>
+    isTaskActive(unit.task?.status),
+  )
+    ? "running"
+    : view.status;
+  const unitChanged = (syncKey: string) => {
+    setLocalTasks((current) => {
+      if (!current[syncKey]) return current;
+      const next = { ...current };
+      delete next[syncKey];
+      return next;
+    });
+    onChanged();
+  };
   const lastFullSuccess = view.last_success_at
     ? formatDateTimeFromMs(view.last_success_at)
     : anySuccess
@@ -194,15 +228,15 @@ function DirectoryScopeRow({
           {view.label}
         </span>
         <span className="flex items-center gap-2 text-xs text-ink-muted">
-          <Badge variant={SCOPE_STATUS_VARIANTS[view.status] ?? "neutral"}>
+          <Badge variant={SCOPE_STATUS_VARIANTS[visibleScopeStatus] ?? "neutral"}>
             <span
               data-testid={`scope-status-${view.scope}`}
-              data-status={view.status}
+              data-status={visibleScopeStatus}
             >
-              {SCOPE_STATUS_LABELS[view.status] ?? view.status}
+              {SCOPE_STATUS_LABELS[visibleScopeStatus] ?? visibleScopeStatus}
             </span>
           </Badge>
-          {view.status === "running" && (
+          {visibleScopeStatus === "running" && (
             <LoadingState label="同步进行中…" className="text-xs" />
           )}
         </span>
@@ -220,7 +254,7 @@ function DirectoryScopeRow({
             onMain={() =>
               void submit({ scope: view.scope as DirectorySyncScope })
             }
-            items={view.units.map((unit) => {
+            items={visibleUnits.map((unit) => {
               const active = isTaskActive(unit.task?.status);
               return {
                 key: unit.sync_key,
@@ -236,11 +270,11 @@ function DirectoryScopeRow({
         </span>
       </div>
       <div className="mt-1 divide-y divide-line/60">
-        {view.units.map((unit) => (
+        {visibleUnits.map((unit) => (
           <DirectoryUnitRow
             key={unit.sync_key}
             unit={unit}
-            onChanged={onChanged}
+            onChanged={() => unitChanged(unit.sync_key)}
           />
         ))}
       </div>
@@ -260,20 +294,29 @@ function FXSyncRow({
   onChanged: () => void;
 }) {
   const serverTask = view?.task ?? null;
-  const [manualTaskId, setManualTaskId] = useState<string | null>(null);
+  const [manualTask, setManualTask] = useState<WorkerTask | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const serverActiveId =
     serverTask && isTaskActive(serverTask.status) ? serverTask.id : null;
-  const trackedTaskId = serverActiveId ?? manualTaskId;
+  const trackedTaskId = serverActiveId ?? manualTask?.id ?? null;
+  const taskSettled = () => {
+    setManualTask(null);
+    onChanged();
+  };
 
   const { task: polledTask, pollError } = useTaskStatus(trackedTaskId, {
     initialTask:
-      serverTask && serverTask.id === trackedTaskId ? serverTask : undefined,
-    onComplete: onChanged,
-    onFailed: onChanged,
+      serverTask && serverTask.id === trackedTaskId
+        ? serverTask
+        : manualTask?.id === trackedTaskId
+          ? manualTask
+          : undefined,
+    onComplete: taskSettled,
+    onFailed: taskSettled,
+    onCanceled: taskSettled,
   });
-  const task = polledTask ?? serverTask;
+  const task = polledTask ?? serverTask ?? manualTask;
   const active = isTaskActive(task?.status);
 
   return (
@@ -320,7 +363,7 @@ function FXSyncRow({
             setCreateError(null);
             return syncFXRates();
           }}
-          onTask={(t: WorkerTask) => setManualTaskId(t.id)}
+          onTask={(t: WorkerTask) => setManualTask(t)}
           onError={setCreateError}
           activeTask={task}
         >

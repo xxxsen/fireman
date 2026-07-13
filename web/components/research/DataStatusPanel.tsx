@@ -64,13 +64,12 @@ function SyncTaskRow({
   onSettled: (task: WorkerTask) => void;
   onRetry?: () => void;
 }) {
-  const settledRef = useRef(false);
+  const settledTaskIdsRef = useRef(new Set<string>());
   const settle = useCallback(
     (settledTask: WorkerTask) => {
-      if (!settledRef.current) {
-        settledRef.current = true;
-        onSettled(settledTask);
-      }
+      if (settledTaskIdsRef.current.has(settledTask.id)) return;
+      settledTaskIdsRef.current.add(settledTask.id);
+      onSettled(settledTask);
     },
     [onSettled],
   );
@@ -79,6 +78,7 @@ function SyncTaskRow({
     initialTask: task ?? null,
     onComplete: settle,
     onFailed: settle,
+    onCanceled: settle,
   });
   const current = polling.task ?? task ?? null;
   const failed = current?.status === "failed";
@@ -262,7 +262,9 @@ export function DataStatusPanel({
           </Button>
           <Button
             pending={syncMutation.isPending}
-            disabled={persistedSync.isLoading || hasActiveSync}
+            disabled={
+              persistedSync.isLoading || persistedSync.isError || hasActiveSync
+            }
             onClick={() => syncMutation.mutate(undefined)}
             data-testid="sync-collection"
           >
@@ -275,6 +277,15 @@ export function DataStatusPanel({
         <p className="mb-3 text-sm text-danger" role="alert">
           创建同步任务失败：{queryErrorMessage(syncMutation.error)}
         </p>
+      )}
+
+      {persistedSync.isError && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-danger" role="alert">
+          <span>同步任务状态恢复失败，恢复前不能创建新任务。</span>
+          <Button variant="ghost" onClick={() => void persistedSync.refetch()}>
+            重试状态检查
+          </Button>
+        </div>
       )}
 
       {blocking.length > 0 && (

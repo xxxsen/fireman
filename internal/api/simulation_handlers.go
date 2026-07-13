@@ -5,12 +5,16 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
 	taskcore "github.com/fireman/fireman/internal/task"
 )
+
+var taskSSEKeepaliveInterval = 15 * time.Second
 
 func (s Services) registerSimulationRoutes(rg *gin.RouterGroup) {
 	rg.POST("/plans/:plan_id/simulations", s.createSimulation)
@@ -214,44 +218,68 @@ func (s Services) cancelTask(c *gin.Context) {
 
 func (s Services) taskEvents(c *gin.Context) {
 	taskID := c.Param("task_id")
-	if _, err := s.Tasks.Get(c.Request.Context(), taskID); err != nil {
-		FailErr(c, err)
-		return
-	}
-	ch, unsub := s.Tasks.EventsHub().Subscribe(taskID)
-	defer unsub()
-
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Status(http.StatusOK)
-
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
 		Fail(c, http.StatusInternalServerError, "internal_error", "streaming unsupported", nil)
 		return
 	}
 
+	// Subscribe before reading the persisted snapshot. A state transition in
+	// between may produce a duplicate event, but cannot disappear entirely.
+	ch, unsub := s.Tasks.EventsHub().Subscribe(taskID)
+	defer unsub()
+	current, err := s.Tasks.Get(c.Request.Context(), taskID)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Status(http.StatusOK)
+
+	initial := taskcore.Event{
+		TaskID: current.ID, Status: current.Status, Phase: current.Phase,
+		ProgressCurrent: current.ProgressCurrent, ProgressTotal: current.ProgressTotal,
+		AttemptCount: current.AttemptCount, ErrorCode: current.ErrorCode,
+		ErrorMessage: current.ErrorMessage, ResultKey: current.ResultKey,
+	}
+	if !writeTaskEvent(c, flusher, initial) || repository.IsTerminalWorkerTaskStatus(initial.Status) {
+		return
+	}
+
 	ctx := c.Request.Context()
+	keepalive := time.NewTicker(taskSSEKeepaliveInterval)
+	defer keepalive.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			if _, err := c.Writer.Write([]byte(": keepalive\n\n")); err != nil {
+				return
+			}
+			flusher.Flush()
 		case ev, open := <-ch:
 			if !open {
 				return
 			}
-			frame, err := taskcore.FormatSSE(ev)
-			if err != nil {
-				return
-			}
-			if _, err := c.Writer.Write(frame); err != nil {
-				return
-			}
-			flusher.Flush()
-			if ev.Status == "complete" || ev.Status == "failed" || ev.Status == "canceled" {
+			if !writeTaskEvent(c, flusher, ev) || repository.IsTerminalWorkerTaskStatus(ev.Status) {
 				return
 			}
 		}
 	}
+}
+
+func writeTaskEvent(c *gin.Context, flusher http.Flusher, event taskcore.Event) bool {
+	frame, err := taskcore.FormatSSE(event)
+	if err != nil {
+		return false
+	}
+	if _, err := c.Writer.Write(frame); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
 }

@@ -71,8 +71,8 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 
 	// --- current default run (follow_global) ---
 	setPlanAssumption(t, db, planID, "follow_global", "", 0)
-	run1 := runRegression(ctx, t, services, runner, simRepo, planID)
-	run2 := runRegression(ctx, t, services, runner, simRepo, planID)
+	run1 := runRegression(ctx, t, db, services, runner, simRepo, planID)
+	run2 := runRegression(ctx, t, db, services, runner, simRepo, planID)
 
 	t.Logf("current P50=%d inputHash=%s", run1.terminalP50, run1.inputHash)
 
@@ -99,9 +99,9 @@ func TestForwardP50RegressionE2E(t *testing.T) {
 
 	// --- v1 / v2 historical pin controls ---
 	setPlanAssumption(t, db, planID, "pinned_profile", assumptions.SystemLegacyProfileID, 1)
-	runV1 := runRegression(ctx, t, services, runner, simRepo, planID)
+	runV1 := runRegression(ctx, t, db, services, runner, simRepo, planID)
 	setPlanAssumption(t, db, planID, "pinned_profile", assumptions.SystemProfileV2ID, 1)
-	runV2 := runRegression(ctx, t, services, runner, simRepo, planID)
+	runV2 := runRegression(ctx, t, db, services, runner, simRepo, planID)
 
 	t.Logf("v1 P50=%d  v2 P50=%d", runV1.terminalP50, runV2.terminalP50)
 
@@ -156,7 +156,7 @@ func registryHash(t *testing.T, id string, version int) string {
 }
 
 func runRegression(
-	ctx context.Context, t *testing.T, svc Services,
+	ctx context.Context, t *testing.T, db *sql.DB, svc Services,
 	runner *worker.SimulationRunner, simRepo *repository.SimulationRepo, planID string,
 ) regressionResult {
 	t.Helper()
@@ -179,6 +179,15 @@ func runRegression(
 	if err := runner.RunSimulation(ctx, run.TaskID, run.ID, &snap,
 		func() bool { return false }, func(int, int, string) {}); err != nil {
 		t.Fatalf("run simulation: %v", err)
+	}
+	// This test invokes the runner directly instead of the worker coordinator.
+	// Mirror the coordinator's terminal transition so the next regression run is
+	// not correctly rejected by the plan-level active-task dedupe gate.
+	if _, err := db.ExecContext(ctx, `
+		UPDATE worker_tasks
+		SET status='complete', phase='complete', finished_at=?, updated_at=?
+		WHERE id=?`, time.Now().UnixMilli(), time.Now().UnixMilli(), run.TaskID); err != nil {
+		t.Fatalf("complete worker task fixture: %v", err)
 	}
 	done, err := simRepo.GetByID(ctx, resp.RunID)
 	if err != nil {

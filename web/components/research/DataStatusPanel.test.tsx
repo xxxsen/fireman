@@ -123,6 +123,17 @@ describe("DataStatusPanel", () => {
     expect(syncCollectionHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("keeps sync disabled when persisted task recovery fails", async () => {
+    getCollectionSyncStatusMock.mockRejectedValue(new Error("network down"));
+    renderPanel();
+    expect(
+      await screen.findByText("同步任务状态恢复失败，恢复前不能创建新任务。"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("sync-collection")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("sync-collection"));
+    expect(syncCollectionHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("shows ready badge and dependency facts", () => {
     renderPanel();
     expect(screen.getByText("数据就绪")).toBeInTheDocument();

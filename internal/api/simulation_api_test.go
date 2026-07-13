@@ -186,6 +186,13 @@ func createSimulationSnapshotForTest(
 	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &snap); err != nil {
 		t.Fatal(err)
 	}
+	// Snapshot-only tests do not execute the worker. Release the plan-level
+	// active-task admission key before constructing the next comparison input.
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(context.Background(), `UPDATE worker_tasks
+		SET status='canceled',finished_at=?,updated_at=? WHERE id=?`, now, now, resp.TaskID); err != nil {
+		t.Fatal(err)
+	}
 	return run, snap
 }
 
@@ -674,6 +681,44 @@ func TestSimulationJobFlow(t *testing.T) {
 	}
 	detailBody := mustRead(t, resp)
 	assertPathDetailSnakeCaseContract(t, detailBody)
+}
+
+func TestSimulationStableActiveDedupe(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	planID := seedSimulationReadyPlan(t, db)
+	services := buildServices(db)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	client := srv.Client()
+	url := srv.URL + "/api/v1/plans/" + planID + "/simulations"
+	resp, body := postJSON(t, client, url, map[string]any{"runs": 1000, "seed": "99"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first create status=%d body=%s", resp.StatusCode, body)
+	}
+	first := decodeEnvelope(t, body)["data"].(map[string]any)
+
+	resp, body = postJSON(t, client, url, map[string]any{"runs": 1000, "seed": "99"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("same-input create status=%d body=%s", resp.StatusCode, body)
+	}
+	second := decodeEnvelope(t, body)["data"].(map[string]any)
+	if second["task_id"] != first["task_id"] || second["run_id"] != first["run_id"] || second["reused"] != true {
+		t.Fatalf("same input was not reused: first=%v second=%v", first, second)
+	}
+
+	resp, body = postJSON(t, client, url, map[string]any{"runs": 1000, "seed": "100"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("different-input create status=%d body=%s", resp.StatusCode, body)
+	}
+	conflict := decodeEnvelope(t, body)
+	if conflict["code"] != "task_already_active" {
+		t.Fatalf("conflict=%v", conflict)
+	}
+	details := conflict["details"].(map[string]any)
+	if details["task_id"] != first["task_id"] || details["resource_id"] != first["run_id"] {
+		t.Fatalf("conflict details=%v first=%v", details, first)
+	}
 }
 
 // assertPathDetailSnakeCaseContract guards the path detail API contract: the

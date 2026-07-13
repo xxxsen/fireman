@@ -1,18 +1,9 @@
 import { apiGet, apiPost, apiPut } from "./client";
-import type { Task } from "@/types/api";
-
-/** Worker task status enum for market data sync tasks. */
-export type WorkerTaskStatus =
-  "pending" | "running" | "pre_complete" | "complete" | "failed" | "canceled";
+import type { Task, WorkerTaskStatus } from "@/types/api";
+export { isTaskActive, isTaskTerminal } from "./tasks";
+export type { WorkerTaskStatus } from "@/types/api";
 
 export type WorkerTask = Task;
-
-/** Active statuses keep polling; terminal statuses stop it. */
-export function isTaskActive(status: WorkerTaskStatus | undefined): boolean {
-  return (
-    status === "pending" || status === "running" || status === "pre_complete"
-  );
-}
 
 export interface MarketAsset {
   asset_key: string;

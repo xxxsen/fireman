@@ -33,6 +33,7 @@ import { DataStatusPanel } from "@/components/research/DataStatusPanel";
 import { BacktestPanel } from "@/components/research/BacktestPanel";
 import { AddAssetDialog } from "@/components/research/AddAssetDialog";
 import { CopyToPlanDialog } from "@/components/research/CopyToPlanDialog";
+import { isTaskActive } from "@/lib/api/tasks";
 
 export default function ResearchCollectionPage() {
   const id = useParams().id as string;
@@ -67,6 +68,10 @@ export default function ResearchCollectionPage() {
     queryKey: ["research", "runs", id],
     queryFn: () => listRuns(id, 5),
     enabled: detailQuery.isSuccess,
+    refetchInterval: (query) =>
+      query.state.data?.runs.some((run) => isTaskActive(run.status))
+        ? 2000
+        : false,
   });
 
   const applyDetail = useCallback(

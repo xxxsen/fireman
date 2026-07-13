@@ -442,6 +442,16 @@ describe("MarketAssetsPage", () => {
     await waitFor(() =>
       expect(syncMarketAssetsMock).toHaveBeenCalledWith({ scope: "hk_all" }),
     );
+    await waitFor(() =>
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
+        "wt_hk1",
+        expect.objectContaining({ onComplete: expect.any(Function) }),
+      ),
+    );
+    expect(screen.getByTestId("scope-status-hk_all")).toHaveAttribute(
+      "data-status",
+      "running",
+    );
     // Scope aggregation comes from the backend: the list query is refetched.
     await waitFor(() =>
       expect(listMarketAssetsMock.mock.calls.length).toBeGreaterThan(1),
@@ -473,10 +483,20 @@ describe("MarketAssetsPage", () => {
     await waitFor(() =>
       expect(syncMarketAssetsMock).toHaveBeenCalledWith({ sync_key: "hk_etf" }),
     );
+    await waitFor(() =>
+      expect(useTaskStatusMock).toHaveBeenCalledWith(
+        "wt_hk2",
+        expect.objectContaining({ onComplete: expect.any(Function) }),
+      ),
+    );
     // Menu closes after selecting.
     expect(
       screen.queryByTestId("sync-button-hk_all-menu"),
     ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("sync-button-hk_all-toggle"));
+    expect(
+      screen.getByTestId("sync-button-hk_all-item-hk_etf"),
+    ).toBeDisabled();
   });
 
   it("disables only the running unit in the dropdown and keeps the main button clickable", async () => {

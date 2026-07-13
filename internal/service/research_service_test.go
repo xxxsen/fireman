@@ -414,6 +414,46 @@ func TestResearchBacktestEndToEnd(t *testing.T) {
 	}
 }
 
+func TestResearchBacktestRejectsDifferentInputWhileActive(t *testing.T) {
+	svc, db := newResearchTestService(t)
+	ctx := context.Background()
+	insertResearchFixtureAsset(t, db, "ACTIVE1", "资产一", "CNY", "2020-01-01", 1643, growthValue(100))
+	insertResearchFixtureAsset(t, db, "ACTIVE2", "资产二", "CNY", "2020-01-01", 1643, growthValue(100))
+	detail := mustCreateResearchCollection(t, svc, ResearchCollectionInput{
+		Name: "活跃任务冲突",
+		Items: []ResearchCollectionItemInput{
+			{AssetKey: "ACTIVE1", Weight: fptr(0.6)},
+			{AssetKey: "ACTIVE2", Weight: fptr(0.4)},
+		},
+	})
+	created, err := svc.CreateBacktest(ctx, detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := svc.research.ListItems(ctx, detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateItem(ctx, detail.ID, items[0].ID, ResearchItemUpdate{Weight: fptr(0.5)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateItem(ctx, detail.ID, items[1].ID, ResearchItemUpdate{Weight: fptr(0.5)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.CreateBacktest(ctx, detail.ID)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != "task_already_active" {
+		t.Fatalf("different active input error=%v", err)
+	}
+	if appErr.Details["task_id"] != created.Run.TaskID || appErr.Details["resource_id"] != created.Run.ID {
+		t.Fatalf("conflict details=%+v", appErr.Details)
+	}
+	runs, err := svc.ListRuns(ctx, detail.ID, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%d err=%v, want one", len(runs), err)
+	}
+}
+
 // TestResearchSourceHashIncludesForwardFillAnchor covers the forward-fill anchor:
 // when a series has no observation on the window start day, the valuation
 // forward-fills from the last pre-window point, so that anchor must be part

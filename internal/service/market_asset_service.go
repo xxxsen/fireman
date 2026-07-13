@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -588,8 +590,9 @@ type DirectorySyncResult struct {
 	Tasks []DirectorySyncTaskItem `json:"tasks"`
 }
 
-// directoryDedupeKey is asset_directory_sync|{sync_key}. force never changes
-// the dedupe key: an active unit task is always returned as-is.
+// directoryDedupeKey is asset_directory_sync|{sync_key}. Force changes the
+// input hash, not the active-task identity: identical requests reuse the task,
+// while a different request conflicts until the active task is terminal.
 func directoryDedupeKey(syncKey string) string {
 	return repository.WorkerTaskTypeAssetDirectorySync + "|" + syncKey
 }
@@ -597,7 +600,7 @@ func directoryDedupeKey(syncKey string) string {
 // SyncDirectory creates asset_directory_sync tasks for the requested scope
 // (all units) or single sync_key. All units are processed in one transaction
 // so worker_tasks and market_asset_sync_state.last_task_id stay consistent;
-// units with an existing active task are returned with existed=true without
+// units with an identical active task are returned with existed=true without
 // blocking the other units.
 func (s *MarketAssetService) SyncDirectory(
 	ctx context.Context, req DirectorySyncRequest,
@@ -681,17 +684,6 @@ func (s *MarketAssetService) createDirectoryUnitTaskTx(
 	item := DirectorySyncTaskItem{SyncKey: unit.SyncKey, Label: unit.Label}
 	taskType := repository.WorkerTaskTypeAssetDirectorySync
 	dedupeKey := directoryDedupeKey(unit.SyncKey)
-
-	existing, err := s.tasks.FindActiveByDedupeTx(ctx, tx, repository.WorkerTypeSidecar, taskType, dedupeKey)
-	if err == nil {
-		item.Task = taskToView(existing)
-		item.Existed = true
-		return item, nil
-	}
-	if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
-		return item, fmt.Errorf("find active directory task: %w", err)
-	}
-
 	payload := AssetDirectorySyncPayload{
 		SyncKey:         unit.SyncKey,
 		Scope:           unit.Scope,
@@ -703,6 +695,8 @@ func (s *MarketAssetService) createDirectoryUnitTaskTx(
 	if err != nil {
 		return item, fmt.Errorf("marshal directory payload: %w", err)
 	}
+	inputHash := payloadInputHash(string(payloadJSON))
+
 	task := repository.WorkerTask{
 		ID:          "task_" + uuid.New().String(),
 		WorkerType:  repository.WorkerTypeSidecar,
@@ -712,27 +706,23 @@ func (s *MarketAssetService) createDirectoryUnitTaskTx(
 		ScopeType:   "system",
 		ScopeID:     unit.SyncKey,
 		DedupeKey:   dedupeKey,
+		InputHash:   inputHash,
 		PayloadJSON: string(payloadJSON),
 		MaxAttempts: 2,
 		CreatedAt:   time.Now().UnixMilli(),
 	}
-	if err := s.coordinator.CreateTx(ctx, tx, &task); err != nil {
-		if repository.IsWorkerTaskUniqueConstraint(err) {
-			// Lost the race: another request created the active task first.
-			dup, findErr := s.tasks.FindActiveByDedupeTx(ctx, tx, repository.WorkerTypeSidecar, taskType, dedupeKey)
-			if findErr != nil {
-				return item, fmt.Errorf("find duplicate directory task: %w", findErr)
-			}
-			item.Task = taskToView(dup)
-			item.Existed = true
-			return item, nil
-		}
-		return item, fmt.Errorf("create directory task: %w", err)
+	bound, reused, err := s.createOrReuseTaskTx(ctx, tx, task)
+	if err != nil {
+		return item, err
+	}
+	item.Task = taskToView(bound)
+	item.Existed = reused
+	if reused {
+		return item, nil
 	}
 	if err := s.assets.SetSyncLastTaskTx(ctx, tx, unit.SyncKey, unit.Scope, task.ID); err != nil {
 		return item, fmt.Errorf("set directory sync last task: %w", err)
 	}
-	item.Task = taskToView(task)
 	return item, nil
 }
 
@@ -754,6 +744,7 @@ func (s *MarketAssetService) createTask(
 		ScopeType:   scopeType,
 		ScopeID:     scopeID,
 		DedupeKey:   dedupeKey,
+		InputHash:   payloadInputHash(payloadJSON),
 		PayloadJSON: payloadJSON,
 		MaxAttempts: 2,
 		CreatedAt:   time.Now().UnixMilli(),
@@ -788,7 +779,7 @@ func (s *MarketAssetService) createOrReuseTaskTx(
 		ctx, tx, task.WorkerType, task.Type, task.DedupeKey,
 	)
 	if err == nil {
-		return existing, true, nil
+		return resolveExistingActiveTask(existing, task.InputHash)
 	}
 	if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
 		return repository.WorkerTask{}, false, fmt.Errorf("find active task: %w", err)
@@ -804,7 +795,12 @@ func (s *MarketAssetService) createOrReuseTaskTx(
 	if err != nil {
 		return repository.WorkerTask{}, false, fmt.Errorf("find duplicate active task: %w", err)
 	}
-	return duplicate, true, nil
+	return resolveExistingActiveTask(duplicate, task.InputHash)
+}
+
+func payloadInputHash(payload string) string {
+	sum := sha256.Sum256([]byte(payload))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // --- asset detail ---
@@ -1073,20 +1069,11 @@ const (
 )
 
 func historyDedupeKey(p AssetHistorySyncPayload) string {
-	allowSwitch := "false"
-	if p.AllowSourceSwitch {
-		allowSwitch = "true"
-	}
 	return strings.Join([]string{
 		repository.WorkerTaskTypeAssetHistorySync,
 		p.AssetKey,
 		p.AdjustPolicy,
 		p.PointType,
-		p.RequestedRange,
-		p.RequiredSourceName,
-		p.StartDate,
-		allowSwitch,
-		p.ReplacementMode,
 	}, "|")
 }
 
@@ -1324,13 +1311,8 @@ func incrementalStartDate(dataAsOf string) (string, error) {
 
 // --- fx sync task creation ---
 
-func fxDedupeKey(p FXRateSyncPayload) string {
-	return strings.Join([]string{
-		repository.WorkerTaskTypeFXRateSync,
-		strings.Join(p.Pairs, ","),
-		p.RequestedRange,
-		p.ReplacementMode,
-	}, "|")
+func fxDedupeKey() string {
+	return repository.WorkerTaskTypeFXRateSync + "|system"
 }
 
 // SyncFXRates creates (or returns the existing active) fx_rate_sync task for
@@ -1349,7 +1331,7 @@ func (s *MarketAssetService) SyncFXRates(ctx context.Context) (TaskCreateResult,
 	}
 	return s.createTask(ctx, 100, repository.WorkerTaskTypeFXRateSync,
 		"system", ScopeFXRates,
-		fxDedupeKey(payload), string(payloadJSON),
+		fxDedupeKey(), string(payloadJSON),
 		func(ctx context.Context, tx *sql.Tx, taskID string) error {
 			return s.assets.SetSyncLastTaskTx(ctx, tx, ScopeFXRates, ScopeFXRates, taskID)
 		})

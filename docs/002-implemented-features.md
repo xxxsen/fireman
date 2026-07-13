@@ -152,7 +152,7 @@ FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](
 | --- | --- |
 | 压力测试 | 历史情景冲击；恢复期 P50 等指标 |
 | 敏感性测试 | Tornado、参数曲线、热力图 |
-| 异步 Job | 与模拟共用 Worker 框架 |
+| 异步任务 | 与模拟共用统一 Worker Task 框架；按任务类型独立恢复、轮询和重试 |
 
 ---
 
@@ -162,7 +162,9 @@ FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](
 | --- | --- |
 | 备份 / 恢复 | `GET /system/backup`、`POST /system/restore`（维护模式） |
 | 计划导出 | JSON、targets CSV、rebalance CSV |
-| Worker 优雅关闭 | 等待进行中 job 或超时 |
+| 统一 Worker Task | `worker_tasks` 是唯一任务表；Go 提供创建、查询、claim、心跳、取消、结果与恢复控制面，见 [031-unified-worker-task-architecture.md](./031-unified-worker-task-architecture.md) |
+| 前端任务恢复 | HTTP 轮询为正确性来源、SSE 加速、刷新按业务 scope 恢复、stable active dedupe 防止重复创建，见 [034-async-task-tracking-and-recovery.md](./034-async-task-tracking-and-recovery.md) |
+| Worker 优雅关闭 | 等待进行中 task 或超时 |
 | Ticket 清理 | 过期 resolution ticket 后台清理 |
 | 集成测试 | `internal/api/stage7_integration_test.go` 等覆盖主链路 |
 
@@ -179,6 +181,7 @@ FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](
 - 组合优先 UI、结构偏差与规模偏差分拆
 - 调仓工作台 / 持仓校正 / 全局配置模板收拢
 - 市场数据自动更新管理与定时扫描器
+- 异步任务前端跟踪、刷新恢复与重复创建防护
 
 ---
 

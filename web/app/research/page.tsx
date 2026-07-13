@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyFromPlanDialog } from "@/components/research/CopyFromPlanDialog";
 import { runStatusBadge } from "@/components/research/runStatus";
+import { isTaskActive } from "@/lib/api/tasks";
 
 function weightBadge(item: ResearchCollectionListItem) {
   if (item.enabled_assets === 0) {
@@ -169,10 +170,20 @@ export default function ResearchHomePage() {
   const collectionsQuery = useQuery({
     queryKey: ["research", "collections"],
     queryFn: () => listCollections(),
+    refetchInterval: (query) =>
+      query.state.data?.collections.some((collection) =>
+        isTaskActive(collection.latest_run?.status),
+      )
+        ? 2000
+        : false,
   });
   const recentRunsQuery = useQuery({
     queryKey: ["research", "recent-runs"],
     queryFn: () => listRecentRuns(8),
+    refetchInterval: (query) =>
+      query.state.data?.runs.some((run) => isTaskActive(run.status))
+        ? 2000
+        : false,
   });
 
   const invalidateCollections = () =>
@@ -281,7 +292,7 @@ export default function ResearchHomePage() {
   const archived = allCollections.filter((c) => c.status === "archived");
   const runs = recentRunsQuery.data?.runs ?? [];
   const syncingCollections = collections.filter(
-    (c) => c.latest_run && (c.latest_run.status === "pending" || c.latest_run.status === "running"),
+    (c) => isTaskActive(c.latest_run?.status),
   );
   const attentionCollections = collections.filter(
     (c) =>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AllocationBarChart } from "@/components/charts/AllocationBarChart";
 import { RegionAllocationBarChart } from "@/components/charts/RegionAllocationBarChart";
 import { AssetClassRegionGroups } from "@/components/charts/AssetClassRegionGroups";
@@ -13,9 +13,11 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageSkeleton } from "@/components/ui/Skeleton";
 import { useTaskStatus } from "@/hooks/useTaskStatus";
+import { useActiveTaskRestore } from "@/hooks/useActiveTaskRestore";
 import { getDashboard } from "@/lib/api/dashboard";
 import { formatMoney, formatMoneyScaled, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
+import { isTaskActive } from "@/lib/api/tasks";
 
 /**
  * Shared header for the two side-by-side allocation cards: a title row plus a
@@ -46,6 +48,7 @@ function ChartCardHeader({
 
 export default function OverviewPage() {
   const planId = useParams().id as string;
+  const qc = useQueryClient();
   const searchParams = useSearchParams();
   const pendingTaskId = searchParams.get("task_id");
   const simulationStartFailed = searchParams.get("simulation_error") === "1";
@@ -53,7 +56,36 @@ export default function OverviewPage() {
     queryKey: ["dashboard", planId],
     queryFn: () => getDashboard(planId),
   });
-  const pendingTask = useTaskStatus(pendingTaskId);
+  const businessTaskId = isTaskActive(data?.latest_simulation?.task_status)
+    ? data?.latest_simulation?.task_id
+    : null;
+  const taskRestore = useActiveTaskRestore({
+    workerType: "go_worker",
+    taskType: "simulation",
+    scopeType: "plan",
+    scopeId: planId,
+    businessTaskId,
+    preferredTaskId: pendingTaskId,
+  });
+  // The restore query intentionally returns active tasks only. Keep the URL
+  // task as a terminal-state hint too, so a refresh can still show completion
+  // or failure feedback for the task that opened this page.
+  const effectiveTaskId = taskRestore.taskId ?? businessTaskId ?? pendingTaskId;
+  const pendingTask = useTaskStatus(effectiveTaskId, {
+    initialTask: taskRestore.task,
+    onComplete: () => {
+      void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
+      void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+    },
+    onFailed: () => {
+      void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
+      void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+    },
+    onCanceled: () => {
+      void qc.invalidateQueries({ queryKey: ["dashboard", planId] });
+      void qc.invalidateQueries({ queryKey: ["active-task-restore"] });
+    },
+  });
 
   if (isLoading && !data) {
     return <PageSkeleton label="加载组合总览…" />;
@@ -80,13 +112,12 @@ export default function OverviewPage() {
     ? `/plans/${planId}/rebalance/executions/${activeExecution.id}`
     : `/plans/${planId}/rebalance`;
 
-  // Explicit job-status branches: pending/running → info, failed → warning,
+  // Explicit job-status branches: active → info, failed → warning,
   // succeeded → success, canceled → silent.
-  const taskStatus = pendingTaskId
+  const taskStatus = effectiveTaskId
     ? (pendingTask.task?.status ?? "pending")
     : null;
-  const simulationRunning =
-    taskStatus === "pending" || taskStatus === "running";
+  const simulationRunning = isTaskActive(taskStatus);
   const simulationSucceeded = taskStatus === "complete";
   const simulationFailed = taskStatus === "failed";
 
@@ -117,6 +148,21 @@ export default function OverviewPage() {
         </Link>
       </Alert>
     );
+  } else if (taskRestore.restoreError) {
+    topBanner = (
+      <Alert variant="warning">
+        <span>模拟任务状态恢复失败。</span>
+        <Button
+          variant="ghost"
+          className="ml-2 px-2 py-1"
+          onClick={() => void taskRestore.retryRestore()}
+        >
+          重试状态检查
+        </Button>
+      </Alert>
+    );
+  } else if (taskRestore.restoring) {
+    topBanner = <Alert variant="info">正在恢复模拟任务状态...</Alert>;
   } else if (simulationFailed) {
     topBanner = (
       <Alert variant="warning">
@@ -139,6 +185,15 @@ export default function OverviewPage() {
         >
           前往计划设置查看
         </Link>
+        {pendingTask.pollError && (
+          <Button
+            variant="ghost"
+            className="ml-2 px-2 py-1"
+            onClick={() => void pendingTask.refetch()}
+          >
+            状态更新失败，立即重试
+          </Button>
+        )}
       </Alert>
     );
   } else if (simulationSucceeded) {

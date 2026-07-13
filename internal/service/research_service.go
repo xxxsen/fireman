@@ -1795,8 +1795,16 @@ func (s *ResearchService) CreateBacktest(
 		DataQualityJSON:   "{}",
 		CreatedAt:         now,
 	}
-	if err := s.persistQueuedResearchRun(ctx, run, inputHash, string(payloadJSON), now); err != nil {
+	bound, racedReuse, err := s.persistQueuedResearchRun(ctx, run, inputHash, string(payloadJSON), now)
+	if err != nil {
 		return zero, err
+	}
+	if racedReuse {
+		existing, getErr := s.research.GetRunByTaskID(ctx, bound.ID)
+		if getErr != nil {
+			return zero, wrapRepo("load active research backtest", getErr)
+		}
+		return ResearchBacktestResult{Run: buildRunView(existing), Reused: true}, nil
 	}
 	return ResearchBacktestResult{Run: buildRunView(run)}, nil
 }
@@ -1826,13 +1834,13 @@ func (s *ResearchService) persistQueuedResearchRun(
 	run repository.ResearchBacktestRun,
 	inputHash, payloadJSON string,
 	now int64,
-) error {
+) (repository.WorkerTask, bool, error) {
 	task := repository.WorkerTask{
 		ID: run.TaskID, WorkerType: repository.WorkerTypeGo,
 		Type:      repository.WorkerTaskTypeResearchBacktest,
 		Status:    repository.WorkerTaskStatusPending,
 		ScopeType: "research_collection", ScopeID: run.CollectionID,
-		DedupeKey: repository.WorkerTaskTypeResearchBacktest + "|collection:" + run.CollectionID + "|input:" + inputHash,
+		DedupeKey: repository.WorkerTaskTypeResearchBacktest + "|collection:" + run.CollectionID,
 		InputHash: inputHash, PayloadJSON: payloadJSON, ProgressTotal: researchJobPhases,
 		CreatedAt: now,
 	}
@@ -1849,17 +1857,20 @@ func (s *ResearchService) persistQueuedResearchTask(
 	task repository.WorkerTask,
 	operation string,
 	createRun func(*sql.Tx) error,
-) error {
+) (repository.WorkerTask, bool, error) {
+	var bound repository.WorkerTask
+	var reused bool
 	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		if err := s.coordinator.CreateTx(ctx, tx, &task); err != nil {
-			return fmt.Errorf("create research task: %w", err)
-		}
-		return createRun(tx)
+		var createErr error
+		bound, reused, createErr = createOrReuseActiveTaskTx(
+			ctx, tx, s.tasks, s.coordinator, task, func() error { return createRun(tx) },
+		)
+		return createErr
 	})
 	if err != nil {
-		return wrapRepo(operation, err)
+		return repository.WorkerTask{}, false, wrapRepo(operation, err)
 	}
-	return nil
+	return bound, reused, nil
 }
 
 // buildResearchSnapshot freezes the dataset into the auditable input

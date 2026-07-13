@@ -1,4 +1,4 @@
-import type { WorkerTaskStatus } from "@/lib/api/market-assets";
+import type { WorkerTaskStatus } from "@/types/api";
 import { Badge, type BadgeVariant } from "./Badge";
 
 const DEFAULT_LABELS: Record<WorkerTaskStatus, string> = {

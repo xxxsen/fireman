@@ -27,6 +27,7 @@ type CreateStressTestRequest struct {
 type CreateStressTestResponse struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
+	Reused bool   `json:"reused"`
 }
 
 // StressTestView is the API view of a stress test job.
@@ -85,7 +86,7 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 			return CreateStressTestResponse{}, err
 		}
 		if found {
-			return CreateStressTestResponse{TaskID: existing.ID, Status: existing.Status}, nil
+			return CreateStressTestResponse{TaskID: existing.ID, Status: existing.Status, Reused: true}, nil
 		}
 	}
 
@@ -95,44 +96,53 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 		return CreateStressTestResponse{}, err
 	}
 
+	var bound repository.WorkerTask
+	var reused bool
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		// Each Monte Carlo run keeps only the latest stress result; cancel any
-		// in-flight prior stress job before dropping its record.
-		if err := supersedePriorAnalysis(
-			ctx, tx, s.coordinator, s.analysis, runCtx.RunID, repository.AnalysisTypeStress,
-		); err != nil {
-			return err
-		}
 		payload, marshalErr := json.Marshal(map[string]string{
 			"simulation_run_id": runCtx.RunID, "analysis_type": repository.AnalysisTypeStress,
 		})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if err := s.coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+		task := repository.WorkerTask{
 			ID: taskID, WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeStress,
 			Status: repository.WorkerTaskStatusPending, ScopeType: "plan", ScopeID: req.PlanID,
 			DedupeKey: repository.WorkerTaskTypeStress + "|simulation_run:" + runCtx.RunID,
 			InputHash: inputHash, PayloadJSON: string(payload), ProgressTotal: 8,
-		}); err != nil {
-			return wrapRepo("create stress task", err)
 		}
-		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
-			TaskID: taskID, PlanID: req.PlanID, Type: repository.AnalysisTypeStress,
-			InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
-		}); err != nil {
-			return wrapRepo("create stress analysis pending", err)
+		var createErr error
+		bound, reused, createErr = createOrReuseActiveTaskTx(
+			ctx, tx, s.tasks, s.coordinator, task, func() error {
+				// Only terminal results are superseded. An active task is returned by
+				// the admission gate and is never canceled by a repeated click.
+				if err := supersedePriorAnalysis(
+					ctx, tx, s.coordinator, s.analysis, runCtx.RunID, repository.AnalysisTypeStress,
+				); err != nil {
+					return err
+				}
+				if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
+					TaskID: taskID, PlanID: req.PlanID, Type: repository.AnalysisTypeStress,
+					InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
+				}); err != nil {
+					return wrapRepo("create stress analysis pending", err)
+				}
+				return nil
+			},
+		)
+		if createErr != nil {
+			return createErr
 		}
 		if req.IdempotencyKey != "" {
 			return s.tasks.SaveIdempotency(ctx, tx, "plan", req.PlanID,
-				repository.WorkerTaskTypeStress, req.IdempotencyKey, taskID, inputHash)
+				repository.WorkerTaskTypeStress, req.IdempotencyKey, bound.ID, inputHash)
 		}
 		return nil
 	})
 	if err != nil {
 		return CreateStressTestResponse{}, wrapRepo("create stress tx", err)
 	}
-	return CreateStressTestResponse{TaskID: taskID, Status: repository.WorkerTaskStatusPending}, nil
+	return CreateStressTestResponse{TaskID: bound.ID, Status: bound.Status, Reused: reused}, nil
 }
 
 func (s *StressService) ListByPlan(ctx context.Context, planID string) ([]StressTestView, error) {

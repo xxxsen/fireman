@@ -18,6 +18,8 @@ const getOptimizationReadinessMock = vi.hoisted(() => vi.fn());
 const getLatestOptimizationMock = vi.hoisted(() => vi.fn());
 const createOptimizationMock = vi.hoisted(() => vi.fn());
 const routerPushMock = vi.hoisted(() => vi.fn());
+const useActiveTaskRestoreMock = vi.hoisted(() => vi.fn());
+const useTaskStatusMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPushMock }),
@@ -31,6 +33,14 @@ vi.mock("@/lib/api/research", async (importOriginal) => ({
   getLatestOptimization: (...args: unknown[]) =>
     getLatestOptimizationMock(...args),
   createOptimization: (...args: unknown[]) => createOptimizationMock(...args),
+}));
+
+vi.mock("@/hooks/useActiveTaskRestore", () => ({
+  useActiveTaskRestore: (...args: unknown[]) =>
+    useActiveTaskRestoreMock(...args),
+}));
+vi.mock("@/hooks/useTaskStatus", () => ({
+  useTaskStatus: (...args: unknown[]) => useTaskStatusMock(...args),
 }));
 
 function detail(): ResearchCollectionDetail {
@@ -308,6 +318,22 @@ describe("BacktestPanel", () => {
     vi.clearAllMocks();
     getOptimizationReadinessMock.mockResolvedValue(optReadiness());
     getLatestOptimizationMock.mockResolvedValue(null);
+    useActiveTaskRestoreMock.mockReturnValue({
+      task: null,
+      taskId: null,
+      restoring: false,
+      restoreError: null,
+      retryRestore: vi.fn(),
+    });
+    useTaskStatusMock.mockReturnValue({
+      task: null,
+      progress: 0,
+      error: null,
+      pollError: null,
+      loading: false,
+      isActive: false,
+      refetch: vi.fn(),
+    });
   });
 
   it("disables the run button with the reason when blocked", () => {
@@ -429,5 +455,48 @@ describe("BacktestPanel", () => {
       ),
     );
     expect(screen.getByTestId("find-optimal")).toBeDisabled();
+  });
+
+  it("keeps both create buttons disabled while active-task state is restoring", async () => {
+    useActiveTaskRestoreMock.mockReturnValue({
+      task: null,
+      taskId: null,
+      restoring: true,
+      restoreError: null,
+      retryRestore: vi.fn(),
+    });
+    renderPanel(readiness());
+    expect(screen.getByTestId("run-backtest")).toBeDisabled();
+    await waitFor(() => expect(screen.getByTestId("find-optimal")).toBeDisabled());
+    expect(screen.getAllByText("正在恢复任务状态...")).toHaveLength(2);
+  });
+
+  it("does not create another backtest when an active run is restored", () => {
+    useTaskStatusMock
+      .mockReturnValueOnce({
+        task: { status: "pre_complete" },
+        progress: 1,
+        error: null,
+        pollError: null,
+        loading: false,
+        isActive: true,
+        refetch: vi.fn(),
+      })
+      .mockReturnValue({
+        task: null,
+        progress: 0,
+        error: null,
+        pollError: null,
+        loading: false,
+        isActive: false,
+        refetch: vi.fn(),
+      });
+    renderPanel(readiness(), [run({ status: "pre_complete" })]);
+    expect(screen.getByTestId("run-backtest")).toBeDisabled();
+    expect(screen.getByTestId("run-disabled-reason")).toHaveTextContent(
+      "正在保存结果",
+    );
+    fireEvent.click(screen.getByTestId("run-backtest"));
+    expect(createBacktestMock).not.toHaveBeenCalled();
   });
 });

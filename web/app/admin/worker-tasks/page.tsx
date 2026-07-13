@@ -15,7 +15,7 @@ import {
 import { WorkerTaskDetailDrawer } from "@/components/admin/WorkerTaskDetailDrawer";
 import { Alert } from "@/components/ui/Alert";
 import { listAdminWorkerTasks, WORKER_TASK_TYPE_LABELS } from "@/lib/api/admin";
-import { isTaskActive } from "@/lib/api/market-assets";
+import { isTaskActive } from "@/lib/api/tasks";
 import {
   ADMIN_PAGE_SIZE,
   useAdminListParams,

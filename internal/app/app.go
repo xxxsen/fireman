@@ -166,10 +166,11 @@ func enqueueAutoUpdateScanTask(
 	coordinator *taskcore.Coordinator, slot int64,
 ) error {
 	idempotencyKey := fmt.Sprintf("%d", slot)
-	dedupe := fmt.Sprintf("auto_update_scan|slot:%d", slot)
+	dedupe := repository.WorkerTaskTypeAutoUpdateScan + "|system"
+	inputHash := fmt.Sprintf("slot:%d", slot)
 	if _, storedHash, err := repo.FindIdempotency(ctx, "system", "auto_update",
 		repository.WorkerTaskTypeAutoUpdateScan, idempotencyKey); err == nil {
-		if storedHash != dedupe {
+		if storedHash != inputHash {
 			return fmt.Errorf("%w for slot %d", errAutoUpdateScanIdempotencyConflict, slot)
 		}
 		return nil
@@ -177,19 +178,38 @@ func enqueueAutoUpdateScanTask(
 		return err
 	}
 	return fdb.WithTx(ctx, pool, func(tx *sql.Tx) error {
+		if existing, err := repo.FindActiveByDedupeTx(
+			ctx, tx, repository.WorkerTypeGo, repository.WorkerTaskTypeAutoUpdateScan, dedupe,
+		); err == nil {
+			// A task can own only one idempotency key. Skipping this scheduler
+			// slot is intentional while the previous scan is still active.
+			_ = existing
+			return nil
+		} else if !errors.Is(err, repository.ErrWorkerTaskNotFound) {
+			return err
+		}
 		task := &repository.WorkerTask{
 			ID: "task_" + uuid.NewString(), WorkerType: repository.WorkerTypeGo,
 			Type:   repository.WorkerTaskTypeAutoUpdateScan,
 			Status: repository.WorkerTaskStatusPending, Priority: 50,
 			ScopeType: "system", ScopeID: "auto_update_scan", DedupeKey: dedupe,
-			InputHash: dedupe, PayloadJSON: fmt.Sprintf(`{"slot_timestamp":%d}`, slot),
+			InputHash: inputHash, PayloadJSON: fmt.Sprintf(`{"slot_timestamp":%d}`, slot),
 			ProgressTotal: 1,
 		}
 		if err := coordinator.CreateTx(ctx, tx, task); err != nil {
-			return err
+			if !repository.IsWorkerTaskUniqueConstraint(err) {
+				return err
+			}
+			_, findErr := repo.FindActiveByDedupeTx(
+				ctx, tx, repository.WorkerTypeGo, repository.WorkerTaskTypeAutoUpdateScan, dedupe,
+			)
+			if findErr != nil {
+				return findErr
+			}
+			return nil
 		}
 		return repo.SaveIdempotency(ctx, tx, "system", "auto_update",
-			repository.WorkerTaskTypeAutoUpdateScan, idempotencyKey, task.ID, dedupe)
+			repository.WorkerTaskTypeAutoUpdateScan, idempotencyKey, task.ID, inputHash)
 	})
 }
 

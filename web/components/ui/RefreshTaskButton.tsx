@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { ApiError } from "@/lib/api/client";
-import { isTaskActive, type TaskCreateResult, type WorkerTask } from "@/lib/api/market-assets";
+import type { TaskCreateResult, WorkerTask } from "@/lib/api/market-assets";
+import { isTaskActive } from "@/lib/api/tasks";
+import { getTask } from "@/lib/api/simulations";
 import { Button, type ButtonVariant } from "./Button";
 
 export interface RefreshTaskButtonProps {
@@ -46,6 +48,17 @@ export function RefreshTaskButton({
       const result = await createTask();
       onTask(result.task, result.existed);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "task_already_active") {
+        const taskId = err.details?.task_id;
+        if (typeof taskId === "string" && taskId) {
+          try {
+            onTask(await getTask(taskId), true);
+            return;
+          } catch {
+            // Fall through to the original conflict message if recovery fails.
+          }
+        }
+      }
       const message =
         err instanceof ApiError ? err.message : err instanceof Error ? err.message : "创建任务失败";
       onError?.(message);

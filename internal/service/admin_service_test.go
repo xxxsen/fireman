@@ -9,8 +9,20 @@ import (
 	"time"
 
 	"github.com/fireman/fireman/internal/repository"
+	taskcore "github.com/fireman/fireman/internal/task"
 	"github.com/fireman/fireman/internal/testutil"
 )
+
+func TestAdminWorkerTaskTypesCoverRegistry(t *testing.T) {
+	registry := taskcore.DefaultRegistry()
+	for _, workerType := range []string{repository.WorkerTypeGo, repository.WorkerTypeSidecar} {
+		for _, definition := range registry.DefinitionsFor(workerType) {
+			if !adminWorkerTaskTypes[definition.Type] {
+				t.Errorf("admin worker task filter is missing %s/%s", workerType, definition.Type)
+			}
+		}
+	}
+}
 
 func newAdminStack(t *testing.T) (*AdminService, *sql.DB) {
 	t.Helper()

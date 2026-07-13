@@ -35,6 +35,7 @@ type CreateSimulationResponse struct {
 	TaskID string `json:"task_id"`
 	RunID  string `json:"run_id"`
 	Status string `json:"status"`
+	Reused bool   `json:"reused"`
 }
 
 // SimulationRetentionLimit is how many Monte Carlo runs are kept per plan; older
@@ -295,6 +296,7 @@ func (s *SimulationService) Create(ctx context.Context, req CreateSimulationRequ
 	}
 
 	if resp, found, err := s.idempotentSimulation(ctx, req, inputHash); err != nil || found {
+		resp.Reused = found
 		return resp, err
 	}
 
@@ -333,39 +335,63 @@ func (s *SimulationService) createSimulationRun(
 		return CreateSimulationResponse{}, err
 	}
 
+	var bound repository.WorkerTask
+	var reused bool
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		payloadJSON, marshalErr := json.Marshal(map[string]string{"run_id": runID})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if err := s.coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+		task := repository.WorkerTask{
 			ID: taskID, WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeSimulation,
 			Status: repository.WorkerTaskStatusPending, ScopeType: "plan", ScopeID: req.PlanID,
+			DedupeKey: repository.WorkerTaskTypeSimulation + "|plan:" + req.PlanID,
 			InputHash: inputHash, PayloadJSON: string(payloadJSON),
 			ProgressTotal: snap.Parameters.SimulationRuns,
-		}); err != nil {
-			return wrapRepo("create simulation task", err)
 		}
-		if err := s.sims.CreatePending(ctx, tx, repository.SimulationRun{
-			ID: runID, TaskID: taskID, PlanID: req.PlanID, InputHash: inputHash,
-			InputSnapshotJSON: string(snapJSON), MarketSnapshotHash: snap.MarketSnapshotHash,
-			EngineVersion: snap.EngineVersion, Runs: snap.Parameters.SimulationRuns,
-			Seed: snap.RootSeed(), HorizonMonths: snap.HorizonMonths(),
-		}); err != nil {
-			return wrapRepo("create pending simulation run", err)
+		var createErr error
+		bound, reused, createErr = createOrReuseActiveTaskTx(
+			ctx, tx, s.tasks, s.coordinator, task, func() error {
+				if err := s.sims.CreatePending(ctx, tx, repository.SimulationRun{
+					ID: runID, TaskID: taskID, PlanID: req.PlanID, InputHash: inputHash,
+					InputSnapshotJSON: string(snapJSON), MarketSnapshotHash: snap.MarketSnapshotHash,
+					EngineVersion: snap.EngineVersion, Runs: snap.Parameters.SimulationRuns,
+					Seed: snap.RootSeed(), HorizonMonths: snap.HorizonMonths(),
+				}); err != nil {
+					return wrapRepo("create pending simulation run", err)
+				}
+				return nil
+			},
+		)
+		if createErr != nil {
+			return createErr
 		}
 		if req.IdempotencyKey != "" {
 			if err := s.tasks.SaveIdempotency(ctx, tx, "plan", req.PlanID,
-				repository.WorkerTaskTypeSimulation, req.IdempotencyKey, taskID, inputHash); err != nil {
+				repository.WorkerTaskTypeSimulation, req.IdempotencyKey, bound.ID, inputHash); err != nil {
 				return wrapRepo("save simulation idempotency", err)
 			}
+		}
+		if reused {
+			return nil
 		}
 		return s.pruneOldRuns(ctx, tx, req.PlanID)
 	})
 	if err != nil {
 		return CreateSimulationResponse{}, wrapRepo("create simulation tx", err)
 	}
-	return CreateSimulationResponse{TaskID: taskID, RunID: runID, Status: repository.WorkerTaskStatusPending}, nil
+	if reused {
+		existingRun, getErr := s.sims.GetByTaskID(ctx, bound.ID)
+		if getErr != nil {
+			return CreateSimulationResponse{}, wrapRepo("load active simulation run", getErr)
+		}
+		return CreateSimulationResponse{
+			TaskID: bound.ID, RunID: existingRun.ID, Status: bound.Status, Reused: true,
+		}, nil
+	}
+	return CreateSimulationResponse{
+		TaskID: taskID, RunID: runID, Status: repository.WorkerTaskStatusPending,
+	}, nil
 }
 
 func (s *SimulationService) idempotentSimulation(

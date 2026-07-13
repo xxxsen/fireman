@@ -266,12 +266,19 @@ export interface ActiveRebalanceExecution {
   line_count: number;
 }
 
+export type WorkerTaskStatus =
+  | "pending"
+  | "running"
+  | "pre_complete"
+  | "complete"
+  | "failed"
+  | "canceled";
+
 export interface Task {
   id: string;
   worker_type: "go_worker" | "sidecar_worker";
   type: string;
-  status:
-    "pending" | "running" | "pre_complete" | "complete" | "failed" | "canceled";
+  status: WorkerTaskStatus;
   scope_type: string;
   scope_id: string;
   progress_current: number;
@@ -282,15 +289,17 @@ export interface Task {
   max_attempts: number;
   error_code?: string;
   error_message?: string;
+  result_key?: string;
   created_at: number;
   started_at?: number | null;
   heartbeat_at?: number | null;
   finished_at?: number | null;
+  updated_at: number;
 }
 
 export interface TaskEvent {
   task_id: string;
-  status: string;
+  status: WorkerTaskStatus;
   phase?: string;
   progress_current: number;
   progress_total: number;
@@ -316,14 +325,7 @@ export interface SimulationRun {
   failure_count: number;
   summary_json: SimulationSummary;
   created_at: number;
-  task_status?:
-    | "pending"
-    | "running"
-    | "pre_complete"
-    | "complete"
-    | "failed"
-    | "canceled"
-    | "unknown";
+  task_status?: WorkerTaskStatus | "unknown";
   task_error_code?: string;
   task_error_message?: string;
   asset_participation?: {

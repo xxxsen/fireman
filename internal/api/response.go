@@ -59,7 +59,7 @@ func FailErr(c *gin.Context, err error) {
 			status = http.StatusConflict
 		case "idempotency_conflict", "task_already_terminal", "task_claim_conflict",
 			"task_lease_lost", "task_cancel_requested", "task_result_conflict",
-			"system_profile_identity_conflict":
+			"task_already_active", "system_profile_identity_conflict":
 			status = http.StatusConflict
 		case "simulation_not_found", "path_not_found",
 			"task_not_found", "market_asset_not_found", "auto_update_rule_not_found",

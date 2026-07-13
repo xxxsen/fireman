@@ -14,6 +14,7 @@ import {
   pointTypeLabel,
 } from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
+import { isTaskActive } from "@/lib/api/tasks";
 import { Button } from "@/components/ui/Button";
 
 function isExchangeTraded(instrumentType: string): boolean {
@@ -150,7 +151,7 @@ function dataStatusBadge(
 ) {
   if (isCash) return <Badge variant="positive">现金（无需历史）</Badge>;
   if (!view) return <Badge variant="neutral">—</Badge>;
-  if (view.sync_status === "pending" || view.sync_status === "running") {
+  if (isTaskActive(view.sync_status)) {
     return <Badge variant="info">同步中</Badge>;
   }
   if (!view.has_history) {

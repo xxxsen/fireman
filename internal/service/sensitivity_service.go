@@ -26,6 +26,7 @@ type CreateSensitivityTestRequest struct {
 type CreateSensitivityTestResponse struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
+	Reused bool   `json:"reused"`
 }
 
 // SensitivityTestView is the API view of a sensitivity test job.
@@ -86,7 +87,7 @@ func (s *SensitivityService) Create(ctx context.Context,
 			return CreateSensitivityTestResponse{}, err
 		}
 		if found {
-			return CreateSensitivityTestResponse{TaskID: existing.ID, Status: existing.Status}, nil
+			return CreateSensitivityTestResponse{TaskID: existing.ID, Status: existing.Status, Reused: true}, nil
 		}
 	}
 
@@ -96,37 +97,44 @@ func (s *SensitivityService) Create(ctx context.Context,
 		return CreateSensitivityTestResponse{}, err
 	}
 
+	var bound repository.WorkerTask
+	var reused bool
 	err = fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
-		// Each Monte Carlo run keeps only the latest sensitivity result; cancel
-		// any in-flight prior sensitivity job before dropping its record.
-		if err := supersedePriorAnalysis(
-			ctx, tx, s.coordinator, s.analysis, runCtx.RunID, repository.AnalysisTypeSensitivity,
-		); err != nil {
-			return err
-		}
 		payload, marshalErr := json.Marshal(map[string]string{
 			"simulation_run_id": runCtx.RunID, "analysis_type": repository.AnalysisTypeSensitivity,
 		})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if err := s.coordinator.CreateTx(ctx, tx, &repository.WorkerTask{
+		task := repository.WorkerTask{
 			ID: taskID, WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeSensitivity,
 			Status: repository.WorkerTaskStatusPending, ScopeType: "plan", ScopeID: req.PlanID,
 			DedupeKey: repository.WorkerTaskTypeSensitivity + "|simulation_run:" + runCtx.RunID,
 			InputHash: inputHash, PayloadJSON: string(payload), ProgressTotal: 50,
-		}); err != nil {
-			return wrapRepo("create sensitivity task", err)
 		}
-		if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
-			TaskID: taskID, PlanID: req.PlanID, Type: repository.AnalysisTypeSensitivity,
-			InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
-		}); err != nil {
-			return wrapRepo("create sensitivity analysis pending", err)
+		var createErr error
+		bound, reused, createErr = createOrReuseActiveTaskTx(
+			ctx, tx, s.tasks, s.coordinator, task, func() error {
+				if err := supersedePriorAnalysis(
+					ctx, tx, s.coordinator, s.analysis, runCtx.RunID, repository.AnalysisTypeSensitivity,
+				); err != nil {
+					return err
+				}
+				if err := s.analysis.CreatePending(ctx, tx, repository.AnalysisResult{
+					TaskID: taskID, PlanID: req.PlanID, Type: repository.AnalysisTypeSensitivity,
+					InputHash: inputHash, SimulationRunID: runCtx.RunID, ResultJSON: pending,
+				}); err != nil {
+					return wrapRepo("create sensitivity analysis pending", err)
+				}
+				return nil
+			},
+		)
+		if createErr != nil {
+			return createErr
 		}
 		if req.IdempotencyKey != "" {
 			return s.tasks.SaveIdempotency(ctx, tx, "plan", req.PlanID,
-				repository.WorkerTaskTypeSensitivity, req.IdempotencyKey, taskID,
+				repository.WorkerTaskTypeSensitivity, req.IdempotencyKey, bound.ID,
 				inputHash)
 		}
 		return nil
@@ -134,7 +142,7 @@ func (s *SensitivityService) Create(ctx context.Context,
 	if err != nil {
 		return CreateSensitivityTestResponse{}, wrapRepo("create sensitivity tx", err)
 	}
-	return CreateSensitivityTestResponse{TaskID: taskID, Status: repository.WorkerTaskStatusPending}, nil
+	return CreateSensitivityTestResponse{TaskID: bound.ID, Status: bound.Status, Reused: reused}, nil
 }
 
 func (s *SensitivityService) ListByPlan(ctx context.Context, planID string) ([]SensitivityTestView, error) {

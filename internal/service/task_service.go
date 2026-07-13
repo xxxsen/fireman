@@ -81,8 +81,24 @@ func (s *TaskService) List(ctx context.Context, params TaskListParams) ([]TaskVi
 		params.Limit = 100
 	}
 	var statuses []string
-	if strings.TrimSpace(params.Status) != "" {
-		statuses = []string{strings.TrimSpace(params.Status)}
+	switch status := strings.TrimSpace(params.Status); status {
+	case "":
+	case "active":
+		statuses = []string{
+			repository.WorkerTaskStatusPending,
+			repository.WorkerTaskStatusRunning,
+			repository.WorkerTaskStatusPreComplete,
+		}
+	case repository.WorkerTaskStatusPending,
+		repository.WorkerTaskStatusRunning,
+		repository.WorkerTaskStatusPreComplete,
+		repository.WorkerTaskStatusComplete,
+		repository.WorkerTaskStatusFailed,
+		repository.WorkerTaskStatusCanceled:
+		statuses = []string{status}
+	default:
+		return nil, 0, newErr("invalid_request",
+			"status must be a worker task status or active", nil)
 	}
 	items, total, err := s.coordinator.List(ctx, repository.WorkerTaskFilter{
 		WorkerType: params.WorkerType, Type: params.Type, Statuses: statuses,

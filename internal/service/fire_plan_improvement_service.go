@@ -264,39 +264,50 @@ func (s *FirePlanImprovementService) Create(
 		SourceMarketHash: snapshot.MarketSnapshotHash, ConfigJSON: string(configRaw),
 		InputSnapshotJSON: string(frozenRaw),
 	}
+	var bound repository.WorkerTask
+	var reused bool
 	err = fdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		payload, marshalErr := json.Marshal(map[string]string{"run_id": record.ID})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		task := &repository.WorkerTask{
+		task := repository.WorkerTask{
 			ID: record.TaskID, WorkerType: repository.WorkerTypeGo,
 			Type: repository.WorkerTaskTypeFirePlanImprovement, Status: repository.WorkerTaskStatusPending,
-			ScopeType: "plan", ScopeID: planID, DedupeKey: "improvement|" + planID + "|" + inputHash,
+			ScopeType: "plan", ScopeID: planID,
+			DedupeKey: repository.WorkerTaskTypeFirePlanImprovement + "|plan:" + planID,
 			InputHash: inputHash, PayloadJSON: string(payload),
 			ProgressTotal: improvement.SearchUpperBound(config),
 		}
-		if err := s.coordinator.CreateTx(ctx, tx, task); err != nil {
-			return err
-		}
-		if err := s.runs.CreateTx(ctx, tx, &record); err != nil {
-			return err
+		var createErr error
+		bound, reused, createErr = createOrReuseActiveTaskTx(
+			ctx, tx, s.tasks, s.coordinator, task, func() error {
+				if err := s.runs.CreateTx(ctx, tx, &record); err != nil {
+					return err
+				}
+				return s.runs.PruneTx(ctx, tx, planID, improvementRetentionLimit)
+			},
+		)
+		if createErr != nil {
+			return createErr
 		}
 		if req.IdempotencyKey != "" {
 			if err := s.tasks.SaveIdempotency(ctx, tx, "plan", planID,
-				repository.WorkerTaskTypeFirePlanImprovement, req.IdempotencyKey, record.TaskID, inputHash); err != nil {
+				repository.WorkerTaskTypeFirePlanImprovement, req.IdempotencyKey, bound.ID, inputHash); err != nil {
 				return err
 			}
 		}
-		return s.runs.PruneTx(ctx, tx, planID, improvementRetentionLimit)
+		return nil
 	})
 	if err != nil {
-		if repository.IsWorkerTaskUniqueConstraint(err) {
-			if existing, findErr := s.runs.FindReusable(ctx, planID, inputHash); findErr == nil {
-				return createImprovementResponse(existing, true), nil
-			}
-		}
 		return CreateImprovementResponse{}, wrapRepo("create improvement transaction", err)
+	}
+	if reused {
+		existing, getErr := s.runs.GetByTaskID(ctx, bound.ID)
+		if getErr != nil {
+			return CreateImprovementResponse{}, wrapRepo("load active improvement", getErr)
+		}
+		return createImprovementResponse(existing, true), nil
 	}
 	record.TaskStatus = repository.WorkerTaskStatusPending
 	return createImprovementResponse(record, false), nil

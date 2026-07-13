@@ -20,6 +20,15 @@ const api = vi.hoisted(() => ({
 const taskState = vi.hoisted(() => ({
   value: { task: null as { status: string; phase?: string } | null, progress: 0, error: null as string | null },
 }));
+const restoreState = vi.hoisted(() => ({
+  value: {
+    task: null,
+    taskId: null as string | null,
+    restoring: false,
+    restoreError: null as Error | null,
+    retryRestore: vi.fn(),
+  },
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -28,6 +37,9 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/hooks/useTaskStatus", () => ({
   useTaskStatus: () => taskState.value,
+}));
+vi.mock("@/hooks/useActiveTaskRestore", () => ({
+  useActiveTaskRestore: () => restoreState.value,
 }));
 
 vi.mock("@/lib/api/improvements", () => ({
@@ -155,6 +167,13 @@ describe("ImprovementPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     taskState.value = { task: null, progress: 0, error: null };
+    restoreState.value = {
+      task: null,
+      taskId: null,
+      restoring: false,
+      restoreError: null,
+      retryRestore: vi.fn(),
+    };
     api.readiness.mockResolvedValue(readiness);
     api.list.mockResolvedValue({ runs: [], total: 0, limit: 20, offset: 0 });
     api.detail.mockResolvedValue(run("pending"));

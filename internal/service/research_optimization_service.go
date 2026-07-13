@@ -398,11 +398,17 @@ type optimizationInputSnapshot struct {
 	Config         OptimizationConfig       `json:"config"`
 }
 
-// CreateOptimization creates an optimization run.
-func (s *ResearchService) CreateOptimization(
+type optimizationCreationContext struct {
+	collection repository.ResearchCollection
+	dataset    *researchDataset
+	config     OptimizationConfig
+	readiness  ResearchReadiness
+}
+
+func (s *ResearchService) prepareOptimizationCreation(
 	ctx context.Context, collectionID string, req ResearchOptimizationRequest,
-) (ResearchOptimizationCreateResult, error) {
-	var zero ResearchOptimizationCreateResult
+) (optimizationCreationContext, error) {
+	var zero optimizationCreationContext
 	collection, err := s.research.GetCollection(ctx, collectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrResearchCollectionNotFound) {
@@ -413,12 +419,10 @@ func (s *ResearchService) CreateOptimization(
 	if collection.Status != repository.ResearchCollectionStatusActive {
 		return zero, newErr("research_collection_archived", "归档的集合不能运行调优", nil)
 	}
-
-	ds, err := s.loadResearchDataset(ctx, collection)
+	dataset, err := s.loadResearchDataset(ctx, collection)
 	if err != nil {
 		return zero, err
 	}
-
 	config, err := optimizationConfigFromRequest(collection, req)
 	if err != nil {
 		return zero, tailRiskAppError(err)
@@ -427,10 +431,28 @@ func (s *ResearchService) CreateOptimization(
 	if err := config.Validate(); err != nil {
 		return zero, newErr("invalid_request", err.Error(), nil)
 	}
-	stdReadiness, err := validateOptimizationCreationReadiness(ds, config, s.now())
+	readiness, err := validateOptimizationCreationReadiness(dataset, config, s.now())
 	if err != nil {
 		return zero, err
 	}
+	return optimizationCreationContext{
+		collection: collection, dataset: dataset, config: config, readiness: readiness,
+	}, nil
+}
+
+// CreateOptimization creates an optimization run.
+func (s *ResearchService) CreateOptimization(
+	ctx context.Context, collectionID string, req ResearchOptimizationRequest,
+) (ResearchOptimizationCreateResult, error) {
+	var zero ResearchOptimizationCreateResult
+	prepared, err := s.prepareOptimizationCreation(ctx, collectionID, req)
+	if err != nil {
+		return zero, err
+	}
+	collection := prepared.collection
+	ds := prepared.dataset
+	config := prepared.config
+	stdReadiness := prepared.readiness
 
 	snapshot := buildOptimizationSnapshot(ds, stdReadiness, config)
 	inputHash := computeOptimizationInputHash(snapshot)
@@ -472,8 +494,18 @@ func (s *ResearchService) CreateOptimization(
 		CreatedAt: now,
 	}
 
-	if err := s.persistQueuedOptimization(ctx, run, inputHash, string(payloadJSON), now); err != nil {
+	bound, racedReuse, err := s.persistQueuedOptimization(ctx, run, inputHash, string(payloadJSON), now)
+	if err != nil {
 		return zero, err
+	}
+	if racedReuse {
+		existing, getErr := s.research.GetOptimizationRunByTaskID(ctx, bound.ID)
+		if getErr != nil {
+			return zero, wrapRepo("load active optimization", getErr)
+		}
+		view := buildOptimizationView(existing)
+		applyOptimizationTaskState(&view, bound)
+		return ResearchOptimizationCreateResult{Optimization: view, Reused: true}, nil
 	}
 
 	view := buildOptimizationView(run)
@@ -548,14 +580,14 @@ func (s *ResearchService) persistQueuedOptimization(
 	run repository.ResearchOptimizationRun,
 	inputHash, payloadJSON string,
 	now int64,
-) error {
+) (repository.WorkerTask, bool, error) {
 	task := repository.WorkerTask{
 		ID: run.TaskID, WorkerType: repository.WorkerTypeGo,
 		Type:      repository.WorkerTaskTypeResearchOptimization,
 		Status:    repository.WorkerTaskStatusPending,
 		ScopeType: "research_collection", ScopeID: run.CollectionID,
 		DedupeKey: repository.WorkerTaskTypeResearchOptimization +
-			"|collection:" + run.CollectionID + "|input:" + inputHash,
+			"|collection:" + run.CollectionID,
 		InputHash: inputHash, PayloadJSON: payloadJSON, ProgressTotal: run.CandidateCount,
 		CreatedAt: now,
 	}

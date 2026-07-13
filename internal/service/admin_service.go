@@ -322,6 +322,7 @@ type AdminWorkerTaskItem struct {
 
 var adminWorkerTaskTypes = map[string]bool{
 	repository.WorkerTaskTypeSimulation:           true,
+	repository.WorkerTaskTypeFirePlanImprovement:  true,
 	repository.WorkerTaskTypeStress:               true,
 	repository.WorkerTaskTypeSensitivity:          true,
 	repository.WorkerTaskTypeResearchBacktest:     true,

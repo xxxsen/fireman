@@ -13,7 +13,7 @@ import {
   workerTaskTypeLabel,
   type AdminWorkerTaskFull,
 } from "@/lib/api/admin";
-import { isTaskActive } from "@/lib/api/market-assets";
+import { isTaskActive } from "@/lib/api/tasks";
 import { formatDurationMs } from "@/lib/admin-format";
 import { formatDateTimeFromMs } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
