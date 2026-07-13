@@ -3,7 +3,11 @@ from __future__ import annotations
 import time
 
 from fireman_market_provider.worker.config import WorkerConfig
-from fireman_market_provider.worker.goclient import GoAPIError, WorkerTask
+from fireman_market_provider.worker.goclient import (
+    GoAPIError,
+    GoInternalClient,
+    WorkerTask,
+)
 from fireman_market_provider.worker.runner import WorkerRunner, _ActiveAttempt
 from fireman_market_provider.worker.process_runner import (
     TaskProcessCanceled,
@@ -74,6 +78,32 @@ class CancelAwareProcessRunner:
         if not canceled.wait(timeout=1.0):
             raise AssertionError("sidecar did not observe canceled task")
         raise TaskProcessCanceled()
+
+
+def test_get_task_scopes_detail_request_to_sidecar_worker(monkeypatch):
+    client = GoInternalClient("http://go")
+    requests: list[tuple[str, str]] = []
+
+    def request(method, path, *_args, **_kwargs):
+        requests.append((method, path))
+        return {
+            "data": {
+                "id": "task_1",
+                "version_no": 1,
+                "type": "asset_history_sync",
+                "status": "running",
+                "payload_json": "{}",
+            }
+        }
+
+    monkeypatch.setattr(client, "_request", request)
+
+    current = client.get_task("task_1")
+
+    assert current.id == "task_1"
+    assert requests == [
+        ("GET", "/internal/worker-tasks/task_1?worker_type=sidecar_worker")
+    ]
 
 
 def test_success_uploads_task_bound_resource_and_reports_result():
@@ -213,6 +243,36 @@ def test_control_poll_stops_execution_after_ownership_loss():
     value._process_runner = LeaseAwareProcessRunner()
     value._run_task(task(), "token-0123456789abcdef")
 
+    assert client.uploads == 0
+    assert client.reports == []
+
+
+def test_control_poll_stops_after_worker_type_mismatch():
+    client = FakeClient()
+    reads = 0
+
+    def mismatched_task(_task_id):
+        nonlocal reads
+        reads += 1
+        raise GoAPIError(
+            "task belongs to another worker type",
+            403,
+            "task_worker_type_mismatch",
+        )
+
+    client.get_task = mismatched_task  # type: ignore[method-assign]
+    value = runner(client, heartbeat=10.0)
+
+    class LeaseAwareProcessRunner:
+        def run(self, _task_type, _payload, _canceled, lost, _stopped):
+            if not lost.wait(timeout=1.0):
+                raise AssertionError("sidecar did not stop after worker type mismatch")
+            raise TaskProcessLeaseLost()
+
+    value._process_runner = LeaseAwareProcessRunner()
+    value._run_task(task(), "token-0123456789abcdef")
+
+    assert reads == 1
     assert client.uploads == 0
     assert client.reports == []
 

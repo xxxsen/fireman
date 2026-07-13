@@ -116,6 +116,39 @@ func TestInternalWorkerTaskProtocol(t *testing.T) {
 		t.Fatalf("list items=%+v", items)
 	}
 
+	for name, query := range map[string]string{
+		"missing worker type": "",
+		"wrong worker type":   "?worker_type=go_worker",
+	} {
+		t.Run(name, func(t *testing.T) {
+			response, getErr := st.client.Get(st.srv.URL + "/internal/worker-tasks/task_protocol" + query)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			defer response.Body.Close()
+			var body map[string]any
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusForbidden || body["code"] != taskcore.ErrWorkerTypeMismatch {
+				t.Fatalf("detail status=%d body=%+v", response.StatusCode, body)
+			}
+		})
+	}
+	response, getErr := st.client.Get(st.srv.URL +
+		"/internal/worker-tasks/task_protocol?worker_type=sidecar_worker")
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	defer response.Body.Close()
+	var detail map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || detail["data"].(map[string]any)["id"] != "task_protocol" {
+		t.Fatalf("worker-scoped detail status=%d body=%+v", response.StatusCode, detail)
+	}
+
 	owner := map[string]any{
 		"worker_type": "sidecar_worker", "worker_id": "sidecar_worker:test",
 		"claim_token": "api-claim-token-00000001",

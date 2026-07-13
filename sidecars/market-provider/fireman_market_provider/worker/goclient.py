@@ -109,7 +109,8 @@ class GoInternalClient:
         return [WorkerTask.from_json(item) for item in items if isinstance(item, dict)]
 
     def get_task(self, task_id: str) -> WorkerTask:
-        payload = self._request("GET", f"/internal/worker-tasks/{task_id}")
+        query = urllib.parse.urlencode({"worker_type": WORKER_TYPE})
+        payload = self._request("GET", f"/internal/worker-tasks/{task_id}?{query}")
         return WorkerTask.from_json(payload["data"])
 
     def claim(self, task_id: str, worker_id: str, claim_token: str) -> WorkerTask:

@@ -178,7 +178,9 @@ class WorkerRunner:
             try:
                 current = self._client.get_task(task.id)
             except GoAPIError as exc:
-                if exc.code == "task_not_found":
+                if exc.code in {"task_not_found", "task_worker_type_mismatch"}:
+                    if exc.code == "task_worker_type_mismatch":
+                        logger.warning("task %s ownership check rejected: %s", task.id, exc)
                     lost.set()
                     return
                 logger.warning("read task %s cancellation state failed: %s", task.id, exc)
