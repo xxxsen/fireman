@@ -12,6 +12,9 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageSkeleton } from "@/components/ui/Skeleton";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
+import { CalculationExplanation } from "@/components/ui/CalculationExplanation";
 import { useActiveTaskRestore } from "@/hooks/useActiveTaskRestore";
 import { useTaskStatus } from "@/hooks/useTaskStatus";
 import {
@@ -103,6 +106,15 @@ const PHASE_LABEL: Record<string, string> = {
   complete: "已完成",
 };
 
+const RUN_STATUS_LABEL: Record<string, string> = {
+  pending: "排队中",
+  running: "计算中",
+  pre_complete: "正在保存结果",
+  complete: "已完成",
+  failed: "失败",
+  canceled: "已取消",
+};
+
 const DEFAULT_TARGET_PERCENT = 95;
 const DEFAULT_EVALUATION_RUNS = 10_000;
 
@@ -124,7 +136,6 @@ function QuestionHelp({ question }: { question: FrontierQuestion }) {
         )}
         align="center"
         clickToggle
-        followCursor
         contentClassName="w-96 max-w-[calc(100vw-2rem)]"
         contentTestId={`frontier-question-help-${question.type}`}
       >
@@ -196,29 +207,19 @@ function CalculationBasis({ run }: { run: FrontierRun }) {
   const question = TYPE_CARDS.find((item) => item.type === run.frontier_type)!;
   const basis = run.frozen_basis;
   return (
-    <section className="rounded-lg border border-brand/25 bg-brand/5 p-4" aria-labelledby="frontier-calculation-basis">
-      <h3 id="frontier-calculation-basis" className="font-semibold text-ink">这次到底计算了什么</h3>
-      <p className="mt-1 text-sm text-ink">{question.purpose}</p>
-      <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
-        <div className="rounded-md bg-surface p-3"><strong className="block text-ink">候选中改变</strong><span className="mt-1 block text-ink-muted">{question.changes}</span></div>
-        <div className="rounded-md bg-surface p-3"><strong className="block text-ink">始终保持冻结</strong><span className="mt-1 block text-ink-muted">{question.fixed}</span></div>
-        <div className="rounded-md bg-surface p-3"><strong className="block text-ink">如何得出结果</strong><span className="mt-1 block text-ink-muted">{question.logic}</span></div>
-      </div>
-      <h4 className="mt-4 text-sm font-semibold text-ink">本次使用的冻结数据</h4>
-      <dl className="mt-2 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
-        <div><dt className="text-ink-muted">来源正式模拟</dt><dd className="break-all">{run.source_simulation_run_id}</dd></div>
-        <div><dt className="text-ink-muted">年龄与期限</dt><dd>当前 {basis.current_age} 岁 · 原退休 {basis.retirement_age} 岁 · 计算至 {basis.end_age} 岁</dd></div>
-        <div><dt className="text-ink-muted">源当前资产</dt><dd>{formatMoney(basis.total_assets_minor)} {basis.base_currency}</dd></div>
-        <div><dt className="text-ink-muted">源年度现金流</dt><dd>储蓄 {formatMoney(basis.annual_savings_minor)}（年增 {formatPercent(basis.annual_savings_growth_rate)}） · 支出 {formatMoney(basis.annual_spending_minor)} · 退休收入 {formatMoney(basis.annual_retirement_income_minor)}（年增 {formatPercent(basis.annual_retirement_income_growth_rate)}）</dd></div>
-        <div><dt className="text-ink-muted">资产与缩放口径</dt><dd>{basis.asset_count} 个启用持仓 · {basis.asset_scaling_basis === "source_amount_proportions" ? "按源金额比例" : "按冻结目标权重"}</dd></div>
-        <div><dt className="text-ink-muted">收益风险模型</dt><dd>{modelLabel(basis.return_assumption_mode)} · {modelLabel(basis.random_factor_model)}{basis.return_assumption_scenario ? ` · ${strategyLabel(basis.return_assumption_scenario)}` : ""}</dd></div>
-        <div><dt className="text-ink-muted">模拟路径</dt><dd>源共 {basis.source_simulation_runs.toLocaleString()} 条，固定使用前 {run.evaluation_runs.toLocaleString()} 条 · seed {basis.seed}</dd></div>
-        <div><dt className="text-ink-muted">搜索网格</dt><dd>{formatMoney(run.config.search.min_minor)} 至 {formatMoney(run.config.search.max_minor)} · step {formatMoney(run.config.search.step_minor)}{run.config.retirement_age_range ? ` · ${run.config.retirement_age_range.min}–${run.config.retirement_age_range.max} 岁` : ""}</dd></div>
-        <div><dt className="text-ink-muted">通胀 / 提款 / 再平衡</dt><dd>{strategyLabel(basis.inflation_mode)} · {strategyLabel(basis.withdrawal_type)} · {strategyLabel(basis.rebalance_frequency)}</dd></div>
-        <div><dt className="text-ink-muted">达标门槛</dt><dd>成功率 Wilson 95% 下界 ≥ {formatPercent(run.config.target_success_probability)}</dd></div>
-      </dl>
-      <p className="mt-3 text-xs text-ink-muted">所有候选与同口径基线都重新运行正式模拟引擎，并使用同一个 seed 和相同 path number；这里展示的是 run 创建时的冻结值，不会随当前计划变化。</p>
-    </section>
+    <CalculationExplanation
+      className="border-brand/25 bg-brand/5"
+      summary={question.purpose}
+      answer={question.description}
+      changed={question.changes}
+      fixed={question.fixed}
+      data={<>这里展示的是 run 创建时的冻结值，不会随当前计划变化。来源模拟 {run.source_simulation_run_id}；当前/原退休/终止年龄为 {basis.current_age}/{basis.retirement_age}/{basis.end_age} 岁；源资产 {formatMoney(basis.total_assets_minor)}；现金流为年储蓄 {formatMoney(basis.annual_savings_minor)}、退休支出 {formatMoney(basis.annual_spending_minor)}、退休收入 {formatMoney(basis.annual_retirement_income_minor)}；{basis.asset_count} 个启用持仓 · {basis.asset_scaling_basis === "source_amount_proportions" ? "按源金额比例" : "按冻结目标权重"}。路径源共 {basis.source_simulation_runs.toLocaleString()} 条，固定使用前 {run.evaluation_runs.toLocaleString()} 条 · seed {basis.seed}。</>}
+      criterion={`${question.logic} 达标条件为 Wilson 95% 下界不低于 ${formatPercent(run.config.target_success_probability)}。`}
+      uncertainty="结果只覆盖设置的离散金额和年龄搜索域；端点仍达标或仍未达标时只报告方向，不向域外插值或推算。Wilson 区间不覆盖模型假设错误。"
+      nextStep="查看点详情和相邻更不利档位；应用前确认计划变化，应用后重新运行正式模拟。"
+      audit={<>收益风险模型 {modelLabel(basis.return_assumption_mode)} / {modelLabel(basis.random_factor_model)}；情景 {strategyLabel(basis.return_assumption_scenario)}；通胀/提款/调仓 {strategyLabel(basis.inflation_mode)} / {strategyLabel(basis.withdrawal_type)} / {strategyLabel(basis.rebalance_frequency)}；搜索 {formatMoney(run.config.search.min_minor)}–{formatMoney(run.config.search.max_minor)}，step {formatMoney(run.config.search.step_minor)}；engine {run.source_engine_version}；algorithm {run.algorithm_version}；input {run.input_hash}</>}
+      defaultOpen
+    />
   );
 }
 
@@ -303,13 +304,9 @@ function FrontierChart({ result }: { result: FrontierResult }) {
   if (segment.length > 1) feasibleSegments.push(segment.join(" "));
   const activePoint = activePointIndex === null ? null : result.points[activePointIndex];
   const activeX = activePointIndex === null ? 0 : x(activePointIndex);
-  const activeY = activePoint ? y(activePoint.value_minor) : 0;
   const tooltipTranslateX = activeX < chart.width * 0.35
     ? "0%"
     : activeX > chart.width * 0.65 ? "-100%" : "-50%";
-  const tooltipTranslateY = activeY < (chart.top + chart.bottom) / 2
-    ? "14px"
-    : "calc(-100% - 14px)";
   return (
     <figure className="rounded-lg border border-line bg-surface p-3" aria-labelledby="frontier-chart-caption">
       <p className="mb-2 text-xs font-medium text-ink-muted">
@@ -384,8 +381,8 @@ function FrontierChart({ result }: { result: FrontierResult }) {
             className="pointer-events-none absolute z-10 w-72 max-w-[calc(100%_-_1rem)] rounded-lg border border-line bg-surface p-3 text-xs leading-relaxed text-ink shadow-lg"
             style={{
               left: `${(activeX / chart.width) * 100}%`,
-              top: `${(activeY / chart.height) * 100}%`,
-              transform: `translate(${tooltipTranslateX}, ${tooltipTranslateY})`,
+              top: "0.5rem",
+              transform: `translateX(${tooltipTranslateX})`,
             }}
           >
             <strong className="block text-sm">{activePoint.retirement_age} 岁退休</strong>
@@ -450,11 +447,11 @@ function PointEvidence({ point, run, onPreview }: {
       </div>
       <p className="mt-3 rounded-md bg-brand/5 px-3 py-2 text-sm text-ink" data-testid="frontier-point-conclusion">{pointConclusion(point, run)}</p>
       <dl className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-        <div><dt className="text-ink-muted">目标 Wilson 下界</dt><dd>{formatPercent(run.config.target_success_probability)}</dd></div>
-        <div><dt className="text-ink-muted">点估计</dt><dd>{formatPercent(point.evaluation.success_probability)}</dd></div>
-        <div><dt className="text-ink-muted">Wilson 95% 区间</dt><dd>{formatPercent(point.evaluation.success_wilson_low)}–{formatPercent(point.evaluation.success_wilson_high)}</dd></div>
-        <div><dt className="text-ink-muted">路径数</dt><dd>{point.evaluation.runs.toLocaleString()}</dd></div>
-        <div><dt className="text-ink-muted">配对变化</dt><dd>改善 {point.evaluation.improved_path_count} / 回退 {point.evaluation.regressed_path_count}</dd></div>
+        <div><dt className="text-ink-muted"><HelpLabel label="目标 Wilson 下界" termKey="wilson_lower_bound" /></dt><dd>{formatPercent(run.config.target_success_probability)}</dd></div>
+        <div><dt className="text-ink-muted"><HelpLabel label="点估计" termKey="fire_success_rate" /></dt><dd>{formatPercent(point.evaluation.success_probability)}</dd></div>
+        <div><dt className="text-ink-muted"><HelpLabel label="Wilson 95% 区间" termKey="wilson_interval" /></dt><dd>{formatPercent(point.evaluation.success_wilson_low)}–{formatPercent(point.evaluation.success_wilson_high)}</dd></div>
+        <div><dt className="text-ink-muted"><HelpLabel label="路径数" termKey="evaluation_paths" /></dt><dd>{point.evaluation.runs.toLocaleString()}</dd></div>
+        <div><dt className="text-ink-muted"><HelpLabel label="配对变化" termKey="paired_path_changes" /></dt><dd>改善 {point.evaluation.improved_path_count} / 回退 {point.evaluation.regressed_path_count}</dd></div>
       </dl>
       {point.worse_neighbor && (
         <p className="mt-3 rounded bg-surface-muted px-3 py-2 text-xs text-ink-muted">
@@ -467,7 +464,10 @@ function PointEvidence({ point, run, onPreview }: {
           {run.frontier_type === "coast_required_assets" ? `；Coast ${point.coast_achieved ? "已达到" : "尚未达到"}` : ""}
         </p>
       )}
-      <p className="mt-2 break-all text-[11px] text-ink-muted">outcome {point.evaluation.outcome_hash}</p>
+      <details className="mt-2 text-[11px] text-ink-muted">
+        <summary className="cursor-pointer font-medium">高级点审计详情</summary>
+        <p className="mt-1 break-all">outcome {point.evaluation.outcome_hash} · snapshot {point.evaluation.snapshot_hash} · config {point.evaluation.candidate_config_hash}</p>
+      </details>
       {point.applicable && (
         <div className="mt-3"><Button variant="secondary" onClick={() => onPreview(point)} disabled={run.current_plan_changed || Boolean(run.application)}>预览应用</Button></div>
       )}
@@ -656,19 +656,19 @@ export function FrontierPage({ planId }: { planId: string }) {
       </section>
 
       <section className="space-y-4 rounded-lg border border-line bg-surface p-5" aria-labelledby="frontier-input-heading">
-        <h2 id="frontier-input-heading" className="text-lg font-semibold text-ink">2. 冻结来源与离散搜索域</h2>
+        <h2 id="frontier-input-heading" aria-label="2. 冻结来源与离散搜索域" className="text-lg font-semibold text-ink"><HelpLabel label="2. 冻结来源与离散搜索域" termKey="search_domain" /></h2>
         <div className="grid gap-4 md:grid-cols-3">
-          <label className="text-sm font-medium text-ink">来源正式模拟
-            <select value={effectiveSourceID} onChange={(event) => { setSourceID(event.target.value); setReadiness(null); }} className="input-base mt-1 w-full">
+          <label className="text-sm font-medium text-ink"><HelpLabel label="来源正式模拟" termKey="common_random_numbers" />
+            <select aria-label="来源正式模拟" value={effectiveSourceID} onChange={(event) => { setSourceID(event.target.value); setReadiness(null); }} className="input-base mt-1 w-full">
               <option value="">请选择</option>
               {qualifiedSources.map((run) => <option key={run.id} value={run.id}>{formatDateTimeFromMs(run.created_at)} · {run.runs.toLocaleString()} 路径</option>)}
             </select>
           </label>
-          <label className="text-sm font-medium text-ink">目标成功率（%）
-            <input className="input-base mt-1 w-full" inputMode="decimal" value={targetDraft} onChange={(event) => { setTargetDraft(event.target.value); setReadiness(null); }} />
+          <label className="text-sm font-medium text-ink"><HelpLabel label="目标成功率（%）" termKey="wilson_lower_bound" />
+            <input aria-label="目标成功率（%）" className="input-base mt-1 w-full" inputMode="decimal" value={targetDraft} onChange={(event) => { setTargetDraft(event.target.value); setReadiness(null); }} />
           </label>
-          <label className="text-sm font-medium text-ink">评估路径数
-            <input className="input-base mt-1 w-full" type="number" min={1000} max={Math.min(20000, selectedSource?.runs ?? 20000)} value={effectiveEvaluationRuns}
+          <label className="text-sm font-medium text-ink"><HelpLabel label="评估路径数" termKey="evaluation_paths" />
+            <input aria-label="评估路径数" className="input-base mt-1 w-full" type="number" min={1000} max={Math.min(20000, selectedSource?.runs ?? 20000)} value={effectiveEvaluationRuns}
               onChange={(event) => { setEvaluationRuns(Number(event.target.value)); setReadiness(null); }} />
           </label>
         </div>
@@ -677,13 +677,13 @@ export function FrontierPage({ planId }: { planId: string }) {
           <label className="text-sm font-medium text-ink">最大退休年龄<input className="input-base mt-1 w-full" type="number" value={effectiveAgeMax} onChange={(event) => { setAgeMax(Number(event.target.value)); setReadiness(null); }} /></label>
         </div>}
         <div className="grid gap-4 md:grid-cols-3">
-          <MoneyInput plain label="搜索下限" valueMinor={effectiveSearch.min} onChange={(min) => { setSearch({ ...effectiveSearch, min }); setReadiness(null); }} />
-          <MoneyInput plain label="搜索上限" valueMinor={effectiveSearch.max} onChange={(max) => { setSearch({ ...effectiveSearch, max }); setReadiness(null); }} />
-          <MoneyInput plain label="搜索精度（step）" valueMinor={effectiveSearch.step} onChange={(step) => { setSearch({ ...effectiveSearch, step }); setReadiness(null); }} />
+          <MoneyInput plain label={<HelpLabel label="搜索下限" termKey="search_domain" />} ariaLabel="搜索下限" valueMinor={effectiveSearch.min} onChange={(min) => { setSearch({ ...effectiveSearch, min }); setReadiness(null); }} />
+          <MoneyInput plain label={<HelpLabel label="搜索上限" termKey="search_domain" />} ariaLabel="搜索上限" valueMinor={effectiveSearch.max} onChange={(max) => { setSearch({ ...effectiveSearch, max }); setReadiness(null); }} />
+          <MoneyInput plain label={<HelpLabel label="搜索精度（step）" termKey="discrete_search_step" />} ariaLabel="搜索精度（step）" valueMinor={effectiveSearch.step} onChange={(step) => { setSearch({ ...effectiveSearch, step }); setReadiness(null); }} />
         </div>
         {readiness && <div className={`rounded-md border p-3 text-sm ${readiness.ready ? "border-success/30 bg-success/5" : "border-danger/30 bg-danger/5"}`}>
           {readiness.ready && readiness.config ? (
-            <p>路径 {readiness.config.evaluation_runs.toLocaleString()} · step {formatMoney(readiness.config.search.step_minor)} · 金额档位 {readiness.money_levels} · 年龄点 {readiness.age_points} · 最多评估 {readiness.evaluation_budget} 次 · 最坏成本 {readiness.path_month_budget.toLocaleString()} path-months</p>
+            <p className="flex flex-wrap items-center gap-x-1">路径 {readiness.config.evaluation_runs.toLocaleString()} · step {formatMoney(readiness.config.search.step_minor)} · 金额档位 {readiness.money_levels} · 年龄点 {readiness.age_points} · 最多评估 {readiness.evaluation_budget} 次 · 最坏成本 {readiness.path_month_budget.toLocaleString()} path-months <MetricHelp termKey="path_month_budget" /></p>
           ) : readiness.issues.map((issue) => <p key={issue.code}>{issue.message}</p>)}
           {!readiness.ready && <p className="mt-1 text-xs">可缩小年龄范围或增大 step 后重试。</p>}
         </div>}
@@ -705,16 +705,18 @@ export function FrontierPage({ planId }: { planId: string }) {
       {applied && <Alert variant="success">前沿点已应用到计划草稿；系统没有自动运行模拟。</Alert>}
 
       {activeRun?.status === "complete" && result && <section className="space-y-4" aria-labelledby="frontier-result-heading">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="frontier-result-heading" className="text-lg font-semibold text-ink">3. 冻结结果</h2><p className="mt-1 text-sm text-ink-muted">来源 {activeRun.source_simulation_run_id} · engine {activeRun.source_engine_version} · algorithm {activeRun.algorithm_version} · 目标 {formatPercent(result.target_probability)} · {result.evaluation_runs.toLocaleString()} 路径</p></div><div className="flex gap-2"><Button variant="secondary" onClick={() => download(`${activeRun.id}.json`, "application/json", JSON.stringify(result, null, 2))}>导出 JSON</Button><Button variant="secondary" onClick={() => download(`${activeRun.id}.csv`, "text/csv;charset=utf-8", csv(result))}>导出 CSV</Button></div></div>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 id="frontier-result-heading" className="text-lg font-semibold text-ink">3. 冻结结果</h2><p className="mt-1 text-sm text-ink-muted">目标 Wilson 下界 {formatPercent(result.target_probability)} · 每个候选 {result.evaluation_runs.toLocaleString()} 条路径</p></div><div className="flex gap-2"><Button variant="secondary" onClick={() => download(`${activeRun.id}.json`, "application/json", JSON.stringify(result, null, 2))}>导出 JSON</Button><Button variant="secondary" onClick={() => download(`${activeRun.id}.csv`, "text/csv;charset=utf-8", csv(result))}>导出 CSV</Button></div></div>
         <div className="flex flex-wrap gap-2 text-xs"><span className={`rounded-full px-2 py-1 ${activeRun.source_available ? "bg-success/10 text-success" : "bg-surface-muted text-ink-muted"}`}>{activeRun.source_available ? "源模拟仍存在" : "源模拟已清理"}</span><span className={`rounded-full px-2 py-1 ${activeRun.current_plan_changed ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>{activeRun.current_plan_changed ? "当前计划已变化" : "当前计划未变化"}</span>{activeRun.application && <span className="rounded-full bg-brand/10 px-2 py-1 text-brand">已应用</span>}</div>
+        {!activeRun.source_available ? <p className="text-xs text-ink-muted">来源模拟记录已被清理，但本次前沿保存的冻结输入和结果仍可审计；不能再从原模拟进入逐路径详情。</p> : null}
+        {activeRun.current_plan_changed ? <Alert variant="warning">当前计划已在前沿创建后变化。结果仍表示当时的冻结方案，但不能直接应用；请基于当前计划重新计算。</Alert> : null}
         <CalculationBasis run={activeRun} />
-        <div className="rounded-lg border border-line bg-surface p-4"><h3 className="font-semibold text-ink">同口径重算基线</h3><p className="mt-1 text-sm text-ink-muted">成功 {result.baseline.success_count}/{result.baseline.runs}，点估计 {formatPercent(result.baseline.success_probability)}，Wilson 95% 区间 {formatPercent(result.baseline.success_wilson_low)}–{formatPercent(result.baseline.success_wilson_high)}。实际执行 {result.distinct_evaluations}/{result.evaluation_budget} 次评估，{result.actual_path_months.toLocaleString()} path-months。</p></div>
+        <div className="rounded-lg border border-line bg-surface p-4"><h3 className="font-semibold text-ink">同口径重算基线</h3><p className="mt-1 flex flex-wrap items-center text-sm text-ink-muted">成功 {result.baseline.success_count}/{result.baseline.runs}，点估计 {formatPercent(result.baseline.success_probability)}，Wilson 95% 区间 {formatPercent(result.baseline.success_wilson_low)}–{formatPercent(result.baseline.success_wilson_high)} <MetricHelp termKey="wilson_interval" />。实际执行 {result.distinct_evaluations}/{result.evaluation_budget} 次评估，{result.actual_path_months.toLocaleString()} path-months <MetricHelp termKey="path_month_budget" />。</p></div>
         {isAgeType(activeRun.frontier_type) && <FrontierChart result={result} />}
         <div className="grid gap-3">{result.points.map((point) => <PointEvidence key={point.id} point={point} run={activeRun} onPreview={(value) => previewM.mutate(value)} />)}</div>
         <Alert variant="info">达标前沿是给定模型与输入下的压力边界；Wilson 区间只反映有限模拟路径的抽样误差，不代表真实未来有同等置信保证。</Alert>
       </section>}
 
-      {runsQ.data && runsQ.data.runs.length > 0 && <section className="space-y-2 border-t border-line pt-5"><h2 className="text-lg font-semibold text-ink">历史前沿</h2><div className="grid gap-2">{runsQ.data.runs.map((run) => <button key={run.id} type="button" onClick={() => setSelectedRunID(run.id)} className="flex flex-wrap justify-between gap-2 rounded border border-line bg-surface px-3 py-2 text-left text-sm hover:border-brand/50"><span>{TYPE_LABEL[run.frontier_type]} · {formatPercent(run.target_probability)}</span><span className="text-ink-muted">{run.status} · {formatDateTimeFromMs(run.created_at)}</span></button>)}</div></section>}
+      {runsQ.data && runsQ.data.runs.length > 0 && <section className="space-y-2 border-t border-line pt-5"><h2 className="text-lg font-semibold text-ink">历史前沿</h2><div className="grid gap-2">{runsQ.data.runs.map((run) => <button key={run.id} type="button" onClick={() => setSelectedRunID(run.id)} className="flex flex-wrap justify-between gap-2 rounded border border-line bg-surface px-3 py-2 text-left text-sm hover:border-brand/50"><span>{TYPE_LABEL[run.frontier_type]} · {formatPercent(run.target_probability)}</span><span className="text-ink-muted">{RUN_STATUS_LABEL[run.status] ?? "状态未知"} · {formatDateTimeFromMs(run.created_at)}</span></button>)}</div></section>}
 
       <PreviewDialog preview={preview} open={Boolean(preview)} pending={applyM.isPending} error={previewError} onClose={() => setPreview(null)} onApply={() => applyM.mutate()} />
       {previewM.isError && <Alert variant="danger">{queryErrorMessage(previewM.error)}</Alert>}

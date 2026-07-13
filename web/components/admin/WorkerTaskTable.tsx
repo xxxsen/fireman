@@ -3,6 +3,8 @@
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import type { AdminWorkerTaskItem } from "@/lib/api/admin";
 import { workerTaskTypeLabel } from "@/lib/api/admin";
 import { isTaskActive } from "@/lib/api/tasks";
@@ -87,16 +89,17 @@ export function WorkerTaskTableRows({
                 : ""}
             </span>
             {task.heartbeat_at && (
-              <span
-                className="block"
-                title={
+              <Tooltip
+                content={
                   task.lease_expires_at
-                    ? `lease ${formatDateTimeFromMs(task.lease_expires_at)}`
-                    : undefined
+                    ? `任务租约到期：${formatDateTimeFromMs(task.lease_expires_at)}`
+                    : "当前任务未返回租约到期时间"
                 }
               >
-                心跳 {formatRelativeTime(task.heartbeat_at)}
-              </span>
+                <span className="block">
+                  心跳 {formatRelativeTime(task.heartbeat_at)}
+                </span>
+              </Tooltip>
             )}
           </td>
           <td className="max-w-48 px-3 py-2 text-xs">
@@ -120,9 +123,9 @@ export function WorkerTaskTableRows({
             {formatDurationMs(task.duration_ms)}
           </td>
           <td className="whitespace-nowrap px-3 py-2 text-ink-muted">
-            <span title={formatDateTimeFromMs(task.created_at)}>
-              {formatRelativeTime(task.created_at)}
-            </span>
+            <Tooltip content={formatDateTimeFromMs(task.created_at)}>
+              <span>{formatRelativeTime(task.created_at)}</span>
+            </Tooltip>
           </td>
           <td
             className="whitespace-nowrap px-3 py-2"
@@ -145,12 +148,21 @@ export function WorkerTaskTableRows({
 
 export const WORKER_TASK_TABLE_HEADERS = [
   "状态",
-  "类型",
-  "Worker",
-  "范围",
+  <HelpLabel key="type" label="类型" termKey="admin_worker_task" />,
+  <span key="worker" className="inline-flex items-center">
+    <HelpLabel label="Worker" termKey="admin_worker_type" />
+    <MetricHelp termKey="admin_claim" />
+  </span>,
+  <HelpLabel key="scope" label="范围" termKey="admin_task_scope" />,
   "dedupe_key / id",
-  "Attempt",
-  "执行",
+  <span key="attempt" className="inline-flex items-center">
+    <HelpLabel label="Attempt" termKey="admin_task_attempt" />
+    <MetricHelp termKey="admin_retry_exhausted" />
+  </span>,
+  <span key="execution" className="inline-flex items-center">
+    <HelpLabel label="执行" termKey="admin_heartbeat" />
+    <MetricHelp termKey="admin_lease" />
+  </span>,
   "错误",
   "耗时",
   "创建时间",

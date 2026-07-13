@@ -16,6 +16,7 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { isTaskActive } from "@/lib/api/tasks";
 import { Button } from "@/components/ui/Button";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 function isExchangeTraded(instrumentType: string): boolean {
   return [
@@ -475,20 +476,14 @@ export function WeightEditor({
                     <td className="px-2 py-2 font-mono-numeric text-xs">
                       {rv?.history_end ?? "—"}
                       {rv?.limits_common_start && (
-                        <span
-                          className="ml-1 text-warning"
-                          title="该资产决定了共同起点"
-                        >
-                          ⤒
-                        </span>
+                        <Tooltip content="该资产决定了回测共同起点">
+                          <span className="ml-1 text-warning" aria-label="决定共同起点">⤒</span>
+                        </Tooltip>
                       )}
                       {rv?.limits_common_end && (
-                        <span
-                          className="ml-1 text-warning"
-                          title="该资产决定了共同终点"
-                        >
-                          ⤓
-                        </span>
+                        <Tooltip content="该资产决定了回测共同终点">
+                          <span className="ml-1 text-warning" aria-label="决定共同终点">⤓</span>
+                        </Tooltip>
                       )}
                     </td>
                     <td className="px-2 py-2">

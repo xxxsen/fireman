@@ -395,7 +395,7 @@ describe("BacktestPanel", () => {
     renderPanel(readiness(), [run()]);
     const latest = screen.getByTestId("latest-run");
     expect(latest).toHaveTextContent("2018-01-01 ~ 2026-07-01");
-    expect(latest).toHaveTextContent("CAGR 7%");
+    expect(latest).toHaveTextContent(/CAGR.*7%/);
     expect(screen.getByTestId("backtest-window")).toHaveTextContent(
       "2018-01-01 ~ 2026-07-01",
     );

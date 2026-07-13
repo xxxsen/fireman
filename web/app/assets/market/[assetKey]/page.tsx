@@ -33,6 +33,8 @@ import { LastRefreshMeta } from "@/components/ui/LastRefreshMeta";
 import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { ReturnSeriesChart } from "@/components/charts/ReturnSeriesChart";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import {
   defaultHistoryRange,
   filterHistoryPoints,
@@ -223,8 +225,10 @@ export default function MarketAssetDetailPage() {
         />
         <button
           type="button"
-          title={
-            history.auto_update?.enabled ? "暂停自动更新" : "启用每日自动更新"
+          aria-label={
+            history.auto_update?.enabled
+              ? `自动更新：每 ${history.auto_update.interval_hours >= 24 ? `${history.auto_update.interval_hours / 24} 天` : `${history.auto_update.interval_hours} 小时`}`
+              : "启用每日自动更新"
           }
           disabled={autoUpdatePending}
           onClick={() => void toggleAutoUpdate()}
@@ -276,9 +280,7 @@ export default function MarketAssetDetailPage() {
         backLabel="资产目录"
         title={asset.name || asset.symbol}
         eyebrow={asset.asset_key}
-        description={`${asset.market} / ${instrumentTypeLabel(asset.instrument_type)} · ${
-          asset.exchange || "—"
-        } · ${asset.instrument_kind || "—"}`}
+        description={`${asset.market} / ${instrumentTypeLabel(asset.instrument_type)} · ${asset.exchange || "—"}`}
         status={
           taskActive ? (
             <LoadingState label="历史数据同步中…" className="text-xs" />
@@ -295,7 +297,7 @@ export default function MarketAssetDetailPage() {
             <dd className="font-mono-numeric text-ink">{asset.symbol}</dd>
           </div>
           <div>
-            <dt className="text-ink-muted">市场 / 类型</dt>
+            <dt className="text-ink-muted"><HelpLabel label="市场 / 资产类型" termKey="instrument_kind" /></dt>
             <dd className="text-ink">
               {asset.market} / {instrumentTypeLabel(asset.instrument_type)}
             </dd>
@@ -305,13 +307,13 @@ export default function MarketAssetDetailPage() {
             <dd className="text-ink">{asset.exchange || "—"}</dd>
           </div>
           <div>
-            <dt className="text-ink-muted">资产 kind / 币种</dt>
+            <dt className="text-ink-muted"><HelpLabel label="数据类别 / 币种" termKey="instrument_kind" /></dt>
             <dd className="text-ink">
               {asset.instrument_kind || "—"} / {asset.currency || "—"}
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">收费模式</dt>
+            <dt className="text-ink-muted"><HelpLabel label="收费模式" termKey="fee_included" /></dt>
             <dd className="text-ink" data-testid="fund-fee-mode">
               {asset.fee_mode === "front_end"
                 ? "前端收费"
@@ -323,7 +325,7 @@ export default function MarketAssetDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">净值主代码</dt>
+            <dt className="text-ink-muted"><HelpLabel label="净值主代码" termKey="canonical_fund_symbol" /></dt>
             <dd
               className="font-mono-numeric text-ink"
               data-testid="canonical-fund-symbol"
@@ -361,7 +363,7 @@ export default function MarketAssetDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">数据截至（data_as_of）</dt>
+            <dt className="text-ink-muted"><HelpLabel label="数据截至日期" termKey="data_as_of" /></dt>
             <dd
               className="font-mono-numeric text-ink"
               data-testid="history-data-as-of"
@@ -385,7 +387,7 @@ export default function MarketAssetDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-ink-muted">复权 / 价格类型</dt>
+            <dt className="text-ink-muted"><HelpLabel label="复权 / 行情点类型" termKey="adjustment_policy" /><MetricHelp termKey="point_type" /></dt>
             <dd className="text-ink">
               {adjustPolicyLabel(history.adjust_policy)} /{" "}
               {pointTypeLabel(history.point_type)}
@@ -461,7 +463,6 @@ export default function MarketAssetDetailPage() {
                       type="button"
                       data-testid={`history-range-${option.key}`}
                       disabled={!available}
-                      title={available ? undefined : "该区间历史数据不足"}
                       aria-pressed={active}
                       onClick={() => setSelectedRange(option.key)}
                       className={
@@ -477,6 +478,9 @@ export default function MarketAssetDetailPage() {
                   );
                 })}
               </div>
+              <p className="mt-1 text-xs text-ink-muted">
+                不可选区间表示该资产历史数据不足以覆盖对应时长。
+              </p>
             </div>
             <div className="mt-3" data-testid="market-asset-chart">
               {chartPoints.length > 0 ? (
@@ -562,10 +566,10 @@ export default function MarketAssetDetailPage() {
                         年份
                       </th>
                       <th className="px-3 py-2 text-right font-medium text-ink-muted">
-                        年化收益
+                        <HelpLabel label="年化收益" termKey="annual_return" />
                       </th>
                       <th className="px-3 py-2 text-left font-medium text-ink-muted">
-                        完整性
+                        <HelpLabel label="完整性" termKey="complete_year" />
                       </th>
                       <th className="px-3 py-2 text-left font-medium text-ink-muted">
                         统计区间
@@ -580,7 +584,7 @@ export default function MarketAssetDetailPage() {
                           {formatPercent(r.annual_return)}
                         </td>
                         <td className="px-3 py-2 text-ink">
-                          {r.is_partial ? "部分年度" : "完整年度"}
+                          <span className="inline-flex items-center">{r.is_partial ? "部分年度" : "完整年度"}<MetricHelp termKey={r.is_partial ? "partial_year" : "complete_year"} /></span>
                         </td>
                         <td className="px-3 py-2 font-mono-numeric text-xs text-ink-muted">
                           {formatAnnualPeriod(r.start_date, r.end_date)}

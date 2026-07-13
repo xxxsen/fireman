@@ -13,6 +13,7 @@ interface MoneyInputProps {
   onChange: (minor: number) => void;
   currency?: string;
   label?: ReactNode;
+  ariaLabel?: string;
   disabled?: boolean;
   /** Plain numeric display without thousand separators. */
   plain?: boolean;
@@ -34,6 +35,7 @@ export function MoneyInput({
   onChange,
   currency = "CNY",
   label,
+  ariaLabel,
   disabled,
   plain = false,
 }: MoneyInputProps) {
@@ -73,6 +75,7 @@ export function MoneyInput({
           inputMode="decimal"
           disabled={disabled}
           data-testid="money-input"
+          aria-label={ariaLabel ?? (typeof label === "string" ? label : undefined)}
           className="input-base min-w-0 font-mono-numeric"
           value={displayValue}
           onFocus={() => {

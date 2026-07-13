@@ -1,9 +1,11 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import { validateAssumptionProfile } from "@/lib/api/assumptions";
 import { assetClassLabel, regionLabel } from "@/lib/format";
 import type {
@@ -33,7 +35,7 @@ function NumberField({
   onChange,
   testid,
 }: {
-  label: string;
+  label: ReactNode;
   ariaLabel?: string;
   value: number;
   step?: number;
@@ -46,7 +48,7 @@ function NumberField({
       <input
         type="number"
         step={step ?? "any"}
-        aria-label={label || ariaLabel}
+        aria-label={typeof label === "string" && label ? label : ariaLabel}
         className="mt-0.5 w-28 rounded border border-line px-2 py-1 text-ink"
         value={Number.isFinite(value) ? value : 0}
         data-testid={testid}
@@ -65,7 +67,7 @@ function TextField({
   width = "w-44",
   invalid,
 }: {
-  label: string;
+  label: ReactNode;
   ariaLabel?: string;
   value: string;
   onChange: (v: string) => void;
@@ -78,7 +80,7 @@ function TextField({
       {label}
       <input
         type="text"
-        aria-label={label || ariaLabel}
+        aria-label={typeof label === "string" && label ? label : ariaLabel}
         aria-invalid={invalid || undefined}
         className={`mt-0.5 ${width} rounded border px-2 py-1 text-ink ${
           invalid ? "border-danger" : "border-line"
@@ -190,20 +192,21 @@ export function ProfileEditor({
                 validation.psd_repair_heavy ? "（修复幅度较大，建议复核相关性后再激活）" : ""
               }`
             : `校验失败：${validation.error ?? "未知错误"}`}
+          {validation.valid ? <span className="ml-1 inline-flex"><MetricHelp termKey="minimum_eigenvalue" /><MetricHelp termKey="psd_repair" /></span> : null}
         </Alert>
       )}
 
       <div className="flex flex-wrap gap-3">
         <TextField label="名称" value={profile.name} width="w-56" onChange={(v) => patch({ name: v })} testid="editor-name" />
-        <NumberField label="厚尾自由度 ν" value={profile.student_t_df} step={1} onChange={(v) => patch({ student_t_df: v })} />
-        <NumberField label="先验等效年数" value={profile.prior_strength_years} step={1} onChange={(v) => patch({ prior_strength_years: v })} />
-        <NumberField label="相关性收缩月数" value={profile.correlation_strength_months} step={1} onChange={(v) => patch({ correlation_strength_months: v })} />
+        <NumberField label={<HelpLabel label="厚尾自由度 ν" termKey="student_t_df" />} ariaLabel="厚尾自由度 ν" value={profile.student_t_df} step={1} onChange={(v) => patch({ student_t_df: v })} />
+        <NumberField label={<HelpLabel label="先验等效年数" termKey="prior_strength" />} ariaLabel="先验等效年数" value={profile.prior_strength_years} step={1} onChange={(v) => patch({ prior_strength_years: v })} />
+        <NumberField label={<HelpLabel label="相关性收缩月数" termKey="correlation_shrinkage" />} ariaLabel="相关性收缩月数" value={profile.correlation_strength_months} step={1} onChange={(v) => patch({ correlation_strength_months: v })} />
         <NumberField label="收益截断下限" value={profile.return_floor} onChange={(v) => patch({ return_floor: v })} testid="editor-return-floor" />
         <NumberField label="收益截断上限" value={profile.return_ceil} onChange={(v) => patch({ return_ceil: v })} testid="editor-return-ceil" />
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <TextField label="来源说明（CMA 出处）" value={state.sourceNote} width="w-72" onChange={(v) => patchMeta({ sourceNote: v })} testid="editor-source-note" />
+        <TextField label={<HelpLabel label="来源说明（CMA 出处）" termKey="assumption_evidence" />} ariaLabel="来源说明（CMA 出处）" value={state.sourceNote} width="w-72" onChange={(v) => patchMeta({ sourceNote: v })} testid="editor-source-note" />
         <TextField label="审核人" value={state.reviewedBy} onChange={(v) => patchMeta({ reviewedBy: v })} testid="editor-reviewed-by" />
         <TextField
           label="审核日期 (YYYY-MM-DD)"
@@ -247,9 +250,9 @@ function ScenarioEditor({
         <thead>
           <tr className="text-ink-muted">
             <th scope="col" className="pr-4 py-1">假设情景</th>
-            <th scope="col" className="pr-4 py-1">收益对数位移</th>
-            <th scope="col" className="pr-4 py-1">FX 收益位移</th>
-            <th scope="col" className="pr-4 py-1">波动率乘子</th>
+            <th scope="col" className="pr-4 py-1"><HelpLabel label="收益对数位移" termKey="return_log_shift" /></th>
+            <th scope="col" className="pr-4 py-1"><HelpLabel label="FX 收益位移" termKey="fx_return_shift" /></th>
+            <th scope="col" className="pr-4 py-1"><HelpLabel label="波动率乘子" termKey="volatility_multiplier" /></th>
           </tr>
         </thead>
         <tbody>
@@ -314,7 +317,7 @@ function ReturnPriorEditor({
   return (
     <div className="overflow-x-auto">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-ink-muted">收益先验（CNY 基础条目必填，不可删除）</h3>
+        <h3 className="text-sm font-medium text-ink-muted"><HelpLabel label="收益先验（CNY 基础条目必填，不可删除）" termKey="return_prior" /></h3>
         <Button variant="ghost" className="px-2 py-1" onClick={add}>
           + 新增
         </Button>
@@ -326,9 +329,9 @@ function ReturnPriorEditor({
             <th scope="col" className="pr-2 py-1">资产类别</th>
             <th scope="col" className="pr-2 py-1">地区</th>
             <th scope="col" className="pr-2 py-1">计价币种</th>
-            <th scope="col" className="pr-2 py-1">年化几何</th>
-            <th scope="col" className="pr-2 py-1">波动下限</th>
-            <th scope="col" className="pr-2 py-1">波动上限</th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="年化几何" termKey="forward_return" /></th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="波动下限" termKey="annual_volatility" /></th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="波动上限" termKey="annual_volatility" /></th>
             <th scope="col" className="pr-2 py-1">来源 URL</th>
             <th scope="col" className="pr-2 py-1">发布</th>
             <th scope="col" className="pr-2 py-1">审核</th>
@@ -387,9 +390,7 @@ function ReturnPriorEditor({
                 </td>
                 <td className="py-1 pr-2">
                   {required ? (
-                    <span className="text-ink-muted" title="产品支持的 CNY 基础资产条目，不可删除">
-                      必填
-                    </span>
+                    <span className="inline-flex items-center text-ink-muted">必填<MetricHelp text="这是产品支持的 CNY 基础资产条目，发布 Profile 时必须存在，因此不能删除。" /></span>
                   ) : (
                     <Button variant="ghost" className="px-2 py-1" onClick={() => remove(i)}>
                       删除
@@ -438,7 +439,7 @@ function FXPriorEditor({
   return (
     <div className="overflow-x-auto">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-ink-muted">FX 先验</h3>
+        <h3 className="text-sm font-medium text-ink-muted"><HelpLabel label="FX 先验" termKey="fx_prior" /></h3>
         <Button variant="ghost" className="px-2 py-1" onClick={add}>
           + 新增
         </Button>
@@ -449,9 +450,9 @@ function FXPriorEditor({
           <tr className="text-ink-muted">
             <th scope="col" className="pr-2 py-1">从</th>
             <th scope="col" className="pr-2 py-1">到</th>
-            <th scope="col" className="pr-2 py-1">年化几何</th>
-            <th scope="col" className="pr-2 py-1">波动下限</th>
-            <th scope="col" className="pr-2 py-1">波动上限</th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="年化几何" termKey="fx_forward_return" /></th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="波动下限" termKey="annual_volatility" /></th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="波动上限" termKey="annual_volatility" /></th>
             <th scope="col" className="pr-2 py-1">来源 URL</th>
             <th scope="col" className="pr-2 py-1">发布</th>
             <th scope="col" className="pr-2 py-1">审核</th>
@@ -547,7 +548,7 @@ function CorrelationEditor({
   return (
     <div className="overflow-x-auto">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-ink-muted">相关性先验</h3>
+        <h3 className="text-sm font-medium text-ink-muted"><HelpLabel label="相关性先验" termKey="correlation_shrinkage" /></h3>
         <div className="flex gap-2">
           <Button variant="ghost" className="px-2 py-1" onClick={fillMissing} data-testid="fill-missing-corr">
             补全缺失对（ρ=0）
@@ -566,7 +567,7 @@ function CorrelationEditor({
           <tr className="text-ink-muted">
             <th scope="col" className="pr-2 py-1">因子 A</th>
             <th scope="col" className="pr-2 py-1">因子 B</th>
-            <th scope="col" className="pr-2 py-1">ρ</th>
+            <th scope="col" className="pr-2 py-1"><HelpLabel label="ρ" termKey="correlation_rho" /></th>
             <th scope="col" className="pr-2 py-1" />
           </tr>
         </thead>

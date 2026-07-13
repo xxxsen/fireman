@@ -56,6 +56,7 @@ export function Tooltip({
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
   const openedByPointerRef = useRef(false);
+  const [pointerDownOpen, setPointerDownOpen] = useState<boolean | null>(null);
   const tooltipId = useId();
 
   const cancelClose = useCallback(() => {
@@ -75,7 +76,49 @@ export function Tooltip({
     setOpen(true);
   }, [cancelClose]);
 
+  const hide = useCallback(
+    (restoreFocus = false) => {
+      cancelClose();
+      setOpen(false);
+      if (restoreFocus) {
+        const restore = () => {
+          const trigger = triggerRef.current?.firstElementChild;
+          if (trigger instanceof HTMLElement) trigger.focus();
+        };
+        if (typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(restore);
+        } else {
+          restore();
+        }
+      }
+    },
+    [cancelClose],
+  );
+
   useEffect(() => () => cancelClose(), [cancelClose]);
+
+  useEffect(() => {
+    if (!open || !clickToggle) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (triggerRef.current?.contains(target) || tooltipRef.current?.contains(target)) return;
+      hide();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      hide(true);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [clickToggle, hide, open]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current || !tooltipRef.current) {
@@ -119,6 +162,23 @@ export function Tooltip({
   const child = Children.only(children);
   const childProps = child.props as React.HTMLAttributes<HTMLElement>;
 
+  const handleTriggerPointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    childProps.onPointerDown?.(event);
+    setPointerDownOpen(open);
+  };
+
+  const handleTriggerClick = (event: React.MouseEvent<HTMLElement>) => {
+    childProps.onClick?.(event);
+    const wasOpenAtPointerDown = pointerDownOpen;
+    setPointerDownOpen(null);
+    // Touch and mouse activation focus the button before click. Preserve the
+    // pre-focus state so a closed tooltip opens instead of immediately
+    // toggling closed. Keyboard activation toggles the focus-open state.
+    setOpen((value) =>
+      wasOpenAtPointerDown === null ? !value : !wasOpenAtPointerDown,
+    );
+  };
+
   const triggerProps: React.HTMLAttributes<HTMLElement> & {
     "data-testid"?: string;
     "aria-expanded"?: boolean;
@@ -126,14 +186,13 @@ export function Tooltip({
     ...(triggerTestId ? { "data-testid": triggerTestId } : {}),
     "aria-describedby": open ? tooltipId : undefined,
     ...(clickToggle ? { "aria-expanded": open } : {}),
+    ...(clickToggle
+      ? {
+          onPointerDown: handleTriggerPointerDown,
+          onClick: handleTriggerClick,
+        }
+      : {}),
   };
-
-  if (clickToggle) {
-    triggerProps.onClick = (event: React.MouseEvent<HTMLElement>) => {
-      childProps.onClick?.(event);
-      setOpen((value) => !value);
-    };
-  }
 
   const trigger = cloneElement(child, triggerProps);
 

@@ -216,6 +216,7 @@ describe("FrontierPage", () => {
     expect(tooltip).toHaveTextContent("Wilson 95% 区间90.6%–92.6%");
     expect(tooltip).toHaveTextContent("Wilson 下界 90.6% ≥ 目标 90%");
     expect(tooltip).toHaveTextContent("相邻未达标档位 ¥440,000.00");
+    expect(tooltip).toHaveStyle({ top: "0.5rem" });
     fireEvent.mouseLeave(boundaryPoint);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 

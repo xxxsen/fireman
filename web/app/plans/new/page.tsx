@@ -7,6 +7,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AssetClassHoldingPicker } from "@/components/plans/AssetClassHoldingPicker";
 import { Button } from "@/components/ui/Button";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PercentInput } from "@/components/ui/PercentInput";
@@ -600,12 +601,14 @@ export default function NewPlanWizardPage() {
                         <MetricHelp termKey="configured_total_assets" />
                       </span>
                     }
+                    ariaLabel="基准规模"
                     valueMinor={totalAssets}
                     onChange={setTotalAssets}
                     plain
                   />
                   <MoneyInput
-                    label="当前年支出"
+                    label={<HelpLabel label="退休后首年支出" termKey="retirement_spending" />}
+                    ariaLabel="退休后首年支出"
                     valueMinor={annualSpending}
                     onChange={setAnnualSpending}
                     plain
@@ -617,12 +620,14 @@ export default function NewPlanWizardPage() {
                         <MetricHelp termKey="annual_savings_wizard" />
                       </span>
                     }
+                    ariaLabel="年储蓄"
                     valueMinor={annualSavings}
                     onChange={setAnnualSavings}
                     plain
                   />
 				  <MoneyInput
-					label="退休后稳定年收入"
+					label={<HelpLabel label="退休后稳定年收入" termKey="stable_retirement_income" />}
+					ariaLabel="退休后稳定年收入"
 					valueMinor={annualRetirementIncome}
 					onChange={setAnnualRetirementIncome}
 					plain
@@ -634,8 +639,9 @@ export default function NewPlanWizardPage() {
             <section className="space-y-4">
               <h2 className="text-sm font-semibold text-ink">目标配置</h2>
               <label className="block max-w-3xl text-sm">
-                <span className="mb-1 block text-ink">配置模板</span>
+                <span className="mb-1 block text-ink"><HelpLabel label="配置模板" termKey="config_template" /></span>
                 <select
+                  aria-label="配置模板"
                   className="input-base"
                   value={scenarioId}
                   onChange={(e) => setScenarioId(e.target.value)}
@@ -654,7 +660,7 @@ export default function NewPlanWizardPage() {
               </p>
               {selectedScenario && regionTargetChecks.length > 0 && (
                 <div className="space-y-3">
-                  <h3 className="text-sm font-medium">地区组内权重</h3>
+                  <h3 className="text-sm font-medium"><HelpLabel label="地区组内权重" termKey="target_weight_within_asset_class" /></h3>
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {regionTargetChecks.map((check) => {
                       const ac = check.assetClass as WizardRegionEditableClass;
@@ -1097,11 +1103,6 @@ export default function NewPlanWizardPage() {
               assetGap < -100 ||
               advancedBlocked
             }
-            title={
-              portfolioReview && !portfolioReview.passed
-                ? portfolioReview.message
-                : undefined
-            }
             onClick={() => finishMut.mutate()}
           >
             {runSimulation ? "创建并运行模拟" : "创建计划"}
@@ -1151,8 +1152,9 @@ function AdvancedFireParamsSection({
       </summary>
       <div className="mt-3 grid items-start gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
         <label className="block text-sm">
-          <span className="mb-1 block text-ink">通胀模式</span>
+          <span className="mb-1 block text-ink"><HelpLabel label="通胀模式" termKey={advanced.inflation_mode === "random_ar1" ? "random_inflation_ar1" : "fixed_inflation"} /></span>
           <select
+            aria-label="通胀模式"
             className="input-base"
             value={advanced.inflation_mode}
             onChange={(e) => onChange("inflation_mode", e.target.value)}
@@ -1163,7 +1165,8 @@ function AdvancedFireParamsSection({
         </label>
         {advanced.inflation_mode === "fixed_real" && (
           <PercentInput
-            label="固定通胀率"
+            label={<HelpLabel label="固定通胀率" termKey="fixed_inflation" />}
+            ariaLabel="固定通胀率"
             value={advanced.fixed_inflation_rate}
             onChange={(v) => onChange("fixed_inflation_rate", v)}
           />
@@ -1182,18 +1185,21 @@ function AdvancedFireParamsSection({
         {advanced.inflation_mode === "random_ar1" && (
           <>
             <PercentInput
-              label="通胀均值 μ"
+              label={<HelpLabel label="通胀均值 μ" termKey="inflation_mu" />}
+              ariaLabel="通胀均值 μ"
               value={advanced.inflation_mu}
               onChange={(v) => onChange("inflation_mu", v)}
             />
             <PercentInput
-              label="通胀波动 σ"
+              label={<HelpLabel label="通胀波动 σ" termKey="inflation_sigma" />}
+              ariaLabel="通胀波动 σ"
               value={advanced.inflation_sigma}
               onChange={(v) => onChange("inflation_sigma", v)}
             />
             <label className="block text-sm">
-              <span className="mb-1 block text-ink">通胀自回归 φ</span>
+              <span className="mb-1 block text-ink"><HelpLabel label="通胀自回归 φ" termKey="inflation_phi" /></span>
               <input
+                aria-label="通胀自回归 φ"
                 type="number"
                 step={0.01}
                 min={0}
@@ -1207,12 +1213,13 @@ function AdvancedFireParamsSection({
         )}
         <label className="block text-sm">
           <span className="mb-1 flex items-center text-ink">
-            提取策略
-            {advanced.withdrawal_type === "guardrail" && (
-              <MetricHelp termKey="guardrail_withdrawal_rate" />
-            )}
+            <HelpLabel
+              label="提取策略"
+              termKey={advanced.withdrawal_type === "fixed_portfolio" ? "withdrawal_fixed_portfolio" : advanced.withdrawal_type === "guardrail" ? "withdrawal_guardrail" : "withdrawal_fixed_real"}
+            />
           </span>
           <select
+            aria-label="提取策略"
             className="input-base"
             value={advanced.withdrawal_type}
             onChange={(e) => onChange("withdrawal_type", e.target.value)}
@@ -1224,7 +1231,8 @@ function AdvancedFireParamsSection({
         </label>
         {advanced.withdrawal_type === "fixed_portfolio" && (
           <PercentInput
-            label="提取率"
+            label={<HelpLabel label="提取率" termKey="withdrawal_fixed_portfolio" />}
+            ariaLabel="提取率"
             value={advanced.withdrawal_rate}
             onChange={(v) => onChange("withdrawal_rate", v)}
           />
@@ -1232,39 +1240,46 @@ function AdvancedFireParamsSection({
         {advanced.withdrawal_type === "guardrail" && (
           <>
             <PercentInput
-              label="护栏下限比例"
+              label={<HelpLabel label="护栏下限比例" termKey="guardrail_withdrawal_rate" />}
+              ariaLabel="护栏下限比例"
               value={advanced.withdrawal_floor_ratio}
               onChange={(v) => onChange("withdrawal_floor_ratio", v)}
             />
             <PercentInput
-              label="护栏上限比例"
+              label={<HelpLabel label="护栏上限比例" termKey="guardrail_withdrawal_rate" />}
+              ariaLabel="护栏上限比例"
               value={advanced.withdrawal_ceiling_ratio}
               onChange={(v) => onChange("withdrawal_ceiling_ratio", v)}
             />
           </>
         )}
         <PercentInput
-          label="有效提取税率"
+          label={<HelpLabel label="有效提取税率" termKey="withdrawal_tax_rate" />}
+          ariaLabel="有效提取税率"
           value={advanced.withdrawal_tax_rate}
           onChange={(v) => onChange("withdrawal_tax_rate", v)}
         />
         <PercentInput
-          label="应税提取比例"
+          label={<HelpLabel label="应税提取比例" termKey="taxable_withdrawal_ratio" />}
+          ariaLabel="应税提取比例"
           value={advanced.taxable_withdrawal_ratio}
           onChange={(v) => onChange("taxable_withdrawal_ratio", v)}
         />
 		<PercentInput
-		  label="储蓄增长率"
+		  label={<HelpLabel label="储蓄增长率" termKey="savings_growth" />}
+		  ariaLabel="储蓄增长率"
 		  value={advanced.annual_savings_growth_rate}
 		  onChange={(v) => onChange("annual_savings_growth_rate", v)}
 		/>
 		<PercentInput
-		  label="稳定收入年增长率"
+		  label={<HelpLabel label="稳定收入年增长率" termKey="retirement_income_growth" />}
+		  ariaLabel="稳定收入年增长率"
 		  value={advanced.annual_retirement_income_growth_rate}
 		  onChange={(v) => onChange("annual_retirement_income_growth_rate", v)}
 		/>
 		<MoneyInput
-		  label="期末最低资产"
+		  label={<HelpLabel label="期末最低资产" termKey="terminal_wealth_floor" />}
+		  ariaLabel="期末最低资产"
 		  valueMinor={advanced.terminal_wealth_floor_minor}
 		  onChange={(v) => onChange("terminal_wealth_floor_minor", v)}
 		/>

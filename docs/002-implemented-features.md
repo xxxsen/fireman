@@ -142,6 +142,8 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 [004-portfolio-first-ui.md](./004-portfolio-first-ui.md) 与
 [008-plan-settings-holdings-preview.md](./008-plan-settings-holdings-preview.md)。
 
+专业术语、计算结果和图表统一提供上下文帮助：字段级使用结构化 topic，结果级展示本次计算的数据与判定口径，图表可见标注轴/单位并提供 hover、键盘与移动端详情。规范见 [037-web-contextual-help-and-explainability.md](./037-web-contextual-help-and-explainability.md)。
+
 调仓执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](./027-quick-fire-calculator.md)。

@@ -32,6 +32,7 @@ import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { RunCharts } from "@/components/research/RunCharts";
 import {
@@ -68,18 +69,20 @@ function MetricCard({
   label,
   value,
   help,
+  termKey,
   tone,
 }: {
   label: string;
   value: string;
   help?: string;
+  termKey?: string;
   tone?: "positive" | "danger";
 }) {
   return (
     <div className="rounded-md border border-line bg-surface px-3 py-2">
       <p className="flex items-center text-xs text-ink-muted">
-        {label}
-        {help && <MetricHelp text={help} />}
+        {termKey ? <HelpLabel label={label} termKey={termKey} /> : label}
+        {!termKey && help && <MetricHelp text={help} />}
       </p>
       <p
         className={
@@ -368,33 +371,39 @@ export default function ResearchRunDetailPage() {
           >
             <MetricCard
               label="累计收益"
+              termKey="cumulative_return"
               value={formatPercent(summary.cumulative_return)}
               tone={summary.cumulative_return >= 0 ? "positive" : "danger"}
             />
             <MetricCard
               label="CAGR"
+              termKey="metric_cagr"
               value={formatPercent(summary.cagr)}
               help="复合年化增长率，按 365.25 天/年折算。"
               tone={summary.cagr >= 0 ? "positive" : "danger"}
             />
             <MetricCard
               label="年化波动率"
+              termKey="metric_annual_volatility"
               value={formatNullablePercent(summary.annual_volatility)}
               help="有效估值日收益的样本标准差 × √252。"
             />
             <MetricCard
               label="最大回撤"
+              termKey="metric_max_drawdown"
               value={formatPercent(summary.max_drawdown)}
               help="净值从峰值到谷底的最大跌幅（负数）。"
               tone="danger"
             />
             <MetricCard
               label="Sharpe"
+              termKey="sharpe_ratio"
               value={summary.sharpe != null ? summary.sharpe.toFixed(2) : "—"}
               help="（年化收益 − 无风险利率）/ 年化波动率；波动率不可用时为空。"
             />
             <MetricCard
               label="Calmar"
+              termKey="calmar_ratio"
               value={summary.calmar != null ? summary.calmar.toFixed(2) : "—"}
               help="CAGR / |最大回撤|；回撤为 0 时为空。"
             />
@@ -432,10 +441,12 @@ export default function ResearchRunDetailPage() {
             />
             <MetricCard
               label="正收益月份占比"
+              termKey="positive_month_ratio"
               value={formatNullablePercent(summary.positive_month_ratio)}
             />
             <MetricCard
               label="回撤持续期"
+              termKey="drawdown_duration"
               value={`当前 ${summary.current_drawdown_days} 天 / 最长 ${summary.max_drawdown_duration_days} 天`}
               help="当前回撤已持续天数与历史最长回撤持续期（峰值到收复）。"
             />
@@ -443,16 +454,19 @@ export default function ResearchRunDetailPage() {
               <>
                 <MetricCard
                   label="累计单边换手"
+                  termKey="portfolio_turnover"
                   value={formatPercent(summary.total_turnover ?? 0)}
                   help="每次再平衡的 0.5 × Σ|扣费前漂移权重 − 目标权重| 之和。"
                 />
                 <MetricCard
                   label="累计交易成本"
+                  termKey="transaction_cost_rate"
                   value={formatMoneyScaled(summary.total_transaction_cost_minor ?? 0, run.base_currency)}
                   help="按运行输入中的初始资金和交易费率逐次四舍五入后的实际费用合计。"
                 />
                 <MetricCard
                   label="交易成本拖累"
+                  termKey="transaction_cost_drag"
                   value={formatPercent(summary.transaction_cost_drag ?? 0)}
                   help="同一调仓路径下，不计费用终值与计费后终值的差额，占初始净值的比例。"
                   tone={(summary.transaction_cost_drag ?? 0) > 0 ? "danger" : undefined}
@@ -463,18 +477,21 @@ export default function ResearchRunDetailPage() {
               <>
                 <MetricCard
                   label={`${summary.tail_risk.horizon_days} 日 ${summary.tail_risk.confidence * 100}% VaR`}
+                  termKey="metric_var_loss"
                   value={formatPercent(summary.tail_risk.var_loss)}
                   help={`基于 ${summary.tail_risk.scenario_count} 个滚动场景的尾部分位损失。正数表示损失，负数表示该尾部边界仍为收益。`}
                   tone={summary.tail_risk.var_loss > 0 ? "danger" : "positive"}
                 />
                 <MetricCard
                   label={`${summary.tail_risk.horizon_days} 日 ${summary.tail_risk.confidence * 100}% CVaR`}
+                  termKey="metric_cvar_loss"
                   value={formatPercent(summary.tail_risk.cvar_loss)}
                   help={`历史最差尾部场景的平均损失，共 ${summary.tail_risk.scenario_count} 个场景，尾部计数 ${summary.tail_risk.tail_count}。`}
                   tone={summary.tail_risk.cvar_loss > 0 ? "danger" : "positive"}
                 />
                 <MetricCard
                   label={`最差 ${summary.tail_risk.horizon_days} 日损失`}
+                  termKey="worst_period_loss"
                   value={formatPercent(summary.tail_risk.worst_loss)}
                   help="该次回测冻结口径下观测到的最差持有期损失。"
                   tone={summary.tail_risk.worst_loss > 0 ? "danger" : "positive"}
@@ -523,17 +540,17 @@ export default function ResearchRunDetailPage() {
           </div>
 
           <section className="rounded-lg border border-line bg-surface p-4">
-            <h3 className="mb-3 text-sm font-semibold text-ink">滚动指标</h3>
+              <h3 className="mb-3 text-sm font-semibold text-ink"><HelpLabel label="滚动指标" termKey="rolling_metric" /></h3>
             <RunRollingCharts points={points} />
           </section>
 
           <div className="grid gap-6 xl:grid-cols-2">
             <section className="rounded-lg border border-line bg-surface p-4">
-              <h3 className="mb-3 text-sm font-semibold text-ink">资产贡献</h3>
+              <h3 className="mb-3 text-sm font-semibold text-ink"><HelpLabel label="资产贡献" termKey="return_contribution" /></h3>
               <RunContributions summary={summary} />
             </section>
             <section className="rounded-lg border border-line bg-surface p-4">
-              <h3 className="mb-3 text-sm font-semibold text-ink">相关性矩阵</h3>
+              <h3 className="mb-3 text-sm font-semibold text-ink"><HelpLabel label="相关性矩阵" termKey="correlation_matrix" /></h3>
               <RunCorrelationMatrix summary={summary} />
             </section>
           </div>

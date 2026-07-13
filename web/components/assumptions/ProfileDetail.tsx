@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
 import type { AssumptionProfile, AssumptionProfileSummary } from "@/types/api";
 import { buildCorrelationMatrix, factorLabel, scenarioLabel } from "./shared";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 export interface ProfileDetailProps {
   profile: AssumptionProfile;
@@ -25,13 +26,12 @@ export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetai
             {profile.name} <span className="font-mono text-xs text-ink-muted">{profile.id}@{profile.version}</span>
           </h2>
           <p className="mt-1 text-xs text-ink-muted">
-            {isSystem ? "系统只读 profile" : "自定义 profile"} · 厚尾自由度 ν={profile.student_t_df} · 收益截断{" "}
-            {formatPercent(profile.return_floor)} ~ {formatPercent(profile.return_ceil)} · 先验等效年数{" "}
-            {profile.prior_strength_years} · 相关性收缩等效月数 {profile.correlation_strength_months}
+            {isSystem ? "系统只读 profile" : "自定义 profile"} · <HelpLabel label={`厚尾自由度 ν=${profile.student_t_df}`} termKey="student_t_df" /> · 收益截断{" "}
+            {formatPercent(profile.return_floor)} ~ {formatPercent(profile.return_ceil)} · <HelpLabel label={`先验等效年数 ${profile.prior_strength_years}`} termKey="prior_strength" /> · <HelpLabel label={`相关性收缩等效月数 ${profile.correlation_strength_months}`} termKey="correlation_shrinkage" />
           </p>
           {summary && (
             <p className="mt-1 text-xs text-ink-muted">
-              来源类型：{summary.evidence_kind === "internal_policy" ? "内部政策假设" : summary.evidence_kind === "user_reviewed" ? "用户审核值" : "外部背景派生值"}
+              <HelpLabel label="来源类型" termKey="assumption_evidence" />：{summary.evidence_kind === "internal_policy" ? "内部政策假设" : summary.evidence_kind === "user_reviewed" ? "用户审核值" : "外部背景派生值"}
               {summary.reviewed_by ? ` · 审核人 ${summary.reviewed_by}` : ""}
               {summary.reviewed_at ? ` · ${summary.reviewed_at}` : ""}
               {summary.evidence_hash ? ` · evidence ${summary.evidence_hash.slice(0, 12)}` : ""}
@@ -57,9 +57,9 @@ export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetai
           <thead>
             <tr className="text-ink-muted">
               <th scope="col" className="pr-4 py-1">假设情景</th>
-              <th scope="col" className="pr-4 py-1">收益对数位移</th>
-              <th scope="col" className="pr-4 py-1">FX 收益位移</th>
-              <th scope="col" className="pr-4 py-1">波动率乘子</th>
+              <th scope="col" className="pr-4 py-1"><HelpLabel label="收益对数位移" termKey="return_log_shift" /></th>
+              <th scope="col" className="pr-4 py-1"><HelpLabel label="FX 收益位移" termKey="fx_return_shift" /></th>
+              <th scope="col" className="pr-4 py-1"><HelpLabel label="波动率乘子" termKey="volatility_multiplier" /></th>
             </tr>
           </thead>
           <tbody>
@@ -76,7 +76,7 @@ export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetai
       </div>
 
       <div className="overflow-x-auto">
-        <h3 className="text-sm font-medium text-ink-muted">收益先验（持续费用已内含·基准币种·名义几何）</h3>
+        <h3 className="text-sm font-medium text-ink-muted"><HelpLabel label="收益先验（持续费用已内含·基准币种·名义几何）" termKey="return_prior" /></h3>
         <p className="mt-1 text-xs text-ink-muted">
           基金净值已反映管理费、托管费等持续费用；模拟不会按 expense ratio 再次扣除。
         </p>
@@ -87,9 +87,9 @@ export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetai
               <th scope="col" className="pr-4 py-1">资产类别</th>
               <th scope="col" className="pr-4 py-1">地区</th>
               <th scope="col" className="pr-4 py-1">计价币种</th>
-              <th scope="col" className="pr-4 py-1">年化几何收益</th>
-              <th scope="col" className="pr-4 py-1">波动率下限/上限</th>
-              <th scope="col" className="pr-4 py-1">来源</th>
+              <th scope="col" className="pr-4 py-1"><HelpLabel label="年化几何收益" termKey="forward_return" /></th>
+              <th scope="col" className="pr-4 py-1"><HelpLabel label="波动率下限/上限" termKey="annual_volatility" /></th>
+              <th scope="col" className="pr-4 py-1"><HelpLabel label="来源" termKey="assumption_evidence" /></th>
             </tr>
           </thead>
           <tbody>
@@ -113,14 +113,14 @@ export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetai
 
       {(profile.fx_priors?.length ?? 0) > 0 && (
         <div className="overflow-x-auto">
-          <h3 className="text-sm font-medium text-ink-muted">FX 先验</h3>
+          <h3 className="text-sm font-medium text-ink-muted"><HelpLabel label="FX 先验" termKey="fx_prior" /></h3>
           <table className="mt-1 min-w-full text-left text-xs">
             <caption className="sr-only">FX 先验列表</caption>
             <thead>
               <tr className="text-ink-muted">
                 <th scope="col" className="pr-4 py-1">货币对</th>
-                <th scope="col" className="pr-4 py-1">年化几何收益</th>
-                <th scope="col" className="pr-4 py-1">波动率下限/上限</th>
+                <th scope="col" className="pr-4 py-1"><HelpLabel label="年化几何收益" termKey="fx_forward_return" /></th>
+                <th scope="col" className="pr-4 py-1"><HelpLabel label="波动率下限/上限" termKey="annual_volatility" /></th>
               </tr>
             </thead>
             <tbody>
@@ -142,7 +142,7 @@ export function ProfileDetail({ profile, summary, onCopy, onEdit }: ProfileDetai
 
       {correlation.keys.length > 0 && (
         <div className="overflow-x-auto">
-          <h3 className="text-sm font-medium text-ink-muted">相关性先验矩阵</h3>
+          <h3 aria-label="相关性先验矩阵" className="text-sm font-medium text-ink-muted"><HelpLabel label="相关性先验矩阵" termKey="correlation_rho" /></h3>
           <table className="mt-1 min-w-full text-left text-xs">
             <caption className="sr-only">相关性先验矩阵</caption>
             <thead>

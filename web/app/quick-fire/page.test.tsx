@@ -95,7 +95,7 @@ describe("QuickFirePage", () => {
     const draftWrites = () => storageSet.mock.calls.filter(([key]) => key === QUICK_FIRE_DRAFT_KEY).length;
     const writesBeforeFocus = draftWrites();
 
-    const money = screen.getByLabelText(/当前可投资资产/);
+    const money = screen.getByRole("textbox", { name: "当前可投资资产" });
     fireEvent.focus(money);
     fireEvent.blur(money);
     await new Promise((resolve) => window.setTimeout(resolve, 350));
@@ -108,7 +108,7 @@ describe("QuickFirePage", () => {
   it("accepts 2.29 percent inflation in natural typing order", async () => {
     render(<QuickFirePage />);
     await waitFor(() => expect(calculateQuickFire).toHaveBeenCalledTimes(1));
-    const inflation = screen.getByLabelText(/通胀率/);
+    const inflation = screen.getByRole("textbox", { name: "固定通胀率" });
     fireEvent.focus(inflation);
     for (const draft of ["2", "2.", "2.2", "2.29"]) {
       fireEvent.change(inflation, { target: { value: draft } });
@@ -126,7 +126,7 @@ describe("QuickFirePage", () => {
     const chart = screen.getByTestId("quick-fire-chart");
     calculateQuickFire.mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
 
-    const spending = screen.getByLabelText(/当前年支出/);
+    const spending = screen.getByRole("textbox", { name: "退休首年支出（当前购买力）" });
     fireEvent.focus(spending);
     fireEvent.change(spending, { target: { value: "130000" } });
     expect(screen.getByTestId("quick-fire-outcome")).toBeVisible();
@@ -154,7 +154,7 @@ describe("QuickFirePage", () => {
       .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
       .mockImplementationOnce(() => new Promise((resolve) => { resolveLatest = resolve; }));
 
-    const spending = screen.getByLabelText(/当前年支出/);
+    const spending = screen.getByRole("textbox", { name: "退休首年支出（当前购买力）" });
     fireEvent.focus(spending);
     fireEvent.change(spending, { target: { value: "130000" } });
     await waitFor(() => expect(calculateQuickFire).toHaveBeenCalledTimes(2));

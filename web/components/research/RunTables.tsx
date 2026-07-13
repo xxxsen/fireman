@@ -9,6 +9,7 @@ import type {
 } from "@/lib/api/research";
 import { dataSourceLabel, formatNullablePercent, formatPercent, pointTypeLabel } from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 // --- annual table ---
 
@@ -28,11 +29,11 @@ export function RunAnnualTable({
         <thead>
           <tr className="border-b border-line text-left text-xs text-ink-muted">
             <th className="px-3 py-2 font-medium">年份</th>
-            <th className="px-3 py-2 text-right font-medium">收益</th>
-            <th className="px-3 py-2 text-right font-medium">年内波动率</th>
-            <th className="px-3 py-2 text-right font-medium">年内最大回撤</th>
-            <th className="px-3 py-2 text-right font-medium">年初/年末权重偏离</th>
-            <th className="px-3 py-2 font-medium">完整性</th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="收益" termKey="annual_return" /></th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="年内波动率" termKey="annual_volatility" /></th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="年内最大回撤" termKey="max_drawdown" /></th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="年初/年末权重偏离" termKey="weight_deviation" /></th>
+            <th className="px-3 py-2 font-medium"><HelpLabel label="完整性" termKey="complete_year" /></th>
           </tr>
         </thead>
         <tbody>
@@ -126,7 +127,7 @@ export function RunMonthlyHeatmap({ months }: { months: ResearchBacktestMonth[] 
                     key={i + 1}
                     className="px-1 py-1 text-center font-mono-numeric"
                     style={v != null ? { backgroundColor: heatColor(v) } : undefined}
-                    title={v != null ? `${year}-${i + 1}: ${formatPercent(v)}` : undefined}
+                    aria-label={v != null ? `${year} 年 ${i + 1} 月收益 ${formatPercent(v)}` : `${year} 年 ${i + 1} 月无数据`}
                   >
                     {v != null ? formatPercent(v) : ""}
                   </td>
@@ -155,24 +156,9 @@ export function RunContributions({ summary }: { summary: ResearchRunSummary }) {
             <th className="px-3 py-2 font-medium">资产</th>
             <th className="px-3 py-2 text-right font-medium">目标权重</th>
             <th className="px-3 py-2 text-right font-medium">期末权重</th>
-            <th
-              className="px-3 py-2 text-right font-medium"
-              title="各资产链接贡献之和等于组合累计收益"
-            >
-              累计收益贡献
-            </th>
-            <th
-              className="px-3 py-2 text-right font-medium"
-              title="组合方差非零时，各资产风险贡献之和等于 100%"
-            >
-              风险贡献
-            </th>
-            <th
-              className="px-3 py-2 text-right font-medium"
-              title="各资产峰值到谷底的链接贡献之和等于最大回撤"
-            >
-              回撤期贡献
-            </th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="累计收益贡献" termKey="return_contribution" /></th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="风险贡献" termKey="risk_contribution" /></th>
+            <th className="px-3 py-2 text-right font-medium"><HelpLabel label="回撤期贡献" termKey="drawdown_contribution" /></th>
           </tr>
         </thead>
         <tbody>
@@ -331,7 +317,7 @@ export function RunDataQuality({
     <div className="space-y-3" data-testid="data-quality">
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
         <div>
-          <dt className="text-ink-muted">共同区间</dt>
+          <dt className="text-ink-muted"><HelpLabel label="共同区间" termKey="common_backtest_interval" /></dt>
           <dd className="font-mono-numeric font-medium text-ink">
             {quality.common_start} ~ {quality.common_end}
           </dd>
@@ -355,7 +341,7 @@ export function RunDataQuality({
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">最大前值填充</dt>
+          <dt className="text-ink-muted"><HelpLabel label="最大前值填充" termKey="forward_fill" /></dt>
           <dd className="font-medium text-ink">{quality.forward_fill_days_max} 天</dd>
         </div>
       </dl>
@@ -367,7 +353,7 @@ export function RunDataQuality({
               <th className="px-3 py-2 font-medium">序列</th>
               <th className="px-3 py-2 font-medium">原始区间（点数）</th>
               <th className="px-3 py-2 font-medium">可用区间</th>
-              <th className="px-3 py-2 text-right font-medium">填充</th>
+              <th className="px-3 py-2 text-right font-medium"><HelpLabel label="填充" termKey="forward_fill" /></th>
               <th className="px-3 py-2 font-medium">共同区间影响</th>
             </tr>
           </thead>

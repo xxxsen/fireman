@@ -57,15 +57,9 @@
 
 ## 6. 术语提示（MetricHelp / 术语表）
 
-财务与模拟相关指标旁挂 `MetricHelp`，文案集中维护在 `web/lib/terms.ts`（`TERMS` 字典 + `helpForTerm`）。未知 key 时 `MetricHelp` 安全降级为不渲染。
+财务、模拟、研究与后台任务指标旁挂 `MetricHelp`，固定文案集中维护在 `web/lib/terms.ts` 的结构化 `HELP_TOPICS`。经过计算的 topic 必须同时说明算法、输入来源和解读；所有 topic 都必须挂载到实际界面，静态测试禁止孤儿 key 和冲突定义。未知 key 在开发/测试环境直接失败，生产环境安全降级。
 
-### 6.1 孤儿术语 key（已记录归档）
-
-下列 key 已在 `terms.ts` 定义，但当前未通过 `MetricHelp` / `helpForTerm` 挂载到任何界面。它们描述的是有效概念，保留以备后续界面挂载，**不作删除**；此处登记以满足“无未登记孤儿 key”的要求：
-
-`p_quantiles`、`max_drawdown`、`annual_return`、`annual_volatility`、`weight_within_group`、`simulation_snapshot_sync`、`holdings_sum`、`holdings_market_value`、`scale_gap_under`、`plan_scale_gap_row`、`structural_rebalance`、`deviation_amount`、`rebalance_mode_full`、`rebalance_mode_new_cash`、`asset_refresh`、`asset_refresh_vs_rebalance_plan`、`current_amount_vs_target`、`portfolio_gap_row`。
-
-> 说明：上述名称中部分与 API 数据字段同名（如 `max_drawdown`、`annual_return`、`holdings_sum`），数据字段仍在使用；此处指的是它们作为“术语表条目”尚未被挂载为帮助提示。
+结果级口径使用 `CalculationExplanation`，图表使用 `ChartFrame`；交互、内容模型、页面覆盖和自动化门禁见 [037-web-contextual-help-and-explainability.md](./037-web-contextual-help-and-explainability.md)。
 
 ## 7. 布局与响应式
 

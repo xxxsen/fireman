@@ -20,6 +20,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageSkeleton } from "@/components/ui/Skeleton";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import { queryErrorMessage } from "@/lib/query-error";
 
 function lineStatusHint(status: string, remainingMinor: number): string | null {
@@ -216,9 +217,13 @@ export default function RebalancePage() {
           <div className="shrink-0 text-right text-sm">{gapAmountCell(row)}</div>
         </div>
         <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <dt className="text-ink-muted">目标金额</dt>
+          <dt className="text-ink-muted">
+            <HelpLabel label="目标金额" termKey="current_amount_vs_target" />
+          </dt>
           <dd className="text-right text-ink">{formatMoney(row.target_amount_minor)}</dd>
-          <dt className="text-ink-muted">当前金额</dt>
+          <dt className="text-ink-muted">
+            <HelpLabel label="当前金额" termKey="holdings_market_value" />
+          </dt>
           <dd className="text-right text-ink">{formatMoney(row.current_amount_minor)}</dd>
         </dl>
       </div>
@@ -293,7 +298,9 @@ export default function RebalancePage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-ink">调仓工作台</h1>
+          <h1 aria-label="调仓工作台" className="text-xl font-semibold text-ink">
+            <HelpLabel label="调仓工作台" termKey="structural_rebalance" />
+          </h1>
           <p className="mt-1 text-sm text-ink-muted">
             对比当前持仓与目标结构；可在此更新真实持仓（持仓校正）或登记调仓执行。
           </p>
@@ -364,7 +371,7 @@ export default function RebalancePage() {
       ) : (
         <section>
           <h2 className="flex items-center font-medium text-ink">
-            结构偏差汇总
+            <HelpLabel label="结构偏差汇总" termKey="portfolio_gap_row" />
             <MetricHelp termKey="gap_color_semantics" />
           </h2>
 
@@ -374,11 +381,21 @@ export default function RebalancePage() {
               <thead className="bg-surface-muted text-ink-muted">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">维度</th>
-                  <th className="px-3 py-2 text-right font-medium">目标占比</th>
-                  <th className="px-3 py-2 text-right font-medium">现状占比</th>
-                  <th className="px-3 py-2 text-right font-medium">目标金额</th>
-                  <th className="px-3 py-2 text-right font-medium">当前金额</th>
-                  <th className="px-3 py-2 text-right font-medium">待投入 / 偏差</th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    <HelpLabel label="目标占比" termKey="target_weight_portfolio" />
+                  </th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    <HelpLabel label="现状占比" termKey="current_weight_portfolio" />
+                  </th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    <HelpLabel label="目标金额" termKey="current_amount_vs_target" />
+                  </th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    <HelpLabel label="当前金额" termKey="holdings_market_value" />
+                  </th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    <HelpLabel label="待投入 / 偏差" termKey="deviation_amount" />
+                  </th>
                 </tr>
               </thead>
               <tbody>

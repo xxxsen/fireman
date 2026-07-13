@@ -39,6 +39,7 @@ import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { TaskErrorInline } from "@/components/ui/TaskErrorInline";
 import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 const PAGE_SIZE = 50;
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -668,10 +669,10 @@ export default function MarketAssetsPage() {
                   <th className="px-3 py-2.5 font-medium">代码</th>
                   <th className="px-3 py-2.5 font-medium">名称</th>
                   <th className="px-3 py-2.5 font-medium">市场</th>
-                  <th className="px-3 py-2.5 font-medium">类型</th>
+                  <th className="px-3 py-2.5 font-medium"><HelpLabel label="资产类型" termKey="instrument_kind" /></th>
                   <th className="px-3 py-2.5 font-medium">交易所</th>
                   <th className="px-3 py-2.5 font-medium">币种</th>
-                  <th className="px-3 py-2.5 font-medium">历史数据</th>
+                  <th className="px-3 py-2.5 font-medium"><HelpLabel label="历史数据截至" termKey="data_as_of" /></th>
                   <th className="px-3 py-2.5 font-medium">来源</th>
                   <th className="px-3 py-2.5 font-medium">基础信息刷新时间</th>
                 </tr>

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { decimalToPercentString, percentToDecimal } from "@/lib/percent";
 
 interface PercentInputProps {
   value: number;
   onChange: (decimal: number) => void;
-  label?: string;
+  label?: ReactNode;
+  ariaLabel?: string;
   disabled?: boolean;
   className?: string;
 }
@@ -15,6 +16,7 @@ export function PercentInput({
   value,
   onChange,
   label,
+  ariaLabel,
   disabled,
   className,
 }: PercentInputProps) {
@@ -41,6 +43,7 @@ export function PercentInput({
           inputMode="decimal"
           disabled={disabled}
           data-testid="percent-input"
+          aria-label={ariaLabel ?? (typeof label === "string" ? label : undefined)}
           className="input-base min-w-0 font-mono-numeric"
           value={editing ? draft : decimalToPercentString(value)}
           onFocus={() => {

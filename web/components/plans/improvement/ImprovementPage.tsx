@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@/components/ui/Alert";
@@ -10,6 +10,9 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageSkeleton } from "@/components/ui/Skeleton";
+import { CalculationExplanation } from "@/components/ui/CalculationExplanation";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import { useActiveTaskRestore } from "@/hooks/useActiveTaskRestore";
 import { useTaskStatus } from "@/hooks/useTaskStatus";
 import {
@@ -61,7 +64,7 @@ function LeverToggle({
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
-  label: string;
+  label: ReactNode;
 }) {
   return (
     <label className="flex min-h-10 items-center gap-2 text-sm font-medium text-ink">
@@ -90,13 +93,13 @@ function MoneyLeverFields({
     <div className="grid gap-3 sm:grid-cols-2">
       <MoneyInput
         plain
-        label={maximumLabel}
+        label={<HelpLabel label={maximumLabel} termKey="search_domain" />}
         valueMinor={value.maximum}
         onChange={(maximum) => onChange({ ...value, maximum })}
       />
       <MoneyInput
         plain
-        label="每档金额"
+        label={<HelpLabel label="每档金额" termKey="discrete_search_step" />}
         valueMinor={value.step}
         onChange={(step) => onChange({ ...value, step })}
       />
@@ -143,8 +146,23 @@ const ImprovementResults = memo(function ImprovementResults({
             基准 {formatPercent(result.baseline.success_probability)}（95% 区间 {formatPercent(result.baseline.success_wilson_low)} - {formatPercent(result.baseline.success_wilson_high)}） · 目标下界 {formatPercent(result.target_probability)}
           </p>
         </div>
-        <span className="text-xs text-ink-muted">来源 {run.source_simulation_run_id}</span>
+        <span className="inline-flex items-center text-xs text-ink-muted">
+          来源 {run.source_simulation_run_id}
+          <MetricHelp termKey="common_random_numbers" />
+        </span>
       </div>
+
+      <CalculationExplanation
+        summary="本次结果在来源模拟的冻结输入上，搜索四类现金流调整能否让 Wilson 95% 下界达到目标。"
+        answer="在你允许的调整范围内，需要怎样改变退休年龄、储蓄、退休支出或稳定收入，才能更稳健地达到目标成功率。"
+        changed="仅改变已启用的四个现金流杠杆，并按设置的上限和离散档位生成候选。"
+        fixed="持仓、配置权重、收益与风险假设、市场快照、来源模拟 seed 和逐路径随机样本保持不变。"
+        data={`来源模拟 ${run.source_simulation_run_id}；每个候选使用 ${result.baseline.runs.toLocaleString()} 条配对路径。`}
+        criterion={`候选的 Wilson 95% 下界达到 ${formatPercent(result.target_probability)} 才算稳健达标；估计成功率达到但下界未达到的候选只列为接近目标。`}
+        uncertainty="这是有限路径、离散档位和当前搜索约束下的结果；域内无解不代表所有可能调整都无解，也不保证真实未来结果。"
+        nextStep="查看候选的具体改变，应用前确认差异；应用只修改计划参数，随后运行正式模拟验证。"
+        audit={`算法 ${result.algorithm_version}；来源引擎 ${run.source_engine_version}；输入 ${run.input_hash}`}
+      />
 
       {run.result_stale && (
         <Alert variant="warning">计划或市场输入已变化，需要重新分析后才能应用。</Alert>
@@ -162,6 +180,7 @@ const ImprovementResults = memo(function ImprovementResults({
       )}
 
       {result.target_reached && (
+        <div className="flex items-center gap-1">
         <div className="inline-flex rounded-md border border-line p-0.5" role="group" aria-label="方案类型">
           <button
             type="button"
@@ -180,6 +199,8 @@ const ImprovementResults = memo(function ImprovementResults({
             平衡方案
           </button>
         </div>
+        <MetricHelp termKey="improvement_recipe" />
+        </div>
       )}
 
       {proposals.length > 0 && (
@@ -193,8 +214,8 @@ const ImprovementResults = memo(function ImprovementResults({
                   <th className="px-2 py-2">年储蓄变化</th>
                   <th className="px-2 py-2">年支出变化</th>
                   <th className="px-2 py-2">稳定收入变化</th>
-                  <th className="px-2 py-2">成功率区间</th>
-                  <th className="px-2 py-2">路径改善</th>
+                  <th className="px-2 py-2"><HelpLabel label="成功率区间" termKey="wilson_interval" /></th>
+                  <th className="px-2 py-2"><HelpLabel label="路径改善" termKey="paired_path_changes" /></th>
                   <th className="sticky right-0 bg-surface px-2 py-2">操作</th>
                 </tr>
               </thead>
@@ -231,8 +252,8 @@ const ImprovementResults = memo(function ImprovementResults({
                 <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                   <dt className="text-ink-muted">FIRE 年龄</dt><dd>{proposal.result_retirement_age}</dd>
                   <dt className="text-ink-muted">储蓄 / 支出</dt><dd>+{formatMoney(proposal.savings_increase_minor)} / -{formatMoney(proposal.spending_reduction_minor)}</dd>
-                  <dt className="text-ink-muted">95% 区间</dt><dd>{formatPercent(proposal.success_wilson_low)} - {formatPercent(proposal.success_wilson_high)}</dd>
-                  <dt className="text-ink-muted">路径改善</dt><dd>+{proposal.improved_path_count} / -{proposal.regressed_path_count}</dd>
+                  <dt className="text-ink-muted"><HelpLabel label="95% 区间" termKey="wilson_interval" /></dt><dd>{formatPercent(proposal.success_wilson_low)} - {formatPercent(proposal.success_wilson_high)}</dd>
+                  <dt className="text-ink-muted"><HelpLabel label="路径改善" termKey="paired_path_changes" /></dt><dd>+{proposal.improved_path_count} / -{proposal.regressed_path_count}</dd>
                 </dl>
               </div>
             ))}
@@ -247,10 +268,10 @@ const ImprovementResults = memo(function ImprovementResults({
       )}
 
       <details className="text-sm">
-        <summary className="cursor-pointer font-medium text-ink">搜索边界</summary>
+        <summary className="cursor-pointer font-medium text-ink"><HelpLabel label="搜索边界" termKey="search_boundary" /></summary>
         <div className="mt-2 overflow-x-auto">
           <table className="min-w-[720px] w-full text-left text-xs">
-            <thead><tr className="text-ink-muted"><th className="p-2">调整</th><th className="p-2">成功率</th><th className="p-2">Wilson 下界</th><th className="p-2">判定</th></tr></thead>
+            <thead><tr className="text-ink-muted"><th className="p-2">调整</th><th className="p-2"><HelpLabel label="成功率" termKey="fire_success_rate" /></th><th className="p-2"><HelpLabel label="Wilson 下界" termKey="wilson_lower_bound" /></th><th className="p-2">判定</th></tr></thead>
             <tbody className="divide-y divide-line">
               {result.evaluations.map((evaluation) => (
                 <tr key={`${evaluation.adjustments.delay_years}-${evaluation.adjustments.savings_increase_minor}-${evaluation.adjustments.spending_reduction_minor}-${evaluation.adjustments.retirement_income_increase_minor}`}>
@@ -302,7 +323,7 @@ function PreviewDialog({
           </table>
           <p className="text-sm text-ink-muted">成功率 {formatPercent(preview.success_probability)}，95% 区间 {formatPercent(preview.success_wilson_low)} - {formatPercent(preview.success_wilson_high)}。</p>
           {preview.retirement_income_delayed && <Alert variant="warning">推迟 FIRE 会同时推迟退休稳定收入的开始时间。</Alert>}
-          <p className="text-xs text-ink-muted">保持不变：{preview.unchanged.join("、")} · 预览有效至 {formatDateTimeFromMs(preview.preview_expires_at)}</p>
+          <p className="text-xs leading-relaxed text-ink-muted">只会修改表格中的四项计划参数。保持不变：{preview.unchanged.join("、")}。这不是交易操作；应用后需要重新运行正式模拟。预览有效至 {formatDateTimeFromMs(preview.preview_expires_at)}。</p>
           {error && <Alert variant="danger">{error}</Alert>}
         </div>
       )}
@@ -473,13 +494,17 @@ export function ImprovementPage({ planId }: { planId: string }) {
     <div>
       <PageHeader backHref={`/plans/${planId}/settings?section=simulation`} backLabel="返回分析中心" title="FIRE 计划改善器" />
       <div className="space-y-6">
+        <p className="flex items-center text-sm leading-relaxed text-ink-muted">
+          只搜索你能接受的现金流调整，不改资产配置和收益假设。
+          <MetricHelp termKey="improvement_search" />
+        </p>
         <section className="border-b border-line pb-6">
           <h2 className="text-lg font-semibold text-ink">来源模拟</h2>
           {source ? (
             <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-4">
-              <div><dt className="text-ink-muted">估计成功率</dt><dd className="mt-1 font-medium">{formatPercent(source.success_probability)}</dd></div>
-              <div><dt className="text-ink-muted">95% Wilson 区间</dt><dd className="mt-1 font-medium">{formatPercent(source.success_wilson_low)} - {formatPercent(source.success_wilson_high)}</dd></div>
-              <div><dt className="text-ink-muted">运行</dt><dd className="mt-1 font-medium">{source.runs.toLocaleString()} 次 · 引擎 {source.engine_version}</dd></div>
+              <div><dt className="text-ink-muted"><HelpLabel label="估计成功率" termKey="fire_success_rate" /></dt><dd className="mt-1 font-medium">{formatPercent(source.success_probability)}</dd></div>
+              <div><dt className="text-ink-muted"><HelpLabel label="95% Wilson 区间" termKey="wilson_interval" /></dt><dd className="mt-1 font-medium">{formatPercent(source.success_wilson_low)} - {formatPercent(source.success_wilson_high)}</dd></div>
+              <div><dt className="text-ink-muted"><HelpLabel label="模拟路径" termKey="simulation_runs" /></dt><dd className="mt-1 font-medium">{source.runs.toLocaleString()} 条</dd></div>
               <div><dt className="text-ink-muted">创建时间</dt><dd className="mt-1 font-medium">{formatDateTimeFromMs(source.created_at)}</dd></div>
             </dl>
           ) : (
@@ -507,7 +532,7 @@ export function ImprovementPage({ planId }: { planId: string }) {
         <section className="border-b border-line pb-6">
           <h2 className="text-lg font-semibold text-ink">目标</h2>
           <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-[160px_1fr] sm:items-end">
-            <label className="block text-sm text-ink">成功率下界
+            <label className="block text-sm text-ink"><HelpLabel label="成功率下界" termKey="wilson_lower_bound" />
               <div className="mt-1 flex items-center gap-2"><input aria-label="目标成功率" className="input-base min-w-0" inputMode="decimal" value={targetDraft} onChange={(event) => { const next = event.target.value; if (/^\d{0,2}(?:\.\d{0,2})?$/.test(next)) setTargetDraft(next); }} /><span className="text-sm text-ink-muted">%</span></div>
             </label>
             <input aria-label="目标成功率滑块" type="range" min={50} max={99} step={0.5} value={target ? target * 100 : 90} onChange={(event) => setTargetDraft(Number(event.target.value).toFixed(1).replace(/\.0$/, ""))} className="mb-2 w-full accent-brand" />
@@ -519,22 +544,21 @@ export function ImprovementPage({ planId }: { planId: string }) {
           <h2 className="text-lg font-semibold text-ink">可接受调整</h2>
           <div className="mt-3 grid gap-5 lg:grid-cols-2">
             <div className="space-y-3">
-              <LeverToggle checked={delayEnabled} onChange={setDelayEnabled} label="推迟 FIRE" />
-              {delayEnabled && <label className="block text-sm text-ink">最多推迟
+              <LeverToggle checked={delayEnabled} onChange={setDelayEnabled} label={<HelpLabel label="推迟 FIRE" termKey="fire_delay" />} />
+              {delayEnabled && <label className="block text-sm text-ink"><HelpLabel label="最多推迟" termKey="search_domain" />
                 <select aria-label="最多推迟年数" value={effectiveMaxDelay} onChange={(event) => setMaxDelay(Number(event.target.value))} className="input-base mt-1">
                   {Array.from({ length: Math.max(0, maxAllowedDelay) }, (_, index) => index + 1).map((year) => <option key={year} value={year}>{year} 年</option>)}
                 </select>
               </label>}
             </div>
-            <div className="space-y-3"><LeverToggle checked={savings.enabled} onChange={(enabled) => setSavings({ ...savings, enabled })} label="增加工作期年净储蓄" /><MoneyLeverFields value={savings} onChange={setSavings} maximumLabel="最多增加" /></div>
-            <div className="space-y-3"><LeverToggle checked={spending.enabled} onChange={(enabled) => setSpending({ ...spending, enabled })} label="降低退休后年支出" /><MoneyLeverFields value={spending} onChange={setSpending} maximumLabel="最多降低" /></div>
-            <div className="space-y-3"><LeverToggle checked={income.enabled} onChange={(enabled) => setIncome({ ...income, enabled })} label="增加可确认的退休稳定年收入" /><MoneyLeverFields value={income} onChange={setIncome} maximumLabel="最多增加" /></div>
+            <div className="space-y-3"><LeverToggle checked={savings.enabled} onChange={(enabled) => setSavings({ ...savings, enabled })} label={<HelpLabel label="增加工作期年净储蓄" termKey="annual_savings_wizard" />} /><MoneyLeverFields value={savings} onChange={setSavings} maximumLabel="最多增加" /></div>
+            <div className="space-y-3"><LeverToggle checked={spending.enabled} onChange={(enabled) => setSpending({ ...spending, enabled })} label={<HelpLabel label="降低退休后年支出" termKey="retirement_spending" />} /><MoneyLeverFields value={spending} onChange={setSpending} maximumLabel="最多降低" /></div>
+            <div className="space-y-3"><LeverToggle checked={income.enabled} onChange={(enabled) => setIncome({ ...income, enabled })} label={<HelpLabel label="增加可确认的退休稳定年收入" termKey="stable_retirement_income" />} /><MoneyLeverFields value={income} onChange={setIncome} maximumLabel="最多增加" /></div>
           </div>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <Button
               disabled={!source || Boolean(configError) || Boolean(alreadyMeets) || running || restorationBlocked}
               pending={createM.isPending}
-              title={restorationBlocked ? "正在恢复任务状态" : undefined}
               onClick={() => createM.mutate()}
             >开始分析</Button>
             {(runsQ.isPending || taskRestore.restoring) && <span className="text-sm text-ink-muted">正在恢复任务状态...</span>}

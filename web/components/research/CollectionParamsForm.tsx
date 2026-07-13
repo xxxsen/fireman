@@ -12,7 +12,7 @@ import {
 } from "@/lib/api/research";
 import { queryErrorMessage } from "@/lib/query-error";
 import { Button } from "@/components/ui/Button";
-import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 export const REBALANCE_POLICY_LABELS: Record<ResearchRebalancePolicy, string> = {
   monthly: "月度再平衡",
@@ -251,8 +251,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <span className="mb-1 flex items-center text-xs text-ink-muted">
-                置信度
-                <MetricHelp text="95% CVaR 表示在历史上最差 5% 的持有期场景中，平均损失是多少。" />
+                <HelpLabel label="置信度" termKey="tail_risk_confidence" />
               </span>
               <div className="inline-flex overflow-hidden rounded-md border border-line" data-testid="tail-confidence-control">
                 {([0.9, 0.95, 0.99] as const).map((value) => (
@@ -270,8 +269,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
             </div>
             <div>
               <span className="mb-1 flex items-center text-xs text-ink-muted">
-                持有期
-                <MetricHelp text="20 日按回测有效收益日滚动复合，相邻场景会共享部分交易日。" />
+                <HelpLabel label="持有期" termKey="tail_risk_horizon" />
               </span>
               <div className="inline-flex overflow-hidden rounded-md border border-line" data-testid="tail-horizon-control">
                 {([1, 20] as const).map((value) => (
@@ -302,7 +300,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
         </label>
 
         <label className="block">
-          <span className={labelCls()}>再平衡规则</span>
+          <span className={labelCls()}><HelpLabel label="再平衡规则" termKey="backtest_rebalance" /></span>
           <select
             value={rebalancePolicy}
             onChange={(e) => setRebalancePolicy(e.target.value as ResearchRebalancePolicy)}
@@ -332,7 +330,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
         )}
 
         <label className="block">
-          <span className={labelCls()}>历史区间策略</span>
+          <span className={labelCls()}><HelpLabel label="历史区间策略" termKey="common_backtest_interval" /></span>
           <select
             value={startPolicy}
             onChange={(e) => setStartPolicy(e.target.value as ResearchStartPolicy)}
@@ -370,7 +368,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
         )}
 
         <label className="block">
-          <span className={labelCls()}>无风险利率（%/年）</span>
+          <span className={labelCls()}><HelpLabel label="无风险利率（%/年）" termKey="risk_free_rate" /></span>
           <input
             type="number"
             value={riskFree}
@@ -381,7 +379,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
         </label>
 
         <div className="block">
-          <span className={labelCls()}>基准资产（可选）</span>
+          <span className={labelCls()}><HelpLabel label="基准资产（可选）" termKey="benchmark_asset" /></span>
           <BenchmarkPicker value={benchmark} onChange={setBenchmark} />
         </div>
 
@@ -420,8 +418,7 @@ export function CollectionParamsForm({ detail, onSaved }: CollectionParamsFormPr
           <div className="mt-2 grid gap-3 sm:grid-cols-3">
             <label className="block">
               <span className={labelCls()}>
-                交易费率（%）
-                <MetricHelp text="再平衡时按单边换手计费：0.5 × Σ|漂移权重 − 目标权重| × 扣费前组合净值 × 交易费率。首次建仓和买入并持有不收费。" />
+                <HelpLabel label="交易费率（%）" termKey="transaction_cost_rate" />
               </span>
               <input
                 type="number"

@@ -232,8 +232,8 @@ describe("OptimizationDetailPage", () => {
     renderPage();
     expect(await screen.findByText("夏普比率")).toBeInTheDocument();
     expect(screen.getByText("卡玛比率")).toBeInTheDocument();
-    fireEvent.mouseEnter(screen.getByLabelText("夏普比率说明"));
-    expect(await screen.findByText(/单位波动风险/)).toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "查看「Sharpe 比率」说明" }));
+    expect(await screen.findByText(/每承担一单位波动/)).toBeInTheDocument();
   });
 
   it("does not mislabel the current streaming optimizer as a pre-cost version", async () => {
@@ -275,13 +275,13 @@ describe("OptimizationDetailPage", () => {
   it("renders the CVaR ranking with frozen loss metrics", async () => {
     renderPage();
     expect(await screen.findByText("20 日 / 95%")).toBeInTheDocument();
-    fireEvent.mouseEnter(screen.getByLabelText("最低尾部损失说明"));
+    fireEvent.mouseEnter(screen.getAllByRole("button", { name: "查看「条件风险价值损失（CVaR loss）」说明" })[0]!);
     expect(
-      await screen.findByText(/最差 5% 场景的平均损失/),
+      await screen.findByText(/比 VaR 边界更差的尾部场景平均损失/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/不保证年化收益更高/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("tab-cvar"));
     expect(await screen.findByTestId("result-table-cvar")).toBeInTheDocument();
+    expect(screen.getByText(/不保证年化收益更高/)).toBeInTheDocument();
     expect(screen.getAllByText("7%").length).toBeGreaterThan(0);
     expect(screen.getByText("VaR loss")).toBeInTheDocument();
     expect(screen.getByText("CVaR loss")).toBeInTheDocument();

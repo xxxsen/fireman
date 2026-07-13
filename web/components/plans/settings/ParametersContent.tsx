@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import { ReturnOverridesCard } from "@/components/parameters/ReturnOverridesCard";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
@@ -306,37 +307,44 @@ export function ParametersContent({
                 <MetricHelp termKey="configured_total_assets" />
               </span>
             }
+            ariaLabel="计划基准规模"
             valueMinor={params.total_assets_minor}
             currency={planQ.data?.base_currency}
             onChange={(v) => update("total_assets_minor", v)}
           />
           <MoneyInput
-            label="当前年储蓄"
+            label={<HelpLabel label="当前年储蓄" termKey="annual_savings_wizard" />}
+            ariaLabel="当前年储蓄"
             valueMinor={params.annual_savings_minor}
             onChange={(v) => update("annual_savings_minor", v)}
           />
           <MoneyInput
-            label="退休后首年支出"
+            label={<HelpLabel label="退休后首年支出" termKey="retirement_spending" />}
+            ariaLabel="退休后首年支出"
             valueMinor={params.annual_spending_minor}
             onChange={(v) => update("annual_spending_minor", v)}
           />
 		  <MoneyInput
-			label="退休后稳定年收入"
+			label={<HelpLabel label="退休后稳定年收入" termKey="stable_retirement_income" />}
+			ariaLabel="退休后稳定年收入"
 			valueMinor={params.annual_retirement_income_minor}
 			onChange={(v) => update("annual_retirement_income_minor", v)}
 		  />
           <PercentInput
-            label="年储蓄增长率"
+            label={<HelpLabel label="年储蓄增长率" termKey="savings_growth" />}
+            ariaLabel="年储蓄增长率"
             value={params.annual_savings_growth_rate}
             onChange={(v) => update("annual_savings_growth_rate", v)}
           />
 		  <PercentInput
-			label="稳定收入年增长率"
+			label={<HelpLabel label="稳定收入年增长率" termKey="retirement_income_growth" />}
+			ariaLabel="稳定收入年增长率"
 			value={params.annual_retirement_income_growth_rate}
 			onChange={(v) => update("annual_retirement_income_growth_rate", v)}
 		  />
           <MoneyInput
-            label="期末最低资产目标"
+            label={<HelpLabel label="期末最低资产目标" termKey="terminal_wealth_floor" />}
+            ariaLabel="期末最低资产目标"
             valueMinor={params.terminal_wealth_floor_minor}
             onChange={(v) => update("terminal_wealth_floor_minor", v)}
           />
@@ -368,8 +376,9 @@ export function ParametersContent({
       {showAllocation && <section className="rounded-lg border border-line p-4">
         <h2 className="text-lg font-medium">资产配置</h2>
         <label className="mt-4 block text-sm">
-          配置模板
+          <HelpLabel label="配置模板" termKey="config_template" />
           <select
+            aria-label="配置模板"
             className="input-base mt-1"
             value={params.selected_scenario_id ?? ""}
             onChange={(e) => update("selected_scenario_id", e.target.value || null)}
@@ -384,7 +393,7 @@ export function ParametersContent({
         </label>
         <div className="mt-4 space-y-4">
           <div>
-            <h3 className="text-sm font-medium">大类目标权重</h3>
+            <h3 className="text-sm font-medium"><HelpLabel label="大类目标权重" termKey="target_weight_portfolio" /></h3>
             <div className="mt-2 grid gap-3 sm:grid-cols-3">
               {assetTargets.map((t, i) => (
                 <PercentInput
@@ -406,7 +415,7 @@ export function ParametersContent({
           </div>
           {ASSET_CLASSES.map((ac) => (
             <div key={ac}>
-              <h3 className="text-sm font-medium">{assetClassLabel(ac)} · 地区组内权重</h3>
+              <h3 className="text-sm font-medium"><HelpLabel label={`${assetClassLabel(ac)} · 地区组内权重`} termKey="target_weight_within_asset_class" /></h3>
               <div className="mt-2 grid gap-3 sm:grid-cols-2">
                 {regionTargets
                   .filter((r) => r.asset_class === ac)
@@ -442,12 +451,13 @@ export function ParametersContent({
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
             <span className="flex items-center">
-              提取策略
-              {params.withdrawal_type === "guardrail" && (
-                <MetricHelp termKey="guardrail_withdrawal_rate" />
-              )}
+              <HelpLabel
+                label="提取策略"
+                termKey={params.withdrawal_type === "fixed_portfolio" ? "withdrawal_fixed_portfolio" : params.withdrawal_type === "guardrail" ? "withdrawal_guardrail" : "withdrawal_fixed_real"}
+              />
             </span>
             <select
+              aria-label="提取策略"
               className="input-base mt-1"
               value={params.withdrawal_type}
               onChange={(e) => update("withdrawal_type", e.target.value)}
@@ -458,8 +468,9 @@ export function ParametersContent({
             </select>
           </label>
           <label className="block text-sm">
-            通胀模式
+            <HelpLabel label="通胀模式" termKey={params.inflation_mode === "random_ar1" ? "random_inflation_ar1" : "fixed_inflation"} />
             <select
+              aria-label="通胀模式"
               className="input-base mt-1"
               value={params.inflation_mode}
               onChange={(e) => update("inflation_mode", e.target.value)}
@@ -470,7 +481,8 @@ export function ParametersContent({
           </label>
           {params.inflation_mode === "fixed_real" && (
             <PercentInput
-              label="固定通胀率"
+              label={<HelpLabel label="固定通胀率" termKey="fixed_inflation" />}
+              ariaLabel="固定通胀率"
               value={params.fixed_inflation_rate}
               onChange={(v) => update("fixed_inflation_rate", v)}
             />
@@ -478,18 +490,21 @@ export function ParametersContent({
           {params.inflation_mode === "random_ar1" && (
             <>
               <PercentInput
-                label="通胀均值 μ"
+                label={<HelpLabel label="通胀均值 μ" termKey="inflation_mu" />}
+                ariaLabel="通胀均值 μ"
                 value={params.inflation_mu}
                 onChange={(v) => update("inflation_mu", v)}
               />
               <PercentInput
-                label="通胀波动 σ"
+                label={<HelpLabel label="通胀波动 σ" termKey="inflation_sigma" />}
+                ariaLabel="通胀波动 σ"
                 value={params.inflation_sigma}
                 onChange={(v) => update("inflation_sigma", v)}
               />
               <label className="block text-sm">
-                通胀自回归 φ
+                <HelpLabel label="通胀自回归 φ" termKey="inflation_phi" />
                 <input
+                  aria-label="通胀自回归 φ"
                   type="number"
                   step={0.01}
                   min={0}
@@ -513,7 +528,8 @@ export function ParametersContent({
           )}
           {params.withdrawal_type === "fixed_portfolio" && (
             <PercentInput
-              label="提取率"
+              label={<HelpLabel label="提取率" termKey="withdrawal_fixed_portfolio" />}
+              ariaLabel="提取率"
               value={params.withdrawal_rate}
               onChange={(v) => update("withdrawal_rate", v)}
             />
@@ -521,24 +537,28 @@ export function ParametersContent({
           {params.withdrawal_type === "guardrail" && (
             <>
               <PercentInput
-                label="护栏下限比例"
+                label={<HelpLabel label="护栏下限比例" termKey="guardrail_withdrawal_rate" />}
+                ariaLabel="护栏下限比例"
                 value={params.withdrawal_floor_ratio}
                 onChange={(v) => update("withdrawal_floor_ratio", v)}
               />
               <PercentInput
-                label="护栏上限比例"
+                label={<HelpLabel label="护栏上限比例" termKey="guardrail_withdrawal_rate" />}
+                ariaLabel="护栏上限比例"
                 value={params.withdrawal_ceiling_ratio}
                 onChange={(v) => update("withdrawal_ceiling_ratio", v)}
               />
             </>
           )}
           <PercentInput
-            label="有效提取税率"
+            label={<HelpLabel label="有效提取税率" termKey="withdrawal_tax_rate" />}
+            ariaLabel="有效提取税率"
             value={params.withdrawal_tax_rate}
             onChange={(v) => update("withdrawal_tax_rate", v)}
           />
           <PercentInput
-            label="应税提取比例"
+            label={<HelpLabel label="应税提取比例" termKey="taxable_withdrawal_ratio" />}
+            ariaLabel="应税提取比例"
             value={params.taxable_withdrawal_ratio}
             onChange={(v) => update("taxable_withdrawal_ratio", v)}
           />
@@ -549,8 +569,9 @@ export function ParametersContent({
         <h2 className="text-lg font-medium">调仓</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <label className="block text-sm">
-            检查频率
+            <HelpLabel label="检查频率" termKey="rebalance_frequency" />
             <select
+              aria-label="检查频率"
               className="input-base mt-1"
               value={params.rebalance_frequency}
               onChange={(e) => update("rebalance_frequency", e.target.value)}
@@ -572,7 +593,8 @@ export function ParametersContent({
           </div>
           <div>
             <PercentInput
-              label="交易成本率"
+              label={<HelpLabel label="交易成本率" termKey="transaction_cost_rate" />}
+              ariaLabel="交易成本率"
               value={params.transaction_cost_rate}
               onChange={(v) => update("transaction_cost_rate", v)}
             />
@@ -639,8 +661,9 @@ export function ParametersContent({
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block text-sm">
-            收益假设来源
+            <HelpLabel label="收益假设来源" termKey="return_assumption_mode" />
             <select
+              aria-label="收益假设来源"
               className="input-base mt-1"
               value={params.return_assumption_mode}
               onChange={(e) => update("return_assumption_mode", e.target.value)}
@@ -654,8 +677,9 @@ export function ParametersContent({
           </label>
           {params.return_assumption_mode !== "historical_cagr" && (
             <label className="block text-sm">
-              假设情景
+              <HelpLabel label="假设情景" termKey="assumption_scenario" />
               <select
+                aria-label="假设情景"
                 className="input-base mt-1"
                 value={params.return_assumption_scenario}
                 onChange={(e) => update("return_assumption_scenario", e.target.value)}
@@ -670,8 +694,9 @@ export function ParametersContent({
           )}
           {params.return_assumption_mode !== "historical_cagr" && (
             <label className="block text-sm">
-              Profile 选择
+              <HelpLabel label="Profile 选择" termKey="assumption_profile_selection" />
               <select
+                aria-label="Profile 选择"
                 className="input-base mt-1"
                 value={params.assumption_selection_mode}
                 onChange={(e) => {
@@ -798,6 +823,7 @@ export function ParametersContent({
               <MetricHelp termKey="simulation_runs" />
             </span>
             <input
+              aria-label="模拟次数"
               type="number"
               min={1000}
               max={100000}
@@ -816,8 +842,9 @@ export function ParametersContent({
             </p>
           </div>
           <label className="block text-sm">
-            随机种子（可选）
+            <HelpLabel label="随机种子（可选）" termKey="random_seed" />
             <input
+              aria-label="随机种子（可选）"
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"

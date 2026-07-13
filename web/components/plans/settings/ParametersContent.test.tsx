@@ -335,7 +335,7 @@ describe("ParametersPage strategy enums", () => {
     const nameInput = await screen.findByTestId("plan-name-input");
     fireEvent.change(nameInput, { target: { value: "合并保存计划" } });
 
-    const classHeading = await screen.findByText("大类目标权重");
+    const classHeading = await screen.findByRole("heading", { name: /大类目标权重/ });
     const classInputs = within(classHeading.parentElement as HTMLElement).getAllByTestId(
       "percent-input",
     );
@@ -578,7 +578,7 @@ describe("ParametersPage strategy enums", () => {
     fireEvent.change(screen.getByLabelText(/提取策略/), { target: { value: "guardrail" } });
     expect(percentInputByLabel("提取率")).not.toBeInTheDocument();
     expect(percentInputByLabel("护栏下限比例")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /查看「护栏提取率」说明/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /查看「护栏提取率」说明/ })).toHaveLength(2);
   });
 
   it("keeps follow-global and baseline as distinct scenario choices", async () => {

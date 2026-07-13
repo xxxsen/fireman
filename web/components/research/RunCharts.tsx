@@ -6,6 +6,8 @@ import type { ResearchRunPoint, ResearchRunSummary } from "@/lib/api/research";
 import { monthlyDownsample } from "@/lib/research/run-analysis";
 import type { NormalizedSeries } from "@/lib/research/candidate-analysis";
 import { formatPercent } from "@/lib/format";
+import { ChartFrame } from "@/components/charts/ChartFrame";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 type ScaleMode = "linear" | "log";
 type FreqMode = "daily" | "monthly";
@@ -13,6 +15,38 @@ type FreqMode = "daily" | "monthly";
 interface TooltipParam {
   dataIndex?: number;
   axisValue?: string;
+}
+
+export function formatRunChartTooltip(
+  points: ResearchRunPoint[],
+  assetNames: Record<string, string>,
+  params: TooltipParam | TooltipParam[],
+): string {
+  const items = Array.isArray(params) ? params : [params];
+  const date = items[0]?.axisValue ?? "";
+  const point = points.find((candidate) => candidate.date === date);
+  if (!point) return date || "无数据";
+  const percent = (value: number) => Number.isFinite(value) ? formatPercent(value) : "无数据";
+  const lines = [
+    `<b>${date}</b>`,
+    `组合净值 ${Number.isFinite(point.nav) ? point.nav.toFixed(4) : "无数据"}（累计 ${percent(point.cumulative_return)}）`,
+    `回撤 ${percent(point.drawdown)}`,
+  ];
+  if (point.benchmark_return != null) {
+    lines.push(`基准累计 ${percent(point.benchmark_return)}`);
+  }
+  if (point.weights && Object.keys(point.weights).length > 0) {
+    lines.push("<hr style='margin:4px 0;border-color:#ddd'/>");
+    for (const [key, weight] of Object.entries(point.weights)) {
+      const contribution = point.contributions?.[key];
+      const name = assetNames[key] ?? key;
+      lines.push(
+        `${name}：权重 ${percent(weight)}` +
+          (contribution != null ? `，当期贡献 ${percent(contribution)}` : ""),
+      );
+    }
+  }
+  return lines.join("<br/>");
 }
 
 export interface RunChartsProps {
@@ -56,35 +90,6 @@ export function RunCharts({
 
   const option = useMemo(() => {
     const dates = displayPoints.map((p) => p.date);
-    const byDate = new Map(displayPoints.map((p) => [p.date, p]));
-
-    const formatter = (params: TooltipParam | TooltipParam[]): string => {
-      const items = Array.isArray(params) ? params : [params];
-      const date = items[0]?.axisValue ?? "";
-      const p = byDate.get(date);
-      if (!p) return date;
-      const lines = [
-        `<b>${date}</b>`,
-        `组合净值 ${p.nav.toFixed(4)}（累计 ${formatPercent(p.cumulative_return)}）`,
-        `回撤 ${formatPercent(p.drawdown)}`,
-      ];
-      if (p.benchmark_return != null) {
-        lines.push(`基准累计 ${formatPercent(p.benchmark_return)}`);
-      }
-      if (p.weights && Object.keys(p.weights).length > 0) {
-        lines.push("<hr style='margin:4px 0;border-color:#ddd'/>");
-        for (const [key, weight] of Object.entries(p.weights)) {
-          const contribution = p.contributions?.[key];
-          const name = assetNames[key] ?? key;
-          lines.push(
-            `${name}：权重 ${formatPercent(weight)}` +
-              (contribution != null ? `，当期贡献 ${formatPercent(contribution)}` : ""),
-          );
-        }
-      }
-      return lines.join("<br/>");
-    };
-
     const navSeries: Record<string, unknown>[] = [
       {
         name: "组合净值",
@@ -168,7 +173,13 @@ export function RunCharts({
     }
 
     return {
-      tooltip: { trigger: "axis" as const, formatter },
+      aria: { enabled: true, description: "展示组合、基准和可选单资产的归一化净值，以及组合与基准回撤。" },
+      tooltip: {
+        trigger: "axis" as const,
+        confine: true,
+        formatter: (params: TooltipParam | TooltipParam[]) =>
+          formatRunChartTooltip(displayPoints, assetNames, params),
+      },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       legend: { type: "scroll" as const, top: 0 },
       grid: [
@@ -176,19 +187,21 @@ export function RunCharts({
         { left: 64, right: 16, top: "66%", height: "24%" },
       ],
       xAxis: [
-        { type: "category" as const, data: dates, boundaryGap: false, gridIndex: 0 },
-        { type: "category" as const, data: dates, boundaryGap: false, gridIndex: 1 },
+        { type: "category" as const, data: dates, boundaryGap: false, gridIndex: 0, name: "日期" },
+        { type: "category" as const, data: dates, boundaryGap: false, gridIndex: 1, name: "日期" },
       ],
       yAxis: [
         {
           type: scale === "log" ? ("log" as const) : ("value" as const),
           scale: true,
           gridIndex: 0,
+          name: "归一化净值",
           axisLabel: { formatter: (v: number) => v.toFixed(2) },
         },
         {
           type: "value" as const,
           gridIndex: 1,
+          name: "回撤（%）",
           max: 0,
           axisLabel: { formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
         },
@@ -206,9 +219,17 @@ export function RunCharts({
   }
 
   return (
-    <div className="rounded-lg border border-line bg-surface p-4" data-testid="run-charts">
+    <ChartFrame
+      title="收益与回撤曲线"
+      termKey="normalized_nav"
+      xAxis="日期"
+      yAxis="归一化净值 / 回撤"
+      interpretation="上图从 1 开始展示累计增长，下图从 0 向下展示相对此前峰值的回撤。线性/对数只改变视觉尺度；单资产线也按起点归一化，不是实际价格。悬浮或点按可查看日期、累计收益、回撤、权重和当期贡献。"
+      legend={<span>组合净值为主线，基准和单资产用于比较；<HelpLabel label="线性/对数坐标" termKey="linear_log_scale" />。</span>}
+      className="rounded-lg border border-line bg-surface p-4"
+    >
+    <div data-testid="run-charts">
       <div className="mb-2 flex flex-wrap items-center gap-3">
-        <h3 className="text-sm font-semibold text-ink">收益与回撤曲线</h3>
         <div className="flex rounded-md border border-line" role="group" aria-label="坐标模式">
           <button
             type="button"
@@ -258,5 +279,6 @@ export function RunCharts({
       </div>
       <ReactECharts option={option} style={{ height: 480 }} notMerge />
     </div>
+    </ChartFrame>
   );
 }

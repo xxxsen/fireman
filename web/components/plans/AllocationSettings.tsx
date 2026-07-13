@@ -18,6 +18,7 @@ import { ApiError } from "@/lib/api/client";
 import { assetClassLabel, formatPercent, regionLabel } from "@/lib/format";
 import { validatePercentSum } from "@/lib/percent";
 import type { RegionTarget } from "@/types/api";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 const ASSET_CLASSES = ["equity", "bond", "cash"] as const;
 
@@ -126,7 +127,7 @@ export function PlanTargetsContent() {
           FIRE 假设请在「FIRE 参数」分区调整。
         </p>
         <label className="mt-3 block text-sm">
-          配置模板
+          <HelpLabel label="配置模板" termKey="config_template" />
           <select
             className="input-base mt-1"
             value={currentScenarioId}
@@ -159,7 +160,9 @@ export function PlanTargetsContent() {
       </div>
 
       <div>
-        <h3 className="text-sm font-medium">大类目标权重（只读）</h3>
+        <h3 className="text-sm font-medium">
+          <HelpLabel label="大类目标权重（只读）" termKey="target_weight_portfolio" />
+        </h3>
         <dl className="mt-2 grid gap-2 sm:grid-cols-3">
           {assetTargets.map((target) => (
             <div key={target.asset_class} className="rounded-md bg-surface-muted px-3 py-2 text-sm">
@@ -171,7 +174,12 @@ export function PlanTargetsContent() {
       </div>
 
       <div className="space-y-4">
-        <h3 className="text-sm font-medium">本计划国内/国外配比</h3>
+        <h3 className="text-sm font-medium">
+          <HelpLabel
+            label="本计划国内/国外配比"
+            termKey="target_weight_within_asset_class"
+          />
+        </h3>
         {ASSET_CLASSES.map((assetClass) => {
           const regions = regionTargets.filter((target) => target.asset_class === assetClass);
           if (regions.length === 0) return null;
@@ -185,7 +193,12 @@ export function PlanTargetsContent() {
                   return (
                     <PercentInput
                       key={`${target.asset_class}:${target.region}`}
-                      label={regionLabel(target.region)}
+                      label={
+                        <HelpLabel
+                          label={regionLabel(target.region)}
+                          termKey="target_weight_within_asset_class"
+                        />
+                      }
                       value={target.weight_within_class}
                       onChange={(v) => {
                         const next = [...regionTargets];

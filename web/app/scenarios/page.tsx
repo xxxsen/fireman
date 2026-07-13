@@ -213,7 +213,6 @@ export function ScenariosPageContent() {
                       variant="ghost"
                       className="px-2 py-1"
                       aria-label="复制配置模板"
-                      title="复制配置模板"
                       onClick={() => {
                         setFormError(null);
                         setEditing({
@@ -235,7 +234,6 @@ export function ScenariosPageContent() {
                         variant="ghost"
                         className="px-2 py-1"
                         aria-label="编辑配置模板"
-                        title="编辑配置模板"
                         onClick={() => {
                           setFormError(null);
                           setEditing({
@@ -255,7 +253,6 @@ export function ScenariosPageContent() {
                         variant="danger"
                         className="px-2 py-1"
                         aria-label="删除配置模板"
-                        title="删除配置模板"
                         onClick={() => {
                           setDeleteError(null);
                           setDeleteTarget(scn);

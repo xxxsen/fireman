@@ -45,6 +45,7 @@ import {
 import { ApiError } from "@/lib/api/client";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import { queryErrorMessage } from "@/lib/query-error";
 
 const STEPS = ["确认范围", "录入当前资产", "确认提交"] as const;
@@ -381,6 +382,12 @@ export default function AssetRefreshPage() {
         title="持仓校正"
         description="按券商账户实际情况更新真实持仓结构与金额，提交后更新持仓事实并同步计划基准规模。"
       />
+      <div className="-mt-4 flex items-center text-sm text-ink-muted">
+        <HelpLabel
+          label="了解持仓校正会改变什么"
+          termKey="asset_refresh"
+        />
+      </div>
 
       <Stepper steps={STEPS} current={step} />
 
@@ -402,7 +409,9 @@ export default function AssetRefreshPage() {
               <dd className="font-medium">{plan.data.name}</dd>
             </div>
             <div>
-              <dt className="text-ink-muted">配置模板（只读）</dt>
+              <dt className="text-ink-muted">
+                <HelpLabel label="配置模板（只读）" termKey="config_template" />
+              </dt>
               <dd className="font-medium" data-testid="asset-refresh-scenario-name">
                 {scenarioName}
                 <Link
@@ -419,7 +428,9 @@ export default function AssetRefreshPage() {
             </div>
           </dl>
           <div>
-            <h3 className="text-sm font-medium">大类目标（只读）</h3>
+            <h3 className="text-sm font-medium">
+              <HelpLabel label="大类目标（只读）" termKey="target_weight_portfolio" />
+            </h3>
             <ul className="mt-2 text-sm text-ink">
               {previewAssetTargets.map((target) => (
                 <li key={target.asset_class}>
@@ -436,7 +447,10 @@ export default function AssetRefreshPage() {
             return (
               <div key={assetClass}>
                 <h3 className="text-sm font-medium">
-                  {assetClassLabel(assetClass)} · 地区组内目标（只读）
+                  <HelpLabel
+                    label={`${assetClassLabel(assetClass)} · 地区组内目标（只读）`}
+                    termKey="target_weight_within_asset_class"
+                  />
                 </h3>
                 <ul className="mt-2 text-sm text-ink">
                   {regions.map((target) => (
@@ -496,8 +510,12 @@ export default function AssetRefreshPage() {
                           <th scope="col" className="px-3 py-2">标的</th>
                           <th scope="col" className="px-3 py-2">分类</th>
                           <th scope="col" className="px-3 py-2">国别</th>
-                          <th scope="col" className="px-3 py-2">组内配比</th>
-                          <th scope="col" className="px-3 py-2">当前金额</th>
+                          <th scope="col" className="px-3 py-2">
+                            <HelpLabel label="组内配比" termKey="weight_within_group" />
+                          </th>
+                          <th scope="col" className="px-3 py-2">
+                            <HelpLabel label="当前金额" termKey="holdings_market_value" />
+                          </th>
                           <th scope="col" className="px-3 py-2">操作</th>
                         </tr>
                       </thead>
@@ -560,7 +578,12 @@ export default function AssetRefreshPage() {
             </div>
           ))}
           <div>
-            <span className="mb-1 block text-sm text-ink-muted">计划基准规模（提交后同步）</span>
+            <span className="mb-1 block text-sm text-ink-muted">
+              <HelpLabel
+                label="计划基准规模（提交后同步）"
+                termKey="configured_total_assets"
+              />
+            </span>
             <div className="flex items-center gap-3">
               <MoneyInput
                 plain

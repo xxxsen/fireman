@@ -2,6 +2,7 @@
 
 import { assetClassLabel, formatMoneyScaled, formatPercent, regionLabel } from "@/lib/format";
 import type { AssetClassRegionGroup } from "@/types/api";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 const MAX_INLINE_HOLDINGS = 4;
 
@@ -64,14 +65,16 @@ export function AssetClassRegionGroups({
                       style={{ width: `${currentPct}%` }}
                     />
                   </div>
-                  <p className="mt-1 truncate text-xs text-ink-muted" title={title}>
-                    {text}
-                    {(region.holdings ?? []).length > 0 && (
-                      <span className="ml-1">
-                        · 当前 {formatMoneyScaled(region.current_amount_minor, currency)}
-                      </span>
-                    )}
-                  </p>
+                  <Tooltip content={title} className="mt-1 max-w-full">
+                    <p className="truncate text-xs text-ink-muted">
+                      {text}
+                      {(region.holdings ?? []).length > 0 && (
+                        <span className="ml-1">
+                          · 当前 {formatMoneyScaled(region.current_amount_minor, currency)}
+                        </span>
+                      )}
+                    </p>
+                  </Tooltip>
                 </li>
               );
             })}

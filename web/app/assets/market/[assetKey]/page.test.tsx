@@ -194,13 +194,13 @@ describe("MarketAssetDetailPage history range shortcuts", () => {
     );
   });
 
-  it("disables ranges without enough points and titles the reason", async () => {
+  it("disables ranges without enough points and shows the reason visibly", async () => {
     renderPage();
     await screen.findByTestId("return-chart");
     // Monthly data leaves at most 1 point in the last 7 days.
     const btn = screen.getByTestId("history-range-7d");
     expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute("title", "该区间历史数据不足");
+    expect(screen.getByText("不可选区间表示该资产历史数据不足以覆盖对应时长。")).toBeInTheDocument();
     expect(screen.getByTestId("history-range-3y")).toBeEnabled();
   });
 

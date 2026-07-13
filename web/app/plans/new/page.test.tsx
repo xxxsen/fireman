@@ -452,9 +452,9 @@ describe("NewPlanWizardPage", () => {
     expect(importedMoney[2]).toHaveValue("123400");
     expect(importedMoney[3]).toHaveValue("24000");
     fireEvent.click(screen.getByText(/高级 FIRE 参数/));
-    expect(screen.getByLabelText(/固定通胀率/)).toHaveValue("2.5");
-    expect(screen.getByLabelText(/储蓄增长率/)).toHaveValue("3");
-    expect(screen.getByLabelText(/稳定收入年增长率/)).toHaveValue("1");
+    expect(screen.getByRole("textbox", { name: "固定通胀率" })).toHaveValue("2.5");
+    expect(screen.getByRole("textbox", { name: "储蓄增长率" })).toHaveValue("3");
+    expect(screen.getByRole("textbox", { name: "稳定收入年增长率" })).toHaveValue("1");
     expect(screen.getAllByTestId("money-input")[4]).toHaveValue("10,000.00");
     expect(window.sessionStorage.getItem(QUICK_FIRE_TRANSFER_KEY)).toBeNull();
 

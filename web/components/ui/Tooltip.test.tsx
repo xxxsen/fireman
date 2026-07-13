@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Tooltip } from "./Tooltip";
 
@@ -40,5 +40,55 @@ describe("Tooltip", () => {
     fireEvent.mouseMove(trigger, { clientX: 300, clientY: 250 });
     expect(tooltip.style.left).toBe("312px");
     expect(tooltip.style.top).toBe("262px");
+  });
+
+  it("opens on touch-style activation and closes when tapping outside", () => {
+    render(
+      <div>
+        <Tooltip content="提示" clickToggle contentTestId="touch-content">
+          <button type="button">帮助</button>
+        </Tooltip>
+        <button type="button">外部</button>
+      </div>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "帮助" });
+    fireEvent.pointerDown(trigger);
+    fireEvent.focus(trigger);
+    fireEvent.click(trigger);
+    expect(screen.getByTestId("touch-content")).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "外部" }));
+    expect(screen.queryByTestId("touch-content")).not.toBeInTheDocument();
+  });
+
+  it("closes with Escape and restores focus to the trigger", async () => {
+    render(
+      <Tooltip content="提示" clickToggle contentTestId="escape-content">
+        <button type="button">帮助</button>
+      </Tooltip>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "帮助" });
+    fireEvent.focus(trigger);
+    expect(screen.getByTestId("escape-content")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("escape-content")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("toggles from the trigger and exposes expanded state", () => {
+    render(
+      <Tooltip content="提示" clickToggle contentTestId="toggle-content">
+        <button type="button">帮助</button>
+      </Tooltip>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "帮助" });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 });

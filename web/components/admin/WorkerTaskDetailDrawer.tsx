@@ -18,6 +18,8 @@ import { isTaskActive } from "@/lib/api/tasks";
 import { formatDurationMs } from "@/lib/admin-format";
 import { formatDateTimeFromMs } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import { FinalizeResultBadge } from "./FinalizeResultBadge";
 import { JsonViewer } from "./JsonViewer";
 import { TaskTimeline } from "./TaskTimeline";
@@ -110,7 +112,9 @@ export function WorkerTaskDetailDrawer({
           )}
 
           <section>
-            <h3 className="mb-2 text-sm font-medium text-ink">执行时间线</h3>
+            <h3 className="mb-2 text-sm font-medium text-ink">
+              <HelpLabel label="执行时间线" termKey="admin_heartbeat" />
+            </h3>
             <TaskTimeline
               timeline={detail.data!.timeline}
               heartbeat={detail.data!.heartbeat}
@@ -127,7 +131,9 @@ export function WorkerTaskDetailDrawer({
           )}
 
           <section>
-            <h3 className="mb-2 text-sm font-medium text-ink">执行尝试</h3>
+            <h3 className="mb-2 text-sm font-medium text-ink">
+              <HelpLabel label="执行尝试" termKey="admin_task_attempt" />
+            </h3>
             {attempts.length === 0 ? (
               <p className="text-xs text-ink-muted">任务尚未被 worker 领取。</p>
             ) : (
@@ -135,7 +141,7 @@ export function WorkerTaskDetailDrawer({
                 {attempts.map((attempt) => (
                   <p key={attempt.attempt_no} className="font-mono">
                     #{attempt.attempt_no} {attempt.worker_id} ·{" "}
-                    {attempt.outcome || "running"}
+                    {attemptOutcomeLabel(attempt.outcome)}
                   </p>
                 ))}
               </div>
@@ -143,7 +149,10 @@ export function WorkerTaskDetailDrawer({
           </section>
 
           <section>
-            <h3 className="mb-2 text-sm font-medium text-ink">终结记录</h3>
+            <h3 className="mb-2 text-sm font-medium text-ink">
+              <HelpLabel label="终结记录" termKey="admin_finalization" />
+              <MetricHelp termKey="admin_pre_complete" />
+            </h3>
             {finalizeRecords.length === 0 ? (
               <p className="text-xs text-ink-muted">
                 此任务尚无 finalizer 处理记录。
@@ -193,7 +202,9 @@ export function WorkerTaskDetailDrawer({
           </section>
 
           <section className="space-y-2">
-            <h3 className="text-sm font-medium text-ink">payload / 结果</h3>
+            <h3 className="text-sm font-medium text-ink">
+              <HelpLabel label="payload / 结果" termKey="admin_payload_result" />
+            </h3>
             <JsonViewer label="payload_json" raw={task.payload_json} />
             <JsonViewer label="result_meta_json" raw={task.result_meta_json} />
             {task.result_key && (
@@ -238,6 +249,20 @@ export function WorkerTaskDetailDrawer({
       )}
     </Drawer>
   );
+}
+
+const ATTEMPT_OUTCOME_LABELS: Record<string, string> = {
+  running: "执行中",
+  complete: "已完成",
+  result_accepted: "结果已接受",
+  failed: "执行失败",
+  canceled: "已取消",
+  lease_expired: "租约过期",
+};
+
+function attemptOutcomeLabel(outcome: string): string {
+  if (!outcome) return ATTEMPT_OUTCOME_LABELS.running;
+  return ATTEMPT_OUTCOME_LABELS[outcome] ?? outcome;
 }
 
 function taskResultHref(task: AdminWorkerTaskFull): string | null {

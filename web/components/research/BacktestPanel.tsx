@@ -22,6 +22,7 @@ import {
   formatPercent,
 } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
@@ -305,7 +306,7 @@ export function BacktestPanel({
           <dd className="font-medium text-ink">{detail.base_currency}</dd>
         </div>
         <div>
-          <dt className="text-ink-muted">再平衡</dt>
+          <dt className="text-ink-muted"><HelpLabel label="再平衡" termKey="backtest_rebalance" /></dt>
           <dd className="font-medium text-ink">
             {REBALANCE_POLICY_LABELS[detail.rebalance_policy] ??
               detail.rebalance_policy}
@@ -314,7 +315,7 @@ export function BacktestPanel({
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">回测区间</dt>
+          <dt className="text-ink-muted"><HelpLabel label="回测区间" termKey="common_backtest_interval" /></dt>
           <dd className="font-medium text-ink" data-testid="backtest-window">
             {readiness?.window_start && readiness.window_end
               ? `${readiness.window_start} ~ ${readiness.window_end}`
@@ -322,13 +323,13 @@ export function BacktestPanel({
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">基准资产</dt>
+          <dt className="text-ink-muted"><HelpLabel label="基准资产" termKey="benchmark_asset" /></dt>
           <dd className="truncate font-medium text-ink">
             {detail.benchmark_asset_key || "无"}
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">CVaR 口径</dt>
+          <dt className="text-ink-muted"><HelpLabel label="CVaR 口径" termKey="metric_cvar_loss" /></dt>
           <dd className="font-medium text-ink">
             {readiness?.tail_risk
               ? `${readiness.tail_risk.horizon_days} 日 / ${readiness.tail_risk.confidence * 100}%`
@@ -336,7 +337,7 @@ export function BacktestPanel({
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">CVaR 场景</dt>
+          <dt className="text-ink-muted"><HelpLabel label="CVaR 场景" termKey="tail_risk_horizon" /></dt>
           <dd
             className="font-medium text-ink"
             data-testid="backtest-cvar-scenarios"
@@ -350,7 +351,7 @@ export function BacktestPanel({
 
       {/* Normal backtest button + its own disabled reason */}
       <div className="flex flex-wrap items-center gap-3">
-        <span className="inline-flex" title={runGateReason ?? undefined}>
+        <span className="inline-flex">
           <Button
             className={runGateReason ? "pointer-events-none w-32" : "w-32"}
             disabled={runGateReason !== null}
@@ -391,7 +392,7 @@ export function BacktestPanel({
 
       {/* Optimization button + its own disabled reason */}
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <span className="inline-flex" title={optimizationGateReason ?? undefined}>
+        <span className="inline-flex">
           <Button
             variant="secondary"
             className={optimizationGateReason ? "pointer-events-none w-32" : "w-32"}
@@ -476,7 +477,7 @@ export function BacktestPanel({
             {runStatusBadge(latest.status)}
             {latest.status === "complete" && latest.summary && (
               <span className="text-xs text-ink-muted">
-                CAGR {formatPercent(latest.summary.cagr)} · 回撤{" "}
+                <HelpLabel label="CAGR" termKey="metric_cagr" /> {formatPercent(latest.summary.cagr)} · 回撤{" "}
                 {formatPercent(latest.summary.max_drawdown)} · 波动{" "}
                 {formatNullablePercent(latest.summary.annual_volatility)}
               </span>

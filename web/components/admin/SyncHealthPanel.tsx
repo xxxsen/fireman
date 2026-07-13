@@ -10,6 +10,8 @@ import {
 import type { WorkerTaskStatus } from "@/lib/api/market-assets";
 import { formatRelativeTime } from "@/lib/admin-format";
 import { formatDateTimeFromMs } from "@/lib/format";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 const SCOPE_STATUS_VARIANTS: Record<string, BadgeVariant> = {
   running: "info",
@@ -30,7 +32,9 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
       className="rounded-lg border border-line bg-surface p-4"
       data-testid="sync-health-panel"
     >
-      <h2 className="text-sm font-medium text-ink">同步健康</h2>
+      <h2 className="text-sm font-medium text-ink">
+        <HelpLabel label="同步健康" termKey="admin_sync_health" />
+      </h2>
       <ul className="mt-3 space-y-2 text-sm">
         {health.directory_scopes.map((scope) => (
           <li key={scope.scope} data-testid="sync-health-scope">
@@ -52,18 +56,15 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
                   </Badge>
                 )}
                 {scope.stale && <Badge variant="warning">超 7 天未成功</Badge>}
-                <span
-                  className="text-xs text-ink-muted"
-                  title={
-                    scope.last_success_at
-                      ? formatDateTimeFromMs(scope.last_success_at)
-                      : undefined
-                  }
-                >
-                  {scope.last_success_at
-                    ? `全量成功于 ${formatRelativeTime(scope.last_success_at)}`
-                    : "部分或全部未成功"}
-                </span>
+                {scope.last_success_at ? (
+                  <Tooltip content={formatDateTimeFromMs(scope.last_success_at)}>
+                    <span className="text-xs text-ink-muted">
+                      全量成功于 {formatRelativeTime(scope.last_success_at)}
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <span className="text-xs text-ink-muted">部分或全部未成功</span>
+                )}
               </span>
             </div>
             <ul className="mt-1 space-y-1 border-l border-line pl-4">
@@ -89,18 +90,15 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
                     {unit.stale && (
                       <Badge variant="warning">超 7 天未成功</Badge>
                     )}
-                    <span
-                      className="text-xs text-ink-muted"
-                      title={
-                        unit.last_success_at
-                          ? formatDateTimeFromMs(unit.last_success_at)
-                          : undefined
-                      }
-                    >
-                      {unit.last_success_at
-                        ? formatRelativeTime(unit.last_success_at)
-                        : "从未成功"}
-                    </span>
+                    {unit.last_success_at ? (
+                      <Tooltip content={formatDateTimeFromMs(unit.last_success_at)}>
+                        <span className="text-xs text-ink-muted">
+                          {formatRelativeTime(unit.last_success_at)}
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <span className="text-xs text-ink-muted">从未成功</span>
+                    )}
                   </span>
                 </li>
               ))}
@@ -117,18 +115,15 @@ export function SyncHealthPanel({ health }: { health: AdminSyncHealth }) {
             <span className="font-mono text-xs text-ink-muted">
               {pair.pair}
             </span>
-            <span
-              className="ml-auto text-xs text-ink-muted"
-              title={
-                pair.last_success_at
-                  ? formatDateTimeFromMs(pair.last_success_at)
-                  : undefined
-              }
-            >
-              {pair.last_success_at
-                ? formatRelativeTime(pair.last_success_at)
-                : "从未成功"}
-            </span>
+            {pair.last_success_at ? (
+              <Tooltip content={formatDateTimeFromMs(pair.last_success_at)} className="ml-auto">
+                <span className="text-xs text-ink-muted">
+                  {formatRelativeTime(pair.last_success_at)}
+                </span>
+              </Tooltip>
+            ) : (
+              <span className="ml-auto text-xs text-ink-muted">从未成功</span>
+            )}
           </li>
         ))}
         {health.directory_scopes.length === 0 &&

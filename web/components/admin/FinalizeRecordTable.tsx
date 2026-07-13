@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import type { AdminFinalizeRecord } from "@/lib/api/admin";
 import { workerTaskTypeLabel } from "@/lib/api/admin";
 import { formatDurationMs, middleTruncate } from "@/lib/admin-format";
@@ -9,10 +10,10 @@ import { formatDateTimeFromMs } from "@/lib/format";
 import { FinalizeResultBadge } from "./FinalizeResultBadge";
 
 export const FINALIZE_RECORD_TABLE_HEADERS = [
-  "结果",
+  <HelpLabel key="result" label="结果" termKey="admin_finalization" />,
   "task id",
-  "任务类型",
-  "尝试",
+  <HelpLabel key="type" label="任务类型" termKey="admin_worker_task" />,
+  <HelpLabel key="attempt" label="尝试" termKey="admin_task_attempt" />,
   "错误码",
   "耗时",
   "时间",

@@ -8,7 +8,7 @@ import {
 } from "@/lib/api/research";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
-import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 const WEIGHT_STEP_OPTIONS = [
   { value: 0.01, label: "1%" },
@@ -113,7 +113,7 @@ export function OptimizationConfigDialog({
     <Dialog open={open} onClose={onClose} title="寻找最优组合" data-testid="optimization-config-dialog">
       <div className="space-y-4">
         <div>
-          <label className="mb-1 block text-sm font-medium text-ink">权重步长</label>
+          <label className="mb-1 block text-sm font-medium text-ink"><HelpLabel label="权重步长" termKey="optimization_weight_step" /></label>
           <select
             value={weightStep}
             onChange={(event) => setWeightStep(Number(event.target.value))}
@@ -127,8 +127,7 @@ export function OptimizationConfigDialog({
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <span className="mb-1 flex items-center text-sm font-medium text-ink">
-              CVaR 置信度
-              <MetricHelp text="95% CVaR 表示历史最差 5% 持有期场景中的平均损失。" />
+              <HelpLabel label="CVaR 置信度" termKey="tail_risk_confidence" />
             </span>
             <Segmented
               values={[0.9, 0.95, 0.99] as const}
@@ -140,8 +139,7 @@ export function OptimizationConfigDialog({
           </div>
           <div>
             <span className="mb-1 flex items-center text-sm font-medium text-ink">
-              CVaR 持有期
-              <MetricHelp text="20 日按有效收益日滚动复合，相邻场景会共享部分交易日。" />
+              <HelpLabel label="CVaR 持有期" termKey="tail_risk_horizon" />
             </span>
             <Segmented
               values={[1, 20] as const}
@@ -159,7 +157,7 @@ export function OptimizationConfigDialog({
         </label>
         {limitCAGR && (
           <label className="block text-sm font-medium text-ink">
-            最低 CAGR（%）
+            <HelpLabel label="最低 CAGR（%）" termKey="metric_cagr" />
             <input
               type="text"
               inputMode="decimal"
@@ -173,7 +171,7 @@ export function OptimizationConfigDialog({
         )}
 
         <label className="block text-sm font-medium text-ink">
-          每组保留数量 (Top K)
+          <HelpLabel label="每组保留数量 (Top K)" termKey="optimization_constraints" />
           <input
             type="number"
             min={1}
@@ -187,7 +185,7 @@ export function OptimizationConfigDialog({
 
         <dl className="rounded-md bg-surface-muted/60 px-4 py-3 text-xs">
           <div className="flex justify-between gap-3"><dt className="text-ink-muted">有效收益日</dt><dd className="text-ink">{optReadiness?.tail_risk?.effective_return_count ?? "—"}{readinessQuery.isFetching && <span className="ml-1 text-ink-muted">更新中…</span>}</dd></div>
-          <div className="mt-1 flex justify-between gap-3"><dt className="text-ink-muted">CVaR 场景</dt><dd className="text-ink">{optReadiness?.tail_risk ? `${optReadiness.tail_risk.scenario_count} / 最少 ${optReadiness.tail_risk.minimum_scenario_count}` : "—"}</dd></div>
+          <div className="mt-1 flex justify-between gap-3"><dt className="text-ink-muted"><HelpLabel label="CVaR 场景" termKey="metric_cvar_loss" /></dt><dd className="text-ink">{optReadiness?.tail_risk ? `${optReadiness.tail_risk.scenario_count} / 最少 ${optReadiness.tail_risk.minimum_scenario_count}` : "—"}</dd></div>
           <div className="mt-1 flex justify-between gap-3"><dt className="text-ink-muted">候选数量</dt><dd className="font-medium text-ink" data-testid="candidate-count">{optReadiness ? optReadiness.candidate_count.toLocaleString() : "—"}</dd></div>
         </dl>
 

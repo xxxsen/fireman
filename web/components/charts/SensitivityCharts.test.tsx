@@ -57,8 +57,8 @@ describe("SensitivityCharts", () => {
     expect(capturedOption?.xAxis?.name).toBe("参数扰动");
 
     const html = capturedOption?.tooltip?.formatter?.([{ axisValue: "+10%", value: 0.85 }]) ?? "";
-    expect(html).toContain("成功率 85%");
-    expect(html).toContain("相对基准 -5%");
+    expect(html).toContain("成功率：85%");
+    expect(html).toContain("相对基准：-5%");
   });
 
   it("renders the heatmap with named axes", () => {

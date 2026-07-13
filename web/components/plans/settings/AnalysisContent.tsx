@@ -4,6 +4,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { MetricHelp } from "@/components/ui/MetricHelp";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { CalculationExplanation } from "@/components/ui/CalculationExplanation";
 import { StaleBanner } from "@/components/ui/StaleBanner";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
@@ -131,15 +133,18 @@ function RunAssumptionCard({
   const riskAssets = assumption.assets.filter((a) => !a.is_cash);
   return (
     <section className="mt-4 rounded-lg border border-line bg-surface-muted/40 p-3 text-sm">
-      <h3 className="font-medium text-ink">本次模拟的收益假设</h3>
+      <h3 className="font-medium text-ink"><HelpLabel label="本次模拟的收益假设" termKey="return_assumption_mode" /></h3>
       <p className="mt-1 text-xs text-ink-muted">
-        引擎 {assumption.engine_version} · {modeLabel}
-        {assumption.profile_id
-          ? ` · ${assumption.profile_id}@${assumption.profile_version}`
-          : ""}
-        {assumption.scenario ? ` · 假设情景 ${assumption.scenario}` : ""} ·{" "}
-        {factorLabel}
+        {modeLabel}{assumption.scenario ? ` · 假设情景 ${assumption.scenario}` : ""}
       </p>
+      <details className="mt-2 text-xs text-ink-muted">
+        <summary className="cursor-pointer font-medium">高级假设版本</summary>
+        <p className="mt-1 break-words">
+          引擎 {assumption.engine_version}
+          {assumption.profile_id ? ` · Profile ${assumption.profile_id}@${assumption.profile_version}` : ""}
+          {` · 随机因子模型 ${factorLabel}`}
+        </p>
+      </details>
       {assumption.correlation_prior_only && (
         <p className="mt-1 text-xs text-warning">
           相关性主要依赖先验（历史共同月份不足），分散化结果偏保守。
@@ -152,14 +157,14 @@ function RunAssumptionCard({
               <tr className="text-ink-muted">
                 <th className="pr-3 py-1">资产</th>
                 <th className="pr-3 py-1">模拟地域</th>
-                <th className="pr-3 py-1">历史 CAGR</th>
-                <th className="pr-3 py-1">本地前瞻收益</th>
-                <th className="pr-3 py-1">FX 前瞻收益</th>
-                <th className="pr-3 py-1">费用 / FX 口径</th>
-                <th className="pr-3 py-1">基准币种合成收益</th>
-                <th className="pr-3 py-1">历史权重</th>
-                <th className="pr-3 py-1">样本年数</th>
-                <th className="pr-3 py-1">波动率</th>
+                <th className="pr-3 py-1"><HelpLabel label="历史 CAGR" termKey="annual_return" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="本地前瞻收益" termKey="forward_return" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="FX 前瞻收益" termKey="fx_forward_return" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="费用 / FX 口径" termKey="fee_included" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="基准币种合成收益" termKey="base_currency_return" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="历史权重" termKey="historical_weight" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="样本年数" termKey="sample_years" /></th>
+                <th className="pr-3 py-1"><HelpLabel label="波动率" termKey="annual_volatility" /></th>
               </tr>
             </thead>
             <tbody>
@@ -384,12 +389,12 @@ function AnalysisJobPanel({
                 <thead>
                   <tr className="text-ink-muted">
                     <th className="pr-3 py-1">压力场景</th>
-                    <th className="pr-3 py-1">成功率</th>
+                    <th className="pr-3 py-1"><HelpLabel label="成功率" termKey="fire_success_rate" /></th>
                     <th className="pr-3 py-1">相对基准</th>
-                    <th className="pr-3 py-1">终值 P25/P50/P95</th>
-                    <th className="pr-3 py-1">P95 回撤</th>
-                    <th className="pr-3 py-1">首次资金不足年龄 P50</th>
-                    <th className="pr-3 py-1">恢复期 P50</th>
+                    <th className="pr-3 py-1"><HelpLabel label="终值 P25/P50/P95" termKey="p_quantiles" /></th>
+                    <th className="pr-3 py-1"><HelpLabel label="P95 回撤" termKey="p95_drawdown" /></th>
+                    <th className="pr-3 py-1"><HelpLabel label="首次资金不足年龄 P50" termKey="failure_age" /></th>
+                    <th className="pr-3 py-1"><HelpLabel label="恢复期 P50" termKey="recovery_period" /></th>
                     <th className="pr-3 py-1">说明</th>
                     <th className="pr-3 py-1">风险提示</th>
                   </tr>
@@ -455,6 +460,8 @@ function AnalysisJobPanel({
             <TornadoChart
               items={tornado.map((t) => ({
                 parameter_name: String(t.parameter_name),
+                low_label: String(t.low_label ?? "低值"),
+                high_label: String(t.high_label ?? "高值"),
                 low_success: (t.low_success as number) ?? 0,
                 high_success: (t.high_success as number) ?? 0,
               }))}
@@ -988,7 +995,7 @@ export function AnalysisContent() {
   return (
     <div className="space-y-8">
       <section className="rounded-lg border border-line bg-surface p-4">
-        <h2 className="font-medium text-ink">Monte Carlo 模拟</h2>
+        <h2 className="font-medium text-ink"><HelpLabel label="Monte Carlo 模拟" termKey="monte_carlo" /></h2>
         {snapshotWarningLabels.length > 0 && (
           <Alert variant="warning" className="mt-2">
             以下持仓历史样本有限，模拟结果长期不确定性较高：
@@ -1030,21 +1037,6 @@ export function AnalysisContent() {
           <Button
             disabled={
               startMut.isPending || simBusy || simRestoreBlocked || !readinessReady || !runsValid
-            }
-            title={
-              simRestoring
-                ? "正在恢复任务状态"
-                : simRestore.restoreError
-                  ? "任务状态检查失败，请重试"
-              : !runsValid
-                ? "模拟次数必须是 1000 至 100000 之间的整数"
-                : readinessQ.isLoading || readinessQ.isFetching
-                  ? "正在检查模拟就绪状态"
-                  : readinessQ.isError
-                    ? "模拟就绪状态检查失败，请重试"
-                    : !readinessReady
-                      ? "部分持仓暂时无法用于模拟，请先按提示处理"
-                      : undefined
             }
             onClick={() => startMut.mutate()}
           >
@@ -1143,16 +1135,36 @@ export function AnalysisContent() {
             <MetricHelp termKey="fire_success_rate" />
           </h2>
           {latest.summary_json?.success_probability !== undefined && (
-            <p className="mt-2 text-2xl font-semibold text-ink">
-              成功率 {formatPercent(latest.summary_json.success_probability)}
-            </p>
+            <div className="mt-2">
+              <p className="text-2xl font-semibold text-ink">
+                成功率 {formatPercent(latest.summary_json.success_probability)}
+              </p>
+              {typeof latest.summary_json.success_wilson_low === "number" && typeof latest.summary_json.success_wilson_high === "number" ? (
+                <p className="mt-1 flex items-center text-sm text-ink-muted">
+                  Wilson 95% 区间 {formatPercent(latest.summary_json.success_wilson_low)}–{formatPercent(latest.summary_json.success_wilson_high)}
+                  <MetricHelp termKey="wilson_interval" />
+                </p>
+              ) : null}
+            </div>
           )}
+
+          <CalculationExplanation
+            className="mt-4"
+            summary="本次结果用同一份冻结计划与市场快照生成多条收益、通胀和现金流路径，并统计满足 FIRE 条件的样本比例。"
+            answer="在当前计划、配置和模型假设下，有限模拟样本中有多少路径在规划期内未耗尽并满足期末最低资产。"
+            changed="每条路径的资产收益、汇率与随机通胀会按模型生成不同序列。"
+            fixed="计划现金流、目标配置、市场统计快照、假设 Profile、运行路径数和 seed 在本次运行中冻结。"
+            data={`来源运行 ${latest.id}；${latest.runs.toLocaleString()} 条路径；规划 ${latest.horizon_months.toLocaleString()} 个月；seed ${latest.seed}。`}
+            criterion="成功路径必须在整个规划期内能够支付现金流，并在终点达到期末最低资产目标；成功率是成功路径数除以完成路径数。"
+            uncertainty="Wilson 区间只描述有限路径的抽样不确定性，不覆盖模型、市场制度或输入判断错误；历史和前瞻假设都不是未来保证。"
+            nextStep="查看财富分位、代表路径和模型提示；计划或市场输入变化后重新运行，再使用改善器或达标前沿。"
+            audit={`引擎 ${latest.engine_version}；输入 ${latest.input_hash}；配置 ${latest.current_config_hash}；市场 ${latest.market_snapshot_hash}`}
+          />
 
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               href={`/plans/${planId}/improvement?simulation_run_id=${encodeURIComponent(latest.id)}`}
               disabled={latest.result_stale}
-              title={latest.result_stale ? "先运行当前计划模拟" : undefined}
             >
               改善计划
             </Button>
@@ -1160,7 +1172,6 @@ export function AnalysisContent() {
               variant="secondary"
               href={`/plans/${planId}/frontier?simulation_run_id=${encodeURIComponent(latest.id)}`}
               disabled={latest.result_stale}
-              title={latest.result_stale ? "先运行当前计划模拟" : undefined}
             >
               达标前沿
             </Button>
@@ -1178,10 +1189,7 @@ export function AnalysisContent() {
 
           {chartSeries && (
             <div className="mt-4">
-              <p className="mb-1 text-xs text-ink-muted">
-                财富分位走势（{caliberLabel(effectiveCaliber)}，单位：元）
-              </p>
-              <WealthPathChart series={chartSeries} />
+              <WealthPathChart series={chartSeries} caliber={effectiveCaliber} />
             </div>
           )}
           {((latest.summary_json?.model_warnings as string[] | undefined) ?? [])
@@ -1196,7 +1204,7 @@ export function AnalysisContent() {
           )}
           {repPaths.length > 0 && (
             <div className="mt-4">
-              <h3 className="text-sm font-medium text-ink-muted">代表路径</h3>
+              <h3 className="text-sm font-medium text-ink-muted"><HelpLabel label="代表路径" termKey="representative_path" /></h3>
               <p className="mt-1 text-xs text-ink-muted">
                 每项为期末资产最接近对应分位数的实际模拟路径，可点击查看完整过程。
               </p>

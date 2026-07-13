@@ -22,6 +22,7 @@ import { queryErrorMessage } from "@/lib/query-error";
 import { AdminPagination } from "@/components/admin/AdminTable";
 import { isTaskActive } from "@/lib/api/tasks";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 const HOURS = [1, 6, 12, 24, 48, 72, 168];
 function formatInterval(hours: number): string {
@@ -160,12 +161,20 @@ function RuleCells({
           ? formatDateTimeFromMs(rule.last_success_at)
           : "--"}
       </td>
-      <td
-        className="max-w-48 truncate"
-        title={rule.last_error_message || undefined}
-      >
-        {rule.last_failed_at ? formatDateTimeFromMs(rule.last_failed_at) : "--"}
-        {rule.last_error_code ? ` (${rule.last_error_code})` : ""}
+      <td className="max-w-48">
+        {rule.last_error_message ? (
+          <Tooltip content={rule.last_error_message}>
+            <span className="block truncate">
+              {rule.last_failed_at ? formatDateTimeFromMs(rule.last_failed_at) : "--"}
+              {rule.last_error_code ? ` (${rule.last_error_code})` : ""}
+            </span>
+          </Tooltip>
+        ) : (
+          <span>
+            {rule.last_failed_at ? formatDateTimeFromMs(rule.last_failed_at) : "--"}
+            {rule.last_error_code ? ` (${rule.last_error_code})` : ""}
+          </span>
+        )}
       </td>
       <td>
         <TaskLink rule={rule} />

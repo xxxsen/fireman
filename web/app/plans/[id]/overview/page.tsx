@@ -242,7 +242,7 @@ export default function OverviewPage() {
           <div>
             <dt className="flex items-center text-sm text-ink-muted">
               已投资金
-              <MetricHelp termKey="invested_minor" />
+              <MetricHelp termKey="holdings_sum" />
             </dt>
             <dd className="mt-1 text-lg font-semibold text-ink">
               {formatMoneyScaled(
@@ -306,12 +306,6 @@ export default function OverviewPage() {
                   data.latest_simulation.result_stale ||
                   data.latest_simulation.task_status !== "complete"
                 }
-                title={
-                  data.latest_simulation.result_stale ||
-                  data.latest_simulation.task_status !== "complete"
-                    ? "先运行当前计划模拟"
-                    : undefined
-                }
               >
                 改善计划
               </Button>
@@ -322,17 +316,17 @@ export default function OverviewPage() {
                   data.latest_simulation.result_stale ||
                   data.latest_simulation.task_status !== "complete"
                 }
-                title={
-                  data.latest_simulation.result_stale ||
-                  data.latest_simulation.task_status !== "complete"
-                    ? "先运行当前计划模拟"
-                    : undefined
-                }
               >
                 达标前沿
               </Button>
             </div>
           </div>
+          {(data.latest_simulation.result_stale ||
+            data.latest_simulation.task_status !== "complete") && (
+            <p className="mt-2 text-sm text-warning">
+              改善计划和达标前沿需要当前计划已完成且未过期的正式模拟；请先重新运行模拟。
+            </p>
+          )}
         </section>
       )}
 

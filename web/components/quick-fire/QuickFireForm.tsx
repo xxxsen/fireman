@@ -2,6 +2,7 @@
 
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { PercentInput } from "@/components/ui/PercentInput";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 import type { QuickFireInput } from "@/lib/api/quick-fire";
 
 export function validateQuickFireInput(input: QuickFireInput): Record<string, string> {
@@ -54,19 +55,19 @@ export function QuickFireForm({
         {numeric("current_age", "当前年龄")}
         {numeric("planned_fire_age", "计划 FIRE 年龄")}
         {numeric("end_age", "目标年龄")}
-        <MoneyField label="当前可投资资产" field="current_assets_minor" input={input} errors={errors} onChange={onChange} />
-        <MoneyField label="年净储蓄" field="annual_savings_minor" input={input} errors={errors} onChange={onChange} />
-        <MoneyField label="当前年支出" field="annual_spending_minor" input={input} errors={errors} onChange={onChange} />
-        <MoneyField label="退休后稳定年收入" field="annual_retirement_income_minor" input={input} errors={errors} onChange={onChange} />
-        <PercentField label="预期年化收益率" field="annual_return_rate" input={input} errors={errors} onChange={onChange} />
-        <PercentField label="通胀率" field="inflation_rate" input={input} errors={errors} onChange={onChange} />
+        <MoneyField label="当前可投资资产" termKey="current_investable_assets" field="current_assets_minor" input={input} errors={errors} onChange={onChange} />
+        <MoneyField label="FIRE 前年净储蓄" termKey="annual_savings_wizard" field="annual_savings_minor" input={input} errors={errors} onChange={onChange} />
+        <MoneyField label="退休首年支出（当前购买力）" termKey="retirement_spending" field="annual_spending_minor" input={input} errors={errors} onChange={onChange} />
+        <MoneyField label="退休后税后稳定年收入" termKey="stable_retirement_income" field="annual_retirement_income_minor" input={input} errors={errors} onChange={onChange} />
+        <PercentField label="名义几何年化收益" termKey="geometric_annual_return" field="annual_return_rate" input={input} errors={errors} onChange={onChange} />
+        <PercentField label="固定通胀率" termKey="fixed_inflation" field="inflation_rate" input={input} errors={errors} onChange={onChange} />
       </div>
       <details className="mt-5 border-t border-line pt-4">
         <summary className="cursor-pointer text-sm font-medium text-ink">更多假设</summary>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <PercentField label="储蓄增长率" field="annual_savings_growth_rate" input={input} errors={errors} onChange={onChange} />
-          <PercentField label="稳定收入年增长率" field="annual_retirement_income_growth_rate" input={input} errors={errors} onChange={onChange} />
-          <MoneyField label="期末最低资产" field="terminal_wealth_floor_minor" input={input} errors={errors} onChange={onChange} />
+          <PercentField label="储蓄增长率" termKey="savings_growth" field="annual_savings_growth_rate" input={input} errors={errors} onChange={onChange} />
+          <PercentField label="稳定收入年增长率" termKey="retirement_income_growth" field="annual_retirement_income_growth_rate" input={input} errors={errors} onChange={onChange} />
+          <MoneyField label="期末最低名义资产" termKey="terminal_wealth_floor" field="terminal_wealth_floor_minor" input={input} errors={errors} onChange={onChange} />
         </div>
       </details>
     </section>
@@ -74,13 +75,13 @@ export function QuickFireForm({
 }
 
 function MoneyField<K extends "current_assets_minor" | "annual_savings_minor" | "annual_spending_minor" | "annual_retirement_income_minor" | "terminal_wealth_floor_minor">({
-  label, field, input, errors, onChange,
-}: { label: string; field: K; input: QuickFireInput; errors: Record<string, string>; onChange: <T extends keyof QuickFireInput>(key: T, value: QuickFireInput[T]) => void }) {
-  return <div><MoneyInput label={label} valueMinor={input[field]} onChange={(value) => onChange(field, value)} />{errors[field] && <span className="mt-1 block text-xs text-danger">{errors[field]}</span>}</div>;
+  label, termKey, field, input, errors, onChange,
+}: { label: string; termKey: string; field: K; input: QuickFireInput; errors: Record<string, string>; onChange: <T extends keyof QuickFireInput>(key: T, value: QuickFireInput[T]) => void }) {
+  return <div><MoneyInput label={<HelpLabel label={label} termKey={termKey} />} ariaLabel={label} valueMinor={input[field]} onChange={(value) => onChange(field, value)} />{errors[field] && <span className="mt-1 block text-xs text-danger">{errors[field]}</span>}</div>;
 }
 
 function PercentField<K extends "annual_return_rate" | "inflation_rate" | "annual_savings_growth_rate" | "annual_retirement_income_growth_rate">({
-  label, field, input, errors, onChange,
-}: { label: string; field: K; input: QuickFireInput; errors: Record<string, string>; onChange: <T extends keyof QuickFireInput>(key: T, value: QuickFireInput[T]) => void }) {
-  return <div><PercentInput label={label} value={input[field]} onChange={(value) => onChange(field, value)} />{errors[field] && <span className="mt-1 block text-xs text-danger">{errors[field]}</span>}</div>;
+  label, termKey, field, input, errors, onChange,
+}: { label: string; termKey: string; field: K; input: QuickFireInput; errors: Record<string, string>; onChange: <T extends keyof QuickFireInput>(key: T, value: QuickFireInput[T]) => void }) {
+  return <div><PercentInput label={<HelpLabel label={label} termKey={termKey} />} ariaLabel={label} value={input[field]} onChange={(value) => onChange(field, value)} />{errors[field] && <span className="mt-1 block text-xs text-danger">{errors[field]}</span>}</div>;
 }

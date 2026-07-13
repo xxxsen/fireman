@@ -7,6 +7,7 @@ import { getScenarioComparison } from "@/lib/api/simulations";
 import { formatMoneyWan, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 import type { ScenarioComparisonRow } from "@/types/api";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 const SCENARIO_LABELS: Record<string, string> = {
   conservative: "保守",
@@ -56,7 +57,7 @@ export function ScenarioComparisonCard({
     <div className="mt-6 rounded-lg border border-line p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-medium text-ink">情景比较（保守 / 基准 / 乐观）</h3>
+          <h3 className="text-sm font-medium text-ink"><HelpLabel label="情景比较（保守 / 基准 / 乐观）" termKey="scenario_comparison" /></h3>
           <p className="mt-1 text-xs text-ink-muted">
             使用所选历史模拟的冻结输入与同一随机种子，仅切换全局情景并列运行。
           </p>
@@ -90,13 +91,13 @@ export function ScenarioComparisonCard({
               <thead className="bg-surface-muted">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium text-ink-muted">情景</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">前瞻收益</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">目标权重下近似年化波动率</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">成功率</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">终值 P50（名义）</th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted"><HelpLabel label="前瞻收益" termKey="forward_return" /></th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted"><HelpLabel label="目标权重下近似年化波动率" termKey="annual_volatility" /></th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted"><HelpLabel label="成功率" termKey="fire_success_rate" /></th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted"><HelpLabel label="终值 P50（名义）" termKey="p_quantiles" /></th>
                   <th className="px-3 py-2 text-right font-medium text-ink-muted">较基准</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">终值 P50（购买力）</th>
-                  <th className="px-3 py-2 text-right font-medium text-ink-muted">最大回撤 P50</th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted"><HelpLabel label="终值 P50（购买力）" termKey="nominal_vs_real" /></th>
+                  <th className="px-3 py-2 text-right font-medium text-ink-muted"><HelpLabel label="最大回撤 P50" termKey="max_drawdown" /></th>
                 </tr>
               </thead>
               <tbody>
@@ -135,6 +136,9 @@ export function ScenarioComparisonCard({
             采用资料库 {data.profile_id || "系统默认"}
             {data.profile_version ? ` v${data.profile_version}` : ""}，每情景 {data.runs} 条路径，种子{" "}
             <span className="font-mono-numeric">{data.seed}</span>。该比较为方向性预览，不写入历史运行。
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-muted">
+            保持不变：计划现金流、目标权重、市场快照、路径数和 seed。只替换收益与风险假设情景；较基准列用于隔离这项变化。该结果是方向性样本比较，不是未来保证。
           </p>
         </>
       )}

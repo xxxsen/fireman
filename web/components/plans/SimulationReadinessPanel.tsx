@@ -13,6 +13,8 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import Link from "next/link";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -161,7 +163,10 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
   return (
     <div data-testid="simulation-readiness-panel">
       <Alert variant="warning" className="mt-2">
-      <p className="font-medium">以下持仓暂时无法创建模拟：</p>
+      <p className="font-medium">
+        <HelpLabel label="以下持仓暂时无法创建模拟：" termKey="readiness_status" />
+        <MetricHelp termKey="simulation_snapshot_sync" />
+      </p>
       <ul className="mt-2 space-y-2 text-sm" data-testid="blocking-assets-list">
         {data.blocking_assets.map((item) => (
           <li key={item.holding_id} data-testid="blocking-asset-item">

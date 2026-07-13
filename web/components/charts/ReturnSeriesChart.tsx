@@ -2,6 +2,7 @@
 
 import ReactECharts from "echarts-for-react";
 import { formatPercent, pointTypeLabel } from "@/lib/format";
+import { ChartFrame } from "./ChartFrame";
 
 export interface ReturnSeriesPoint {
   date: string;
@@ -10,6 +11,21 @@ export interface ReturnSeriesPoint {
 }
 
 type AxisTooltipParam = { dataIndex?: number };
+
+export function formatReturnSeriesTooltip(
+  points: ReturnSeriesPoint[],
+  pointType: string | undefined,
+  params: AxisTooltipParam | AxisTooltipParam[],
+): string {
+  const items = Array.isArray(params) ? params : [params];
+  const point = points[items[0]?.dataIndex ?? 0];
+  if (!point) return "无数据";
+  return [
+    `日期：${point.date}`,
+    `累计收益：${Number.isFinite(point.cumulative_return) ? formatPercent(point.cumulative_return) : "无数据"}`,
+    `${pointTypeLabel(pointType)}：${Number.isFinite(point.value) ? point.value.toLocaleString("zh-CN", { maximumFractionDigits: 4 }) : "无数据"}`,
+  ].join("<br/>");
+}
 
 export function ReturnSeriesChart({
   points,
@@ -28,29 +44,20 @@ export function ReturnSeriesChart({
 
   const valueLabel = pointTypeLabel(pointType);
 
-  const formatter = (params: AxisTooltipParam | AxisTooltipParam[]): string => {
-    const items = Array.isArray(params) ? params : [params];
-    const idx = items[0]?.dataIndex ?? 0;
-    const p = points[idx];
-    if (!p) return "";
-    return [
-      p.date,
-      `累计收益 ${formatPercent(p.cumulative_return)}`,
-      `${valueLabel} ${p.value.toLocaleString("zh-CN", { maximumFractionDigits: 4 })}`,
-    ].join("<br/>");
-  };
-
   const option = {
-    tooltip: { trigger: "axis" as const, formatter },
-    grid: { left: 56, right: 16, bottom: 32, top: 16 },
+    aria: { enabled: true, description: `展示使用${valueLabel}计算的归一化累计收益历史。` },
+    tooltip: { trigger: "axis" as const, confine: true, formatter: (params: AxisTooltipParam | AxisTooltipParam[]) => formatReturnSeriesTooltip(points, pointType, params) },
+    grid: { left: 64, right: 16, bottom: 48, top: 24, containLabel: true },
     xAxis: {
       type: "category" as const,
       data: points.map((p) => p.date),
       boundaryGap: false,
+      name: "日期",
     },
     yAxis: {
       type: "value" as const,
       scale: true,
+      name: "累计收益（%）",
       axisLabel: { formatter: (v: number) => `${(v * 100).toFixed(1)}%` },
     },
     series: [
@@ -66,5 +73,17 @@ export function ReturnSeriesChart({
     ],
   };
 
-  return <ReactECharts option={option} style={{ height: 280 }} />;
+  return (
+    <ChartFrame
+      title="归一化累计收益"
+      termKey="cumulative_return"
+      xAxis="日期"
+      yAxis="累计收益"
+      unit="%"
+      legend={`曲线以所选区间首个有效${valueLabel}为起点归一化。`}
+      interpretation="曲线表示历史区间内相对起点的累计变化，不是资产价格预测。悬浮或点按可查看日期、累计收益和原始点值。平滑连线只用于显示。"
+    >
+      <ReactECharts option={option} style={{ height: 280 }} />
+    </ChartFrame>
+  );
 }

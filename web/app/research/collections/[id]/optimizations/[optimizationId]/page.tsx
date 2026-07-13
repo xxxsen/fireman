@@ -20,6 +20,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { HelpLabel } from "@/components/ui/HelpLabel";
+import { MetricHelp } from "@/components/ui/MetricHelp";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import type { ResearchRebalancePolicy } from "@/lib/api/research";
@@ -60,25 +62,15 @@ function ResultTable({
         <thead>
           <tr className="border-b border-line text-left text-xs text-ink-muted">
             <th className="px-2 py-2 font-medium">#</th>
-            <th className="px-2 py-2 font-medium">{tab === "cvar" ? "CVaR" : "得分"}</th>
-            <th className="px-2 py-2 font-medium">年化收益</th>
-            <th className="px-2 py-2 font-medium">累计收益</th>
-            <th className="px-2 py-2 font-medium">最大回撤</th>
-            <th className="px-2 py-2 font-medium">波动率</th>
-            <th className="px-2 py-2 font-medium">VaR loss</th>
-            <th className="px-2 py-2 font-medium">CVaR loss</th>
-            <th className="px-2 py-2 font-medium">
-              <MetricHeader
-                label="夏普比率"
-                help="衡量单位波动风险带来的超额收益，数值越高代表风险调整后收益越好。"
-              />
-            </th>
-            <th className="px-2 py-2 font-medium">
-              <MetricHeader
-                label="卡玛比率"
-                help="衡量年化收益相对最大回撤的表现，数值越高代表在控制回撤下的收益更好。"
-              />
-            </th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label={tab === "cvar" ? "CVaR" : "得分"} termKey="optimization_ranking" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="年化收益" termKey="metric_cagr" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="累计收益" termKey="cumulative_return" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="最大回撤" termKey="metric_max_drawdown" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="波动率" termKey="metric_annual_volatility" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="VaR loss" termKey="metric_var_loss" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="CVaR loss" termKey="metric_cvar_loss" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="夏普比率" termKey="sharpe_ratio" /></th>
+            <th className="px-2 py-2 font-medium"><HelpLabel label="卡玛比率" termKey="calmar_ratio" /></th>
             <th className="px-2 py-2 font-medium">权重分配</th>
             <th className="px-2 py-2 text-right font-medium">操作</th>
           </tr>
@@ -154,23 +146,6 @@ function TailLossCell({
   );
 }
 
-function MetricHeader({ label, help }: { label: string; help: string }) {
-  return (
-    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-      {label}
-      <Tooltip content={help} contentClassName="max-w-64" contentTestId={`metric-help-${label}`}>
-        <button
-          type="button"
-          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-line text-[10px] text-ink-muted hover:border-brand hover:text-brand"
-          aria-label={`${label}说明`}
-        >
-          ?
-        </button>
-      </Tooltip>
-    </span>
-  );
-}
-
 function WeightBar({
   weights,
 }: {
@@ -189,7 +164,8 @@ function WeightBar({
   const title = active.map((w) => `${w.name}: ${formatPercent(w.weight)}`).join(" / ");
 
   return (
-    <div className="max-w-[22rem] space-y-0.5" title={title}>
+    <Tooltip content={title} clickToggle contentClassName="max-w-80 whitespace-normal">
+    <div className="max-w-[22rem] space-y-0.5" tabIndex={0} aria-label={`权重分配：${title}`}>
       {active.map((w) => (
         <div
           key={w.key}
@@ -209,6 +185,7 @@ function WeightBar({
         </div>
       ))}
     </div>
+    </Tooltip>
   );
 }
 
@@ -288,13 +265,6 @@ export default function OptimizationDetailPage() {
   });
   const effectiveStatus = taskState.task?.status ?? opt?.status;
   const collectionName = detail?.name ?? "研究集合";
-
-  const cvarHelp = useMemo(() => {
-    const confidence = opt?.config?.tail_risk?.confidence ?? 0.95;
-    const horizon = opt?.config?.tail_risk?.horizon_days ?? 20;
-    const tailPercent = Math.round((1 - confidence) * 100);
-    return `按本次设置，最小化历史滚动 ${horizon} 日收益中最差 ${tailPercent}% 场景的平均损失（CVaR）。它用于衡量短期尾部风险，不保证年化收益更高、最大回撤更小或回撤恢复更快；请结合“最低回撤”和“收益回撤平衡”结果比较。`;
-  }, [opt]);
 
   const activeItems = useMemo(() => {
     if (!opt?.result) return [];
@@ -382,7 +352,7 @@ export default function OptimizationDetailPage() {
 
       <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3 lg:grid-cols-6">
         <div>
-          <dt className="text-ink-muted">权重步长</dt>
+          <dt className="text-ink-muted"><HelpLabel label="权重步长" termKey="optimization_weight_step" /></dt>
           <dd className="font-medium text-ink">
             {opt.config?.weight_step != null
               ? formatPercent(opt.config.weight_step)
@@ -390,19 +360,19 @@ export default function OptimizationDetailPage() {
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">CVaR 口径</dt>
+          <dt className="text-ink-muted"><HelpLabel label="CVaR 口径" termKey="metric_cvar_loss" /></dt>
           <dd className="font-medium text-ink">
             {opt.config?.tail_risk ? `${opt.config.tail_risk.horizon_days} 日 / ${opt.config.tail_risk.confidence * 100}%` : "—"}
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">最低 CAGR</dt>
+          <dt className="text-ink-muted"><HelpLabel label="最低 CAGR" termKey="metric_cagr" /></dt>
           <dd className="font-medium text-ink">
             {opt.config?.minimum_cagr != null ? formatPercent(opt.config.minimum_cagr) : "未限制"}
           </dd>
         </div>
         <div>
-          <dt className="text-ink-muted">Top K</dt>
+          <dt className="text-ink-muted"><HelpLabel label="Top K" termKey="optimization_constraints" /></dt>
           <dd className="font-medium text-ink">{opt.config?.top_k ?? "—"}</dd>
         </div>
         <div>
@@ -508,21 +478,20 @@ export default function OptimizationDetailPage() {
                   >
                     {tab.label}
                   </button>
-                  {tab.key === "cvar" && (
-                    <Tooltip content={cvarHelp} contentClassName="max-w-80">
-                      <button
-                        type="button"
-                        className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px]"
-                        aria-label="最低尾部损失说明"
-                      >
-                        ?
-                      </button>
-                    </Tooltip>
-                  )}
+                  {tab.key === "cvar" && <MetricHelp termKey="metric_cvar_loss" />}
                 </div>
               );
             })}
           </div>
+
+          <p className="rounded-md bg-surface-muted px-3 py-2 text-xs leading-relaxed text-ink-muted">
+            <HelpLabel label="当前排序" termKey="optimization_ranking" />：
+            {activeTab === "cagr" && "按 CAGR 从高到低，优先展示历史复合收益较高的候选。"}
+            {activeTab === "drawdown" && "按最大回撤幅度从低到高，优先展示历史最深回撤较小的候选。"}
+            {activeTab === "cvar" && "先应用最低 CAGR 约束，再按 CVaR loss 从低到高展示尾部平均损失较小的候选；这不保证年化收益更高。"}
+            {activeTab === "calmar" && "按 Calmar 比率从高到低，平衡 CAGR 与最大回撤。"}
+            所有结果只在当前离散权重步长和已评估候选中排名；主指标相同时使用稳定并列规则。<MetricHelp termKey="optimization_tie_break" />
+          </p>
 
           <ResultTable
             items={activeItems}

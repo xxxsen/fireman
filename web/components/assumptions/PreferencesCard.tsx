@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import type { AssumptionProfileSummary } from "@/types/api";
 import { scenarioLabel } from "./shared";
+import { HelpLabel } from "@/components/ui/HelpLabel";
 
 export interface PreferencesCardProps {
   profiles: AssumptionProfileSummary[];
@@ -38,13 +39,13 @@ export function PreferencesCard({
 
   return (
     <section className="rounded-lg border border-line bg-surface p-4">
-      <h2 className="font-medium text-ink">全局默认</h2>
+      <h2 className="font-medium text-ink"><HelpLabel label="全局默认" termKey="assumption_profile_selection" /></h2>
       <p className="mt-1 text-xs text-ink-muted">
         跟随全局的计划使用此处选择的 profile 与假设情景；未配置时使用系统 system_cma_v4。
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-4">
         <label className="text-sm text-ink">
-          默认 profile
+          <HelpLabel label="默认 Profile" termKey="assumption_profile_selection" />
           <select
             className="ml-2 rounded border border-line px-2 py-1"
             value={sel}
@@ -59,7 +60,7 @@ export function PreferencesCard({
           </select>
         </label>
         <label className="text-sm text-ink">
-          默认假设情景
+          <HelpLabel label="默认假设情景" termKey="assumption_scenario" />
           <select
             className="ml-2 rounded border border-line px-2 py-1"
             value={scenario}
