@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FrontierPage } from "./FrontierPage";
@@ -203,7 +203,27 @@ describe("FrontierPage", () => {
     expect(screen.getByText(/连线仅为视觉连接/)).toBeInTheDocument();
     expect(screen.getByText(/空心点表示搜索域内没有达标值/)).toBeInTheDocument();
     expect(screen.getByText("横轴：退休年龄（岁） · 纵轴：最大达标年度退休支出（元）")).toBeInTheDocument();
-    expect(document.querySelector("circle title")?.textContent).toContain("Wilson 下界");
+    const chart = screen.getByRole("img", { name: "FIRE 达标前沿离散点图" });
+    expect(within(chart).getByText("年度支出（元）")).toBeInTheDocument();
+    expect(within(chart).getByText("¥80.00 万元")).toBeInTheDocument();
+
+    const boundaryPoint = screen.getByTestId("frontier-chart-point-point_boundary");
+    fireEvent.mouseEnter(boundaryPoint);
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("50 岁退休");
+    expect(tooltip).toHaveTextContent("最大达标年度支出¥400,000.00");
+    expect(tooltip).toHaveTextContent("成功路径2,750 / 3,000");
+    expect(tooltip).toHaveTextContent("Wilson 95% 区间90.6%–92.6%");
+    expect(tooltip).toHaveTextContent("Wilson 下界 90.6% ≥ 目标 90%");
+    expect(tooltip).toHaveTextContent("相邻未达标档位 ¥440,000.00");
+    fireEvent.mouseLeave(boundaryPoint);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    const noFeasiblePoint = screen.getByTestId("frontier-chart-point-point_none");
+    fireEvent.focus(noFeasiblePoint);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("搜索域内无达标值");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Wilson 下界 2% < 目标 90%");
+    fireEvent.blur(noFeasiblePoint);
     expect(screen.getByText(/Wilson 区间只反映有限模拟路径/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "这次到底计算了什么" })).toBeInTheDocument();
     expect(screen.getByText(/源共 3,000 条，固定使用前 3,000 条 · seed 42/)).toBeInTheDocument();
@@ -246,6 +266,42 @@ describe("FrontierPage", () => {
     expect(screen.getByText(/2 个启用持仓 · 按源金额比例/)).toBeInTheDocument();
     expect(screen.getByText(/储蓄.*支出.*退休收入/)).toBeInTheDocument();
     expect(screen.getByText(/当前资产.*缺口/)).toBeInTheDocument();
+  });
+
+  it("uses savings-specific axis and tooltip labels for the minimum-savings curve", async () => {
+    const run = completeRun();
+    api.list.mockResolvedValue({ runs: [{ id: "run_1", task_id: "task_1", status: "complete", frontier_type: "retirement_age_min_savings", target_probability: 0.9, created_at: 1 }], total: 1 });
+    api.detail.mockResolvedValue({
+      ...run,
+      frontier_type: "retirement_age_min_savings",
+      config: { ...run.config, frontier_type: "retirement_age_min_savings" },
+      result: { ...run.result, frontier_type: "retirement_age_min_savings" },
+    });
+
+    renderPage();
+
+    const chart = await screen.findByRole("img", { name: "FIRE 达标前沿离散点图" });
+    expect(within(chart).getByText("首年储蓄（元）")).toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByTestId("frontier-chart-point-point_boundary"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("最低达标首年储蓄");
+  });
+
+  it("centers a single chart point when all values are equal", async () => {
+    const run = completeRun();
+    api.list.mockResolvedValue({ runs: [{ id: "run_1", task_id: "task_1", status: "complete", frontier_type: "retirement_age_max_spending", target_probability: 0.9, created_at: 1 }], total: 1 });
+    api.detail.mockResolvedValue({
+      ...run,
+      result: { ...run.result, points: [points[0]] },
+    });
+
+    renderPage();
+
+    const point = await screen.findByTestId("frontier-chart-point-point_boundary");
+    const circles = Array.from(point.querySelectorAll("circle"));
+    expect(circles).toHaveLength(2);
+    expect(circles.every((circle) => circle.getAttribute("cy") === "112")).toBe(true);
+    const chart = screen.getByRole("img", { name: "FIRE 达标前沿离散点图" });
+    expect(within(chart).getAllByText("¥40.00 万元")).toHaveLength(1);
   });
 
   it("marks cancellation without rendering partial points", async () => {

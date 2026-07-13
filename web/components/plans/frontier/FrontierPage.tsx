@@ -26,7 +26,7 @@ import {
 import { getParameters, getPlan } from "@/lib/api/plans";
 import { listSimulations } from "@/lib/api/simulations";
 import { isTaskActive } from "@/lib/api/tasks";
-import { formatDateTimeFromMs, formatMoney, formatPercent } from "@/lib/format";
+import { formatDateTimeFromMs, formatMoney, formatMoneyScaled, formatPercent } from "@/lib/format";
 import { queryErrorMessage } from "@/lib/query-error";
 import type {
   FrontierPoint,
@@ -262,15 +262,34 @@ function csv(result: FrontierResult) {
 }
 
 function FrontierChart({ result }: { result: FrontierResult }) {
+  const [activePointIndex, setActivePointIndex] = useState<number | null>(null);
   const values = result.points.map((point) => point.value_minor);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = Math.max(1, max - min);
-  const x = (index: number) => result.points.length === 1 ? 320 : 72 + index * (496 / (result.points.length - 1));
-  const y = (value: number) => 172 - ((value - min) / span) * 132;
+  const chart = { width: 640, height: 250, left: 112, right: 608, top: 42, bottom: 182 };
+  const x = (index: number) => result.points.length === 1
+    ? (chart.left + chart.right) / 2
+    : chart.left + index * ((chart.right - chart.left) / (result.points.length - 1));
+  const y = (value: number) => max === min
+    ? (chart.top + chart.bottom) / 2
+    : chart.bottom - ((value - min) / span) * (chart.bottom - chart.top);
   const yAxisLabel = result.frontier_type === "retirement_age_max_spending"
     ? "最大达标年度退休支出（元）"
     : "最低达标首年年度储蓄（元）";
+  const yAxisShortLabel = result.frontier_type === "retirement_age_max_spending"
+    ? "年度支出（元）"
+    : "首年储蓄（元）";
+  const pointValueLabel = result.frontier_type === "retirement_age_max_spending"
+    ? "最大达标年度支出"
+    : "最低达标首年储蓄";
+  const yTicks = max === min
+    ? [{ value: max, position: y(max) }]
+    : [
+        { value: max, position: chart.top },
+        { value: min + span / 2, position: (chart.top + chart.bottom) / 2 },
+        { value: min, position: chart.bottom },
+      ];
   const feasibleSegments: string[] = [];
   let segment: string[] = [];
   result.points.forEach((point, index) => {
@@ -282,37 +301,117 @@ function FrontierChart({ result }: { result: FrontierResult }) {
     }
   });
   if (segment.length > 1) feasibleSegments.push(segment.join(" "));
+  const activePoint = activePointIndex === null ? null : result.points[activePointIndex];
+  const activeX = activePointIndex === null ? 0 : x(activePointIndex);
+  const activeY = activePoint ? y(activePoint.value_minor) : 0;
+  const tooltipTranslateX = activeX < chart.width * 0.35
+    ? "0%"
+    : activeX > chart.width * 0.65 ? "-100%" : "-50%";
+  const tooltipTranslateY = activeY < (chart.top + chart.bottom) / 2
+    ? "14px"
+    : "calc(-100% - 14px)";
   return (
     <figure className="rounded-lg border border-line bg-surface p-3" aria-labelledby="frontier-chart-caption">
       <p className="mb-2 text-xs font-medium text-ink-muted">
         横轴：退休年龄（岁） · 纵轴：{yAxisLabel}
       </p>
-      <svg viewBox="0 0 620 230" className="h-auto w-full" role="img" aria-label="FIRE 达标前沿离散点图">
-        <line x1="72" y1="40" x2="72" y2="172" stroke="currentColor" className="text-line" />
-        <line x1="72" y1="172" x2="568" y2="172" stroke="currentColor" className="text-line" />
-        <text x="16" y="106" textAnchor="middle" transform="rotate(-90 16 106)" className="fill-ink-muted text-[10px]">
-          {yAxisLabel}
-        </text>
-        <text x="64" y="44" textAnchor="end" className="fill-ink-muted text-[10px]">{formatMoney(max)}</text>
-        <text x="64" y="172" textAnchor="end" className="fill-ink-muted text-[10px]">{formatMoney(min)}</text>
-        {feasibleSegments.map((points) => <polyline key={points} points={points} fill="none" stroke="currentColor" strokeWidth="2" className="text-brand" />)}
-        {result.points.map((point, index) => (
-          <g key={point.id}>
-            <circle
-              cx={x(index)} cy={y(point.value_minor)} r="6"
-              fill={point.status === "no_feasible_value" ? "white" : "currentColor"}
-              stroke="currentColor" strokeWidth="2"
-              className={point.status === "no_feasible_value" ? "text-warning" : "text-brand"}
-            >
-              <title>{`${point.retirement_age ? `${point.retirement_age} 岁，` : ""}${formatMoney(point.value_minor)}；${STATUS_LABEL[point.status]}；Wilson 下界 ${formatPercent(point.evaluation.success_wilson_low)}`}</title>
-            </circle>
-            <text x={x(index)} y="194" textAnchor="middle" className="fill-ink-muted text-[10px]">
-              {point.retirement_age || "当前"}
-            </text>
-          </g>
-        ))}
-        <text x="320" y="220" textAnchor="middle" className="fill-ink-muted text-[10px]">退休年龄（岁）</text>
-      </svg>
+      <div className="relative">
+        <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="h-auto w-full" role="img" aria-label="FIRE 达标前沿离散点图">
+          {yTicks.map((tick) => (
+            <g key={`${tick.value}-${tick.position}`}>
+              <line
+                x1={chart.left} y1={tick.position} x2={chart.right} y2={tick.position}
+                stroke="currentColor" strokeDasharray="3 4" className="text-line"
+              />
+              <text x={chart.left - 12} y={tick.position + 4} textAnchor="end" className="fill-ink-muted text-[10px]">
+                {formatMoneyScaled(tick.value)}
+              </text>
+            </g>
+          ))}
+          <line x1={chart.left} y1={chart.top} x2={chart.left} y2={chart.bottom} stroke="currentColor" className="text-line" />
+          <line x1={chart.left} y1={chart.bottom} x2={chart.right} y2={chart.bottom} stroke="currentColor" className="text-line" />
+          <text
+            x="18" y={(chart.top + chart.bottom) / 2} textAnchor="middle"
+            transform={`rotate(-90 18 ${(chart.top + chart.bottom) / 2})`}
+            className="fill-ink-muted text-[10px]"
+          >
+            {yAxisShortLabel}
+          </text>
+          {feasibleSegments.map((points) => <polyline key={points} points={points} fill="none" stroke="currentColor" strokeWidth="2" className="text-brand" />)}
+          {result.points.map((point, index) => {
+            const pointLabel = `${point.retirement_age} 岁退休，${pointValueLabel} ${formatMoney(point.value_minor)}，${STATUS_LABEL[point.status]}，Wilson 95% 下界 ${formatPercent(point.evaluation.success_wilson_low)}`;
+            const active = activePointIndex === index;
+            return (
+              <g
+                key={point.id}
+                tabIndex={0}
+                role="img"
+                aria-label={pointLabel}
+                aria-describedby={active ? "frontier-chart-point-tooltip" : undefined}
+                data-testid={`frontier-chart-point-${point.id}`}
+                className="cursor-help outline-none"
+                onMouseEnter={() => setActivePointIndex(index)}
+                onMouseLeave={() => setActivePointIndex(null)}
+                onFocus={() => setActivePointIndex(index)}
+                onBlur={() => setActivePointIndex(null)}
+              >
+                <circle cx={x(index)} cy={y(point.value_minor)} r="14" fill="transparent" stroke="none" />
+                {active && (
+                  <circle
+                    cx={x(index)} cy={y(point.value_minor)} r="10" fill="none"
+                    stroke="currentColor" strokeWidth="2" className="text-focus"
+                  />
+                )}
+                <circle
+                  cx={x(index)} cy={y(point.value_minor)} r="6"
+                  fill={point.status === "no_feasible_value" ? "white" : "currentColor"}
+                  stroke="currentColor" strokeWidth="2" pointerEvents="none"
+                  className={point.status === "no_feasible_value" ? "text-warning" : "text-brand"}
+                />
+                <text x={x(index)} y="204" textAnchor="middle" pointerEvents="none" className="fill-ink-muted text-[10px]">
+                  {point.retirement_age || "当前"}
+                </text>
+              </g>
+            );
+          })}
+          <text x={(chart.left + chart.right) / 2} y="238" textAnchor="middle" className="fill-ink-muted text-[10px]">退休年龄（岁）</text>
+        </svg>
+        {activePoint && (
+          <div
+            id="frontier-chart-point-tooltip"
+            role="tooltip"
+            data-testid="frontier-chart-tooltip"
+            className="pointer-events-none absolute z-10 w-72 max-w-[calc(100%_-_1rem)] rounded-lg border border-line bg-surface p-3 text-xs leading-relaxed text-ink shadow-lg"
+            style={{
+              left: `${(activeX / chart.width) * 100}%`,
+              top: `${(activeY / chart.height) * 100}%`,
+              transform: `translate(${tooltipTranslateX}, ${tooltipTranslateY})`,
+            }}
+          >
+            <strong className="block text-sm">{activePoint.retirement_age} 岁退休</strong>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <dt className="text-ink-muted">{pointValueLabel}</dt>
+              <dd className="text-right font-semibold">{formatMoney(activePoint.value_minor)}</dd>
+              <dt className="text-ink-muted">边界判定</dt>
+              <dd className="text-right">{STATUS_LABEL[activePoint.status]}</dd>
+              <dt className="text-ink-muted">成功路径</dt>
+              <dd className="text-right">{activePoint.evaluation.success_count.toLocaleString()} / {activePoint.evaluation.runs.toLocaleString()}</dd>
+              <dt className="text-ink-muted">成功率点估计</dt>
+              <dd className="text-right">{formatPercent(activePoint.evaluation.success_probability)}</dd>
+              <dt className="text-ink-muted">Wilson 95% 区间</dt>
+              <dd className="text-right">{formatPercent(activePoint.evaluation.success_wilson_low)}–{formatPercent(activePoint.evaluation.success_wilson_high)}</dd>
+            </dl>
+            <p className="mt-2 border-t border-line pt-2">
+              判定口径：Wilson 下界 {formatPercent(activePoint.evaluation.success_wilson_low)} {activePoint.evaluation.meets_target ? "≥" : "<"} 目标 {formatPercent(result.target_probability)}。
+            </p>
+            {activePoint.worse_neighbor && (
+              <p className="mt-1 text-ink-muted">
+                相邻未达标档位 {formatMoney(activePoint.worse_neighbor.value_minor)}：成功 {activePoint.worse_neighbor.success_count.toLocaleString()} / {activePoint.worse_neighbor.runs.toLocaleString()}，Wilson 下界 {formatPercent(activePoint.worse_neighbor.success_wilson_low)}。
+              </p>
+            )}
+          </div>
+        )}
+      </div>
       <figcaption id="frontier-chart-caption" className="text-xs text-ink-muted">
         {result.discrete_connection_note} 空心点表示搜索域内没有达标值，不参与连线。
       </figcaption>
