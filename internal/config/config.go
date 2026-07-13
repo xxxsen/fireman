@@ -103,40 +103,54 @@ func Load(path string) (Config, error) {
 }
 
 func validate(cfg Config) (Config, error) {
+	if err := validateRequiredStrings(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateConcurrency(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func validateRequiredStrings(cfg Config) error {
 	if strings.TrimSpace(cfg.Addr) == "" {
-		return Config{}, errAddrEmpty
+		return errAddrEmpty
 	}
 	if strings.TrimSpace(cfg.InternalAddr) == "" {
-		return Config{}, errInternalAddrEmpty
+		return errInternalAddrEmpty
 	}
 	if strings.TrimSpace(cfg.DBPath) == "" {
-		return Config{}, errDBPathEmpty
+		return errDBPathEmpty
 	}
 	if strings.TrimSpace(cfg.ResourceDBPath) == "" {
-		return Config{}, errResourceDBPathEmpty
+		return errResourceDBPathEmpty
 	}
 	if strings.TrimSpace(cfg.Timezone) == "" {
-		return Config{}, errTimezoneEmpty
+		return errTimezoneEmpty
 	}
 	if strings.TrimSpace(cfg.LogLevel) == "" {
-		return Config{}, errLogLevelEmpty
+		return errLogLevelEmpty
 	}
+	return nil
+}
+
+func validateConcurrency(cfg Config) error {
 	if cfg.WorkerConcurrency < 1 {
-		return Config{}, fmt.Errorf("%w, got %d", errWorkerConcurrency, cfg.WorkerConcurrency)
+		return fmt.Errorf("%w, got %d", errWorkerConcurrency, cfg.WorkerConcurrency)
 	}
 	if cfg.ResearchOptimizationConcurrency < 1 || cfg.ResearchOptimizationConcurrency > 32 {
-		return Config{}, fmt.Errorf("%w, got %d", errResearchOptimizationConcurrency,
+		return fmt.Errorf("%w, got %d", errResearchOptimizationConcurrency,
 			cfg.ResearchOptimizationConcurrency)
 	}
 	if cfg.FirePlanImprovementConcurrency < 1 || cfg.FirePlanImprovementConcurrency > 16 {
-		return Config{}, fmt.Errorf("%w, got %d", errFirePlanImprovementConcurrency,
+		return fmt.Errorf("%w, got %d", errFirePlanImprovementConcurrency,
 			cfg.FirePlanImprovementConcurrency)
 	}
 	if cfg.FireFrontierConcurrency < 1 || cfg.FireFrontierConcurrency > 16 {
-		return Config{}, fmt.Errorf("%w, got %d", errFireFrontierConcurrency, cfg.FireFrontierConcurrency)
+		return fmt.Errorf("%w, got %d", errFireFrontierConcurrency, cfg.FireFrontierConcurrency)
 	}
 	if cfg.AutoUpdateScanIntervalMinutes < 5 || cfg.AutoUpdateScanIntervalMinutes > 1440 {
-		return Config{}, fmt.Errorf("%w, got %d", errAutoUpdateScanInterval, cfg.AutoUpdateScanIntervalMinutes)
+		return fmt.Errorf("%w, got %d", errAutoUpdateScanInterval, cfg.AutoUpdateScanIntervalMinutes)
 	}
-	return cfg, nil
+	return nil
 }

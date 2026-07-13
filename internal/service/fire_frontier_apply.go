@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/domain"
@@ -192,7 +193,8 @@ func (s *FireFrontierService) Apply(ctx context.Context, runID, pointID string,
 			return repository.ErrVersionConflict
 		}
 		currentMarketHash, txErr := s.simulation.CurrentMarketSnapshotHashReadOnlyTx(
-			ctx, tx, loaded.record.PlanID, loaded.frozen.SourceSnapshot)
+			ctx, tx, loaded.record.PlanID, loaded.frozen.SourceSnapshot,
+		)
 		if txErr != nil || currentMarketHash != loaded.record.SourceMarketHash {
 			return repository.ErrVersionConflict
 		}
@@ -207,80 +209,126 @@ func (s *FireFrontierService) Apply(ctx context.Context, runID, pointID string,
 		return s.runs.CreateApplicationTx(ctx, tx, application)
 	})
 	if err != nil {
-		if errors.Is(err, repository.ErrVersionConflict) {
-			return ApplyFrontierResponse{}, newErr("frontier_preview_stale", "plan changed while applying", nil)
-		}
-		if isUniqueConstraintErr(err) {
-			if existing, getErr := s.runs.GetApplication(ctx, runID); getErr == nil &&
-				existing.PointID == pointID && existing.PreviewHash == req.PreviewHash {
-				return s.appliedFrontierResponse(ctx, existing)
-			}
-			return ApplyFrontierResponse{}, newErr("frontier_run_already_applied",
-				"frontier run has already been applied", nil)
-		}
-		return ApplyFrontierResponse{}, wrapRepo("apply frontier transaction", err)
+		return s.frontierApplyError(ctx, runID, pointID, req.PreviewHash, err)
 	}
 	plan.ConfigVersion = application.AfterConfigVersion
-	return ApplyFrontierResponse{Application: application, Plan: plan,
-		Parameters: ParametersToAPI(updatedParams)}, nil
+	return ApplyFrontierResponse{
+		Application: application,
+		Plan:        plan,
+		Parameters:  ParametersToAPI(updatedParams),
+	}, nil
 }
 
-func (s *FireFrontierService) loadFrontierPoint(ctx context.Context, runID, pointID string) (
-	applicableFrontier, error,
-) {
+func (s *FireFrontierService) frontierApplyError(ctx context.Context, runID, pointID, previewHash string,
+	err error,
+) (ApplyFrontierResponse, error) {
+	if errors.Is(err, repository.ErrVersionConflict) {
+		return ApplyFrontierResponse{}, newErr("frontier_preview_stale", "plan changed while applying", nil)
+	}
+	if !isUniqueConstraintErr(err) {
+		return ApplyFrontierResponse{}, wrapRepo("apply frontier transaction", err)
+	}
+	existing, getErr := s.runs.GetApplication(ctx, runID)
+	if getErr == nil && existing.PointID == pointID && existing.PreviewHash == previewHash {
+		return s.appliedFrontierResponse(ctx, existing)
+	}
+	return ApplyFrontierResponse{}, newErr("frontier_run_already_applied",
+		"frontier run has already been applied", nil)
+}
+
+func (s *FireFrontierService) loadFrontierPoint(
+	ctx context.Context,
+	runID string,
+	pointID string,
+) (applicableFrontier, error) {
+	record, frozen, result, err := s.loadFrontierRunResult(ctx, runID)
+	if err != nil {
+		return applicableFrontier{}, err
+	}
+	point, err := applicableFrontierPoint(record, result, pointID)
+	if err != nil {
+		return applicableFrontier{}, err
+	}
+	if err := reproduceFrontierPoint(record, frozen, point); err != nil {
+		return applicableFrontier{}, err
+	}
+	return applicableFrontier{record: record, frozen: frozen, result: result, point: point}, nil
+}
+
+func (s *FireFrontierService) loadFrontierRunResult(
+	ctx context.Context,
+	runID string,
+) (repository.FireFrontierRun, frontier.FrozenInput, frontier.Result, error) {
 	record, err := s.runs.GetByID(ctx, runID)
 	if err != nil {
-		return applicableFrontier{}, newErr("frontier_run_not_found", "frontier run not found", nil)
+		return repository.FireFrontierRun{}, frontier.FrozenInput{}, frontier.Result{},
+			newErr("frontier_run_not_found", "frontier run not found", nil)
 	}
 	if record.TaskStatus != repository.WorkerTaskStatusComplete {
-		return applicableFrontier{}, newErr("frontier_point_not_applicable", "frontier run is not complete", nil)
+		return repository.FireFrontierRun{}, frontier.FrozenInput{}, frontier.Result{},
+			newErr("frontier_point_not_applicable", "frontier run is not complete", nil)
 	}
 	var frozen frontier.FrozenInput
 	var result frontier.Result
 	if json.Unmarshal([]byte(record.InputSnapshotJSON), &frozen) != nil ||
 		json.Unmarshal(record.ResultJSON, &result) != nil || result.AlgorithmVersion != record.AlgorithmVersion ||
 		result.FrontierType != record.FrontierType {
-		return applicableFrontier{}, newErr("frontier_result_inconsistent", "frontier result cannot be decoded", nil)
+		return repository.FireFrontierRun{}, frontier.FrozenInput{}, frontier.Result{},
+			newErr("frontier_result_inconsistent", "frontier result cannot be decoded", nil)
 	}
-	var found *frontier.Point
+	return record, frozen, result, nil
+}
+
+func applicableFrontierPoint(record repository.FireFrontierRun, result frontier.Result,
+	pointID string,
+) (frontier.Point, error) {
+	var found frontier.Point
+	matched := false
 	for i := range result.Points {
 		if result.Points[i].ID == pointID {
-			found = &result.Points[i]
+			found = result.Points[i]
+			matched = true
 			break
 		}
 	}
-	if found == nil {
-		return applicableFrontier{}, newErr("frontier_point_not_found", "frontier point not found", nil)
+	if !matched {
+		return frontier.Point{}, newErr("frontier_point_not_found", "frontier point not found", nil)
 	}
 	if !found.Applicable || (record.FrontierType != frontier.TypeRetirementAgeMaxSpending &&
 		record.FrontierType != frontier.TypeRetirementAgeMinSavings) ||
 		(found.Status != frontier.StatusBoundaryFound && found.Status != frontier.StatusEntireDomainFeasible) ||
 		!found.Evaluation.MeetsTarget || found.Evaluation.SuccessWilsonLow < result.TargetProbability {
-		return applicableFrontier{}, newErr("frontier_point_not_applicable", "frontier point cannot be applied", nil)
+		return frontier.Point{}, newErr("frontier_point_not_applicable", "frontier point cannot be applied", nil)
 	}
+	return found, nil
+}
+
+func reproduceFrontierPoint(record repository.FireFrontierRun, frozen frontier.FrozenInput,
+	point frontier.Point,
+) error {
 	baseConfig, err := frontier.DecodeConfigHashInput(frozen.ConfigHashInputJSON)
 	if err != nil {
-		return applicableFrontier{}, newErr("frontier_result_inconsistent", err.Error(), nil)
+		return newErr("frontier_result_inconsistent", err.Error(), nil)
 	}
-	candidate := frontier.Candidate{RetirementAge: found.RetirementAge, ValueMinor: found.ValueMinor}
+	candidate := frontier.Candidate{RetirementAge: point.RetirementAge, ValueMinor: point.ValueMinor}
 	snapshot, err := frontier.BuildCandidate(frozen.SourceSnapshot, record.FrontierType, candidate)
 	if err != nil {
-		return applicableFrontier{}, newErr("frontier_result_inconsistent", err.Error(), nil)
+		return newErr("frontier_result_inconsistent", err.Error(), nil)
 	}
 	candidateConfig, err := frontier.ApplyConfigCandidate(baseConfig, record.FrontierType, candidate, nil)
 	if err != nil {
-		return applicableFrontier{}, newErr("frontier_result_inconsistent", err.Error(), nil)
+		return newErr("frontier_result_inconsistent", err.Error(), nil)
 	}
 	candidateHash, err := domain.ComputeConfigHash(candidateConfig)
-	if err != nil || candidateHash != found.Evaluation.CandidateConfigHash {
-		return applicableFrontier{}, newErr("frontier_result_inconsistent", "candidate config hash differs", nil)
+	if err != nil || candidateHash != point.Evaluation.CandidateConfigHash {
+		return newErr("frontier_result_inconsistent", "candidate config hash differs", nil)
 	}
 	snapshot.ConfigHash = candidateHash
 	snapshotHash, err := simulation.HashInput(&snapshot)
-	if err != nil || snapshotHash != found.Evaluation.SnapshotHash {
-		return applicableFrontier{}, newErr("frontier_result_inconsistent", "candidate snapshot hash differs", nil)
+	if err != nil || snapshotHash != point.Evaluation.SnapshotHash {
+		return newErr("frontier_result_inconsistent", "candidate snapshot hash differs", nil)
 	}
-	return applicableFrontier{record: record, frozen: frozen, result: result, point: *found}, nil
+	return nil
 }
 
 func (s *FireFrontierService) currentFrontierState(ctx context.Context, loaded applicableFrontier) (
@@ -300,7 +348,7 @@ func (s *FireFrontierService) currentFrontierState(ctx context.Context, loaded a
 	}
 	configHash, err := domain.ComputeConfigHash(input)
 	if err != nil {
-		return plan, params, "", "", err
+		return plan, params, "", "", fmt.Errorf("compute current frontier config hash: %w", err)
 	}
 	marketHash, err := s.simulation.CurrentMarketSnapshotHashReadOnly(ctx,
 		loaded.record.PlanID, loaded.frozen.SourceSnapshot)
@@ -321,13 +369,17 @@ func (s *FireFrontierService) appliedFrontierResponse(ctx context.Context,
 	if err != nil {
 		return ApplyFrontierResponse{}, wrapRepo("load applied frontier parameters", err)
 	}
-	return ApplyFrontierResponse{Application: application, Plan: plan,
-		Parameters: ParametersToAPI(params)}, nil
+	return ApplyFrontierResponse{
+		Application: application, Plan: plan,
+		Parameters: ParametersToAPI(params),
+	}, nil
 }
 
 func frontierParameterValues(params repository.PlanParameters) FrontierParameterValues {
-	return FrontierParameterValues{RetirementAge: params.RetirementAge,
-		AnnualSavingsMinor: params.AnnualSavingsMinor, AnnualSpendingMinor: params.AnnualSpendingMinor}
+	return FrontierParameterValues{
+		RetirementAge:      params.RetirementAge,
+		AnnualSavingsMinor: params.AnnualSavingsMinor, AnnualSpendingMinor: params.AnnualSpendingMinor,
+	}
 }
 
 func frontierPointValues(params repository.PlanParameters, frontierType string,

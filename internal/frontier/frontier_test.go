@@ -320,8 +320,10 @@ func TestSearchDomainStatusesAndWilsonRule(t *testing.T) {
 		}
 		// Deliberately lie in aggregate floating fields. Search must derive the
 		// probability and Wilson interval from k/N and branch on Wilson low only.
-		return simulation.OutcomeEvaluation{Runs: runs, SuccessCount: 995, SuccessProbability: 1,
-			SuccessWilsonLow: 1, SuccessWilsonHigh: 1, Outcomes: out}, nil
+		return simulation.OutcomeEvaluation{
+			Runs: runs, SuccessCount: 995, SuccessProbability: 1,
+			SuccessWilsonLow: 1, SuccessWilsonHigh: 1, Outcomes: out,
+		}, nil
 	}
 	result, err := Search(context.Background(), frozen, SearchOptions{Evaluator: evaluator})
 	if err != nil {
@@ -440,22 +442,30 @@ func TestFixedSeedGoldenAllFrontierTypes(t *testing.T) {
 		pointID    string
 		resultHash string
 	}{
-		{TypeRetirementAgeMaxSpending, &AgeRange{Min: 55, Max: 55},
+		{
+			TypeRetirementAgeMaxSpending, &AgeRange{Min: 55, Max: 55},
 			MoneySearch{MinMinor: 10_000_000, MaxMinor: 100_000_000, StepMinor: 10_000_000},
 			StatusBoundaryFound, 70_000_000, 838, 0.8138767565, 0.8595362600,
-			"fpt_b84d8b752e34f5dd9664", "sha256:e56784b1027233cb59866a1091911afd3ae16ae6385c8fb543ee4edd5f3bc276"},
-		{TypeRetirementAgeMinSavings, &AgeRange{Min: 55, Max: 55},
+			"fpt_b84d8b752e34f5dd9664", "sha256:e56784b1027233cb59866a1091911afd3ae16ae6385c8fb543ee4edd5f3bc276",
+		},
+		{
+			TypeRetirementAgeMinSavings, &AgeRange{Min: 55, Max: 55},
 			MoneySearch{MinMinor: 0, MaxMinor: 100_000_000, StepMinor: 10_000_000},
 			StatusBoundaryFound, 10_000_000, 973, 0.9610010106, 0.9813787434,
-			"fpt_0f45eb002c22bf54eb25", "sha256:3e2635707ff4bbd53009668f908d86b968d3f091a960f1e1cb810ec4c5341f11"},
-		{TypeRequiredCurrentAssets, nil,
+			"fpt_0f45eb002c22bf54eb25", "sha256:3e2635707ff4bbd53009668f908d86b968d3f091a960f1e1cb810ec4c5341f11",
+		},
+		{
+			TypeRequiredCurrentAssets, nil,
 			MoneySearch{MinMinor: 10_000_000, MaxMinor: 300_000_000, StepMinor: 10_000_000},
 			StatusEntireDomainFeasible, 10_000_000, 881, 0.8594587715, 0.8996251318,
-			"fpt_0fbb43843c29e3894e07", "sha256:fd5023589501531c94504824042578133120228c0dc254923bd8e90c1ff0bc56"},
-		{TypeCoastRequiredAssets, nil,
+			"fpt_0fbb43843c29e3894e07", "sha256:fd5023589501531c94504824042578133120228c0dc254923bd8e90c1ff0bc56",
+		},
+		{
+			TypeCoastRequiredAssets, nil,
 			MoneySearch{MinMinor: 10_000_000, MaxMinor: 300_000_000, StepMinor: 10_000_000},
 			StatusBoundaryFound, 150_000_000, 839, 0.8149295246, 0.8604758382,
-			"fpt_211a286e24ca103d9def", "sha256:bc9921c7f74c2b0a71223371ac17bd862376c3f6d3e729a3d55c89d73ebbd984"},
+			"fpt_211a286e24ca103d9def", "sha256:bc9921c7f74c2b0a71223371ac17bd862376c3f6d3e729a3d55c89d73ebbd984",
+		},
 	}
 	const baselineOutcomeHash = "sha256:ceb29e5e0030c55a97cb375e70fed98d43be8b20fc129a91a67e8eaf56acf038"
 	for _, test := range tests {
@@ -492,14 +502,26 @@ func TestDeterministicCashSnapshotHasHandCheckableFourTypeBoundaries(t *testing.
 		boundary int64
 		worse    int64
 	}{
-		{TypeRetirementAgeMaxSpending, &AgeRange{Min: 31, Max: 31},
-			MoneySearch{MinMinor: 1_200, MaxMinor: 3_600, StepMinor: 1_200}, 1_200, 2_400},
-		{TypeRetirementAgeMinSavings, &AgeRange{Min: 31, Max: 31},
-			MoneySearch{MinMinor: 0, MaxMinor: 3_600, StepMinor: 1_200}, 2_400, 1_200},
-		{TypeRequiredCurrentAssets, nil,
-			MoneySearch{MinMinor: 1, MaxMinor: 3_598, StepMinor: 1_199}, 2_399, 1_200},
-		{TypeCoastRequiredAssets, nil,
-			MoneySearch{MinMinor: 1_200, MaxMinor: 4_800, StepMinor: 1_200}, 3_600, 2_400},
+		{
+			TypeRetirementAgeMaxSpending, &AgeRange{Min: 31, Max: 31},
+			MoneySearch{MinMinor: 1_200, MaxMinor: 3_600, StepMinor: 1_200},
+			1_200, 2_400,
+		},
+		{
+			TypeRetirementAgeMinSavings, &AgeRange{Min: 31, Max: 31},
+			MoneySearch{MinMinor: 0, MaxMinor: 3_600, StepMinor: 1_200},
+			2_400, 1_200,
+		},
+		{
+			TypeRequiredCurrentAssets, nil,
+			MoneySearch{MinMinor: 1, MaxMinor: 3_598, StepMinor: 1_199},
+			2_399, 1_200,
+		},
+		{
+			TypeCoastRequiredAssets, nil,
+			MoneySearch{MinMinor: 1_200, MaxMinor: 4_800, StepMinor: 1_200},
+			3_600, 2_400,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.typeName, func(t *testing.T) {
@@ -556,8 +578,10 @@ func thresholdEvaluator(field func(simulation.InputSnapshot) int64, threshold in
 				out[i] = true
 			}
 		}
-		return simulation.OutcomeEvaluation{Runs: runs, SuccessCount: countSuccess(out),
-			TerminalP50Minor: field(*in), Outcomes: out}, nil
+		return simulation.OutcomeEvaluation{
+			Runs: runs, SuccessCount: countSuccess(out),
+			TerminalP50Minor: field(*in), Outcomes: out,
+		}, nil
 	}
 }
 

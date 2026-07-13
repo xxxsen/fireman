@@ -36,74 +36,114 @@ func Normalize(frontierType string, target float64, evaluationRuns int, ageRange
 	if !validType(frontierType) {
 		return Config{}, fmt.Errorf("%w: unsupported frontier_type", ErrConfigInvalid)
 	}
-	if math.IsNaN(target) || math.IsInf(target, 0) || target < 0.50 || target > 0.99 ||
-		math.Abs(target*10_000-math.Round(target*10_000)) > 1e-8 {
-		return Config{}, fmt.Errorf("%w: target_success_probability must be in [0.50, 0.99] with at most 4 decimals", ErrConfigInvalid)
+	if err := validateTargetProbability(target); err != nil {
+		return Config{}, err
 	}
-	if sourceRuns < 1000 {
-		return Config{}, fmt.Errorf("%w: source simulation must contain at least 1000 runs", ErrConfigInvalid)
+	normalizedRuns, err := normalizeEvaluationRuns(evaluationRuns, sourceRuns)
+	if err != nil {
+		return Config{}, err
 	}
-	if evaluationRuns == 0 {
-		evaluationRuns = min(sourceRuns, DefaultEvaluationRuns)
+	levels, err := validateMoneySearch(frontierType, search)
+	if err != nil {
+		return Config{}, err
 	}
-	if evaluationRuns < 1000 || evaluationRuns > min(sourceRuns, 20000) {
-		return Config{}, fmt.Errorf("%w: evaluation_runs outside source/run limits", ErrConfigInvalid)
-	}
-	if search.MinMinor < 0 || search.MaxMinor < search.MinMinor || search.MaxMinor > MaxMoneyMinor ||
-		search.StepMinor <= 0 || (search.MaxMinor-search.MinMinor)%search.StepMinor != 0 {
-		return Config{}, fmt.Errorf("%w: invalid discrete money search", ErrConfigInvalid)
-	}
-	if frontierType == TypeRetirementAgeMaxSpending && search.MinMinor < 1 {
-		return Config{}, fmt.Errorf("%w: annual spending minimum must be positive", ErrConfigInvalid)
-	}
-	if (frontierType == TypeRequiredCurrentAssets || frontierType == TypeCoastRequiredAssets) && search.MinMinor < 1 {
-		return Config{}, fmt.Errorf("%w: asset minimum must be positive", ErrConfigInvalid)
-	}
-	levels64 := (search.MaxMinor-search.MinMinor)/search.StepMinor + 1
-	if levels64 < 1 || levels64 > MaxMoneyLevels {
-		return Config{}, fmt.Errorf("%w: money search may contain at most %d levels", ErrConfigInvalid, MaxMoneyLevels)
-	}
-	levels := int(levels64)
-	agePoints := 1
-	var normalizedAge *AgeRange
-	if isAgeFrontier(frontierType) {
-		if ageRange == nil || ageRange.Min < currentAge || ageRange.Max < ageRange.Min ||
-			ageRange.Max >= endAge || ageRange.Max-ageRange.Min+1 > MaxAgePoints {
-			return Config{}, fmt.Errorf("%w: invalid retirement_age_range", ErrConfigInvalid)
-		}
-		copyRange := *ageRange
-		normalizedAge = &copyRange
-		agePoints = ageRange.Max - ageRange.Min + 1
-	} else if ageRange != nil {
-		return Config{}, fmt.Errorf("%w: retirement_age_range is only valid for age frontiers", ErrConfigInvalid)
+	normalizedAge, agePoints, err := normalizeAgeRange(frontierType, ageRange, currentAge, endAge)
+	if err != nil {
+		return Config{}, err
 	}
 	if horizonMonths <= 0 {
 		return Config{}, fmt.Errorf("%w: source horizon must be positive", ErrConfigInvalid)
 	}
 	perPoint, evaluationBudget := EvaluationBudget(agePoints, levels)
-	if evaluationBudget > MaxEvaluationBudget {
-		return Config{}, fmt.Errorf("%w: %d > %d", ErrBudgetExceeded, evaluationBudget, MaxEvaluationBudget)
-	}
-	pathMonths, ok := PathMonthBudget(evaluationBudget, evaluationRuns, horizonMonths)
-	if !ok {
-		return Config{}, fmt.Errorf("%w: path-month budget overflow", ErrComputeBudgetExceeded)
-	}
-	if pathMonths > MaxPathMonthBudget {
-		return Config{}, fmt.Errorf("%w: %d > %d", ErrComputeBudgetExceeded, pathMonths, MaxPathMonthBudget)
+	pathMonths, err := validateComputeBudget(evaluationBudget, normalizedRuns, horizonMonths)
+	if err != nil {
+		return Config{}, err
 	}
 	return Config{
-		FrontierType: frontierType, TargetSuccessProbability: target, EvaluationRuns: evaluationRuns,
+		FrontierType: frontierType, TargetSuccessProbability: target, EvaluationRuns: normalizedRuns,
 		RetirementAgeRange: normalizedAge, Search: search, MoneyLevels: levels, AgePoints: agePoints,
 		PerPointBudget: perPoint, EvaluationBudget: evaluationBudget, PathMonthBudget: pathMonths,
 	}, nil
 }
 
+func validateTargetProbability(target float64) error {
+	if math.IsNaN(target) || math.IsInf(target, 0) || target < 0.50 || target > 0.99 ||
+		math.Abs(target*10_000-math.Round(target*10_000)) > 1e-8 {
+		return fmt.Errorf(
+			"%w: target_success_probability must be in [0.50, 0.99] with at most 4 decimals",
+			ErrConfigInvalid,
+		)
+	}
+	return nil
+}
+
+func normalizeEvaluationRuns(evaluationRuns, sourceRuns int) (int, error) {
+	if sourceRuns < 1000 {
+		return 0, fmt.Errorf("%w: source simulation must contain at least 1000 runs", ErrConfigInvalid)
+	}
+	if evaluationRuns == 0 {
+		evaluationRuns = min(sourceRuns, DefaultEvaluationRuns)
+	}
+	if evaluationRuns < 1000 || evaluationRuns > min(sourceRuns, 20000) {
+		return 0, fmt.Errorf("%w: evaluation_runs outside source/run limits", ErrConfigInvalid)
+	}
+	return evaluationRuns, nil
+}
+
+func validateMoneySearch(frontierType string, search MoneySearch) (int, error) {
+	if search.MinMinor < 0 || search.MaxMinor < search.MinMinor || search.MaxMinor > MaxMoneyMinor ||
+		search.StepMinor <= 0 || (search.MaxMinor-search.MinMinor)%search.StepMinor != 0 {
+		return 0, fmt.Errorf("%w: invalid discrete money search", ErrConfigInvalid)
+	}
+	if frontierType == TypeRetirementAgeMaxSpending && search.MinMinor < 1 {
+		return 0, fmt.Errorf("%w: annual spending minimum must be positive", ErrConfigInvalid)
+	}
+	if (frontierType == TypeRequiredCurrentAssets || frontierType == TypeCoastRequiredAssets) &&
+		search.MinMinor < 1 {
+		return 0, fmt.Errorf("%w: asset minimum must be positive", ErrConfigInvalid)
+	}
+	levels64 := (search.MaxMinor-search.MinMinor)/search.StepMinor + 1
+	if levels64 < 1 || levels64 > MaxMoneyLevels {
+		return 0, fmt.Errorf("%w: money search may contain at most %d levels", ErrConfigInvalid, MaxMoneyLevels)
+	}
+	return int(levels64), nil
+}
+
+func normalizeAgeRange(frontierType string, ageRange *AgeRange, currentAge, endAge int) (*AgeRange, int, error) {
+	if isAgeFrontier(frontierType) {
+		if ageRange == nil || ageRange.Min < currentAge || ageRange.Max < ageRange.Min ||
+			ageRange.Max >= endAge || ageRange.Max-ageRange.Min+1 > MaxAgePoints {
+			return nil, 0, fmt.Errorf("%w: invalid retirement_age_range", ErrConfigInvalid)
+		}
+		copyRange := *ageRange
+		return &copyRange, ageRange.Max - ageRange.Min + 1, nil
+	}
+	if ageRange != nil {
+		return nil, 0, fmt.Errorf("%w: retirement_age_range is only valid for age frontiers", ErrConfigInvalid)
+	}
+	return nil, 1, nil
+}
+
+func validateComputeBudget(evaluationBudget, evaluationRuns, horizonMonths int) (int64, error) {
+	if evaluationBudget > MaxEvaluationBudget {
+		return 0, fmt.Errorf("%w: %d > %d", ErrBudgetExceeded, evaluationBudget, MaxEvaluationBudget)
+	}
+	pathMonths, ok := PathMonthBudget(evaluationBudget, evaluationRuns, horizonMonths)
+	if !ok {
+		return 0, fmt.Errorf("%w: path-month budget overflow", ErrComputeBudgetExceeded)
+	}
+	if pathMonths > MaxPathMonthBudget {
+		return 0, fmt.Errorf("%w: %d > %d", ErrComputeBudgetExceeded, pathMonths, MaxPathMonthBudget)
+	}
+	return pathMonths, nil
+}
+
 // EvaluationBudget returns the documented conservative binary-search bound.
-func EvaluationBudget(agePoints, moneyLevels int) (perPoint, total int) {
+func EvaluationBudget(agePoints, moneyLevels int) (int, int) {
 	if agePoints < 0 || moneyLevels < 1 {
 		return 0, 0
 	}
-	perPoint = bits.Len(uint(moneyLevels)) + 2 // ceil(log2(levels+1)) + 2
+	perPoint := bits.Len(uint(moneyLevels)) + 2 // ceil(log2(levels+1)) + 2
 	return perPoint, 1 + agePoints*perPoint
 }
 

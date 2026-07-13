@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -24,6 +25,8 @@ const (
 	frontierRetentionLimit = 20
 	frontierPreviewTTL     = 15 * time.Minute
 )
+
+var errFrontierSnapshotSchema = errors.New("source snapshot does not pass the current schema validator")
 
 type FireFrontierService struct {
 	db          *sql.DB
@@ -212,19 +215,10 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 	if err != nil {
 		return CreateFrontierResponse{}, err
 	}
-	if req.IdempotencyKey != "" {
-		if task, found, findErr := findExistingIdempotentTask(ctx, s.tasks, planID,
-			repository.WorkerTaskTypeFireFrontier, req.IdempotencyKey, prepared.inputHash,
-			"find frontier idempotency"); findErr != nil {
-			return CreateFrontierResponse{}, findErr
-		} else if found {
-			existing, getErr := s.runs.GetByTaskID(ctx, task.ID)
-			if getErr != nil {
-				return CreateFrontierResponse{}, wrapRepo("load idempotent frontier", getErr)
-			}
-			logFrontierAdmission(existing, true, req.RequestID)
-			return createFrontierResponse(existing, true), nil
-		}
+	if response, found, findErr := s.findIdempotentFrontier(ctx, planID, req, prepared.inputHash); findErr != nil {
+		return CreateFrontierResponse{}, findErr
+	} else if found {
+		return response, nil
 	}
 	record := repository.FireFrontierRun{
 		ID: "ffr_" + uuid.NewString(), TaskID: "task_" + uuid.NewString(), PlanID: planID,
@@ -254,7 +248,7 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 		var createErr error
 		bound, reused, createErr = createOrReuseActiveTaskTx(ctx, tx, s.tasks, s.coordinator, task, func() error {
 			if err := s.runs.CreateTx(ctx, tx, &record); err != nil {
-				return err
+				return fmt.Errorf("create frontier run: %w", err)
 			}
 			return s.runs.PruneTx(ctx, tx, planID, frontierRetentionLimit)
 		})
@@ -281,6 +275,30 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 	record.TaskStatus = repository.WorkerTaskStatusPending
 	logFrontierAdmission(record, false, req.RequestID)
 	return createFrontierResponse(record, false), nil
+}
+
+func (s *FireFrontierService) findIdempotentFrontier(
+	ctx context.Context,
+	planID string,
+	req FireFrontierRequest,
+	inputHash string,
+) (CreateFrontierResponse, bool, error) {
+	if req.IdempotencyKey == "" {
+		return CreateFrontierResponse{}, false, nil
+	}
+	task, found, err := findExistingIdempotentTask(
+		ctx, s.tasks, planID, repository.WorkerTaskTypeFireFrontier,
+		req.IdempotencyKey, inputHash, "find frontier idempotency",
+	)
+	if err != nil || !found {
+		return CreateFrontierResponse{}, false, err
+	}
+	existing, err := s.runs.GetByTaskID(ctx, task.ID)
+	if err != nil {
+		return CreateFrontierResponse{}, false, wrapRepo("load idempotent frontier", err)
+	}
+	logFrontierAdmission(existing, true, req.RequestID)
+	return createFrontierResponse(existing, true), true, nil
 }
 
 func (s *FireFrontierService) List(ctx context.Context, planID string, limit, offset int) (
@@ -483,17 +501,19 @@ func (s *FireFrontierService) prepare(ctx context.Context, planID string,
 	}
 	inputHash, err := frontier.HashFrozenIdentity(run.ID, frozen)
 	if err != nil {
-		return preparedFrontier{}, err
+		return preparedFrontier{}, fmt.Errorf("hash frozen frontier identity: %w", err)
 	}
-	return preparedFrontier{run: run, snapshot: snapshot, configInput: configInput,
+	return preparedFrontier{
+		run: run, snapshot: snapshot, configInput: configInput,
 		config: config, baseline: baseline, configRaw: configRaw, frozenRaw: frozenRaw,
-		inputHash: inputHash}, nil
+		inputHash: inputHash,
+	}, nil
 }
 
 func validateFrontierSnapshot(snapshot simulation.InputSnapshot) error {
 	p := snapshot.Parameters
 	if p.TotalAssetsMinor < 0 || len(snapshot.Assets) == 0 {
-		return errors.New("source snapshot does not pass the current schema validator")
+		return errFrontierSnapshotSchema
 	}
 	// The frontier source contract explicitly permits zero assets so the frozen
 	// target-weight fallback can be evaluated. Validate every other field through
@@ -521,7 +541,7 @@ func validateFrontierSnapshot(snapshot simulation.InputSnapshot) error {
 		StudentTDf: p.StudentTDf,
 	}
 	if err := validateParameters(params); err != nil {
-		return errors.New("source snapshot does not pass the current schema validator")
+		return errFrontierSnapshotSchema
 	}
 	return nil
 }
@@ -555,8 +575,10 @@ func mapFrontierConfigError(err error) error {
 }
 
 func createFrontierResponse(record repository.FireFrontierRun, reused bool) CreateFrontierResponse {
-	return CreateFrontierResponse{RunID: record.ID, TaskID: record.TaskID,
-		Status: record.TaskStatus, Reused: reused}
+	return CreateFrontierResponse{
+		RunID: record.ID, TaskID: record.TaskID,
+		Status: record.TaskStatus, Reused: reused,
+	}
 }
 
 func logFrontierAdmission(record repository.FireFrontierRun, reused bool, requestID string) {

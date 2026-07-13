@@ -48,7 +48,7 @@ func TestFirePlanImprovementEndToEnd(t *testing.T) {
 
 	tasksBefore := countImprovementRows(t, db, "worker_tasks")
 	readiness := getImprovementJSON(t, srv,
-		"/api/v1/plans/"+planID+"/improvement-readiness?simulation_run_id="+sourceRunID, http.StatusOK)
+		"/api/v1/plans/"+planID+"/improvement-readiness?simulation_run_id="+sourceRunID)
 	if readiness["ready"] != true || readiness["source_run"].(map[string]any)["id"] != sourceRunID {
 		t.Fatalf("unexpected readiness: %#v", readiness)
 	}
@@ -70,7 +70,7 @@ func TestFirePlanImprovementEndToEnd(t *testing.T) {
 	waitImprovementTask(t, db, created["task_id"].(string))
 	runID := created["run_id"].(string)
 
-	detail := getImprovementJSON(t, srv, "/api/v1/improvement-runs/"+runID, http.StatusOK)
+	detail := getImprovementJSON(t, srv, "/api/v1/improvement-runs/"+runID)
 	if detail["status"] != repository.WorkerTaskStatusComplete {
 		t.Fatalf("improvement status=%v", detail["status"])
 	}
@@ -160,7 +160,7 @@ func TestFirePlanImprovementEndToEnd(t *testing.T) {
 	postImprovementJSON(t, srv,
 		"/api/v1/improvement-runs/"+runID+"/proposals/"+proposalID+"/apply",
 		applyBody, http.StatusConflict, "")
-	stale := getImprovementJSON(t, srv, "/api/v1/improvement-runs/"+runID, http.StatusOK)
+	stale := getImprovementJSON(t, srv, "/api/v1/improvement-runs/"+runID)
 	if stale["result_stale"] != true {
 		t.Fatal("applied result must become stale after the plan version changes")
 	}
@@ -262,15 +262,15 @@ func postImprovementJSON(t *testing.T, srv *httptest.Server, path string, body a
 	return env["data"].(map[string]any)
 }
 
-func getImprovementJSON(t *testing.T, srv *httptest.Server, path string, status int) map[string]any {
+func getImprovementJSON(t *testing.T, srv *httptest.Server, path string) map[string]any {
 	t.Helper()
 	resp, err := srv.Client().Get(srv.URL + path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw := mustRead(t, resp)
-	if resp.StatusCode != status {
-		t.Fatalf("GET %s status=%d want=%d body=%s", path, resp.StatusCode, status, raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status=%d want=%d body=%s", path, resp.StatusCode, http.StatusOK, raw)
 	}
 	return decodeEnvelope(t, raw)["data"].(map[string]any)
 }

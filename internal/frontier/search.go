@@ -62,39 +62,9 @@ type searcher struct {
 // partial Result: cancellation, invalid candidates, or monotonicity violations
 // all return an error and an empty result.
 func Search(ctx context.Context, frozen FrozenInput, opt SearchOptions) (Result, error) {
-	if err := validateFrozen(frozen); err != nil {
-		return Result{}, err
-	}
-	baseConfig, err := DecodeConfigHashInput(frozen.ConfigHashInputJSON)
+	s, err := prepareSearcher(ctx, frozen, opt)
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: decode config hash input: %v", ErrResultInconsistent, err)
-	}
-	configHash, err := domain.ComputeConfigHash(cloneConfigHashInput(baseConfig))
-	if err != nil || configHash != frozen.SourceSnapshot.ConfigHash {
-		return Result{}, fmt.Errorf("%w: frozen config hash mismatch (%s != %s)",
-			ErrResultInconsistent, configHash, frozen.SourceSnapshot.ConfigHash)
-	}
-	evaluator := opt.Evaluator
-	if evaluator == nil {
-		evaluator = func(ctx context.Context, snapshot *simulation.InputSnapshot, runs int) (
-			simulation.OutcomeEvaluation, error,
-		) {
-			return simulation.EvaluateOutcomes(snapshot, simulation.RunOptions{
-				Runs: runs, CancelCheck: func() bool { return ctx.Err() != nil },
-			})
-		}
-	}
-	parallelism := opt.Parallelism
-	if parallelism < 1 {
-		parallelism = 1
-	}
-	if parallelism > 16 {
-		parallelism = 16
-	}
-	s := &searcher{
-		ctx: ctx, base: frozen.SourceSnapshot, baseConfig: baseConfig, config: frozen.Config,
-		evaluator: evaluator, progress: opt.Progress, parallelism: parallelism,
-		cache: map[string]cachedEvaluation{}, inflight: map[string]*evaluationCall{},
+		return Result{}, err
 	}
 	if s.progress != nil {
 		s.progress(0, s.config.EvaluationBudget, "validating")
@@ -108,6 +78,48 @@ func Search(ctx context.Context, frozen FrozenInput, opt SearchOptions) (Result,
 	if s.progress != nil {
 		s.progress(s.evaluated, s.config.EvaluationBudget, "searching")
 	}
+	points, err := s.searchPoints()
+	if err != nil {
+		return Result{}, err
+	}
+	return s.buildResult(baseline, points)
+}
+
+func prepareSearcher(ctx context.Context, frozen FrozenInput, opt SearchOptions) (*searcher, error) {
+	if err := validateFrozen(frozen); err != nil {
+		return nil, err
+	}
+	baseConfig, err := DecodeConfigHashInput(frozen.ConfigHashInputJSON)
+	if err != nil {
+		return nil, fmt.Errorf("%w: decode config hash input: %w", ErrResultInconsistent, err)
+	}
+	configHash, err := domain.ComputeConfigHash(cloneConfigHashInput(baseConfig))
+	if err != nil {
+		return nil, fmt.Errorf("%w: compute frozen config hash: %w", ErrResultInconsistent, err)
+	}
+	if configHash != frozen.SourceSnapshot.ConfigHash {
+		return nil, fmt.Errorf("%w: frozen config hash mismatch (%s != %s)",
+			ErrResultInconsistent, configHash, frozen.SourceSnapshot.ConfigHash)
+	}
+	evaluator := opt.Evaluator
+	if evaluator == nil {
+		evaluator = func(ctx context.Context, snapshot *simulation.InputSnapshot, runs int) (
+			simulation.OutcomeEvaluation, error,
+		) {
+			return simulation.EvaluateOutcomes(snapshot, simulation.RunOptions{
+				Runs: runs, CancelCheck: func() bool { return ctx.Err() != nil },
+			})
+		}
+	}
+	parallelism := min(16, max(1, opt.Parallelism))
+	return &searcher{
+		ctx: ctx, base: frozen.SourceSnapshot, baseConfig: baseConfig, config: frozen.Config,
+		evaluator: evaluator, progress: opt.Progress, parallelism: parallelism,
+		cache: map[string]cachedEvaluation{}, inflight: map[string]*evaluationCall{},
+	}, nil
+}
+
+func (s *searcher) searchPoints() ([]Point, error) {
 	ages := s.ages()
 	points := make([]Point, len(ages))
 	errs := make([]error, len(ages))
@@ -120,8 +132,8 @@ func Search(ctx context.Context, frozen FrozenInput, opt SearchOptions) (Result,
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
-			case <-ctx.Done():
-				errs[i] = ctx.Err()
+			case <-s.ctx.Done():
+				errs[i] = fmt.Errorf("wait to search frontier point: %w", s.ctx.Err())
 				return
 			}
 			points[i], errs[i] = s.searchPoint(age)
@@ -130,17 +142,21 @@ func Search(ctx context.Context, frozen FrozenInput, opt SearchOptions) (Result,
 	group.Wait()
 	for _, searchErr := range errs {
 		if searchErr != nil {
-			return Result{}, searchErr
+			return nil, searchErr
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
+	if err := s.ctx.Err(); err != nil {
+		return nil, fmt.Errorf("search frontier points: %w", err)
 	}
+	return points, nil
+}
+
+func (s *searcher) buildResult(baseline cachedEvaluation, points []Point) (Result, error) {
 	if s.progress != nil {
 		s.progress(s.evaluated, s.config.EvaluationBudget, "validating_result")
 	}
 	if err := s.ctx.Err(); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("validate frontier result: %w", err)
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].RetirementAge < points[j].RetirementAge })
 	evaluations := s.sortedEvaluations()
@@ -157,7 +173,7 @@ func Search(ctx context.Context, frozen FrozenInput, opt SearchOptions) (Result,
 		return Result{}, err
 	}
 	if err := s.ctx.Err(); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("complete frontier search: %w", err)
 	}
 	if s.progress != nil {
 		s.progress(s.evaluated, s.config.EvaluationBudget, "complete")
@@ -180,8 +196,11 @@ func validateFrozen(frozen FrozenInput) error {
 		config.RetirementAgeRange, config.Search, frozen.SourceSnapshot.Parameters.CurrentAge,
 		frozen.SourceSnapshot.Parameters.EndAge, frozen.SourceSnapshot.Parameters.SimulationRuns,
 		frozen.SourceSnapshot.HorizonMonths())
-	if err != nil || !reflect.DeepEqual(normalized, config) {
-		return fmt.Errorf("%w: normalized config cannot be reproduced: %v", ErrResultInconsistent, err)
+	if err != nil {
+		return fmt.Errorf("%w: normalized config cannot be reproduced: %w", ErrResultInconsistent, err)
+	}
+	if !reflect.DeepEqual(normalized, config) {
+		return fmt.Errorf("%w: normalized config differs from frozen config", ErrResultInconsistent)
 	}
 	return nil
 }
@@ -201,7 +220,7 @@ func (s *searcher) evaluateBaseline() (cachedEvaluation, error) {
 
 func (s *searcher) evaluate(candidate Candidate) (cachedEvaluation, error) {
 	if err := s.ctx.Err(); err != nil {
-		return cachedEvaluation{}, err
+		return cachedEvaluation{}, fmt.Errorf("evaluate frontier candidate: %w", err)
 	}
 	snapshot, err := BuildCandidate(s.base, s.config.FrontierType, candidate)
 	if err != nil {
@@ -246,7 +265,7 @@ func (s *searcher) evaluateSnapshot(snapshot simulation.InputSnapshot, candidate
 		s.mu.Unlock()
 		select {
 		case <-s.ctx.Done():
-			return cachedEvaluation{}, s.ctx.Err()
+			return cachedEvaluation{}, fmt.Errorf("wait for frontier evaluation: %w", s.ctx.Err())
 		case <-call.done:
 			return call.value, call.err
 		}
@@ -280,14 +299,14 @@ func (s *searcher) runEvaluation(snapshot simulation.InputSnapshot, snapshotHash
 	candidate Candidate, isSearch bool,
 ) (cachedEvaluation, error) {
 	if err := s.ctx.Err(); err != nil {
-		return cachedEvaluation{}, err
+		return cachedEvaluation{}, fmt.Errorf("run frontier evaluation: %w", err)
 	}
 	outcome, err := s.evaluator(s.ctx, &snapshot, s.config.EvaluationRuns)
 	if err != nil {
 		return cachedEvaluation{}, err
 	}
 	if err := s.ctx.Err(); err != nil {
-		return cachedEvaluation{}, err
+		return cachedEvaluation{}, fmt.Errorf("finish frontier evaluation: %w", err)
 	}
 	if outcome.Runs != s.config.EvaluationRuns || len(outcome.Outcomes) != s.config.EvaluationRuns ||
 		countSuccess(outcome.Outcomes) != outcome.SuccessCount {
@@ -318,33 +337,40 @@ func (s *searcher) runEvaluation(snapshot simulation.InputSnapshot, snapshotHash
 			}
 		}
 	}
-	return cachedEvaluation{evaluation: evaluation, outcomes: append([]bool(nil), outcome.Outcomes...),
-		candidate: candidate, isSearch: isSearch}, nil
+	return cachedEvaluation{
+		evaluation: evaluation, outcomes: append([]bool(nil), outcome.Outcomes...),
+		candidate: candidate, isSearch: isSearch,
+	}, nil
 }
 
 func (s *searcher) checkMonotonicityLocked(candidate cachedEvaluation) error {
 	for _, other := range s.cache {
-		if !other.isSearch || other.candidate.RetirementAge != candidate.candidate.RetirementAge ||
-			other.candidate.ValueMinor == candidate.candidate.ValueMinor {
-			continue
+		if err := s.checkMonotonicPair(other, candidate); err != nil {
+			return err
 		}
-		lower, higher := other, candidate
-		if lower.candidate.ValueMinor > higher.candidate.ValueMinor {
-			lower, higher = higher, lower
-		}
-		var better, worse cachedEvaluation
-		if s.config.FrontierType == TypeRetirementAgeMaxSpending {
-			better, worse = lower, higher
-		} else {
-			better, worse = higher, lower
-		}
-		if worse.evaluation.SuccessCount > better.evaluation.SuccessCount {
+	}
+	return nil
+}
+
+func (s *searcher) checkMonotonicPair(other, candidate cachedEvaluation) error {
+	if !other.isSearch || other.candidate.RetirementAge != candidate.candidate.RetirementAge ||
+		other.candidate.ValueMinor == candidate.candidate.ValueMinor {
+		return nil
+	}
+	lower, higher := other, candidate
+	if lower.candidate.ValueMinor > higher.candidate.ValueMinor {
+		lower, higher = higher, lower
+	}
+	better, worse := higher, lower
+	if s.config.FrontierType == TypeRetirementAgeMaxSpending {
+		better, worse = lower, higher
+	}
+	if worse.evaluation.SuccessCount > better.evaluation.SuccessCount {
+		return ErrMonotonicityViolated
+	}
+	for i := range better.outcomes {
+		if worse.outcomes[i] && !better.outcomes[i] {
 			return ErrMonotonicityViolated
-		}
-		for i := range better.outcomes {
-			if worse.outcomes[i] && !better.outcomes[i] {
-				return ErrMonotonicityViolated
-			}
 		}
 	}
 	return nil
@@ -500,112 +526,156 @@ func (s *searcher) sortedEvaluations() []Evaluation {
 }
 
 func validateResult(result Result, config Config, horizonMonths int) error {
-	if result.AlgorithmVersion != AlgorithmVersion || result.FrontierType != config.FrontierType ||
-		result.TargetProbability != config.TargetSuccessProbability || result.EvaluationRuns != config.EvaluationRuns ||
-		result.EvaluationBudget != config.EvaluationBudget || result.PathMonthBudget != config.PathMonthBudget ||
-		result.DistinctEvaluations < 1 || result.DistinctEvaluations > config.EvaluationBudget ||
-		result.DistinctEvaluations != len(result.Evaluations) ||
-		result.ActualPathMonths != int64(result.DistinctEvaluations)*int64(config.EvaluationRuns)*int64(horizonMonths) ||
-		result.ActualPathMonths > config.PathMonthBudget || len(result.Points) != config.AgePoints ||
-		result.DiscreteConnectionNote != "连线仅为视觉连接，不代表中间年龄或金额已计算。" ||
-		!validEvaluation(result.Baseline, config.TargetSuccessProbability, config.EvaluationRuns) {
+	if !validResultIdentity(result, config) || !validResultBudget(result, config, horizonMonths) ||
+		!validEvaluation(result.Baseline, config.TargetSuccessProbability, config.EvaluationRuns) ||
+		!validSortedEvaluations(result.Evaluations, config) {
 		return ErrResultInconsistent
 	}
-	seenSnapshots := make(map[string]struct{}, len(result.Evaluations))
-	for i, evaluation := range result.Evaluations {
-		if !validEvaluation(evaluation, config.TargetSuccessProbability, config.EvaluationRuns) {
-			return ErrResultInconsistent
-		}
-		if i > 0 {
-			previous := result.Evaluations[i-1]
-			if previous.RetirementAge > evaluation.RetirementAge ||
-				(previous.RetirementAge == evaluation.RetirementAge && previous.ValueMinor > evaluation.ValueMinor) ||
-				(previous.RetirementAge == evaluation.RetirementAge && previous.ValueMinor == evaluation.ValueMinor &&
-					previous.SnapshotHash > evaluation.SnapshotHash) {
-				return ErrResultInconsistent
-			}
-		}
-		if _, duplicate := seenSnapshots[evaluation.SnapshotHash]; duplicate {
-			return ErrResultInconsistent
-		}
-		seenSnapshots[evaluation.SnapshotHash] = struct{}{}
-	}
 	for i, point := range result.Points {
-		expectedAge := 0
-		if isAgeFrontier(config.FrontierType) {
-			expectedAge = config.RetirementAgeRange.Min + i
-		}
-		if point.RetirementAge != expectedAge || point.ID != PointID(config.FrontierType, expectedAge, point.ValueMinor) ||
-			point.ValueMinor < config.Search.MinMinor || point.ValueMinor > config.Search.MaxMinor ||
-			(point.ValueMinor-config.Search.MinMinor)%config.Search.StepMinor != 0 ||
-			point.Evaluation.RetirementAge != expectedAge || point.Evaluation.ValueMinor != point.ValueMinor ||
-			!validEvaluation(point.Evaluation, config.TargetSuccessProbability, config.EvaluationRuns) ||
-			point.Applicable != (isAgeFrontier(config.FrontierType) && point.Status != StatusNoFeasibleValue &&
-				point.Evaluation.MeetsTarget) {
-			return ErrResultInconsistent
-		}
-		switch point.Status {
-		case StatusBoundaryFound:
-			if point.WorseNeighbor == nil || !point.Evaluation.MeetsTarget || point.WorseNeighbor.MeetsTarget ||
-				abs64(point.Evaluation.ValueMinor-point.WorseNeighbor.ValueMinor) != config.Search.StepMinor ||
-				point.WorseNeighbor.RetirementAge != expectedAge ||
-				!validEvaluation(*point.WorseNeighbor, config.TargetSuccessProbability, config.EvaluationRuns) {
-				return ErrResultInconsistent
-			}
-			if config.FrontierType == TypeRetirementAgeMaxSpending {
-				if point.WorseNeighbor.ValueMinor != point.ValueMinor+config.Search.StepMinor {
-					return ErrResultInconsistent
-				}
-			} else if point.WorseNeighbor.ValueMinor != point.ValueMinor-config.Search.StepMinor {
-				return ErrResultInconsistent
-			}
-		case StatusEntireDomainFeasible:
-			if !point.Evaluation.MeetsTarget || point.WorseNeighbor != nil {
-				return ErrResultInconsistent
-			}
-			expected := config.Search.MinMinor
-			if config.FrontierType == TypeRetirementAgeMaxSpending {
-				expected = config.Search.MaxMinor
-			}
-			if point.ValueMinor != expected {
-				return ErrResultInconsistent
-			}
-		case StatusNoFeasibleValue:
-			if point.Evaluation.MeetsTarget || point.WorseNeighbor != nil || point.Applicable {
-				return ErrResultInconsistent
-			}
-			expected := config.Search.MaxMinor
-			if config.FrontierType == TypeRetirementAgeMaxSpending {
-				expected = config.Search.MinMinor
-			}
-			if point.ValueMinor != expected {
-				return ErrResultInconsistent
-			}
-		default:
-			return ErrResultInconsistent
-		}
-		if !isAgeFrontier(config.FrontierType) {
-			if point.SourceCurrentAssetsMinor == nil ||
-				(point.Status == StatusBoundaryFound && (point.GapMinor == nil || point.Achieved == nil)) ||
-				(point.Status != StatusBoundaryFound && (point.GapMinor != nil || point.Achieved != nil ||
-					point.CoastAchieved != nil)) {
-				return ErrResultInconsistent
-			}
-			if point.Status == StatusBoundaryFound {
-				if *point.GapMinor != point.ValueMinor-*point.SourceCurrentAssetsMinor ||
-					*point.Achieved != (*point.SourceCurrentAssetsMinor >= point.ValueMinor) ||
-					(config.FrontierType == TypeCoastRequiredAssets &&
-						(point.CoastAchieved == nil || *point.CoastAchieved != *point.Achieved)) ||
-					(config.FrontierType == TypeRequiredCurrentAssets && point.CoastAchieved != nil) {
-					return ErrResultInconsistent
-				}
-			}
-		} else if point.SourceCurrentAssetsMinor != nil || point.GapMinor != nil || point.Achieved != nil ||
-			point.CoastAchieved != nil {
+		if !validFrontierPoint(point, config, expectedPointAge(config, i)) {
 			return ErrResultInconsistent
 		}
 	}
 	return nil
+}
+
+func validResultIdentity(result Result, config Config) bool {
+	return result.AlgorithmVersion == AlgorithmVersion &&
+		result.FrontierType == config.FrontierType &&
+		result.TargetProbability == config.TargetSuccessProbability &&
+		result.EvaluationRuns == config.EvaluationRuns &&
+		result.DiscreteConnectionNote == "连线仅为视觉连接，不代表中间年龄或金额已计算。"
+}
+
+func validResultBudget(result Result, config Config, horizonMonths int) bool {
+	expectedPathMonths := int64(result.DistinctEvaluations) * int64(config.EvaluationRuns) * int64(horizonMonths)
+	return result.EvaluationBudget == config.EvaluationBudget &&
+		result.PathMonthBudget == config.PathMonthBudget &&
+		result.DistinctEvaluations >= 1 &&
+		result.DistinctEvaluations <= config.EvaluationBudget &&
+		result.DistinctEvaluations == len(result.Evaluations) &&
+		result.ActualPathMonths == expectedPathMonths &&
+		result.ActualPathMonths <= config.PathMonthBudget &&
+		len(result.Points) == config.AgePoints
+}
+
+func validSortedEvaluations(evaluations []Evaluation, config Config) bool {
+	seenSnapshots := make(map[string]struct{}, len(evaluations))
+	for i, evaluation := range evaluations {
+		if !validEvaluation(evaluation, config.TargetSuccessProbability, config.EvaluationRuns) {
+			return false
+		}
+		if i > 0 && evaluationLess(evaluation, evaluations[i-1]) {
+			return false
+		}
+		if _, duplicate := seenSnapshots[evaluation.SnapshotHash]; duplicate {
+			return false
+		}
+		seenSnapshots[evaluation.SnapshotHash] = struct{}{}
+	}
+	return true
+}
+
+func evaluationLess(left, right Evaluation) bool {
+	if left.RetirementAge != right.RetirementAge {
+		return left.RetirementAge < right.RetirementAge
+	}
+	if left.ValueMinor != right.ValueMinor {
+		return left.ValueMinor < right.ValueMinor
+	}
+	return left.SnapshotHash < right.SnapshotHash
+}
+
+func expectedPointAge(config Config, index int) int {
+	if !isAgeFrontier(config.FrontierType) {
+		return 0
+	}
+	return config.RetirementAgeRange.Min + index
+}
+
+func validFrontierPoint(point Point, config Config, expectedAge int) bool {
+	if !validFrontierPointCore(point, config, expectedAge) ||
+		!validFrontierPointStatus(point, config, expectedAge) {
+		return false
+	}
+	return validFrontierPointMetadata(point, config)
+}
+
+func validFrontierPointCore(point Point, config Config, expectedAge int) bool {
+	expectedApplicable := isAgeFrontier(config.FrontierType) &&
+		point.Status != StatusNoFeasibleValue && point.Evaluation.MeetsTarget
+	return point.RetirementAge == expectedAge &&
+		point.ID == PointID(config.FrontierType, expectedAge, point.ValueMinor) &&
+		point.ValueMinor >= config.Search.MinMinor && point.ValueMinor <= config.Search.MaxMinor &&
+		(point.ValueMinor-config.Search.MinMinor)%config.Search.StepMinor == 0 &&
+		point.Evaluation.RetirementAge == expectedAge && point.Evaluation.ValueMinor == point.ValueMinor &&
+		validEvaluation(point.Evaluation, config.TargetSuccessProbability, config.EvaluationRuns) &&
+		point.Applicable == expectedApplicable
+}
+
+func validFrontierPointStatus(point Point, config Config, expectedAge int) bool {
+	switch point.Status {
+	case StatusBoundaryFound:
+		return validBoundaryPoint(point, config, expectedAge)
+	case StatusEntireDomainFeasible:
+		expected := config.Search.MinMinor
+		if config.FrontierType == TypeRetirementAgeMaxSpending {
+			expected = config.Search.MaxMinor
+		}
+		return point.Evaluation.MeetsTarget && point.WorseNeighbor == nil && point.ValueMinor == expected
+	case StatusNoFeasibleValue:
+		expected := config.Search.MaxMinor
+		if config.FrontierType == TypeRetirementAgeMaxSpending {
+			expected = config.Search.MinMinor
+		}
+		return !point.Evaluation.MeetsTarget && point.WorseNeighbor == nil &&
+			!point.Applicable && point.ValueMinor == expected
+	default:
+		return false
+	}
+}
+
+func validBoundaryPoint(point Point, config Config, expectedAge int) bool {
+	if point.WorseNeighbor == nil || !point.Evaluation.MeetsTarget || point.WorseNeighbor.MeetsTarget ||
+		abs64(point.Evaluation.ValueMinor-point.WorseNeighbor.ValueMinor) != config.Search.StepMinor ||
+		point.WorseNeighbor.RetirementAge != expectedAge ||
+		!validEvaluation(*point.WorseNeighbor, config.TargetSuccessProbability, config.EvaluationRuns) {
+		return false
+	}
+	if config.FrontierType == TypeRetirementAgeMaxSpending {
+		return point.WorseNeighbor.ValueMinor == point.ValueMinor+config.Search.StepMinor
+	}
+	return point.WorseNeighbor.ValueMinor == point.ValueMinor-config.Search.StepMinor
+}
+
+func validFrontierPointMetadata(point Point, config Config) bool {
+	if isAgeFrontier(config.FrontierType) {
+		return validAgeFrontierPointMetadata(point)
+	}
+	return validAssetFrontierPointMetadata(point, config.FrontierType)
+}
+
+func validAgeFrontierPointMetadata(point Point) bool {
+	return point.SourceCurrentAssetsMinor == nil && point.GapMinor == nil && point.Achieved == nil &&
+		point.CoastAchieved == nil
+}
+
+func validAssetFrontierPointMetadata(point Point, frontierType string) bool {
+	if point.SourceCurrentAssetsMinor == nil {
+		return false
+	}
+	if point.Status != StatusBoundaryFound {
+		return point.GapMinor == nil && point.Achieved == nil && point.CoastAchieved == nil
+	}
+	if point.GapMinor == nil || point.Achieved == nil ||
+		*point.GapMinor != point.ValueMinor-*point.SourceCurrentAssetsMinor ||
+		*point.Achieved != (*point.SourceCurrentAssetsMinor >= point.ValueMinor) {
+		return false
+	}
+	if frontierType == TypeCoastRequiredAssets {
+		return point.CoastAchieved != nil && *point.CoastAchieved == *point.Achieved
+	}
+	return frontierType == TypeRequiredCurrentAssets && point.CoastAchieved == nil
 }
 
 func validEvaluation(evaluation Evaluation, target float64, runs int) bool {

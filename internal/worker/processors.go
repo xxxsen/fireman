@@ -153,7 +153,6 @@ func (p *ProcessorSet) firePlanImprovement(
 	})
 }
 
-//nolint:wrapcheck // Typed frontier errors are mapped to stable public task codes.
 func (p *ProcessorSet) fireFrontier(
 	ctx context.Context, item repository.WorkerTask, attempt Attempt,
 ) error {
@@ -168,13 +167,7 @@ func (p *ProcessorSet) fireFrontier(
 		return taskcore.NewError(taskcore.ErrPayloadInvalid,
 			"decode fire frontier input: "+err.Error(), nil)
 	}
-	identityHash, identityErr := frontier.HashFrozenIdentity(run.SourceSimulationRunID, frozen)
-	if identityErr != nil || identityHash != run.InputHash ||
-		run.AlgorithmVersion != frontier.AlgorithmVersion ||
-		run.FrontierType != frozen.Config.FrontierType || run.EvaluationRuns != frozen.Config.EvaluationRuns ||
-		run.SourceEngineVersion != frozen.SourceSnapshot.EngineVersion ||
-		run.SourceConfigHash != frozen.SourceSnapshot.ConfigHash ||
-		run.SourceMarketHash != frozen.SourceSnapshot.MarketSnapshotHash {
+	if !validFrontierIdentity(run, frozen) {
 		return p.failFrontier(ctx, run, "frontier_result_inconsistent",
 			frontier.ErrResultInconsistent)
 	}
@@ -183,22 +176,42 @@ func (p *ProcessorSet) fireFrontier(
 		Parallelism: p.frontierParallelism, Progress: attempt.Progress,
 	})
 	if err != nil {
-		switch {
-		case errors.Is(err, context.Canceled):
-			return context.Canceled
-		case errors.Is(err, frontier.ErrCandidateInvalid):
-			return p.failFrontier(ctx, run, "frontier_candidate_invalid", err)
-		case errors.Is(err, frontier.ErrMonotonicityViolated):
-			return p.failFrontier(ctx, run, "frontier_monotonicity_violated", err)
-		case errors.Is(err, frontier.ErrResultInconsistent):
-			return p.failFrontier(ctx, run, "frontier_result_inconsistent", err)
-		default:
-			return err
-		}
+		return p.frontierSearchError(ctx, run, err)
 	}
 	if attempt.Canceled() {
-		return context.Canceled
+		return fmt.Errorf("finish fire frontier search: %w", context.Canceled)
 	}
+	return p.completeFrontier(ctx, item, attempt, run, result)
+}
+
+func validFrontierIdentity(run repository.FireFrontierRun, frozen frontier.FrozenInput) bool {
+	identityHash, err := frontier.HashFrozenIdentity(run.SourceSimulationRunID, frozen)
+	return err == nil && identityHash == run.InputHash &&
+		run.AlgorithmVersion == frontier.AlgorithmVersion &&
+		run.FrontierType == frozen.Config.FrontierType && run.EvaluationRuns == frozen.Config.EvaluationRuns &&
+		run.SourceEngineVersion == frozen.SourceSnapshot.EngineVersion &&
+		run.SourceConfigHash == frozen.SourceSnapshot.ConfigHash &&
+		run.SourceMarketHash == frozen.SourceSnapshot.MarketSnapshotHash
+}
+
+func (p *ProcessorSet) frontierSearchError(ctx context.Context, run repository.FireFrontierRun, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("search fire frontier: %w", context.Canceled)
+	case errors.Is(err, frontier.ErrCandidateInvalid):
+		return p.failFrontier(ctx, run, "frontier_candidate_invalid", err)
+	case errors.Is(err, frontier.ErrMonotonicityViolated):
+		return p.failFrontier(ctx, run, "frontier_monotonicity_violated", err)
+	case errors.Is(err, frontier.ErrResultInconsistent):
+		return p.failFrontier(ctx, run, "frontier_result_inconsistent", err)
+	default:
+		return fmt.Errorf("search fire frontier: %w", err)
+	}
+}
+
+func (p *ProcessorSet) completeFrontier(ctx context.Context, item repository.WorkerTask,
+	attempt Attempt, run repository.FireFrontierRun, result frontier.Result,
+) error {
 	raw, err := frontier.MarshalResult(result)
 	if err != nil {
 		return fmt.Errorf("marshal fire frontier result: %w", err)
@@ -206,7 +219,7 @@ func (p *ProcessorSet) fireFrontier(
 	completedAt := time.Now().UnixMilli()
 	err = fdb.WithTx(ctx, p.db, func(tx *sql.Tx) error {
 		if err := p.frontiers.CompleteTx(ctx, tx, item.ID, raw, completedAt); err != nil {
-			return err
+			return fmt.Errorf("store fire frontier result: %w", err)
 		}
 		if err := p.complete(ctx, tx, item, attempt, "fire_frontier_run:"+run.ID,
 			map[string]any{"run_id": run.ID, "distinct_evaluations": result.DistinctEvaluations}); err != nil {
@@ -214,16 +227,20 @@ func (p *ProcessorSet) fireFrontier(
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE worker_tasks SET phase='complete' WHERE id=? AND status='complete'`,
 			item.ID); err != nil {
-			return err
+			return fmt.Errorf("mark fire frontier task complete: %w", err)
 		}
-		return p.frontiers.PruneTx(ctx, tx, run.PlanID, 20)
+		if err := p.frontiers.PruneTx(ctx, tx, run.PlanID, 20); err != nil {
+			return fmt.Errorf("prune fire frontier runs: %w", err)
+		}
+		return nil
 	})
-	if err == nil {
-		slog.Info("fire_frontier_worker_completed", "task_id", item.ID, "run_id", run.ID,
-			"source_run_id", run.SourceSimulationRunID, "input_hash", run.InputHash,
-			"distinct_evaluations", result.DistinctEvaluations)
+	if err != nil {
+		return fmt.Errorf("complete fire frontier transaction: %w", err)
 	}
-	return err
+	slog.Info("fire_frontier_worker_completed", "task_id", item.ID, "run_id", run.ID,
+		"source_run_id", run.SourceSimulationRunID, "input_hash", run.InputHash,
+		"distinct_evaluations", result.DistinctEvaluations)
+	return nil
 }
 
 func (p *ProcessorSet) failFrontier(_ context.Context, run repository.FireFrontierRun,
@@ -242,7 +259,10 @@ func (p *ProcessorSet) finalizeTerminalFrontier(ctx context.Context, tx *sql.Tx,
 	if item.Type != repository.WorkerTaskTypeFireFrontier {
 		return nil
 	}
-	return p.frontiers.MarkTerminalAndPruneByTaskTx(ctx, tx, item.ID, at, 20)
+	if err := p.frontiers.MarkTerminalAndPruneByTaskTx(ctx, tx, item.ID, at, 20); err != nil {
+		return fmt.Errorf("mark terminal fire frontier: %w", err)
+	}
+	return nil
 }
 
 //nolint:wrapcheck // Coordinator errors retain lease and cancellation codes for the supervisor.

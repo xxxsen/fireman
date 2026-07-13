@@ -68,7 +68,7 @@ func TestFireFrontierFourTypesAndApplyEndToEnd(t *testing.T) {
 		}
 		waitImprovementTask(t, db, created["task_id"].(string))
 		detail := getImprovementJSON(t, srv,
-			"/api/v1/fire-frontier-runs/"+created["run_id"].(string), http.StatusOK)
+			"/api/v1/fire-frontier-runs/"+created["run_id"].(string))
 		if detail["status"] != repository.WorkerTaskStatusComplete || detail["phase"] != "complete" || detail["result"] == nil {
 			t.Fatalf("frontier detail=%#v", detail)
 		}
@@ -229,7 +229,7 @@ func TestFireFrontierFourTypesAndApplyEndToEnd(t *testing.T) {
 	}
 
 	afterDelete := getImprovementJSON(t, srv,
-		"/api/v1/fire-frontier-runs/"+ageRun["id"].(string), http.StatusOK)
+		"/api/v1/fire-frontier-runs/"+ageRun["id"].(string))
 	resultAfterDelete, _ := json.Marshal(afterDelete["result"])
 	if afterDelete["source_available"] != false || string(resultBeforeDelete) != string(resultAfterDelete) {
 		t.Fatalf("source deletion changed history: %#v", afterDelete)
@@ -445,7 +445,7 @@ func TestFireFrontierPreviewRejectsNoOpAssetNoneUnknownAndIncomplete(t *testing.
 		created := postFrontierJSON(t, srv, "/api/v1/plans/"+planID+"/fire-frontier-runs",
 			request, http.StatusAccepted, key)
 		waitImprovementTask(t, db, created["task_id"].(string))
-		return getImprovementJSON(t, srv, "/api/v1/fire-frontier-runs/"+created["run_id"].(string), http.StatusOK)
+		return getImprovementJSON(t, srv, "/api/v1/fire-frontier-runs/"+created["run_id"].(string))
 	}
 
 	noOpRun := createAndLoad("no-op", frontierRequest(sourceID, "retirement_age_min_savings",

@@ -256,7 +256,6 @@ func (c *Coordinator) Release(ctx context.Context, id string, req OwnedRequest) 
 	return c.finishOrRetryOwned(ctx, id, req, "released", "worker_shutdown", "worker released task", true, nil)
 }
 
-//nolint:gocognit,gocyclo,lll,wrapcheck // Acceptance keeps validation, idempotency and CAS together.
 func (c *Coordinator) Report(ctx context.Context, id string, req ResultRequest) (repository.WorkerTask, error) {
 	return c.ReportWithTerminalHook(ctx, id, req, nil)
 }
@@ -344,15 +343,12 @@ func (c *Coordinator) ReportWithTerminalHook(ctx context.Context, id string, req
 	return updated, nil
 }
 
-//nolint:gocognit,gocritic,gocyclo,lll,nestif,wrapcheck // Terminal and retry states commit atomically.
+//nolint:gocognit,gocyclo,lll,wrapcheck // Terminal and retry states commit atomically.
 func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req OwnedRequest,
 	outcome, code, message string, retryable bool, hook TerminalHook,
 ) (repository.WorkerTask, error) {
 	tokenHash := repository.HashClaimToken(req.ClaimToken)
 	now := c.now().UnixMilli()
-	if len(message) > maxErrorMessage {
-		message = message[:maxErrorMessage]
-	}
 	var updated repository.WorkerTask
 	err := fdb.WithTx(ctx, c.db, func(tx *sql.Tx) error {
 		current, err := c.repo.GetByIDTx(ctx, tx, id)
@@ -374,37 +370,12 @@ func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req Own
 		if !leaseActive(current, now) {
 			return NewError(ErrLeaseLost, "task lease was lost", nil)
 		}
-		status := repository.WorkerTaskStatusFailed
-		availableAt := current.AvailableAt
-		attemptOutcome := outcome
-		if outcome == "canceled" || current.CancelRequested {
-			status = repository.WorkerTaskStatusCanceled
-			if code == "" {
-				code = repository.WorkerTaskErrorCanceled
-				message = "task canceled by user"
-			}
-		} else if retryable && current.AttemptCount < current.MaxAttempts {
-			status = repository.WorkerTaskStatusPending
-			availableAt = now + retryBackoff(current.AttemptCount).Milliseconds()
-			attemptOutcome = "retry_scheduled"
-		} else if retryable {
-			if code != "" {
-				message = code + ": " + message
-			}
-			code = ErrRetryExhausted
-			attemptOutcome = "retry_exhausted"
-		}
-		if len(message) > maxErrorMessage {
-			message = message[:maxErrorMessage]
-		}
-		finished := any(nil)
-		if repository.IsTerminalWorkerTaskStatus(status) {
-			finished = now
-		}
+		decision := decideOwnedFinish(current, outcome, code, message, retryable, now)
 		result, err := tx.ExecContext(ctx, `UPDATE worker_tasks SET status=?,available_at=?,claimed_by=?,claim_token_hash=?,
 			attempt_started_at=NULL,heartbeat_at=NULL,lease_expires_at=NULL,progress_current=0,phase='',
 			error_code=?,error_message=?,finished_at=?,updated_at=? WHERE id=? AND status=? AND claimed_by=? AND claim_token_hash=?`,
-			status, availableAt, "", "", code, message, finished, now, id,
+			decision.status, decision.availableAt, "", "", decision.code, decision.message,
+			decision.finishedAt, now, id,
 			repository.WorkerTaskStatusRunning, req.WorkerID, tokenHash)
 		if err != nil {
 			return err
@@ -414,7 +385,8 @@ func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req Own
 			return NewError(ErrLeaseLost, "task result CAS failed", nil)
 		}
 		attemptResult, err := tx.ExecContext(ctx, `UPDATE worker_task_attempts SET released_at=?,outcome=?,report_outcome=?,error_code=?,error_message=?
-			WHERE task_id=? AND attempt_no=?`, now, attemptOutcome, outcome, code, message, id, current.AttemptCount)
+			WHERE task_id=? AND attempt_no=?`, now, decision.attemptOutcome, outcome,
+			decision.code, decision.message, id, current.AttemptCount)
 		if err := requireOne(attemptResult, err, ErrLeaseLost, "task result attempt was not found"); err != nil {
 			return err
 		}
@@ -432,6 +404,52 @@ func (c *Coordinator) finishOrRetryOwned(ctx context.Context, id string, req Own
 	}
 	c.publish(updated)
 	return updated, nil
+}
+
+type ownedFinishDecision struct {
+	status         string
+	availableAt    int64
+	attemptOutcome string
+	code           string
+	message        string
+	finishedAt     any
+}
+
+func decideOwnedFinish(current repository.WorkerTask, outcome, code, message string,
+	retryable bool, now int64,
+) ownedFinishDecision {
+	decision := ownedFinishDecision{
+		status:         repository.WorkerTaskStatusFailed,
+		availableAt:    current.AvailableAt,
+		attemptOutcome: outcome,
+		code:           code,
+		message:        message,
+	}
+	switch {
+	case outcome == "canceled" || current.CancelRequested:
+		decision.status = repository.WorkerTaskStatusCanceled
+		if decision.code == "" {
+			decision.code = repository.WorkerTaskErrorCanceled
+			decision.message = "task canceled by user"
+		}
+	case retryable && current.AttemptCount < current.MaxAttempts:
+		decision.status = repository.WorkerTaskStatusPending
+		decision.availableAt = now + retryBackoff(current.AttemptCount).Milliseconds()
+		decision.attemptOutcome = "retry_scheduled"
+	case retryable:
+		if decision.code != "" {
+			decision.message = decision.code + ": " + decision.message
+		}
+		decision.code = ErrRetryExhausted
+		decision.attemptOutcome = "retry_exhausted"
+	}
+	if len(decision.message) > maxErrorMessage {
+		decision.message = decision.message[:maxErrorMessage]
+	}
+	if repository.IsTerminalWorkerTaskStatus(decision.status) {
+		decision.finishedAt = now
+	}
+	return decision
 }
 
 func retryBackoff(attempt int) time.Duration {

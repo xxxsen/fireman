@@ -78,7 +78,11 @@ func ValidateConfigAssets(snapshot simulation.InputSnapshot, config domain.Confi
 	return nil
 }
 
-func BuildCandidate(base simulation.InputSnapshot, frontierType string, candidate Candidate) (simulation.InputSnapshot, error) {
+func BuildCandidate(
+	base simulation.InputSnapshot,
+	frontierType string,
+	candidate Candidate,
+) (simulation.InputSnapshot, error) {
 	out, err := cloneSnapshot(base)
 	if err != nil {
 		return simulation.InputSnapshot{}, err
@@ -134,7 +138,9 @@ func ApplyConfigCandidate(base domain.ConfigHashInput, frontierType string, cand
 			key, _ := out.Holdings[i]["asset_key"].(string)
 			amount, ok := assetAmounts[key]
 			if !ok {
-				return domain.ConfigHashInput{}, fmt.Errorf("%w: holding %q missing from frozen assets", ErrCandidateInvalid, key)
+				return domain.ConfigHashInput{}, fmt.Errorf(
+					"%w: holding %q missing from frozen assets", ErrCandidateInvalid, key,
+				)
 			}
 			out.Holdings[i]["current_amount_minor"] = amount
 		}
@@ -211,45 +217,16 @@ func scaleAssets(snapshot *simulation.InputSnapshot, total int64) error {
 	if total < 1 {
 		return fmt.Errorf("%w: candidate assets must be positive", ErrCandidateInvalid)
 	}
-	originalTotal := int64(0)
-	for _, asset := range snapshot.Assets {
-		if asset.InitialMinor < 0 || asset.InitialMinor > math.MaxInt64-originalTotal {
-			return fmt.Errorf("%w: invalid original asset amounts", ErrCandidateInvalid)
-		}
-		originalTotal += asset.InitialMinor
+	originalTotal, err := originalAssetTotal(snapshot.Assets)
+	if err != nil {
+		return err
 	}
 	if originalTotal != snapshot.Parameters.TotalAssetsMinor {
 		return fmt.Errorf("%w: frozen asset amounts do not equal total assets", ErrCandidateInvalid)
 	}
-	var weights []*big.Rat
-	eligible := make([]bool, len(snapshot.Assets))
-	if originalTotal > 0 {
-		weights = make([]*big.Rat, len(snapshot.Assets))
-		for i := range snapshot.Assets {
-			weights[i] = new(big.Rat).SetFrac(big.NewInt(snapshot.Assets[i].InitialMinor), big.NewInt(originalTotal))
-			eligible[i] = snapshot.Assets[i].InitialMinor > 0
-		}
-	} else {
-		weights = make([]*big.Rat, len(snapshot.Assets))
-		sum := new(big.Rat)
-		for i := range snapshot.Assets {
-			weight := snapshot.Assets[i].TargetWeight
-			if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
-				return fmt.Errorf("%w: invalid target weights for zero-total fallback", ErrCandidateInvalid)
-			}
-			weights[i] = new(big.Rat).SetFloat64(weight)
-			sum.Add(sum, weights[i])
-			eligible[i] = weight > 0
-		}
-		one := new(big.Rat).SetInt64(1)
-		delta := new(big.Rat).Sub(sum, one)
-		abs, _ := new(big.Float).Abs(new(big.Float).SetRat(delta)).Float64()
-		if sum.Sign() <= 0 || abs > 1e-9 {
-			return fmt.Errorf("%w: target weights must sum to 1 for zero-total fallback", ErrCandidateInvalid)
-		}
-		for i := range weights {
-			weights[i] = new(big.Rat).Quo(weights[i], sum)
-		}
+	weights, eligible, err := assetWeights(snapshot.Assets, originalTotal)
+	if err != nil {
+		return err
 	}
 	amounts, err := largestRemainder(total, snapshot.Assets, weights, eligible)
 	if err != nil {
@@ -260,6 +237,48 @@ func scaleAssets(snapshot *simulation.InputSnapshot, total int64) error {
 	}
 	snapshot.Parameters.TotalAssetsMinor = total
 	return nil
+}
+
+func originalAssetTotal(assets []simulation.SnapshotAsset) (int64, error) {
+	var total int64
+	for _, asset := range assets {
+		if asset.InitialMinor < 0 || asset.InitialMinor > math.MaxInt64-total {
+			return 0, fmt.Errorf("%w: invalid original asset amounts", ErrCandidateInvalid)
+		}
+		total += asset.InitialMinor
+	}
+	return total, nil
+}
+
+func assetWeights(assets []simulation.SnapshotAsset, originalTotal int64) ([]*big.Rat, []bool, error) {
+	weights := make([]*big.Rat, len(assets))
+	eligible := make([]bool, len(assets))
+	if originalTotal > 0 {
+		for i := range assets {
+			weights[i] = new(big.Rat).SetFrac(big.NewInt(assets[i].InitialMinor), big.NewInt(originalTotal))
+			eligible[i] = assets[i].InitialMinor > 0
+		}
+		return weights, eligible, nil
+	}
+	sum := new(big.Rat)
+	for i := range assets {
+		weight := assets[i].TargetWeight
+		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+			return nil, nil, fmt.Errorf("%w: invalid target weights for zero-total fallback", ErrCandidateInvalid)
+		}
+		weights[i] = new(big.Rat).SetFloat64(weight)
+		sum.Add(sum, weights[i])
+		eligible[i] = weight > 0
+	}
+	delta := new(big.Rat).Sub(sum, new(big.Rat).SetInt64(1))
+	abs, _ := new(big.Float).Abs(new(big.Float).SetRat(delta)).Float64()
+	if sum.Sign() <= 0 || abs > 1e-9 {
+		return nil, nil, fmt.Errorf("%w: target weights must sum to 1 for zero-total fallback", ErrCandidateInvalid)
+	}
+	for i := range weights {
+		weights[i] = new(big.Rat).Quo(weights[i], sum)
+	}
+	return weights, eligible, nil
 }
 
 type remainderItem struct {
@@ -274,28 +293,9 @@ func largestRemainder(total int64, assets []simulation.SnapshotAsset, weights []
 	if len(assets) == 0 || len(weights) != len(assets) || len(eligible) != len(assets) {
 		return nil, fmt.Errorf("%w: no allocatable frozen assets", ErrCandidateInvalid)
 	}
-	amounts := make([]int64, len(assets))
-	items := make([]remainderItem, 0, len(assets))
-	allocated := int64(0)
-	for i, weight := range weights {
-		if weight == nil || weight.Sign() < 0 {
-			return nil, ErrCandidateInvalid
-		}
-		raw := new(big.Rat).Mul(new(big.Rat).SetInt64(total), weight)
-		base := new(big.Int).Quo(raw.Num(), raw.Denom())
-		if !base.IsInt64() {
-			return nil, ErrCandidateInvalid
-		}
-		amounts[i] = base.Int64()
-		allocated += amounts[i]
-		if eligible[i] {
-			items = append(items, remainderItem{index: i, assetKey: assets[i].AssetKey,
-				remainder: new(big.Rat).Sub(raw, new(big.Rat).SetInt(base))})
-		}
-	}
-	remaining := total - allocated
-	if remaining < 0 || remaining > int64(len(items)) {
-		return nil, fmt.Errorf("%w: asset allocation does not conserve total", ErrCandidateInvalid)
+	amounts, items, remaining, err := floorAssetAllocations(total, assets, weights, eligible)
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if cmp := items[i].remainder.Cmp(items[j].remainder); cmp != 0 {
@@ -306,17 +306,55 @@ func largestRemainder(total int64, assets []simulation.SnapshotAsset, weights []
 	for i := int64(0); i < remaining; i++ {
 		amounts[items[i].index]++
 	}
-	check := int64(0)
-	for _, amount := range amounts {
-		if amount < 0 || amount > math.MaxInt64-check {
-			return nil, ErrCandidateInvalid
-		}
-		check += amount
-	}
-	if check != total {
+	if !allocationConservesTotal(amounts, total) {
 		return nil, ErrCandidateInvalid
 	}
 	return amounts, nil
+}
+
+func floorAssetAllocations(
+	total int64,
+	assets []simulation.SnapshotAsset,
+	weights []*big.Rat,
+	eligible []bool,
+) ([]int64, []remainderItem, int64, error) {
+	amounts := make([]int64, len(assets))
+	items := make([]remainderItem, 0, len(assets))
+	allocated := int64(0)
+	for i, weight := range weights {
+		if weight == nil || weight.Sign() < 0 {
+			return nil, nil, 0, ErrCandidateInvalid
+		}
+		raw := new(big.Rat).Mul(new(big.Rat).SetInt64(total), weight)
+		base := new(big.Int).Quo(raw.Num(), raw.Denom())
+		if !base.IsInt64() {
+			return nil, nil, 0, ErrCandidateInvalid
+		}
+		amounts[i] = base.Int64()
+		allocated += amounts[i]
+		if eligible[i] {
+			items = append(items, remainderItem{
+				index: i, assetKey: assets[i].AssetKey,
+				remainder: new(big.Rat).Sub(raw, new(big.Rat).SetInt(base)),
+			})
+		}
+	}
+	remaining := total - allocated
+	if remaining < 0 || remaining > int64(len(items)) {
+		return nil, nil, 0, fmt.Errorf("%w: asset allocation does not conserve total", ErrCandidateInvalid)
+	}
+	return amounts, items, remaining, nil
+}
+
+func allocationConservesTotal(amounts []int64, total int64) bool {
+	var check int64
+	for _, amount := range amounts {
+		if amount < 0 || amount > math.MaxInt64-check {
+			return false
+		}
+		check += amount
+	}
+	return check == total
 }
 
 func assetAmountMap(snapshot simulation.InputSnapshot) map[string]int64 {
