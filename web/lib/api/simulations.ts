@@ -76,8 +76,7 @@ export type ReadinessReason =
   | "history_missing"
   | "history_sync_running"
   | "simulation_insufficient_history"
-  | "provider_data_anomaly"
-  | "asset_identity_conflict";
+  | "provider_data_anomaly";
 
 /**
  * One plan holding whose market asset blocks simulation. Not every blocked
@@ -90,7 +89,6 @@ export interface BlockingAsset {
   name: string;
   reason: ReadinessReason | string;
   message?: string;
-  candidate_asset_keys?: string[];
 }
 
 export interface SimulationReadiness {
@@ -113,7 +111,6 @@ export interface SyncMissingBlockedEntry {
   asset_key: string;
   reason: ReadinessReason | string;
   message?: string;
-  candidate_asset_keys?: string[];
 }
 
 export interface SyncMissingHistoryResult {

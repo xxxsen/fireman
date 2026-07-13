@@ -206,31 +206,6 @@ func (r *MarketAssetRepo) GetByKeyTx(ctx context.Context, tx *sql.Tx, assetKey s
 	return scanMarketAsset(row)
 }
 
-// ListAssetsByMarketSymbol returns every active directory row sharing one
-// market + symbol pair. Used to detect asset identity conflicts where the
-// same code exists under several instrument types.
-func (r *MarketAssetRepo) ListAssetsByMarketSymbol(
-	ctx context.Context, market, symbol string,
-) ([]MarketAsset, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+marketAssetColumns+` FROM market_assets
-		WHERE market=? AND symbol=? AND active=1
-		ORDER BY instrument_type ASC, asset_key ASC`, market, symbol)
-	if err != nil {
-		return nil, wrapSQL("list market assets by market+symbol", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []MarketAsset
-	for rows.Next() {
-		a, err := scanMarketAsset(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, wrapSQL("iterate market assets by market+symbol", rows.Err())
-}
-
 // MarketAssetSearchOptions filters directory search. Search never touches the
 // network; it reads local rows only. SymbolQuery matches only
 // symbol/region_code+symbol; NameQuery matches only name.

@@ -249,6 +249,45 @@ CREATE TABLE analysis_results (
   FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT,
   FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
 );
+CREATE TABLE fire_plan_improvement_runs (
+  id                       TEXT    PRIMARY KEY,
+  task_id                  TEXT    NOT NULL UNIQUE,
+  plan_id                  TEXT    NOT NULL,
+  source_simulation_run_id TEXT    NOT NULL,
+  input_hash               TEXT    NOT NULL,
+  algorithm_version        TEXT    NOT NULL,
+  source_engine_version    TEXT    NOT NULL,
+  source_config_hash       TEXT    NOT NULL,
+  source_market_hash       TEXT    NOT NULL,
+  config_json              TEXT    NOT NULL,
+  input_snapshot_json      TEXT    NOT NULL,
+  result_json              TEXT    NOT NULL DEFAULT '{}',
+  created_at               INTEGER NOT NULL,
+  completed_at             INTEGER,
+  FOREIGN KEY(task_id) REFERENCES worker_tasks(id) ON DELETE RESTRICT,
+  FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_fire_plan_improvement_runs_plan
+ON fire_plan_improvement_runs(plan_id, created_at DESC);
+CREATE INDEX idx_fire_plan_improvement_runs_input
+ON fire_plan_improvement_runs(plan_id, input_hash, created_at DESC);
+CREATE TABLE fire_plan_improvement_applications (
+  id                    TEXT    PRIMARY KEY,
+  improvement_run_id    TEXT    NOT NULL,
+  proposal_id           TEXT    NOT NULL,
+  plan_id               TEXT    NOT NULL,
+  before_config_version INTEGER NOT NULL,
+  after_config_version  INTEGER NOT NULL,
+  preview_hash          TEXT    NOT NULL,
+  before_json           TEXT    NOT NULL,
+  after_json            TEXT    NOT NULL,
+  applied_at            INTEGER NOT NULL,
+  UNIQUE(improvement_run_id, proposal_id),
+  FOREIGN KEY(improvement_run_id) REFERENCES fire_plan_improvement_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_fire_plan_improvement_applications_plan
+ON fire_plan_improvement_applications(plan_id, applied_at DESC);
 CREATE TABLE worker_task_idempotency_keys (
   scope_type      TEXT NOT NULL,
   scope_id        TEXT NOT NULL,

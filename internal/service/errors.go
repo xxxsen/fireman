@@ -47,6 +47,12 @@ func newErr(code, message string, details map[string]any) *AppError {
 	return &AppError{Code: code, Message: message, Details: details}
 }
 
+// NewPublicError lets infrastructure adapters preserve a stable business error
+// code without exposing service internals.
+func NewPublicError(code, message string, details map[string]any) *AppError {
+	return newErr(code, message, details)
+}
+
 func isUniqueConstraintErr(err error) bool {
 	if err == nil {
 		return false

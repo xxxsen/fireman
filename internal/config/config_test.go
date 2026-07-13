@@ -34,6 +34,10 @@ func TestLoad_DefaultsFromEmptyJSON(t *testing.T) {
 		t.Errorf("expected default research optimization concurrency 4, got %d",
 			cfg.ResearchOptimizationConcurrency)
 	}
+	if cfg.FirePlanImprovementConcurrency != 4 {
+		t.Errorf("expected FIRE plan improvement concurrency 4, got %d",
+			cfg.FirePlanImprovementConcurrency)
+	}
 	if cfg.AutoUpdateScanIntervalMinutes != 60 {
 		t.Errorf("expected default auto-update interval 60, got %d", cfg.AutoUpdateScanIntervalMinutes)
 	}
@@ -75,7 +79,8 @@ func TestLoad_OverridesAndValidation(t *testing.T) {
 		"timezone": "Asia/Shanghai",
 		"log_level": "debug",
 		"worker_concurrency": 2,
-		"research_optimization_concurrency": 6
+		"research_optimization_concurrency": 6,
+		"fire_plan_improvement_concurrency": 8
 	}`)
 	cfg, err := Load(path)
 	if err != nil {
@@ -90,6 +95,10 @@ func TestLoad_OverridesAndValidation(t *testing.T) {
 	if cfg.ResearchOptimizationConcurrency != 6 {
 		t.Errorf("expected research optimization concurrency 6, got %d",
 			cfg.ResearchOptimizationConcurrency)
+	}
+	if cfg.FirePlanImprovementConcurrency != 8 {
+		t.Errorf("expected FIRE plan improvement concurrency 8, got %d",
+			cfg.FirePlanImprovementConcurrency)
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected log level debug, got %q", cfg.LogLevel)
@@ -115,6 +124,17 @@ func TestLoad_RejectsInvalidResearchOptimizationConcurrency(t *testing.T) {
 			path := writeConfigFile(t, `{"research_optimization_concurrency":`+value+`}`)
 			if _, err := Load(path); err == nil {
 				t.Errorf("expected research optimization concurrency %s to fail", value)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidFirePlanImprovementConcurrency(t *testing.T) {
+	for _, value := range []string{"0", "17"} {
+		t.Run(value, func(t *testing.T) {
+			path := writeConfigFile(t, `{"fire_plan_improvement_concurrency":`+value+`}`)
+			if _, err := Load(path); err == nil {
+				t.Errorf("expected FIRE plan improvement concurrency %s to fail", value)
 			}
 		})
 	}

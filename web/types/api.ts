@@ -349,6 +349,184 @@ export interface SimulationSummary {
   correlation_disclaimer?: string;
 }
 
+export interface ImprovementIssue {
+  code: string;
+  message: string;
+}
+
+export interface ImprovementParameters {
+  retirement_age: number;
+  end_age: number;
+  annual_savings_minor: number;
+  annual_spending_minor: number;
+  annual_retirement_income_minor: number;
+}
+
+export interface ImprovementReadiness {
+  ready: boolean;
+  source_run?: {
+    id: string;
+    engine_version: string;
+    runs: number;
+    success_probability: number;
+    success_wilson_low: number;
+    success_wilson_high: number;
+    created_at: number;
+  };
+  current_parameters: ImprovementParameters;
+  blocking_reasons: ImprovementIssue[];
+  warnings: ImprovementIssue[];
+}
+
+export interface ImprovementConfig {
+  target_success_probability: number;
+  retirement_delay?: { max_delay_years: number } | null;
+  savings_increase?: { max_increase_minor: number; step_minor: number } | null;
+  spending_reduction?: { max_reduction_minor: number; step_minor: number } | null;
+  retirement_income_increase?: { max_increase_minor: number; step_minor: number } | null;
+}
+
+export interface ImprovementEvaluation {
+  adjustments: {
+    delay_years: number;
+    savings_increase_minor: number;
+    spending_reduction_minor: number;
+    retirement_income_increase_minor: number;
+  };
+  runs: number;
+  success_count: number;
+  success_probability: number;
+  success_wilson_low: number;
+  success_wilson_high: number;
+  terminal_p50_minor: number;
+  max_drawdown_p95: number;
+  improved_path_count: number;
+  regressed_path_count: number;
+  unchanged_success_count: number;
+  unchanged_failure_count: number;
+  meets_target: boolean;
+  candidate_config_hash: string;
+  candidate_snapshot_hash: string;
+}
+
+export interface ImprovementProposal {
+  id: string;
+  recipe: string;
+  delay_years: number;
+  savings_increase_minor: number;
+  spending_reduction_minor: number;
+  retirement_income_increase_minor: number;
+  result_retirement_age: number;
+  result_annual_savings_minor: number;
+  result_annual_spending_minor: number;
+  result_annual_retirement_income_minor: number;
+  success_probability: number;
+  success_wilson_low: number;
+  success_wilson_high: number;
+  terminal_p50_minor: number;
+  max_drawdown_p95: number;
+  improved_path_count: number;
+  regressed_path_count: number;
+  candidate_config_hash: string;
+  candidate_snapshot_hash: string;
+}
+
+export interface ImprovementResult {
+  algorithm_version: string;
+  target_probability: number;
+  baseline: ImprovementEvaluation;
+  target_reached: boolean;
+  proposals: ImprovementProposal[];
+  best_attainable?: ImprovementProposal | null;
+  recipes: { recipe: string; status: string; proposal_id?: string }[];
+  evaluations: ImprovementEvaluation[];
+  evaluated_count: number;
+  warnings?: ImprovementIssue[];
+}
+
+export interface ImprovementApplication {
+  id: string;
+  improvement_run_id: string;
+  proposal_id: string;
+  plan_id: string;
+  before_config_version: number;
+  after_config_version: number;
+  preview_hash: string;
+  before_json: string;
+  after_json: string;
+  applied_at: number;
+}
+
+export interface ImprovementRun {
+  id: string;
+  task_id: string;
+  plan_id: string;
+  source_simulation_run_id: string;
+  input_hash: string;
+  algorithm_version: string;
+  source_engine_version: string;
+  source_config_hash: string;
+  source_market_hash: string;
+  config: ImprovementConfig;
+  result?: ImprovementResult;
+  status: Task["status"];
+  progress_current: number;
+  progress_total: number;
+  phase: string;
+  attempt_count: number;
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  completed_at?: number | null;
+  result_stale: boolean;
+  application?: ImprovementApplication | null;
+}
+
+export interface ImprovementRunSummary {
+  id: string;
+  task_id: string;
+  source_simulation_run_id: string;
+  target_probability: number;
+  status: Task["status"];
+  progress_current: number;
+  progress_total: number;
+  phase: string;
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  completed_at?: number | null;
+  target_reached?: boolean;
+  best_attainable?: ImprovementProposal | null;
+  result_stale: boolean;
+}
+
+export interface ImprovementPreview {
+  run_id: string;
+  proposal_id: string;
+  expected_plan_config_version: number;
+  before: ImprovementParameterValues;
+  after: ImprovementParameterValues;
+  unchanged: string[];
+  source_run_id: string;
+  algorithm_version: string;
+  target_probability: number;
+  success_probability: number;
+  success_wilson_low: number;
+  success_wilson_high: number;
+  retirement_income_delayed: boolean;
+  current_config_hash: string;
+  current_market_hash: string;
+  preview_hash: string;
+  preview_expires_at: number;
+}
+
+export interface ImprovementParameterValues {
+  retirement_age: number;
+  annual_savings_minor: number;
+  annual_spending_minor: number;
+  annual_retirement_income_minor: number;
+}
+
 /** RunAssumption is the frozen return-calibration + risk-model audit of a run. */
 export interface RunAssumption {
   engine_version: string;

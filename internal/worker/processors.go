@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	fdb "github.com/fireman/fireman/internal/db"
+	"github.com/fireman/fireman/internal/improvement"
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/resourcedb"
 	"github.com/fireman/fireman/internal/sensitivity"
@@ -25,14 +27,16 @@ type Attempt struct {
 }
 
 type ProcessorSet struct {
-	db          *sql.DB
-	coordinator *taskcore.Coordinator
-	sims        *repository.SimulationRepo
-	analysis    *repository.AnalysisRepo
-	research    *service.ResearchService
-	autoUpdates *service.AutoUpdateService
-	resources   *resourcedb.DB
-	processors  map[string]func(context.Context, repository.WorkerTask, Attempt) error
+	db                     *sql.DB
+	coordinator            *taskcore.Coordinator
+	sims                   *repository.SimulationRepo
+	analysis               *repository.AnalysisRepo
+	improvements           *repository.FirePlanImprovementRepo
+	research               *service.ResearchService
+	autoUpdates            *service.AutoUpdateService
+	resources              *resourcedb.DB
+	improvementParallelism int
+	processors             map[string]func(context.Context, repository.WorkerTask, Attempt) error
 }
 
 func NewProcessorSet(
@@ -45,13 +49,15 @@ func NewProcessorSet(
 	}
 	set := &ProcessorSet{
 		db: db, coordinator: coordinator, sims: repository.NewSimulationRepo(db),
-		analysis: repository.NewAnalysisRepo(db), research: research, autoUpdates: autoUpdates,
-		resources: resourceStore,
+		analysis: repository.NewAnalysisRepo(db), improvements: repository.NewFirePlanImprovementRepo(db),
+		research: research, autoUpdates: autoUpdates, resources: resourceStore,
+		improvementParallelism: 4,
 	}
 	set.processors = map[string]func(context.Context, repository.WorkerTask, Attempt) error{
 		repository.WorkerTaskTypeSimulation:           set.simulation,
 		repository.WorkerTaskTypeStress:               set.stress,
 		repository.WorkerTaskTypeSensitivity:          set.sensitivity,
+		repository.WorkerTaskTypeFirePlanImprovement:  set.firePlanImprovement,
 		repository.WorkerTaskTypeResearchBacktest:     set.researchBacktest,
 		repository.WorkerTaskTypeResearchOptimization: set.researchOptimization,
 		repository.WorkerTaskTypeAutoUpdateScan:       set.autoUpdateScan,
@@ -66,6 +72,12 @@ func NewProcessorSet(
 		}
 	}
 	return set
+}
+
+func (p *ProcessorSet) SetImprovementParallelism(value int) {
+	if value >= 1 && value <= 16 {
+		p.improvementParallelism = value
+	}
 }
 
 //nolint:lll // Registry dispatch includes the unsupported type in the protocol error detail.
@@ -83,6 +95,49 @@ func (p *ProcessorSet) stress(ctx context.Context, item repository.WorkerTask, a
 
 func (p *ProcessorSet) sensitivity(ctx context.Context, item repository.WorkerTask, attempt Attempt) error {
 	return p.analysisTask(ctx, item, attempt, repository.AnalysisTypeSensitivity)
+}
+
+//nolint:wrapcheck // Typed search and transaction errors must reach the supervisor classifier.
+func (p *ProcessorSet) firePlanImprovement(
+	ctx context.Context, item repository.WorkerTask, attempt Attempt,
+) error {
+	run, err := p.improvements.GetByTaskID(ctx, item.ID)
+	if err != nil {
+		return fmt.Errorf("load fire plan improvement input: %w", err)
+	}
+	var frozen improvement.FrozenInput
+	if err := json.Unmarshal([]byte(run.InputSnapshotJSON), &frozen); err != nil {
+		return taskcore.NewError(taskcore.ErrPayloadInvalid,
+			"decode fire plan improvement input: "+err.Error(), nil)
+	}
+	attempt.Progress(0, improvement.SearchUpperBound(frozen.Config), "searching")
+	result, err := improvement.Search(ctx, run.ID, frozen, improvement.SearchOptions{
+		Parallelism: p.improvementParallelism, Progress: attempt.Progress,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			return context.Canceled
+		case errors.Is(err, improvement.ErrMonotonicityViolation):
+			return service.NewPublicError("improvement_monotonicity_violation", err.Error(), nil)
+		case errors.Is(err, improvement.ErrResultInconsistent), errors.Is(err, improvement.ErrOutcomeBitsInvalid):
+			return service.NewPublicError("improvement_result_inconsistent", err.Error(), nil)
+		default:
+			return err
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal fire plan improvement result: %w", err)
+	}
+	completedAt := time.Now().UnixMilli()
+	return fdb.WithTx(ctx, p.db, func(tx *sql.Tx) error {
+		if err := p.improvements.CompleteTx(ctx, tx, item.ID, raw, completedAt); err != nil {
+			return err
+		}
+		return p.complete(ctx, tx, item, attempt, "fire_plan_improvement_run:"+run.ID,
+			map[string]any{"run_id": run.ID, "target_reached": result.TargetReached})
+	})
 }
 
 //nolint:wrapcheck // Coordinator errors retain lease and cancellation codes for the supervisor.

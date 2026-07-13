@@ -143,6 +143,30 @@ describe("OverviewPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the plan improver for a current completed simulation", async () => {
+    mockDashboard.data = {
+      ...mockDashboard.data,
+      latest_simulation: {
+        id: "sim_1",
+        task_status: "complete",
+        result_stale: false,
+        summary_json: {
+          success_probability: 0.72,
+          success_wilson_low: 0.69,
+          success_wilson_high: 0.75,
+        },
+      },
+    };
+    renderPage();
+
+    expect(await screen.findByText("FIRE 状态")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "改善计划" })).toHaveAttribute(
+      "href",
+      "/plans/plan_1/improvement?simulation_run_id=sim_1",
+    );
+    expect(screen.getByText(/95% 区间 69% - 75%/)).toBeInTheDocument();
+  });
+
   it("shows a running banner while the tracked simulation job is in progress", async () => {
     mockOverviewSearchParams.set(new URLSearchParams("task_id=job_1"));
     mockJobState.value = {

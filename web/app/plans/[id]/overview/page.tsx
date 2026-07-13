@@ -8,6 +8,7 @@ import { RegionAllocationBarChart } from "@/components/charts/RegionAllocationBa
 import { AssetClassRegionGroups } from "@/components/charts/AssetClassRegionGroups";
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { Alert } from "@/components/ui/Alert";
+import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageSkeleton } from "@/components/ui/Skeleton";
@@ -214,6 +215,42 @@ export default function OverviewPage() {
           </div>
         </dl>
       </section>
+
+      {data.latest_simulation && (
+        <section className="border-b border-line pb-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="flex items-center text-lg font-medium text-ink">
+                FIRE 状态
+                <MetricHelp termKey="fire_success_rate" />
+              </h2>
+              <p className="mt-1 text-sm text-ink-muted">
+                最新模拟成功率 {formatPercent(
+                  data.latest_simulation.summary_json.success_probability ?? 0,
+                )}
+                {data.latest_simulation.summary_json.success_wilson_low !== undefined &&
+                  data.latest_simulation.summary_json.success_wilson_high !== undefined &&
+                  `，95% 区间 ${formatPercent(data.latest_simulation.summary_json.success_wilson_low)} - ${formatPercent(data.latest_simulation.summary_json.success_wilson_high)}`}
+              </p>
+            </div>
+            <Button
+              href={`/plans/${planId}/improvement?simulation_run_id=${encodeURIComponent(data.latest_simulation.id)}`}
+              disabled={
+                data.latest_simulation.result_stale ||
+                data.latest_simulation.task_status !== "complete"
+              }
+              title={
+                data.latest_simulation.result_stale ||
+                data.latest_simulation.task_status !== "complete"
+                  ? "先运行当前计划模拟"
+                  : undefined
+              }
+            >
+              改善计划
+            </Button>
+          </div>
+        </section>
+      )}
 
       {!enabledHoldings ? (
         <EmptyState

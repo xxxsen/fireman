@@ -14,7 +14,6 @@ import (
 
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/testutil"
-	"github.com/fireman/fireman/internal/worker"
 )
 
 func setupHKIntegration(t *testing.T) (*httptest.Server, *sql.DB, *http.Client) {

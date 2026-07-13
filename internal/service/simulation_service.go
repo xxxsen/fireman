@@ -141,6 +141,87 @@ func (s *SimulationService) RunConfigHash(ctx context.Context, runID string) (st
 	return snap.ConfigHash, true
 }
 
+// CurrentMarketSnapshotHashReadOnly rebuilds only the market-data identity for
+// a frozen source snapshot. It reads existing holding/FX snapshots and never
+// creates projections or repairs missing data.
+func (s *SimulationService) CurrentMarketSnapshotHashReadOnly(
+	ctx context.Context, planID string, source simulation.InputSnapshot,
+) (string, error) {
+	return s.currentMarketSnapshotHash(ctx, nil, planID, source)
+}
+
+// CurrentMarketSnapshotHashReadOnlyTx repeats the market identity check inside
+// the caller's transaction snapshot, immediately before a guarded write.
+func (s *SimulationService) CurrentMarketSnapshotHashReadOnlyTx(
+	ctx context.Context, tx *sql.Tx, planID string, source simulation.InputSnapshot,
+) (string, error) {
+	return s.currentMarketSnapshotHash(ctx, tx, planID, source)
+}
+
+//nolint:gocognit,gocyclo // DB and transaction readers share the same ordered identity checks.
+func (s *SimulationService) currentMarketSnapshotHash(
+	ctx context.Context, tx *sql.Tx, planID string, source simulation.InputSnapshot,
+) (string, error) {
+	var plan repository.Plan
+	var err error
+	if tx == nil {
+		plan, err = s.plans.GetByID(ctx, planID)
+	} else {
+		plan, err = s.plans.GetByIDTx(ctx, tx, planID)
+	}
+	if err != nil {
+		return "", wrapRepo("load plan for market identity", err)
+	}
+	var holdings []repository.PlanHolding
+	if tx == nil {
+		holdings, err = s.holdings.ListByPlan(ctx, planID)
+	} else {
+		holdings, err = s.holdings.ListByPlanTx(ctx, tx, planID)
+	}
+	if err != nil {
+		return "", wrapRepo("list holdings for market identity", err)
+	}
+	byID := make(map[string]repository.PlanHolding, len(holdings))
+	for _, holding := range holdings {
+		byID[holding.ID] = holding
+	}
+	assets := make([]simulation.SnapshotAsset, 0, len(source.Assets))
+	for _, asset := range source.Assets {
+		holding, ok := byID[asset.HoldingID]
+		if !ok || !holding.Enabled || holding.AssetKey != asset.AssetKey || holding.SimulationSnapshotID == "" {
+			return "", newErr("improvement_source_market_changed",
+				"source holding is no longer ready for simulation", map[string]any{"holding_id": asset.HoldingID})
+		}
+		var snapshot repository.SimulationSnapshot
+		if tx == nil {
+			snapshot, err = s.snapRepo.GetByID(ctx, holding.SimulationSnapshotID)
+		} else {
+			snapshot, err = s.snapRepo.GetByIDTx(ctx, tx, holding.SimulationSnapshotID)
+		}
+		if err != nil {
+			return "", newErr("improvement_source_market_changed",
+				"current simulation snapshot is unavailable", map[string]any{"holding_id": asset.HoldingID})
+		}
+		asset.SnapshotID = holding.SimulationSnapshotID
+		asset.SourceHash = snapshot.SourceHash
+		if asset.FXTreatment == simulation.FXTreatmentSeparateFactor && asset.Currency != plan.BaseCurrency {
+			var metrics marketdata.SnapshotMetrics
+			if tx == nil {
+				metrics, err = s.fx.Metrics(ctx, asset.Currency, plan.BaseCurrency, plan.ValuationDate)
+			} else {
+				metrics, err = s.fx.MetricsTx(ctx, tx, asset.Currency, plan.BaseCurrency, plan.ValuationDate)
+			}
+			if err != nil || metrics.SourceHash == "" || !metrics.SimulationEligible {
+				return "", newErr("improvement_source_market_changed",
+					"current FX snapshot is unavailable", map[string]any{"currency": asset.Currency})
+			}
+			asset.FXSnapshotID = metrics.SourceHash
+		}
+		assets = append(assets, asset)
+	}
+	return simulation.MarketHashFromAssets(assets), nil
+}
+
 // analysisResultStale reports whether an attached analysis (stress/sensitivity)
 // is stale relative to the current plan config. It compares the config hash
 // frozen in the owning Monte Carlo run's snapshot against the current plan hash;
@@ -294,7 +375,7 @@ func (s *SimulationService) idempotentSimulation(
 		return CreateSimulationResponse{}, false, nil
 	}
 	existing, found, err := findExistingIdempotentTask(
-		ctx, s.tasks, "plan", req.PlanID, repository.WorkerTaskTypeSimulation,
+		ctx, s.tasks, req.PlanID, repository.WorkerTaskTypeSimulation,
 		req.IdempotencyKey, inputHash,
 		"find simulation idempotency",
 	)

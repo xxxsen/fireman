@@ -202,7 +202,19 @@ type SnapshotMonth struct {
 }
 
 func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapshot, error) {
-	row := r.db.QueryRowContext(ctx, `
+	return r.getByID(ctx, r.db, id)
+}
+
+func (r *SnapshotRepo) GetByIDTx(ctx context.Context, tx *sql.Tx, id string) (SimulationSnapshot, error) {
+	return r.getByID(ctx, tx, id)
+}
+
+func (r *SnapshotRepo) getByID(ctx context.Context, q interface {
+	rowQuerier
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, id string,
+) (SimulationSnapshot, error) {
+	row := q.QueryRowContext(ctx, `
 		SELECT id, asset_key, plan_id, inclusion_date, as_of_date,
 			window_start, window_end, complete_year_start, complete_year_end,
 			complete_year_count, daily_observation_count, monthly_return_count,
@@ -215,7 +227,7 @@ func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapsh
 	if err != nil {
 		return SimulationSnapshot{}, err
 	}
-	years, err := r.listYears(ctx, id)
+	years, err := r.listYears(ctx, q, id)
 	if err != nil {
 		return SimulationSnapshot{}, err
 	}
@@ -223,8 +235,8 @@ func (r *SnapshotRepo) GetByID(ctx context.Context, id string) (SimulationSnapsh
 	return snap, nil
 }
 
-func (r *SnapshotRepo) listYears(ctx context.Context, snapshotID string) ([]SnapshotYear, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func (r *SnapshotRepo) listYears(ctx context.Context, q rowQuerier, snapshotID string) ([]SnapshotYear, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT year, annual_return, start_date, end_date, observations
 		FROM market_asset_simulation_snapshot_years
 		WHERE snapshot_id=? ORDER BY year`, snapshotID)

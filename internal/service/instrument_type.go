@@ -1,12 +1,13 @@
 package service
 
 // This file is the single source of truth for instrument-type presentation:
-// the Chinese label and the identity-candidate ordering priority. The API
+// the Chinese label and same-code search-result ordering priority. The API
 // exposes both on asset search results (instrument_type_label /
 // instrument_type_priority) so the web UI never re-implements the mapping.
 
-// instrumentTypePriority orders identity-conflict candidates: mutual funds
-// first, then exchange funds and stocks, then everything else.
+// instrumentTypePriority orders same-code search results: mutual funds first,
+// then exchange funds and stocks, then everything else. The ordering only
+// helps users distinguish choices and never changes a saved holding.
 func instrumentTypePriority(t string) int {
 	switch t {
 	case "cn_mutual_fund":

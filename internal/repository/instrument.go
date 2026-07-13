@@ -54,7 +54,20 @@ func (r *InstrumentRepo) GetByID(ctx context.Context, id string) (InstrumentReco
 func (r *InstrumentRepo) FindByKey(ctx context.Context, market, instrumentType, code,
 	adjustPolicy string,
 ) (InstrumentRecord, error) {
-	row := r.db.QueryRowContext(ctx, `
+	return r.findByKey(ctx, r.db, market, instrumentType, code, adjustPolicy)
+}
+
+func (r *InstrumentRepo) FindByKeyTx(ctx context.Context, tx *sql.Tx, market, instrumentType, code,
+	adjustPolicy string,
+) (InstrumentRecord, error) {
+	return r.findByKey(ctx, tx, market, instrumentType, code, adjustPolicy)
+}
+
+func (r *InstrumentRepo) findByKey(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, market, instrumentType, code, adjustPolicy string,
+) (InstrumentRecord, error) {
+	row := q.QueryRowContext(ctx, `
 		SELECT `+instrumentBaseColumns+`
 		FROM instruments
 		WHERE market=? AND instrument_type=? AND code=? AND adjust_policy=?`,

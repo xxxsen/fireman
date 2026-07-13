@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -45,6 +46,18 @@ func NewFXResolver(inst *repository.InstrumentRepo, market *repository.MarketDat
 func (r *FXResolver) Metrics(
 	ctx context.Context, assetCurrency, baseCurrency, asOfDate string,
 ) (SnapshotMetrics, error) {
+	return r.metrics(ctx, nil, assetCurrency, baseCurrency, asOfDate)
+}
+
+func (r *FXResolver) MetricsTx(
+	ctx context.Context, tx *sql.Tx, assetCurrency, baseCurrency, asOfDate string,
+) (SnapshotMetrics, error) {
+	return r.metrics(ctx, tx, assetCurrency, baseCurrency, asOfDate)
+}
+
+func (r *FXResolver) metrics(
+	ctx context.Context, tx *sql.Tx, assetCurrency, baseCurrency, asOfDate string,
+) (SnapshotMetrics, error) {
 	code, err := FXPairCode(assetCurrency, baseCurrency)
 	if err != nil {
 		return SnapshotMetrics{}, err
@@ -53,11 +66,21 @@ func (r *FXResolver) Metrics(
 		return SnapshotMetrics{}, nil
 	}
 
-	inst, err := r.inst.FindByKey(ctx, "SYSTEM", "fx_rate", code, "none")
+	var inst repository.InstrumentRecord
+	if tx == nil {
+		inst, err = r.inst.FindByKey(ctx, "SYSTEM", "fx_rate", code, "none")
+	} else {
+		inst, err = r.inst.FindByKeyTx(ctx, tx, "SYSTEM", "fx_rate", code, "none")
+	}
 	if err != nil {
 		return SnapshotMetrics{}, fmt.Errorf("fx instrument %s: %w", code, err)
 	}
-	rows, err := r.market.ListByInstrument(ctx, inst.ID)
+	var rows []repository.MarketDataPoint
+	if tx == nil {
+		rows, err = r.market.ListByInstrument(ctx, inst.ID)
+	} else {
+		rows, err = r.market.ListByInstrumentTx(ctx, tx, inst.ID)
+	}
 	if err != nil {
 		return SnapshotMetrics{}, fmt.Errorf("list fx market data: %w", err)
 	}

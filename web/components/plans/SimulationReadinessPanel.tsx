@@ -20,14 +20,13 @@ const REASON_LABELS: Record<string, string> = {
   history_sync_running: "历史同步中",
   simulation_insufficient_history: "历史已同步，但完整年度不足，暂不可模拟",
   provider_data_anomaly: "历史已同步，但数据质量异常，暂不可模拟",
-  asset_identity_conflict: "资产身份可能选错，当前历史不可用于模拟",
   foreign_cash_not_supported: "外币现金暂不支持 FIRE 模拟",
 };
 
 /**
  * Polling only follows in-flight history sync tasks: terminal blocked states
- * (identity conflict, data anomaly, short history) do not poll — they need
- * user action, not waiting. Exported for tests.
+ * (data anomaly, short history) do not poll because waiting cannot resolve
+ * them. Exported for tests.
  */
 export function readinessPollInterval(
   data: SimulationReadiness | undefined,
@@ -64,19 +63,8 @@ export function buildSyncResultMessage(res: SyncMissingHistoryResult): string {
   return parts.length ? parts.join("，") : "所有资产历史已就绪，正在重新检查…";
 }
 
-/** Per-reason action links: fix-in-place for conflicts, inspect for anomalies. */
-function BlockingItemActions({ planId, item }: { planId: string; item: BlockingAsset }) {
-  if (item.reason === "asset_identity_conflict") {
-    return (
-      <Link
-        href={`/plans/${planId}/asset-refresh`}
-        className="text-brand underline-offset-2 hover:underline"
-        data-testid="readiness-go-asset-refresh"
-      >
-        去持仓校正
-      </Link>
-    );
-  }
+/** Readiness diagnoses the selected asset's own data; inspect it in place. */
+function BlockingItemActions({ item }: { item: BlockingAsset }) {
   return (
     <Link
       href={`/assets/market/${encodeURIComponent(item.asset_key)}`}
@@ -180,11 +168,11 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
               <span className="font-medium">{item.name || item.symbol || item.asset_key}</span>
               {item.symbol && <span className="text-ink-muted">{item.symbol}</span>}
               <span>{REASON_LABELS[item.reason] ?? item.reason}</span>
-              <BlockingItemActions planId={planId} item={item} />
+              <BlockingItemActions item={item} />
             </span>
             {/* history_missing / history_sync_running are fully covered by
                 their labels and the active-task line; only richer diagnoses
-                (conflict advice, anomaly detail) need the backend message. */}
+                (such as anomaly details) need the backend message. */}
             {item.message &&
               item.reason !== "history_missing" &&
               item.reason !== "history_sync_running" && (

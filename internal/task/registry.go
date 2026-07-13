@@ -78,6 +78,7 @@ func DefaultRegistry() *Registry {
 		goDefinition(repository.WorkerTaskTypeSimulation, "simulation_run:"),
 		goDefinition(repository.WorkerTaskTypeStress, "analysis_result:"),
 		goDefinition(repository.WorkerTaskTypeSensitivity, "analysis_result:"),
+		goDefinition(repository.WorkerTaskTypeFirePlanImprovement, "fire_plan_improvement_run:"),
 		goDefinition(repository.WorkerTaskTypeResearchBacktest, "research_backtest_run:"),
 		goDefinition(repository.WorkerTaskTypeResearchOptimization, "research_optimization_run:"),
 		{

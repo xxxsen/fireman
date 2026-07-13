@@ -16,6 +16,7 @@ const TABS = [
  */
 const EXTRA_TAB_SEGMENTS: Record<string, readonly string[]> = {
   rebalance: ["asset-refresh"],
+  settings: ["improvement"],
 };
 
 export function PlanTabs({

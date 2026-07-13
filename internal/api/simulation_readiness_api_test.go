@@ -122,12 +122,10 @@ func TestSimulationReadinessRejectsForeignCash(t *testing.T) {
 	}
 }
 
-// TestSimulationReadiness_IdentityConflict reproduces the 150015 case: the
-// plan holds the exchange-fund identity whose synced history is anomalous
-// while a mutual-fund identity with the same code and name exists. Readiness
-// must flag the identity conflict with the mutual-fund candidate, and
-// one-click sync must block instead of creating a useless task.
-func TestSimulationReadiness_IdentityConflict(t *testing.T) {
+// TestSimulationReadiness_UserSelectedIdentityIsPreserved reproduces the
+// 150015 same-code case. The plan explicitly holds the exchange identity, so
+// readiness reports its anomalous data without inferring a mutual-fund choice.
+func TestSimulationReadiness_UserSelectedIdentityIsPreserved(t *testing.T) {
 	srv, db, client := testRouterWithDB(t)
 
 	exchange := marketAssetSeed{
@@ -157,18 +155,14 @@ func TestSimulationReadiness_IdentityConflict(t *testing.T) {
 		t.Fatalf("blocking_assets=%v want 1 item", blocking)
 	}
 	item := blocking[0].(map[string]any)
-	if item["reason"] != "asset_identity_conflict" {
-		t.Fatalf("reason=%v want asset_identity_conflict", item["reason"])
+	if item["reason"] != "provider_data_anomaly" {
+		t.Fatalf("reason=%v want provider_data_anomaly", item["reason"])
 	}
-	candidates := item["candidate_asset_keys"].([]any)
-	if len(candidates) != 1 || candidates[0] != mutual.AssetKey {
-		t.Fatalf("candidate_asset_keys=%v want [%s]", candidates, mutual.AssetKey)
-	}
-	if msg, _ := item["message"].(string); msg == "" {
-		t.Fatal("identity conflict must carry a user-facing message")
+	if _, ok := item["candidate_asset_keys"]; ok {
+		t.Fatalf("readiness must not suggest a different user identity: %v", item)
 	}
 
-	// One-click sync must not create a task for the conflicted asset.
+	// One-click sync must not create a task for already-synced anomalous data.
 	syncOut := postSyncMissing(t, client, srv.URL, plan.ID)
 	if created := syncOut["created"].([]any); len(created) != 0 {
 		t.Fatalf("created=%v want empty", created)
@@ -181,8 +175,8 @@ func TestSimulationReadiness_IdentityConflict(t *testing.T) {
 		t.Fatalf("blocked=%v want 1 item", blocked)
 	}
 	be := blocked[0].(map[string]any)
-	if be["reason"] != "asset_identity_conflict" {
-		t.Fatalf("blocked reason=%v want asset_identity_conflict", be["reason"])
+	if be["reason"] != "provider_data_anomaly" {
+		t.Fatalf("blocked reason=%v want provider_data_anomaly", be["reason"])
 	}
 	var taskCount int
 	if err := db.QueryRowContext(context.Background(),
@@ -194,9 +188,9 @@ func TestSimulationReadiness_IdentityConflict(t *testing.T) {
 	}
 }
 
-// TestSimulationReadiness_ProviderDataAnomalyWithoutCandidate verifies the
-// anomaly reason when no better identity exists for the code.
-func TestSimulationReadiness_ProviderDataAnomalyWithoutCandidate(t *testing.T) {
+// TestSimulationReadiness_ProviderDataAnomaly verifies the terminal anomaly
+// reason for already-synced data.
+func TestSimulationReadiness_ProviderDataAnomaly(t *testing.T) {
 	srv, db, client := testRouterWithDB(t)
 
 	seed := cnETFAssetSeed()
@@ -214,10 +208,6 @@ func TestSimulationReadiness_ProviderDataAnomalyWithoutCandidate(t *testing.T) {
 	if item["reason"] != "provider_data_anomaly" {
 		t.Fatalf("reason=%v want provider_data_anomaly", item["reason"])
 	}
-	if _, hasCand := item["candidate_asset_keys"]; hasCand {
-		t.Fatalf("no candidates expected, got %v", item["candidate_asset_keys"])
-	}
-
 	syncOut := postSyncMissing(t, client, srv.URL, plan.ID)
 	blocked := syncOut["blocked"].([]any)
 	if len(blocked) != 1 || blocked[0].(map[string]any)["reason"] != "provider_data_anomaly" {
@@ -253,6 +243,38 @@ func TestSimulationReadiness_InsufficientHistoryIsNotMissing(t *testing.T) {
 	}
 	if created := syncOut["created"].([]any); len(created) != 0 {
 		t.Fatalf("created=%v want empty", created)
+	}
+}
+
+// TestSimulationReadiness_SameCodeFundIdentityDoesNotOverrideShortHistory
+// reproduces 510500: the catalog legitimately contains exchange and mutual
+// fund rows with the same code and name. Without a data anomaly this is not
+// evidence that the user chose the wrong identity.
+func TestSimulationReadiness_SameCodeFundIdentityDoesNotOverrideShortHistory(t *testing.T) {
+	srv, db, client := testRouterWithDB(t)
+
+	exchange := marketAssetSeed{
+		AssetKey: "CN|cn_exchange_fund|sh|510500", Market: "CN",
+		InstrumentType: "cn_exchange_fund", RegionCode: "sh", Symbol: "510500",
+		Name: "中证500ETF南方", InstrumentKind: "etf", Currency: "CNY",
+		PointType: "adjusted_close", Points: buildShortFixturePoints(),
+	}
+	seedMarketAssetWithHistory(t, db, exchange)
+	mutual := marketAssetSeed{
+		AssetKey: "CN|cn_mutual_fund||510500", Market: "CN",
+		InstrumentType: "cn_mutual_fund", Symbol: "510500",
+		Name: "中证500ETF南方", InstrumentKind: "指数型-股票", Currency: "CNY",
+		PointType: "nav", Points: nil,
+	}
+	seedMarketAssetWithHistory(t, db, mutual)
+
+	plan := createTestPlan(t, db)
+	insertHoldingRow(t, db, plan.ID, exchange.AssetKey)
+
+	readiness := getReadiness(t, client, srv.URL, plan.ID)
+	item := readiness["blocking_assets"].([]any)[0].(map[string]any)
+	if item["reason"] != "simulation_insufficient_history" {
+		t.Fatalf("reason=%v want simulation_insufficient_history", item["reason"])
 	}
 }
 
@@ -306,6 +328,25 @@ func TestSimulationReadiness_MissingThenRunning(t *testing.T) {
 	}
 	if existing := syncOut["existing"].([]any); len(existing) != 1 {
 		t.Fatalf("second sync existing=%v want 1 item", existing)
+	}
+
+	// A worker-reported result still awaits Go-side finalization in
+	// pre_complete. It must remain in-flight so the UI keeps polling instead
+	// of rendering a terminal diagnosis from not-yet-committed business data.
+	taskID := created[0].(map[string]any)["task"].(map[string]any)["id"].(string)
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE worker_tasks SET status='pre_complete', updated_at=? WHERE id=?`,
+		time.Now().UnixMilli(), taskID); err != nil {
+		t.Fatal(err)
+	}
+	readiness = getReadiness(t, client, srv.URL, plan.ID)
+	item = readiness["blocking_assets"].([]any)[0].(map[string]any)
+	if item["reason"] != "history_sync_running" {
+		t.Fatalf("pre_complete reason=%v want history_sync_running", item["reason"])
+	}
+	active := readiness["active_tasks"].([]any)
+	if len(active) != 1 || active[0].(map[string]any)["status"] != "pre_complete" {
+		t.Fatalf("pre_complete active_tasks=%v want one pre_complete task", active)
 	}
 }
 

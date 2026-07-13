@@ -21,6 +21,9 @@ var (
 	errResearchOptimizationConcurrency = errors.New(
 		"research_optimization_concurrency must be within [1, 32]",
 	)
+	errFirePlanImprovementConcurrency = errors.New(
+		"fire_plan_improvement_concurrency must be within [1, 16]",
+	)
 	errAutoUpdateScanInterval = errors.New("auto_update_scan_interval_minutes must be within 5..1440")
 )
 
@@ -37,6 +40,7 @@ type Config struct {
 	LogLevel                        string `json:"log_level"`
 	WorkerConcurrency               int    `json:"worker_concurrency"`
 	ResearchOptimizationConcurrency int    `json:"research_optimization_concurrency"`
+	FirePlanImprovementConcurrency  int    `json:"fire_plan_improvement_concurrency"`
 	AutoUpdateScanIntervalMinutes   int    `json:"auto_update_scan_interval_minutes"`
 }
 
@@ -49,6 +53,7 @@ const (
 	defaultLogLevel                        = "info"
 	defaultWorkerConcurrency               = 1
 	defaultResearchOptimizationConcurrency = 4
+	defaultFirePlanImprovementConcurrency  = 4
 	defaultAutoUpdateScanIntervalMinutes   = 60
 )
 
@@ -63,6 +68,7 @@ func Default() Config {
 		LogLevel:                        defaultLogLevel,
 		WorkerConcurrency:               defaultWorkerConcurrency,
 		ResearchOptimizationConcurrency: defaultResearchOptimizationConcurrency,
+		FirePlanImprovementConcurrency:  defaultFirePlanImprovementConcurrency,
 		AutoUpdateScanIntervalMinutes:   defaultAutoUpdateScanIntervalMinutes,
 	}
 }
@@ -117,6 +123,10 @@ func validate(cfg Config) (Config, error) {
 	if cfg.ResearchOptimizationConcurrency < 1 || cfg.ResearchOptimizationConcurrency > 32 {
 		return Config{}, fmt.Errorf("%w, got %d", errResearchOptimizationConcurrency,
 			cfg.ResearchOptimizationConcurrency)
+	}
+	if cfg.FirePlanImprovementConcurrency < 1 || cfg.FirePlanImprovementConcurrency > 16 {
+		return Config{}, fmt.Errorf("%w, got %d", errFirePlanImprovementConcurrency,
+			cfg.FirePlanImprovementConcurrency)
 	}
 	if cfg.AutoUpdateScanIntervalMinutes < 5 || cfg.AutoUpdateScanIntervalMinutes > 1440 {
 		return Config{}, fmt.Errorf("%w, got %d", errAutoUpdateScanInterval, cfg.AutoUpdateScanIntervalMinutes)

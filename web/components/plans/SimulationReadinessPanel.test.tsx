@@ -95,36 +95,6 @@ describe("SimulationReadinessPanel", () => {
     expect(await screen.findByText("未同步历史数据")).toBeInTheDocument();
   });
 
-  it("labels asset_identity_conflict as a wrong identity, not missing history", async () => {
-    getSimulationReadiness.mockResolvedValue(
-      makeReadiness({
-        blocking_assets: [
-          {
-            holding_id: "hold_1",
-            asset_key: "CN|cn_exchange_fund|sz|150015",
-            symbol: "150015",
-            name: "银河银富货币B",
-            reason: "asset_identity_conflict",
-            message: "该代码存在多个资产身份，请切换为「公募基金」身份",
-            candidate_asset_keys: ["CN|cn_mutual_fund||150015"],
-          },
-        ],
-      }),
-    );
-    renderPanel();
-    expect(
-      await screen.findByText("资产身份可能选错，当前历史不可用于模拟"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("未同步历史数据")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("该代码存在多个资产身份，请切换为「公募基金」身份"),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("readiness-go-asset-refresh")).toHaveAttribute(
-      "href",
-      "/plans/plan_1/asset-refresh",
-    );
-  });
-
   it("labels provider_data_anomaly and links to the asset detail page", async () => {
     getSimulationReadiness.mockResolvedValue(
       makeReadiness({
@@ -178,7 +148,7 @@ describe("SimulationReadinessPanel", () => {
             asset_key: "CN|cn_exchange_fund|sz|150015",
             symbol: "150015",
             name: "银河银富货币B",
-            reason: "asset_identity_conflict",
+            reason: "provider_data_anomaly",
           },
         ],
       }),
@@ -188,8 +158,8 @@ describe("SimulationReadinessPanel", () => {
         blocked: [
           {
             asset_key: "CN|cn_exchange_fund|sz|150015",
-            reason: "asset_identity_conflict",
-            message: "请切换资产身份",
+            reason: "provider_data_anomaly",
+            message: "历史指标异常",
           },
         ],
       }),
@@ -290,7 +260,7 @@ describe("SimulationReadinessPanel", () => {
             asset_key: "CN|cn_exchange_fund|sz|150015",
             symbol: "150015",
             name: "银河银富货币B",
-            reason: "asset_identity_conflict",
+            reason: "provider_data_anomaly",
           },
         ],
       }),
@@ -300,8 +270,8 @@ describe("SimulationReadinessPanel", () => {
         blocked: [
           {
             asset_key: "CN|cn_exchange_fund|sz|150015",
-            reason: "asset_identity_conflict",
-            message: "请切换资产身份",
+            reason: "provider_data_anomaly",
+            message: "历史指标异常",
           },
         ],
       }),
@@ -340,7 +310,7 @@ describe("readinessPollInterval", () => {
               asset_key: "CN|cn_exchange_fund|sz|150015",
               symbol: "150015",
               name: "银河银富货币B",
-              reason: "asset_identity_conflict",
+              reason: "provider_data_anomaly",
             },
           ],
         }),

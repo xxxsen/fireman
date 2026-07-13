@@ -77,7 +77,7 @@ func (s *StressService) Create(ctx context.Context, req CreateStressTestRequest)
 
 	if req.IdempotencyKey != "" {
 		existing, found, err := findExistingIdempotentTask(
-			ctx, s.tasks, "plan", req.PlanID, repository.WorkerTaskTypeStress,
+			ctx, s.tasks, req.PlanID, repository.WorkerTaskTypeStress,
 			req.IdempotencyKey, inputHash,
 			"find stress idempotency",
 		)

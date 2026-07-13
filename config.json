@@ -7,5 +7,6 @@
   "log_level": "info",
   "worker_concurrency": 1,
   "research_optimization_concurrency": 4,
+  "fire_plan_improvement_concurrency": 4,
   "auto_update_scan_interval_minutes": 60
 }

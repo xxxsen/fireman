@@ -175,9 +175,21 @@ func (r *PlanRepo) bumpVersion(ctx context.Context, exec interface {
 }
 
 func (r *PlanRepo) Delete(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM plans WHERE id=?`, id)
+	return r.delete(ctx, r.db, id)
+}
+
+// DeleteTx deletes a plan inside an existing transaction.
+func (r *PlanRepo) DeleteTx(ctx context.Context, tx *sql.Tx, id string) error {
+	return r.delete(ctx, tx, id)
+}
+
+func (r *PlanRepo) delete(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, id string,
+) error {
+	res, err := exec.ExecContext(ctx, `DELETE FROM plans WHERE id=?`, id)
 	if err != nil {
-		return wrapSQL("update plan", err)
+		return wrapSQL("delete plan", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

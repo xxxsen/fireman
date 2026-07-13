@@ -66,7 +66,11 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 			ContentHash: contentHash, Scenario: scenario,
 		}
 	}
-	return s.compute(ctx, planID, params, identity)
+	in, err := s.configInput(ctx, planID, params, identity)
+	if err != nil {
+		return "", err
+	}
+	return hashConfigInput(in)
 }
 
 // ComputeWithIdentity hashes a plan using an already-resolved identity. Run
@@ -75,32 +79,80 @@ func (s *ConfigHashService) Compute(ctx context.Context, planID string) (string,
 func (s *ConfigHashService) ComputeWithIdentity(
 	ctx context.Context, planID string, identity *EffectiveAssumptionIdentity,
 ) (string, error) {
-	params, err := s.params.Get(ctx, planID)
+	in, err := s.SnapshotWithIdentity(ctx, planID, identity)
 	if err != nil {
-		return "", fmt.Errorf("load parameters: %w", err)
+		return "", err
 	}
-	return s.compute(ctx, planID, params, identity)
+	return hashConfigInput(in)
 }
 
-func (s *ConfigHashService) compute(
+func hashConfigInput(in domain.ConfigHashInput) (string, error) {
+	hash, err := domain.ComputeConfigHash(in)
+	if err != nil {
+		return "", fmt.Errorf("compute config hash: %w", err)
+	}
+	return hash, nil
+}
+
+// SnapshotWithIdentity returns the complete structured value used for config
+// hashing. Improvement jobs freeze this value so candidate hashes can be
+// reproduced without rereading mutable plan data.
+func (s *ConfigHashService) SnapshotWithIdentity(
+	ctx context.Context, planID string, identity *EffectiveAssumptionIdentity,
+) (domain.ConfigHashInput, error) {
+	params, err := s.params.Get(ctx, planID)
+	if err != nil {
+		return domain.ConfigHashInput{}, fmt.Errorf("load parameters: %w", err)
+	}
+	return s.configInput(ctx, planID, params, identity)
+}
+
+// SnapshotReadOnly resolves the current effective identity without creating or
+// repairing reference data. Bootstrap owns that initialization.
+func (s *ConfigHashService) SnapshotReadOnly(
+	ctx context.Context, planID string,
+) (domain.ConfigHashInput, error) {
+	params, err := s.params.Get(ctx, planID)
+	if err != nil {
+		return domain.ConfigHashInput{}, fmt.Errorf("load parameters: %w", err)
+	}
+	var identity *EffectiveAssumptionIdentity
+	if params.ReturnAssumptionMode == repository.ModeBlendedPrior ||
+		params.ReturnAssumptionMode == repository.ModeCustom {
+		if s.assumptions == nil {
+			return domain.ConfigHashInput{}, errAssumptionRepositoryNotConfigured
+		}
+		profile, scenario, contentHash, err := resolveProfileAndScenario(ctx, s.assumptions, params)
+		if err != nil {
+			return domain.ConfigHashInput{}, err
+		}
+		identity = &EffectiveAssumptionIdentity{
+			ProfileID: profile.ID, ProfileVersion: profile.Version,
+			ContentHash: contentHash, Scenario: scenario,
+		}
+	}
+	return s.configInput(ctx, planID, params, identity)
+}
+
+func (s *ConfigHashService) configInput(
 	ctx context.Context, planID string, params repository.PlanParameters,
 	identity *EffectiveAssumptionIdentity,
-) (string, error) {
+) (domain.ConfigHashInput, error) {
 	plan, err := s.plans.GetByID(ctx, planID)
 	if err != nil {
-		return "", fmt.Errorf("load plan: %w", err)
+		return domain.ConfigHashInput{}, fmt.Errorf("load plan: %w", err)
 	}
 	alloc, err := s.alloc.Get(ctx, planID)
 	if err != nil {
-		return "", fmt.Errorf("load allocation: %w", err)
+		return domain.ConfigHashInput{}, fmt.Errorf("load allocation: %w", err)
 	}
 	holds, err := s.holdings.ListByPlan(ctx, planID)
 	if err != nil {
-		return "", fmt.Errorf("list holdings: %w", err)
+		return domain.ConfigHashInput{}, fmt.Errorf("list holdings: %w", err)
 	}
 	overrides, err := s.overrides.ListByPlan(ctx, planID)
 	if err != nil {
-		return "", fmt.Errorf("list return overrides: %w", err)
+		return domain.ConfigHashInput{}, fmt.Errorf("list return overrides: %w", err)
 	}
 
 	parameterMap := parametersToMap(params)
@@ -110,7 +162,7 @@ func (s *ConfigHashService) compute(
 		parameterMap["effective_assumption_profile_content_hash"] = identity.ContentHash
 		parameterMap["effective_assumption_scenario"] = identity.Scenario
 	}
-	in := domain.ConfigHashInput{
+	return domain.ConfigHashInput{
 		PlanID:        planID,
 		Name:          plan.Name,
 		BaseCurrency:  plan.BaseCurrency,
@@ -119,12 +171,7 @@ func (s *ConfigHashService) compute(
 		AssetClass:    assetClassToMaps(alloc.AssetClassTargets),
 		RegionTargets: regionToMaps(alloc.RegionTargets),
 		Holdings:      holdingsToMaps(holds, overrides),
-	}
-	hash, err := domain.ComputeConfigHash(in)
-	if err != nil {
-		return "", fmt.Errorf("compute config hash: %w", err)
-	}
-	return hash, nil
+	}, nil
 }
 
 func parametersToMap(p repository.PlanParameters) map[string]any {

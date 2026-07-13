@@ -452,6 +452,7 @@ scope_type + scope_id + task_type + idempotency_key -> task_id + input_hash
 | `sensitivity` | `analysis_result:{task_id}` |
 | `research_backtest` | `research_backtest_run:{run_id}` |
 | `research_optimization_backtest` | `research_optimization_run:{run_id}` |
+| `fire_plan_improvement` | `fire_plan_improvement_run:{run_id}` |
 | `market_data_auto_update_scan` | `resource:{sha256}`，内容为 scan summary |
 | 三类 sidecar task | `resource:{sha256}` |
 
@@ -482,6 +483,7 @@ scope_type + scope_id + task_type + idempotency_key -> task_id + input_hash
 | `go_worker` | `sensitivity` | direct transaction | 2 | sensitivity processor |
 | `go_worker` | `research_backtest` | direct transaction | 2 | research backtest processor |
 | `go_worker` | `research_optimization_backtest` | direct transaction | 2 | optimization processor |
+| `go_worker` | `fire_plan_improvement` | direct transaction | 2 | FIRE 计划改善搜索 processor |
 | `go_worker` | `market_data_auto_update_scan` | direct transaction | 2 | auto-update scan processor |
 | `sidecar_worker` | `asset_directory_sync` | Go finalizer | 2 | directory result handler |
 | `sidecar_worker` | `asset_history_sync` | Go finalizer | 2 | history result handler |
@@ -1120,6 +1122,7 @@ Go processor 与 Go finalizer 均由 map 注册，不存在按任务类型分散
 | `sensitivity` | 同上 | 冻结输入对应的 analysis result 已持久化 |
 | `research_backtest` | `pending -> running -> complete`；`research_backtest_run:{run_id}` | points、months、summary 与 run 终态一致 |
 | `research_optimization_backtest` | `pending -> running -> complete`；`research_optimization_run:{run_id}` | 候选结果与 optimization run 终态一致 |
+| `fire_plan_improvement` | `pending -> running -> complete`；`fire_plan_improvement_run:{run_id}` | 改善 result 与 task 终态同事务，输入快照保持冻结 |
 | `market_data_auto_update_scan` | `pending -> running -> complete`；`resource:{sha256}` | summary resource 存在，幂等键绑定唯一时间槽 |
 | `asset_directory_sync` | `pending -> running -> pre_complete -> complete` | 目录、sync state、data version 和 finalize record 同步提交 |
 | `asset_history_sync` | 同上 | points、详情投影、data version 幂等提交 |

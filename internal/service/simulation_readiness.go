@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
 	fdb "github.com/fireman/fireman/internal/db"
 	"github.com/fireman/fireman/internal/marketdata"
@@ -19,14 +17,13 @@ const (
 	ReadinessReasonHistorySyncRunning            = "history_sync_running"
 	ReadinessReasonSimulationInsufficientHistory = "simulation_insufficient_history"
 	ReadinessReasonProviderDataAnomaly           = "provider_data_anomaly"
-	ReadinessReasonAssetIdentityConflict         = "asset_identity_conflict"
 	ReadinessReasonForeignCashUnsupported        = "foreign_cash_not_supported"
 )
 
 // BlockingAsset is one plan holding whose market asset blocks simulation.
 // Not every blocked asset is missing history: an asset can be fully synced
-// yet fail snapshot admission (data anomaly, wrong asset identity, or not
-// enough complete years).
+// yet fail snapshot admission because of a data anomaly or insufficient
+// complete years.
 type BlockingAsset struct {
 	HoldingID string `json:"holding_id"`
 	AssetKey  string `json:"asset_key"`
@@ -34,9 +31,6 @@ type BlockingAsset struct {
 	Name      string `json:"name"`
 	Reason    string `json:"reason"`
 	Message   string `json:"message,omitempty"`
-	// CandidateAssetKeys lists better-matching directory identities when the
-	// reason is asset_identity_conflict.
-	CandidateAssetKeys []string `json:"candidate_asset_keys,omitempty"`
 }
 
 // SimulationReadinessView is the GET /plans/{id}/simulation-readiness response.
@@ -55,10 +49,9 @@ type SyncMissingAssetEntry struct {
 // SyncMissingBlockedEntry is an asset for which no sync task was created
 // because syncing again would not make it simulatable.
 type SyncMissingBlockedEntry struct {
-	AssetKey           string   `json:"asset_key"`
-	Reason             string   `json:"reason"`
-	Message            string   `json:"message,omitempty"`
-	CandidateAssetKeys []string `json:"candidate_asset_keys,omitempty"`
+	AssetKey string `json:"asset_key"`
+	Reason   string `json:"reason"`
+	Message  string `json:"message,omitempty"`
 }
 
 // SyncMissingHistoryResult is the POST /plans/{id}/sync-missing-asset-history
@@ -74,9 +67,8 @@ type SyncMissingHistoryResult struct {
 // assetProbe is the readiness verdict for one market asset. Empty Reason
 // means the asset can build its simulation snapshot right now.
 type assetProbe struct {
-	Reason             string
-	Message            string
-	CandidateAssetKeys []string
+	Reason  string
+	Message string
 }
 
 // SimulationReadinessService checks whether every enabled plan holding can
@@ -165,7 +157,6 @@ func (s *SimulationReadinessService) Check(
 			HoldingID: h.ID, AssetKey: h.AssetKey,
 			Symbol: h.InstrumentCode, Name: h.InstrumentName,
 			Reason: probe.Reason, Message: probe.Message,
-			CandidateAssetKeys: probe.CandidateAssetKeys,
 		})
 		if task, ok := s.activeHistoryTask(ctx, h.AssetKey); ok {
 			if _, dup := seenTask[task.ID]; !dup {
@@ -210,7 +201,7 @@ func (s *SimulationReadinessService) probeAsset(
 	if !errors.As(err, &snapErr) {
 		return assetProbe{}, wrapRepo("probe asset readiness", err)
 	}
-	// A pending/running history sync may change the verdict, so report it as
+	// An unfinished history sync may change the verdict, so report it as
 	// in-flight instead of a terminal blocked state.
 	if _, running := s.activeHistoryTask(ctx, assetKey); running {
 		return assetProbe{
@@ -225,17 +216,10 @@ func (s *SimulationReadinessService) probeAsset(
 		}, nil
 	}
 
-	// Local history exists but the snapshot cannot be built. Distinguish
-	// wrong-identity and data-anomaly cases from plain short history.
+	// The holding's asset_key is an explicit user choice. A failure can report
+	// the quality of that identity's data, but must never infer that the user
+	// intended a different directory row sharing the same code.
 	anomaly := snapshotFailureIsAnomaly(snapErr)
-	current, candidates := s.identityCandidates(ctx, assetKey, anomaly)
-	if len(candidates) > 0 {
-		return assetProbe{
-			Reason:             ReadinessReasonAssetIdentityConflict,
-			Message:            identityConflictMessage(current, candidates),
-			CandidateAssetKeys: candidateKeys(candidates),
-		}, nil
-	}
 	if anomaly {
 		return assetProbe{
 			Reason:  ReadinessReasonProviderDataAnomaly,
@@ -271,81 +255,9 @@ func snapshotFailureIsAnomaly(e *marketdata.SnapshotError) bool {
 	return false
 }
 
-// identityCandidates finds other active directory rows with the same
-// market+symbol that likely represent the intended asset. Name equality is
-// the primary signal; the mutual-vs-exchange fund pattern additionally
-// qualifies when the current asset failed with a data anomaly (a money-market
-// fund fetched under an exchange-traded identity produces anomalous series).
-func (s *SimulationReadinessService) identityCandidates(
-	ctx context.Context, assetKey string, anomaly bool,
-) (repository.MarketAsset, []repository.MarketAsset) {
-	current, err := s.assetRepo.GetByKey(ctx, assetKey)
-	if err != nil {
-		return repository.MarketAsset{}, nil
-	}
-	siblings, err := s.assetRepo.ListAssetsByMarketSymbol(ctx, current.Market, current.Symbol)
-	if err != nil {
-		return current, nil
-	}
-	var out []repository.MarketAsset
-	for _, cand := range siblings {
-		if cand.AssetKey == current.AssetKey {
-			continue
-		}
-		nameMatch := namesRoughlyEqual(current.Name, cand.Name)
-		typePattern := current.InstrumentType == "cn_exchange_fund" &&
-			cand.InstrumentType == "cn_mutual_fund"
-		if nameMatch || (typePattern && anomaly) {
-			out = append(out, cand)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return instrumentTypePriority(out[i].InstrumentType) <
-			instrumentTypePriority(out[j].InstrumentType)
-	})
-	return current, out
-}
-
-func candidateKeys(assets []repository.MarketAsset) []string {
-	keys := make([]string, len(assets))
-	for i, a := range assets {
-		keys[i] = a.AssetKey
-	}
-	return keys
-}
-
-func identityConflictMessage(current repository.MarketAsset, candidates []repository.MarketAsset) string {
-	curLabel := instrumentTypeLabelZH(current.InstrumentType)
-	best := candidates[0]
-	candDesc := instrumentTypeLabelZH(best.InstrumentType)
-	if best.Name != "" {
-		candDesc = best.Name + " · " + candDesc
-	}
-	return fmt.Sprintf(
-		"该代码存在多个资产身份，当前「%s」历史已同步但无法用于模拟，建议在持仓校正中切换为：%s",
-		curLabel, candDesc,
-	)
-}
-
-// normalizeAssetName strips whitespace and upper-cases for a tolerant
-// name comparison across directory sources.
-func normalizeAssetName(s string) string {
-	return strings.ToUpper(strings.Join(strings.Fields(s), ""))
-}
-
-// namesRoughlyEqual reports whether two directory names refer to the same
-// underlying asset: equal after normalization, or one contains the other
-// (sources differ in suffixes like share-class markers).
-func namesRoughlyEqual(a, b string) bool {
-	na, nb := normalizeAssetName(a), normalizeAssetName(b)
-	if na == "" || nb == "" {
-		return false
-	}
-	return na == nb || strings.Contains(na, nb) || strings.Contains(nb, na)
-}
-
-// activeHistoryTask returns the pending/running history sync task recorded on
-// any history dimension of the asset.
+// activeHistoryTask returns an unfinished history sync task recorded on any
+// history dimension of the asset. pre_complete remains active because its
+// result has not yet been finalized into business tables.
 func (s *SimulationReadinessService) activeHistoryTask(
 	ctx context.Context, assetKey string,
 ) (WorkerTaskView, bool) {
@@ -362,7 +274,8 @@ func (s *SimulationReadinessService) activeHistoryTask(
 			continue
 		}
 		if task.Status == repository.WorkerTaskStatusPending ||
-			task.Status == repository.WorkerTaskStatusRunning {
+			task.Status == repository.WorkerTaskStatusRunning ||
+			task.Status == repository.WorkerTaskStatusPreComplete {
 			return taskToView(task), true
 		}
 	}
@@ -544,10 +457,9 @@ func (s *SimulationReadinessService) syncOneAsset(
 	default:
 		// History is synced but a new sync cannot fix the admission failure.
 		out.Blocked = append(out.Blocked, SyncMissingBlockedEntry{
-			AssetKey:           assetKey,
-			Reason:             probe.Reason,
-			Message:            probe.Message,
-			CandidateAssetKeys: probe.CandidateAssetKeys,
+			AssetKey: assetKey,
+			Reason:   probe.Reason,
+			Message:  probe.Message,
 		})
 		return nil
 	}

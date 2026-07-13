@@ -53,8 +53,20 @@ func (r *MarketDataRepo) UpsertBatch(ctx context.Context, tx *sql.Tx, instrument
 }
 
 func (r *MarketDataRepo) ListByInstrument(ctx context.Context, instrumentID string) ([]MarketDataPoint, error) {
+	return r.listByInstrument(ctx, r.db, instrumentID)
+}
+
+func (r *MarketDataRepo) ListByInstrumentTx(
+	ctx context.Context, tx *sql.Tx, instrumentID string,
+) ([]MarketDataPoint, error) {
+	return r.listByInstrument(ctx, tx, instrumentID)
+}
+
+func (r *MarketDataRepo) listByInstrument(
+	ctx context.Context, q rowQuerier, instrumentID string,
+) ([]MarketDataPoint, error) {
 	return queryCollect(
-		ctx, r.db, `
+		ctx, q, `
 		SELECT instrument_id, trade_date, value, point_type, source_name, fetched_at
 		FROM market_data_points
 		WHERE instrument_id=?

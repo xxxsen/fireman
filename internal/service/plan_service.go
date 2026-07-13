@@ -13,6 +13,7 @@ import (
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/marketdata"
 	"github.com/fireman/fireman/internal/repository"
+	taskcore "github.com/fireman/fireman/internal/task"
 )
 
 // CreatePlanRequest is the payload for creating a plan.
@@ -56,6 +57,12 @@ type PlanService struct {
 	assetRepo *repository.MarketAssetRepo
 	hash      *ConfigHashService
 	snapSvc   *marketdata.SnapshotService
+	tasks     *taskcore.Coordinator
+}
+
+// SetTaskCoordinator enables transactional cancellation of plan-owned work.
+func (s *PlanService) SetTaskCoordinator(coordinator *taskcore.Coordinator) {
+	s.tasks = coordinator
 }
 
 func NewPlanService(
@@ -252,13 +259,57 @@ func (s *PlanService) Update(ctx context.Context, planID string, req UpdatePlanR
 }
 
 func (s *PlanService) Delete(ctx context.Context, planID string) error {
-	if err := s.plans.Delete(ctx, planID); err != nil {
+	var canceledTaskIDs []string
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		if s.tasks != nil {
+			taskIDs, err := activeImprovementTaskIDsTx(ctx, tx, planID)
+			if err != nil {
+				return err
+			}
+			now := time.Now().UnixMilli()
+			for _, taskID := range taskIDs {
+				if err := s.tasks.RequestCancelTx(ctx, tx, taskID,
+					repository.WorkerTaskErrorCanceled, "plan deleted", now); err != nil {
+					return fmt.Errorf("cancel plan improvement task: %w", err)
+				}
+				canceledTaskIDs = append(canceledTaskIDs, taskID)
+			}
+		}
+		return s.plans.DeleteTx(ctx, tx, planID)
+	})
+	if err != nil {
 		if errors.Is(err, repository.ErrPlanNotFound) {
 			return newErr("plan_not_found", "plan not found", nil)
 		}
 		return wrapRepo("delete plan", err)
 	}
+	for _, taskID := range canceledTaskIDs {
+		_ = s.tasks.PublishCurrent(ctx, taskID)
+	}
 	return nil
+}
+
+func activeImprovementTaskIDsTx(ctx context.Context, tx *sql.Tx, planID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM worker_tasks
+		WHERE scope_type='plan' AND scope_id=? AND type=?
+		AND status IN ('pending','running','pre_complete')`,
+		planID, repository.WorkerTaskTypeFirePlanImprovement)
+	if err != nil {
+		return nil, fmt.Errorf("list plan improvement tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var taskIDs []string
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			return nil, fmt.Errorf("scan plan improvement task: %w", err)
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate plan improvement tasks: %w", err)
+	}
+	return taskIDs, nil
 }
 
 // GetParameters returns plan FIRE parameters.

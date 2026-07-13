@@ -42,12 +42,13 @@ Fireman 的资产目录、计划持仓和 FIRE 模拟共用同一套行情质量
 计划持仓进入 FIRE 模拟前，由 `GET /api/v1/plans/:plan_id/simulation-readiness` 统一检查，快照试算（`BuildSnapshotForHolding`，不落库）是唯一准入标准——仅有历史点位（`point_count > 0`）不代表可模拟：
 
 - 每个持仓的 `asset_key` 在 `market_assets` 中存在且可用；
-- 无法通过快照试算的持仓进入 `blocking_assets`，按原因细分：`history_missing`（未同步历史）、`history_sync_running`（同步任务进行中）、`simulation_insufficient_history`（历史已同步但完整年度不足）、`provider_data_anomaly`（历史已同步但指标/数据质量异常）、`asset_identity_conflict`（同 market+symbol 存在更匹配的其他资产身份，附 `candidate_asset_keys`，如场内 `150015` 应切换为场外基金身份）；
+- 无法通过快照试算的持仓进入 `blocking_assets`，按原因细分：`history_missing`（未同步历史）、`history_sync_running`（同步任务处于 `pending`、`running` 或等待 Go 侧结果落库的 `pre_complete`）、`simulation_insufficient_history`（历史已同步但完整年度不足）、`provider_data_anomaly`（历史已同步但指标/数据质量异常）；
+- 持仓保存的完整 `asset_key` 是用户明确选择的资产身份。模拟准入、历史同步和快照构建只检查该身份自身的数据，不根据同代码目录记录推断或建议切换身份；同代码多身份仅在资产选择器中并列展示，由用户决定；
 - readiness 未通过时模拟创建被 `market_asset_history_missing` 错误阻断（details 携带 `blocking_assets`）；
 - 懒保存的持仓在 readiness 检查时试算快照（不落库）；模拟创建前再统一构建并持久化 `market_asset_simulation_snapshots`；
 - 对外币资产，模拟快照必须能解析对应 FX 因子。
 
-`POST /api/v1/plans/:plan_id/sync-missing-asset-history` 同样以快照试算为准入：可试算的资产返回 `ready`；仅对 `history_missing` 创建（或复用 active）`default_refresh` 历史同步任务；`history_sync_running` 归入 `existing`；`simulation_insufficient_history`/`provider_data_anomaly`/`asset_identity_conflict` 归入 `blocked` 并附原因与建议，不再反复创建无效任务。不满足准入时在服务层返回明确错误，而不是让引擎在中途失败。
+`POST /api/v1/plans/:plan_id/sync-missing-asset-history` 同样以快照试算为准入：可试算的资产返回 `ready`；仅对 `history_missing` 创建（或复用 active）`default_refresh` 历史同步任务；`history_sync_running` 归入 `existing`；`simulation_insufficient_history`/`provider_data_anomaly` 归入 `blocked` 并附原因，不再反复创建无效任务。不满足准入时在服务层返回明确错误，而不是让引擎在中途失败。
 
 ## API 与前端展示
 

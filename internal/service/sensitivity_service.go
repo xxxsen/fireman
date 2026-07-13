@@ -78,7 +78,7 @@ func (s *SensitivityService) Create(ctx context.Context,
 
 	if req.IdempotencyKey != "" {
 		existing, found, err := findExistingIdempotentTask(
-			ctx, s.tasks, "plan", req.PlanID, repository.WorkerTaskTypeSensitivity,
+			ctx, s.tasks, req.PlanID, repository.WorkerTaskTypeSensitivity,
 			req.IdempotencyKey, inputHash,
 			"find sensitivity idempotency",
 		)

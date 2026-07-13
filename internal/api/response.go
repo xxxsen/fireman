@@ -62,8 +62,20 @@ func FailErr(c *gin.Context, err error) {
 			"system_profile_identity_conflict":
 			status = http.StatusConflict
 		case "simulation_not_found", "path_not_found",
-			"task_not_found", "market_asset_not_found", "auto_update_rule_not_found":
+			"task_not_found", "market_asset_not_found", "auto_update_rule_not_found",
+			"improvement_source_run_not_found", "improvement_run_not_found",
+			"improvement_proposal_not_found":
 			status = http.StatusNotFound
+		case "improvement_source_run_not_complete", "improvement_source_run_stale",
+			"improvement_source_engine_legacy", "improvement_source_paths_incomplete",
+			"improvement_target_already_met", "improvement_proposal_not_met",
+			"improvement_preview_stale", "improvement_source_market_changed",
+			"improvement_proposal_already_applied":
+			status = http.StatusConflict
+		case "improvement_config_invalid", "improvement_no_enabled_lever":
+			status = http.StatusBadRequest
+		case "improvement_result_inconsistent", "improvement_monotonicity_violation":
+			status = http.StatusInternalServerError
 		case "research_collection_not_found", "research_item_not_found",
 			"research_run_not_found", "research_optimization_not_found", "saved_filter_not_found":
 			status = http.StatusNotFound

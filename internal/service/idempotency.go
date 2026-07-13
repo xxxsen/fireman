@@ -10,12 +10,12 @@ import (
 func findExistingIdempotentTask(
 	ctx context.Context,
 	tasks *repository.WorkerTaskRepo,
-	scopeType, scopeID, taskType, key, inputHash, findErrMsg string,
+	scopeID, taskType, key, inputHash, findErrMsg string,
 ) (repository.WorkerTask, bool, error) {
 	if key == "" {
 		return repository.WorkerTask{}, false, nil
 	}
-	existing, storedHash, err := tasks.FindIdempotency(ctx, scopeType, scopeID, taskType, key)
+	existing, storedHash, err := tasks.FindIdempotency(ctx, "plan", scopeID, taskType, key)
 	if err == nil {
 		if storedHash != inputHash {
 			return repository.WorkerTask{}, false, newErr(
