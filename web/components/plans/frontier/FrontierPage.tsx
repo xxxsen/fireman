@@ -266,8 +266,11 @@ function FrontierChart({ result }: { result: FrontierResult }) {
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = Math.max(1, max - min);
-  const x = (index: number) => result.points.length === 1 ? 300 : 36 + index * (528 / (result.points.length - 1));
+  const x = (index: number) => result.points.length === 1 ? 320 : 72 + index * (496 / (result.points.length - 1));
   const y = (value: number) => 172 - ((value - min) / span) * 132;
+  const yAxisLabel = result.frontier_type === "retirement_age_max_spending"
+    ? "最大达标年度退休支出（元）"
+    : "最低达标首年年度储蓄（元）";
   const feasibleSegments: string[] = [];
   let segment: string[] = [];
   result.points.forEach((point, index) => {
@@ -281,8 +284,17 @@ function FrontierChart({ result }: { result: FrontierResult }) {
   if (segment.length > 1) feasibleSegments.push(segment.join(" "));
   return (
     <figure className="rounded-lg border border-line bg-surface p-3" aria-labelledby="frontier-chart-caption">
-      <svg viewBox="0 0 600 210" className="h-auto w-full" role="img" aria-label="FIRE 达标前沿离散点图">
-        <line x1="36" y1="172" x2="564" y2="172" stroke="currentColor" className="text-line" />
+      <p className="mb-2 text-xs font-medium text-ink-muted">
+        横轴：退休年龄（岁） · 纵轴：{yAxisLabel}
+      </p>
+      <svg viewBox="0 0 620 230" className="h-auto w-full" role="img" aria-label="FIRE 达标前沿离散点图">
+        <line x1="72" y1="40" x2="72" y2="172" stroke="currentColor" className="text-line" />
+        <line x1="72" y1="172" x2="568" y2="172" stroke="currentColor" className="text-line" />
+        <text x="16" y="106" textAnchor="middle" transform="rotate(-90 16 106)" className="fill-ink-muted text-[10px]">
+          {yAxisLabel}
+        </text>
+        <text x="64" y="44" textAnchor="end" className="fill-ink-muted text-[10px]">{formatMoney(max)}</text>
+        <text x="64" y="172" textAnchor="end" className="fill-ink-muted text-[10px]">{formatMoney(min)}</text>
         {feasibleSegments.map((points) => <polyline key={points} points={points} fill="none" stroke="currentColor" strokeWidth="2" className="text-brand" />)}
         {result.points.map((point, index) => (
           <g key={point.id}>
@@ -294,11 +306,12 @@ function FrontierChart({ result }: { result: FrontierResult }) {
             >
               <title>{`${point.retirement_age ? `${point.retirement_age} 岁，` : ""}${formatMoney(point.value_minor)}；${STATUS_LABEL[point.status]}；Wilson 下界 ${formatPercent(point.evaluation.success_wilson_low)}`}</title>
             </circle>
-            <text x={x(index)} y="195" textAnchor="middle" className="fill-ink-muted text-[10px]">
+            <text x={x(index)} y="194" textAnchor="middle" className="fill-ink-muted text-[10px]">
               {point.retirement_age || "当前"}
             </text>
           </g>
         ))}
+        <text x="320" y="220" textAnchor="middle" className="fill-ink-muted text-[10px]">退休年龄（岁）</text>
       </svg>
       <figcaption id="frontier-chart-caption" className="text-xs text-ink-muted">
         {result.discrete_connection_note} 空心点表示搜索域内没有达标值，不参与连线。

@@ -202,6 +202,8 @@ describe("FrontierPage", () => {
     expect(screen.getByText("当前计划已变化")).toBeInTheDocument();
     expect(screen.getByText(/连线仅为视觉连接/)).toBeInTheDocument();
     expect(screen.getByText(/空心点表示搜索域内没有达标值/)).toBeInTheDocument();
+    expect(screen.getByText("横轴：退休年龄（岁） · 纵轴：最大达标年度退休支出（元）")).toBeInTheDocument();
+    expect(document.querySelector("circle title")?.textContent).toContain("Wilson 下界");
     expect(screen.getByText(/Wilson 区间只反映有限模拟路径/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "这次到底计算了什么" })).toBeInTheDocument();
     expect(screen.getByText(/源共 3,000 条，固定使用前 3,000 条 · seed 42/)).toBeInTheDocument();

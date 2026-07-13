@@ -101,65 +101,49 @@ func TestFireFrontierAtomicCreationAndRetention(t *testing.T) {
 	}
 }
 
-func TestFireFrontierCompletionRollbackAndReusableStates(t *testing.T) {
-	for _, status := range []string{
-		WorkerTaskStatusPending, WorkerTaskStatusRunning, WorkerTaskStatusPreComplete,
-		WorkerTaskStatusComplete, WorkerTaskStatusFailed, WorkerTaskStatusCanceled,
-	} {
-		t.Run(status, func(t *testing.T) {
-			db := testutil.OpenTestDB(t)
-			ctx := context.Background()
-			repo := NewFireFrontierRepo(db)
-			if _, err := db.ExecContext(ctx, `INSERT INTO plans
-				(id,name,valuation_date,created_at,updated_at) VALUES ('plan_reuse','plan','2026-07-13',1,1)`); err != nil {
-				t.Fatal(err)
+func TestFireFrontierAllowsRepeatedInputAndRollsBackCompletion(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	ctx := context.Background()
+	repo := NewFireFrontierRepo(db)
+	if _, err := db.ExecContext(ctx, `INSERT INTO plans
+		(id,name,valuation_date,created_at,updated_at) VALUES ('plan_repeat','plan','2026-07-13',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	for i, taskID := range []string{"task_first", "task_second"} {
+		err := fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+			if err := insertFrontierTask(ctx, tx, taskID, int64(i+1), WorkerTaskStatusPending); err != nil {
+				return err
 			}
-			err := fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
-				if err := insertFrontierTask(ctx, tx, "task_reuse", 1, status); err != nil {
-					return err
-				}
-				completed := int64(2)
-				run := &FireFrontierRun{
-					ID: "run_reuse", TaskID: "task_reuse", PlanID: "plan_reuse",
-					SourceSimulationRunID: "sim", InputHash: "same-input", AlgorithmVersion: "v1",
-					FrontierType: "required_current_assets", SourceEngineVersion: "3.5.0",
-					SourceConfigHash: "config", SourceMarketHash: "market", EvaluationRuns: 1000,
-					ConfigJSON: `{}`, InputSnapshotJSON: `{}`,
-				}
-				if IsTerminalWorkerTaskStatus(status) {
-					run.CompletedAt = &completed
-				}
-				return repo.CreateTx(ctx, tx, run)
+			return repo.CreateTx(ctx, tx, &FireFrontierRun{
+				ID: "run_" + taskID, TaskID: taskID, PlanID: "plan_repeat",
+				SourceSimulationRunID: "sim", InputHash: "same-input", AlgorithmVersion: "v1",
+				FrontierType: "required_current_assets", SourceEngineVersion: "3.5.0",
+				SourceConfigHash: "config", SourceMarketHash: "market", EvaluationRuns: 1000,
+				ConfigJSON: `{}`, InputSnapshotJSON: `{}`, CreatedAt: int64(i + 1),
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			found, findErr := repo.FindReusable(ctx, "plan_reuse", "same-input")
-			if status == WorkerTaskStatusFailed || status == WorkerTaskStatusCanceled {
-				if !errors.Is(findErr, ErrFireFrontierNotFound) {
-					t.Fatalf("terminal failure/cancel was reused: %#v err=%v", found, findErr)
-				}
-			} else if findErr != nil || found.ID != "run_reuse" {
-				t.Fatalf("status %s not reusable: %#v err=%v", status, found, findErr)
-			}
-
-			if status == WorkerTaskStatusPending {
-				sentinel := errors.New("injected task completion failure")
-				err = fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
-					if err := repo.CompleteTx(ctx, tx, "task_reuse", json.RawMessage(`{"points":[]}`), 99); err != nil {
-						return err
-					}
-					return sentinel
-				})
-				if !errors.Is(err, sentinel) {
-					t.Fatalf("completion injection error=%v", err)
-				}
-				run, getErr := repo.GetByID(ctx, "run_reuse")
-				if getErr != nil || run.CompletedAt != nil || string(run.ResultJSON) != `{}` {
-					t.Fatalf("rolled-back completion left partial result: %#v err=%v", run, getErr)
-				}
-			}
 		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, total, err := repo.ListByPlan(ctx, "plan_repeat", 20, 0)
+	if err != nil || total != 2 || len(runs) != 2 || runs[0].InputHash != runs[1].InputHash {
+		t.Fatalf("repeated input runs=%#v total=%d err=%v", runs, total, err)
+	}
+
+	sentinel := errors.New("injected task completion failure")
+	err = fdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+		if err := repo.CompleteTx(ctx, tx, "task_first", json.RawMessage(`{"points":[]}`), 99); err != nil {
+			return err
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("completion injection error=%v", err)
+	}
+	run, getErr := repo.GetByID(ctx, "run_task_first")
+	if getErr != nil || run.CompletedAt != nil || string(run.ResultJSON) != `{}` {
+		t.Fatalf("rolled-back completion left partial result: %#v err=%v", run, getErr)
 	}
 }
 

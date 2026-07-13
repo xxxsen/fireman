@@ -88,7 +88,6 @@ type FrontierReadiness struct {
 	EvaluationBudget int                    `json:"evaluation_budget"`
 	PathMonthBudget  int64                  `json:"path_month_budget"`
 	SourceBaseline   *FrontierSourceSummary `json:"source_baseline,omitempty"`
-	ReusableRunID    string                 `json:"reusable_run_id,omitempty"`
 }
 
 type CreateFrontierResponse struct {
@@ -203,15 +202,9 @@ func (s *FireFrontierService) Readiness(ctx context.Context, planID string,
 		AgePoints: prepared.config.AgePoints, EvaluationBudget: prepared.config.EvaluationBudget,
 		PathMonthBudget: prepared.config.PathMonthBudget, SourceBaseline: &prepared.baseline,
 	}
-	if reusable, err := s.runs.FindReusable(ctx, planID, prepared.inputHash); err == nil {
-		readiness.ReusableRunID = reusable.ID
-	} else if !errors.Is(err, repository.ErrFireFrontierNotFound) {
-		return FrontierReadiness{}, wrapRepo("find reusable frontier", err)
-	}
 	return readiness, nil
 }
 
-//nolint:funlen,gocognit // Atomic task/run creation and idempotency form one admission boundary.
 func (s *FireFrontierService) Create(ctx context.Context, planID string,
 	req FireFrontierRequest,
 ) (CreateFrontierResponse, error) {
@@ -232,16 +225,6 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 			logFrontierAdmission(existing, true, req.RequestID)
 			return createFrontierResponse(existing, true), nil
 		}
-	}
-	if existing, findErr := s.runs.FindReusable(ctx, planID, prepared.inputHash); findErr == nil {
-		bound, bindErr := s.bindReusableIdempotency(ctx, planID, req, prepared.inputHash, existing)
-		if bindErr != nil {
-			return CreateFrontierResponse{}, bindErr
-		}
-		logFrontierAdmission(bound, true, req.RequestID)
-		return createFrontierResponse(bound, true), nil
-	} else if !errors.Is(findErr, repository.ErrFireFrontierNotFound) {
-		return CreateFrontierResponse{}, wrapRepo("find reusable frontier", findErr)
 	}
 	record := repository.FireFrontierRun{
 		ID: "ffr_" + uuid.NewString(), TaskID: "task_" + uuid.NewString(), PlanID: planID,
@@ -264,7 +247,7 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 			ID: record.TaskID, WorkerType: repository.WorkerTypeGo,
 			Type: repository.WorkerTaskTypeFireFrontier, Status: repository.WorkerTaskStatusPending,
 			ScopeType: "plan", ScopeID: planID,
-			DedupeKey: repository.WorkerTaskTypeFireFrontier + "|plan:" + planID,
+			DedupeKey: frontierAdmissionDedupeKey(planID, req.IdempotencyKey, record.TaskID),
 			InputHash: prepared.inputHash, PayloadJSON: string(payload),
 			ProgressTotal: prepared.config.EvaluationBudget, Phase: "validating",
 		}
@@ -276,9 +259,9 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 			return s.runs.PruneTx(ctx, tx, planID, frontierRetentionLimit)
 		})
 		if createErr != nil {
-			return createErr
+			return mapFrontierAdmissionError(req.IdempotencyKey, createErr)
 		}
-		if req.IdempotencyKey != "" {
+		if req.IdempotencyKey != "" && !reused {
 			return s.tasks.SaveIdempotency(ctx, tx, "plan", planID,
 				repository.WorkerTaskTypeFireFrontier, req.IdempotencyKey, bound.ID, prepared.inputHash)
 		}
@@ -298,41 +281,6 @@ func (s *FireFrontierService) Create(ctx context.Context, planID string,
 	record.TaskStatus = repository.WorkerTaskStatusPending
 	logFrontierAdmission(record, false, req.RequestID)
 	return createFrontierResponse(record, false), nil
-}
-
-// bindReusableIdempotency makes an Idempotency-Key durable even when admission
-// reuses an already-complete run instead of creating a new task. A concurrent
-// binder is resolved through the same fixed input-hash conflict rule.
-func (s *FireFrontierService) bindReusableIdempotency(ctx context.Context, planID string,
-	req FireFrontierRequest, inputHash string, reusable repository.FireFrontierRun,
-) (repository.FireFrontierRun, error) {
-	if req.IdempotencyKey == "" {
-		return reusable, nil
-	}
-	err := fdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		return s.tasks.SaveIdempotency(ctx, tx, "plan", planID,
-			repository.WorkerTaskTypeFireFrontier, req.IdempotencyKey, reusable.TaskID, inputHash)
-	})
-	if err == nil {
-		return reusable, nil
-	}
-	if !isUniqueConstraintErr(err) {
-		return repository.FireFrontierRun{}, wrapRepo("bind reusable frontier idempotency", err)
-	}
-	task, found, findErr := findExistingIdempotentTask(ctx, s.tasks, planID,
-		repository.WorkerTaskTypeFireFrontier, req.IdempotencyKey, inputHash,
-		"resolve reusable frontier idempotency")
-	if findErr != nil {
-		return repository.FireFrontierRun{}, findErr
-	}
-	if !found {
-		return repository.FireFrontierRun{}, wrapRepo("resolve reusable frontier idempotency", err)
-	}
-	bound, getErr := s.runs.GetByTaskID(ctx, task.ID)
-	if getErr != nil {
-		return repository.FireFrontierRun{}, wrapRepo("load reusable idempotent frontier", getErr)
-	}
-	return bound, nil
 }
 
 func (s *FireFrontierService) List(ctx context.Context, planID string, limit, offset int) (
@@ -614,6 +562,26 @@ func createFrontierResponse(record repository.FireFrontierRun, reused bool) Crea
 func logFrontierAdmission(record repository.FireFrontierRun, reused bool, requestID string) {
 	slog.Info("fire_frontier_admitted", "request_id", requestID, "task_id", record.TaskID, "run_id", record.ID,
 		"source_run_id", record.SourceSimulationRunID, "input_hash", record.InputHash, "reused", reused)
+}
+
+// frontierAdmissionDedupeKey prevents only concurrent replays of the same
+// client request from creating two tasks. A new request gets an independent
+// task even when its frozen input hash matches a historical or active run.
+func frontierAdmissionDedupeKey(planID, idempotencyKey, taskID string) string {
+	identity := taskID
+	if idempotencyKey != "" {
+		sum := sha256.Sum256([]byte(planID + "\x00" + idempotencyKey))
+		identity = hex.EncodeToString(sum[:])
+	}
+	return repository.WorkerTaskTypeFireFrontier + "|request:" + identity
+}
+
+func mapFrontierAdmissionError(idempotencyKey string, err error) error {
+	var appErr *AppError
+	if idempotencyKey != "" && errors.As(err, &appErr) && appErr.Code == "task_already_active" {
+		return newErr("idempotency_conflict", "idempotency key reused with different input", nil)
+	}
+	return err
 }
 
 func roundAPIFloat(value float64) float64 { return math.Round(value*1e10) / 1e10 }

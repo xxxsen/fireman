@@ -109,6 +109,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | 参数过期 | 计划参数变更后旧模拟 run 标记 stale |
 | 版本化模拟假设 | CNY 基准的 CMA v4 profile、历史 profile 回放、canonical/evidence hash provenance、固定 seed P50 回归 |
 | 前瞻收益校准 | 历史收益向长期先验收缩，支持资产级 override、FX 因子和真实购买力序列 |
+| FIRE 达标前沿 | 基于指定正式模拟的冻结输入回答四类单变量边界问题；每个新的运行请求独立计算，只有同一 `Idempotency-Key` 且输入一致的请求重试才返回原任务，见 [036-fire-confidence-frontier.md](./036-fire-confidence-frontier.md) |
 
 详见 [016-simulation-assumption-profile-integrity.md](./016-simulation-assumption-profile-integrity.md)、[019-fire-simulation-forward-engine-and-plan-controls.md](./019-fire-simulation-forward-engine-and-plan-controls.md)、[026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md) 与 [032-simulation-assumption-lifecycle-and-effective-inputs.md](./032-simulation-assumption-lifecycle-and-effective-inputs.md)。
 
@@ -125,6 +126,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | `/plans/{id}/rebalance/executions` | 多日调仓执行列表 |
 | `/plans/{id}/rebalance/executions/{executionId}` | 调仓执行工作区：登记卖出、买入、备注、完成或取消 |
 | `/plans/{id}/settings` | 切换当前计划使用的配置模板、编辑计划参数、运行模拟 |
+| `/plans/{id}/frontier` | 运行四类 FIRE 达标前沿，查看冻结计算依据、曲线点证据与历史运行 |
 | `/assets` | 全市场资产目录（同步状态面板、筛选、分页）|
 | `/assets/market/{assetKey}` | 市场资产详情、历史同步、年度收益 |
 | `/research` | 组合研究首页：研究集合、最近回测运行、JSON 导入导出 |

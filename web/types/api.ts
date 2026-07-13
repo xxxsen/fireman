@@ -630,7 +630,6 @@ export interface FrontierReadiness {
     success_wilson_high: number;
     created_at: number;
   };
-  reusable_run_id?: string;
 }
 
 export interface FrontierApplication {

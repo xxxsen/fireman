@@ -9,6 +9,7 @@ export class ApiError extends Error {
     message: string,
     public readonly details?: Record<string, unknown>,
     public readonly status?: number,
+    public readonly requestId?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -115,6 +116,7 @@ export async function apiRequest<T>(
         errBody.message,
         errBody.details,
         res!.status,
+        errBody.request_id,
       );
     } catch (e) {
       if (e instanceof ApiError) throw e;

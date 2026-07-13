@@ -142,12 +142,6 @@ func (r *FireFrontierRepo) GetByTaskID(ctx context.Context, taskID string) (Fire
 	return scanFireFrontier(r.db.QueryRowContext(ctx, fireFrontierSelect+` WHERE r.task_id=?`, taskID))
 }
 
-func (r *FireFrontierRepo) FindReusable(ctx context.Context, planID, inputHash string) (FireFrontierRun, error) {
-	return scanFireFrontier(r.db.QueryRowContext(ctx, fireFrontierSelect+`
-		WHERE r.plan_id=? AND r.input_hash=? AND t.status IN ('pending','running','pre_complete','complete')
-		ORDER BY r.created_at DESC,r.id DESC LIMIT 1`, planID, inputHash))
-}
-
 func (r *FireFrontierRepo) ListByPlan(ctx context.Context, planID string, limit, offset int) (
 	[]FireFrontierRun, int, error,
 ) {

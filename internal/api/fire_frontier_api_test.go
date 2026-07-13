@@ -60,10 +60,11 @@ func TestFireFrontierFourTypesAndApplyEndToEnd(t *testing.T) {
 		}
 		created := postFrontierJSON(t, srv,
 			"/api/v1/plans/"+planID+"/fire-frontier-runs", request, http.StatusAccepted, "frontier-key-"+string(rune('a'+i)))
-		reused := postFrontierJSON(t, srv,
-			"/api/v1/plans/"+planID+"/fire-frontier-runs", request, http.StatusOK, "")
-		if reused["reused"] != true || reused["run_id"] != created["run_id"] {
-			t.Fatalf("frontier not reused: created=%#v reused=%#v", created, reused)
+		replayed := postFrontierJSON(t, srv,
+			"/api/v1/plans/"+planID+"/fire-frontier-runs", request, http.StatusOK,
+			"frontier-key-"+string(rune('a'+i)))
+		if replayed["reused"] != true || replayed["run_id"] != created["run_id"] {
+			t.Fatalf("idempotent frontier replay diverged: created=%#v replayed=%#v", created, replayed)
 		}
 		waitImprovementTask(t, db, created["task_id"].(string))
 		detail := getImprovementJSON(t, srv,
@@ -262,6 +263,14 @@ func TestFireFrontierValidationAndIdempotencyErrors(t *testing.T) {
 	created := postFrontierJSON(t, srv, "/api/v1/plans/"+planID+"/fire-frontier-runs",
 		request, http.StatusAccepted, "same-key")
 	waitImprovementTask(t, db, created["task_id"].(string))
+	repeatedRun := postFrontierJSON(t, srv, "/api/v1/plans/"+planID+"/fire-frontier-runs",
+		request, http.StatusAccepted, "same-input-new-key")
+	if repeatedRun["reused"] == true || repeatedRun["run_id"] == created["run_id"] ||
+		repeatedRun["task_id"] == created["task_id"] {
+		t.Fatalf("a new request unexpectedly reused a historical calculation: first=%#v repeated=%#v",
+			created, repeatedRun)
+	}
+	waitImprovementTask(t, db, repeatedRun["task_id"].(string))
 	different := frontierRequest(sourceID, "required_current_assets", nil,
 		map[string]any{"min_minor": 1, "max_minor": 200, "step_minor": 199})
 	conflict := postFrontierJSON(t, srv, "/api/v1/plans/"+planID+"/fire-frontier-runs",
@@ -272,10 +281,10 @@ func TestFireFrontierValidationAndIdempotencyErrors(t *testing.T) {
 	differentCreated := postFrontierJSON(t, srv, "/api/v1/plans/"+planID+"/fire-frontier-runs",
 		different, http.StatusAccepted, "different-key")
 	waitImprovementTask(t, db, differentCreated["task_id"].(string))
-	conflictWithBothReusable := postFrontierJSON(t, srv,
+	conflictAfterIndependentRuns := postFrontierJSON(t, srv,
 		"/api/v1/plans/"+planID+"/fire-frontier-runs", request, http.StatusConflict, "different-key")
-	if conflictWithBothReusable["code"] != "idempotency_conflict" {
-		t.Fatalf("idempotency conflict was bypassed by reusable run: %#v", conflictWithBothReusable)
+	if conflictAfterIndependentRuns["code"] != "idempotency_conflict" {
+		t.Fatalf("idempotency conflict was bypassed after independent runs: %#v", conflictAfterIndependentRuns)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE plan_parameters SET annual_spending_minor=annual_spending_minor+1
 		WHERE plan_id=?`, planID); err != nil {
