@@ -56,6 +56,7 @@
 | 数据过期提示 | 距最近交易日 >7 自然日返回 stale 警告 |
 | Refresh | 手工刷新立即执行；源切换时全量替换 |
 | 自动更新管理 | 可配置的定时扫描器，为目录单元和资产历史维度创建刷新任务；复用既有 worker/sidecar 链路，乐观锁并发控制和 active-dedupe 保证幂等，见 [029-market-data-auto-update-scheduler.md](./029-market-data-auto-update-scheduler.md) |
+| 任务取消与执行中断 | active task 可由业务页面或管理后台立即取消；Go worker 协作停止，Sidecar 终止独立进程组；取消不保存部分结果、不重试且立即释放同类任务门禁，见 [035-worker-task-cancellation.md](./035-worker-task-cancellation.md) |
 
 TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 

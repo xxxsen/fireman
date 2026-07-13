@@ -1,6 +1,7 @@
 package stress
 
 import (
+	"context"
 	"math"
 	"sort"
 
@@ -43,12 +44,21 @@ type RunOptions struct {
 
 // Run executes all built-in scenarios with common random numbers against the frozen input.
 func Run(in *simulation.InputSnapshot, opt RunOptions) Report {
+	report, _ := RunCancelable(in, opt)
+	return report
+}
+
+// RunCancelable is the worker entry point and never returns a partial report.
+func RunCancelable(in *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 	runs := opt.Runs
 	if runs <= 0 {
 		runs = in.Parameters.SimulationRuns
 	}
 
 	baseline := runPaths(in, runs, nil, opt)
+	if baseline.canceled {
+		return Report{}, context.Canceled
+	}
 	baselineSuccess := float64(baseline.success) / float64(runs)
 
 	scenarios := BuiltinScenarios()
@@ -64,10 +74,13 @@ func Run(in *simulation.InputSnapshot, opt RunOptions) Report {
 
 	for i, sc := range scenarios {
 		if opt.CancelCheck != nil && opt.CancelCheck() {
-			break
+			return Report{}, context.Canceled
 		}
 		sched := CompileSchedule(sc.ID, in)
 		out := runPaths(in, runs, sched, opt)
+		if out.canceled {
+			return Report{}, context.Canceled
+		}
 		sr := aggregateScenario(sc, out, baselineSuccess, in.Parameters.CurrentAge)
 		results[i] = sr
 		if sr.SuccessProbability < worstSuccess {
@@ -86,10 +99,11 @@ func Run(in *simulation.InputSnapshot, opt RunOptions) Report {
 		Seed:                       in.Parameters.Seed,
 		Scenarios:                  results,
 		WorstScenarioID:            worstID,
-	}
+	}, nil
 }
 
 type pathBatch struct {
+	canceled       bool
 	success        int
 	terminals      []float64
 	drawdowns      []float64
@@ -118,7 +132,8 @@ func runPaths(in *simulation.InputSnapshot, runs int, sched simulation.ShockSche
 
 	for i := 0; i < runs; i++ {
 		if opt.CancelCheck != nil && opt.CancelCheck() {
-			break
+			batch.canceled = true
+			return batch
 		}
 		ps, _ := simulation.RunPath(in, i, simulation.PathRunOpts{
 			CollectMonthlyWealth: sched != nil,

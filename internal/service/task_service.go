@@ -10,7 +10,8 @@ import (
 )
 
 type TaskService struct {
-	coordinator *taskcore.Coordinator
+	coordinator  *taskcore.Coordinator
+	cancellation *TaskCancellationService
 }
 
 // TaskView is the public task projection. Payload and ownership credentials
@@ -53,8 +54,10 @@ type TaskListParams struct {
 	Offset     int
 }
 
-func NewTaskService(coordinator *taskcore.Coordinator) *TaskService {
-	return &TaskService{coordinator: coordinator}
+func NewTaskService(
+	coordinator *taskcore.Coordinator, cancellation *TaskCancellationService,
+) *TaskService {
+	return &TaskService{coordinator: coordinator, cancellation: cancellation}
 }
 
 func (s *TaskService) Get(ctx context.Context, taskID string) (TaskView, error) {
@@ -66,7 +69,15 @@ func (s *TaskService) Get(ctx context.Context, taskID string) (TaskView, error) 
 }
 
 func (s *TaskService) Cancel(ctx context.Context, taskID string) (TaskView, error) {
-	item, err := s.coordinator.RequestCancel(ctx, taskID)
+	item, err := s.cancellation.Cancel(ctx, taskID, TaskCancellationUser)
+	if err != nil {
+		return TaskView{}, mapTaskError(err)
+	}
+	return publicTaskView(item), nil
+}
+
+func (s *TaskService) CancelAdmin(ctx context.Context, taskID string) (TaskView, error) {
+	item, err := s.cancellation.Cancel(ctx, taskID, TaskCancellationAdmin)
 	if err != nil {
 		return TaskView{}, mapTaskError(err)
 	}

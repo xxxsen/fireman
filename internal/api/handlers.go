@@ -71,6 +71,8 @@ func NewServices(
 	snapSvc := marketdata.NewSnapshotService(snapRepo, marketAssetRepo)
 	simRepo := repository.NewSimulationRepo(db)
 	analysisRepo := repository.NewAnalysisRepo(db)
+	improvementRepo := repository.NewFirePlanImprovementRepo(db)
+	researchRepo := repository.NewResearchRepo(db)
 	targetSvc := service.NewTargetService(plans, params, alloc, holdings, hash)
 	rebalanceSvc := service.NewRebalanceService(plans, params, alloc, holdings)
 	holdingsSvc := service.NewHoldingsService(db, plans, holdings, snapSvc, marketAssetRepo)
@@ -92,7 +94,7 @@ func NewServices(
 	sensitivitySvc := service.NewSensitivityService(db, plans, workerTaskRepo, taskCoordinator, analysisRepo, simSvc, hash)
 	improvementSvc := service.NewFirePlanImprovementService(
 		db, plans, params, simRepo, workerTaskRepo, taskCoordinator,
-		repository.NewFirePlanImprovementRepo(db), hash, simSvc,
+		improvementRepo, hash, simSvc,
 	)
 	dashboardSvc := service.NewDashboardService(
 		plans, params, alloc, scenario, holdings, simRepo, analysisRepo, hash,
@@ -102,8 +104,11 @@ func NewServices(
 	planSvc := service.NewPlanService(db, plans, params, alloc, scenario, holdings, marketAssetRepo, hash, snapSvc)
 	planSvc.SetTaskCoordinator(taskCoordinator)
 	researchSvc := service.NewResearchService(
-		db, repository.NewResearchRepo(db), marketAssetRepo, workerTaskRepo, taskCoordinator,
+		db, researchRepo, marketAssetRepo, workerTaskRepo, taskCoordinator,
 		instRepo, marketRepo, plans, holdings, marketAssetSvc,
+	)
+	taskCancellationSvc := service.NewTaskCancellationService(
+		db, taskCoordinator, researchRepo, improvementRepo,
 	)
 	adminSvc := service.NewAdminService(
 		workerTaskRepo, repository.NewWorkerTaskFinalizeRecordRepo(db),
@@ -130,7 +135,7 @@ func NewServices(
 		Stress:              stressSvc,
 		Sensitivity:         sensitivitySvc,
 		Improvements:        improvementSvc,
-		Tasks:               service.NewTaskService(taskCoordinator),
+		Tasks:               service.NewTaskService(taskCoordinator, taskCancellationSvc),
 		TaskCoordinator:     taskCoordinator,
 		Research:            researchSvc,
 		Dashboard:           dashboardSvc,

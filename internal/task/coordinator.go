@@ -416,30 +416,14 @@ func retryBackoff(attempt int) time.Duration {
 	return time.Duration(min(seconds, 300)) * time.Second
 }
 
-//nolint:lll,wrapcheck // Pending, finalizing and running cancellation use guarded updates.
+//nolint:wrapcheck // Cancellation and attempt fencing commit in one transaction.
 func (c *Coordinator) RequestCancel(ctx context.Context, id string) (repository.WorkerTask, error) {
 	now := c.now().UnixMilli()
 	var updated repository.WorkerTask
 	err := fdb.WithTx(ctx, c.db, func(tx *sql.Tx) error {
-		current, err := c.repo.GetByIDTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if repository.IsTerminalWorkerTaskStatus(current.Status) {
-			return NewError(ErrAlreadyTerminal, "task already finished", map[string]any{"status": current.Status})
-		}
-		var result sql.Result
-		if current.Status == repository.WorkerTaskStatusPending || current.Status == repository.WorkerTaskStatusPreComplete {
-			result, err = tx.ExecContext(ctx, `UPDATE worker_tasks SET status=?,cancel_requested=1,finished_at=?,
-				error_code=?,error_message='task canceled by user',updated_at=? WHERE id=? AND status=?`,
-				repository.WorkerTaskStatusCanceled, now, repository.WorkerTaskErrorCanceled, now, id, current.Status)
-		} else {
-			result, err = tx.ExecContext(ctx, `UPDATE worker_tasks SET cancel_requested=1,updated_at=? WHERE id=? AND status=?`, now, id, repository.WorkerTaskStatusRunning)
-		}
-		if err := requireOne(result, err, ErrAlreadyTerminal, "task changed while cancellation was requested"); err != nil {
-			return err
-		}
-		updated, err = c.repo.GetByIDTx(ctx, tx, id)
+		var err error
+		updated, err = c.CancelImmediateTx(ctx, tx, id, repository.WorkerTaskErrorCanceled,
+			"task canceled by user", now)
 		return err
 	})
 	if err != nil {
@@ -449,33 +433,66 @@ func (c *Coordinator) RequestCancel(ctx context.Context, id string) (repository.
 	return updated, nil
 }
 
-// RequestCancelTx applies cancellation inside a producer transaction. It is
-// used when a newer analysis supersedes an older task and the cancellation,
-// old result removal and replacement task creation must commit together.
+// CancelImmediateTx makes every active task terminal and fences its current
+// attempt before returning. It deliberately does not publish an event because
+// the caller still owns the surrounding transaction.
 //
-//nolint:lll,wrapcheck // Transactional cancellation mirrors RequestCancel in the producer transaction.
-func (c *Coordinator) RequestCancelTx(
+//nolint:lll,wrapcheck // Task and attempt state are deliberately updated together.
+func (c *Coordinator) CancelImmediateTx(
 	ctx context.Context, tx *sql.Tx, id, code, message string, now int64,
-) error {
+) (repository.WorkerTask, error) {
 	current, err := c.repo.GetByIDTx(ctx, tx, id)
-	if errors.Is(err, repository.ErrWorkerTaskNotFound) {
-		return nil
+	if err != nil {
+		return repository.WorkerTask{}, err
 	}
-	if err != nil || repository.IsTerminalWorkerTaskStatus(current.Status) {
-		return err
+	if current.Status == repository.WorkerTaskStatusCanceled {
+		return current, nil
+	}
+	if repository.IsTerminalWorkerTaskStatus(current.Status) {
+		return repository.WorkerTask{}, NewError(ErrAlreadyTerminal, "task already finished",
+			map[string]any{"status": current.Status})
 	}
 	if code == "" {
 		code = repository.WorkerTaskErrorCanceled
 	}
-	if current.Status == repository.WorkerTaskStatusPending || current.Status == repository.WorkerTaskStatusPreComplete {
-		result, updateErr := tx.ExecContext(ctx, `UPDATE worker_tasks SET status=?,cancel_requested=1,finished_at=?,
-			error_code=?,error_message=?,updated_at=? WHERE id=? AND status=?`,
-			repository.WorkerTaskStatusCanceled, now, code, message, now, id, current.Status)
-		return requireOne(result, updateErr, ErrAlreadyTerminal, "task changed while cancellation was requested")
+	if len(message) > maxErrorMessage {
+		message = message[:maxErrorMessage]
 	}
-	result, updateErr := tx.ExecContext(ctx, `UPDATE worker_tasks SET cancel_requested=1,error_code=?,error_message=?,updated_at=?
-		WHERE id=? AND status=?`, code, message, now, id, repository.WorkerTaskStatusRunning)
-	return requireOne(result, updateErr, ErrAlreadyTerminal, "task changed while cancellation was requested")
+	result, updateErr := tx.ExecContext(ctx, `UPDATE worker_tasks SET status=?,cancel_requested=1,finished_at=?,
+		error_code=?,error_message=?,next_finalize_at=NULL,claimed_by='',claim_token_hash='',
+		attempt_started_at=NULL,heartbeat_at=NULL,lease_expires_at=NULL,updated_at=?
+		WHERE id=? AND status=?`, repository.WorkerTaskStatusCanceled, now, code, message, now, id, current.Status)
+	if err := requireOne(result, updateErr, ErrAlreadyTerminal, "task changed while cancellation was requested"); err != nil {
+		return repository.WorkerTask{}, err
+	}
+	if current.Status == repository.WorkerTaskStatusRunning {
+		_, err = tx.ExecContext(ctx, `UPDATE worker_task_attempts SET released_at=?,outcome='canceled',
+			report_outcome='canceled',error_code=?,error_message=?
+			WHERE task_id=? AND attempt_no=? AND released_at IS NULL`,
+			now, code, message, id, current.AttemptCount)
+		if err != nil {
+			return repository.WorkerTask{}, err
+		}
+	}
+	updated, err := c.repo.GetByIDTx(ctx, tx, id)
+	return updated, err
+}
+
+// RequestCancelTx applies cancellation inside a producer transaction. It is
+// used when a newer analysis supersedes an older task and the cancellation,
+// old result removal and replacement task creation must commit together.
+func (c *Coordinator) RequestCancelTx(
+	ctx context.Context, tx *sql.Tx, id, code, message string, now int64,
+) error {
+	_, err := c.CancelImmediateTx(ctx, tx, id, code, message, now)
+	if errors.Is(err, repository.ErrWorkerTaskNotFound) {
+		return nil
+	}
+	var taskErr *Error
+	if errors.As(err, &taskErr) && taskErr.Code == ErrAlreadyTerminal {
+		return nil
+	}
+	return err
 }
 
 func (c *Coordinator) publish(value repository.WorkerTask) {

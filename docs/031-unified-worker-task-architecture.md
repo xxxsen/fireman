@@ -5,6 +5,7 @@
 - 唯一任务表：`worker_tasks`
 - 当前工程状态：未发布，不迁移历史任务和历史运行结果
 - migration 约束：任务重构涉及的 migration 变更只允许 DDL；禁止用 migration 执行任务数据搬迁、回填或修正
+- 任务取消与执行中断：见 `docs/035-worker-task-cancellation.md`
 
 ## 1. 结论与固定决策
 

@@ -15,6 +15,7 @@ type RunOptions struct {
 
 // RunResult holds aggregated simulation output.
 type RunResult struct {
+	Canceled           bool
 	HorizonMonths      int
 	SuccessCount       int
 	FailureCount       int
@@ -74,7 +75,7 @@ func Run(in *InputSnapshot, opt RunOptions) RunResult {
 
 	for i := 0; i < runs; i++ {
 		if opt.CancelCheck != nil && opt.CancelCheck() {
-			break
+			return RunResult{Canceled: true}
 		}
 		ps, _ := RunPath(in, i, PathRunOpts{CollectMonthlyWealth: true})
 		paths[i] = ps

@@ -315,7 +315,11 @@ func (r *ResearchRepo) ListCollections(ctx context.Context, status string) ([]Re
 
 // DeleteCollection removes a collection; items and runs cascade.
 func (r *ResearchRepo) DeleteCollection(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM research_collections WHERE id=?`, id)
+	return r.DeleteCollectionTx(ctx, nil, id)
+}
+
+func (r *ResearchRepo) DeleteCollectionTx(ctx context.Context, tx *sql.Tx, id string) error {
+	res, err := r.exec(tx).ExecContext(ctx, `DELETE FROM research_collections WHERE id=?`, id)
 	if err != nil {
 		return wrapSQL("delete research collection", err)
 	}
@@ -673,6 +677,14 @@ func (r *ResearchRepo) FailRun(ctx context.Context, id, _ string, completedAt in
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE research_backtest_runs SET completed_at=? WHERE id=?`, completedAt, id)
 	return wrapSQL("fail research run", err)
+}
+
+func (r *ResearchRepo) MarkRunCanceledByTaskTx(
+	ctx context.Context, tx *sql.Tx, taskID string, completedAt int64,
+) error {
+	_, err := tx.ExecContext(ctx, `UPDATE research_backtest_runs
+		SET completed_at=COALESCE(completed_at,?) WHERE task_id=?`, completedAt, taskID)
+	return wrapSQL("mark canceled research run", err)
 }
 
 // --- backtest points / years / months ---
@@ -1537,6 +1549,14 @@ func (r *ResearchRepo) FailOptimizationRun(
 		UPDATE research_optimization_runs
 		SET completed_at=? WHERE id=?`, completedAt, id)
 	return wrapSQL("fail optimization run", err)
+}
+
+func (r *ResearchRepo) MarkOptimizationCanceledByTaskTx(
+	ctx context.Context, tx *sql.Tx, taskID string, completedAt int64,
+) error {
+	_, err := tx.ExecContext(ctx, `UPDATE research_optimization_runs
+		SET completed_at=COALESCE(completed_at,?) WHERE task_id=?`, completedAt, taskID)
+	return wrapSQL("mark canceled optimization run", err)
 }
 
 // LatestOptimizationByCollection returns the most recent optimization run

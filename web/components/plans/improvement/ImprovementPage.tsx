@@ -21,7 +21,8 @@ import {
   previewImprovementProposal,
 } from "@/lib/api/improvements";
 import { getPlan } from "@/lib/api/plans";
-import { cancelTask, createSimulation, getSimulation } from "@/lib/api/simulations";
+import { createSimulation, getSimulation } from "@/lib/api/simulations";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import {
   activeTaskConflictRef,
   isTaskActive,
@@ -553,7 +554,7 @@ export function ImprovementPage({ planId }: { planId: string }) {
 
         {running && (
           <section aria-live="polite" className="border-b border-line pb-6">
-            <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold text-ink">正在分析</h2><p className="mt-1 text-sm text-ink-muted">{taskState.task?.status === "pre_complete" ? "正在保存结果" : taskState.task?.phase || activeRun?.phase || "等待执行"} · {Math.round(taskState.progress * 100)}%</p></div><Button variant="danger" onClick={() => void cancelTask(activeTaskID!)}>取消</Button></div>
+            <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold text-ink">正在分析</h2><p className="mt-1 text-sm text-ink-muted">{taskState.task?.status === "pre_complete" ? "正在保存结果" : taskState.task?.phase || activeRun?.phase || "等待执行"} · {Math.round(taskState.progress * 100)}%</p></div><TaskCancelButton task={taskState.task} onCanceled={() => taskState.refetch().then(() => undefined)} /></div>
             <div className="mt-3 h-2 overflow-hidden rounded bg-surface-muted"><div className="h-full bg-brand transition-[width]" style={{ width: `${Math.max(2, taskState.progress * 100)}%` }} /></div>
             {taskState.pollError && (
               <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-warning">

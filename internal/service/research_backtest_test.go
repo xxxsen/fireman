@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -8,6 +9,25 @@ import (
 	"testing"
 	"time"
 )
+
+func TestResearchBacktestCancellationInsideDailyLoopReturnsNoResult(t *testing.T) {
+	points := genDailySeries(t, "2020-01-01", 800, func(i int) float64 {
+		return 100 + float64(i)/10
+	})
+	checks := 0
+	result, err := RunResearchBacktestWithOptions(singleAssetInput(t, points), BacktestRunOptions{
+		CancelCheck: func() bool {
+			checks++
+			return checks > 50
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+	if result != nil {
+		t.Fatalf("canceled backtest returned partial result: %#v", result)
+	}
+}
 
 // --- helpers ---
 

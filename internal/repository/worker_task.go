@@ -42,6 +42,8 @@ const (
 	WorkerTaskErrorHeartbeatTimeout = "worker_heartbeat_timeout"
 	WorkerTaskErrorInterrupted      = "worker_interrupted"
 	WorkerTaskErrorCanceled         = "canceled_by_user"
+	WorkerTaskErrorCanceledByAdmin  = "canceled_by_admin"
+	WorkerTaskErrorCanceledPlan     = "canceled_by_plan_delete"
 )
 
 var ErrWorkerTaskNotFound = errors.New("worker task not found")

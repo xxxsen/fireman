@@ -15,8 +15,13 @@ from typing import Any
 from ..logutil import get_logger
 from .config import WorkerConfig, worker_enabled
 from .errors import TaskFailure
-from .executors import execute_task
 from .goclient import GoAPIError, GoInternalClient, WorkerTask
+from .process_runner import (
+    TaskProcessCanceled,
+    TaskProcessLeaseLost,
+    TaskProcessRunner,
+    TaskProcessShutdown,
+)
 
 logger = get_logger(__name__)
 
@@ -38,6 +43,7 @@ class WorkerRunner:
         self._thread: threading.Thread | None = None
         self._active_lock = threading.Lock()
         self._active: _ActiveAttempt | None = None
+        self._process_runner = TaskProcessRunner()
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -52,17 +58,13 @@ class WorkerRunner:
 
     def stop(self) -> None:
         self._stop.set()
-        with self._active_lock:
-            active = self._active
-        if active is not None:
-            try:
-                self._client.release(active.task_id, self._worker_id, active.token)
-            except GoAPIError as exc:
-                if exc.code != "task_lease_lost":
-                    logger.warning("release task %s failed: %s", active.task_id, exc)
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
+        with self._active_lock:
+            active = self._active
+        if active is not None:
+            self._release_active(active)
 
     def _claim_loop(self) -> None:
         while not self._stop.is_set():
@@ -106,22 +108,35 @@ class WorkerRunner:
             daemon=True,
         )
         heartbeat.start()
+        control = threading.Thread(
+            target=self._control_loop,
+            args=(task, heartbeat_stop, lost, canceled),
+            name=f"control-{task.id[:12]}",
+            daemon=True,
+        )
+        control.start()
         try:
-            result = self._execute(task)
+            result = self._execute(task, canceled, lost)
             if lost.is_set():
                 logger.warning("task %s result discarded after lease loss", task.id)
                 return
-            if canceled.is_set() or self._stop.is_set():
-                self._report_until_accepted(
-                    task, token, lost, "canceled",
-                    error_code="canceled_by_user", error_message="task canceled",
-                )
+            if canceled.is_set():
+                logger.info("task %s execution stopped after cancellation", task.id)
+                return
+            if self._stop.is_set():
+                self._release_active(_ActiveAttempt(task.id, token))
                 return
             result_key = self._upload_until_accepted(task, token, result, lost)
             if result_key and not lost.is_set():
                 self._report_until_accepted(
                     task, token, lost, "success", result_key=result_key
                 )
+        except TaskProcessCanceled:
+            logger.info("task %s process terminated after cancellation", task.id)
+        except TaskProcessLeaseLost:
+            logger.warning("task %s process terminated after lease loss", task.id)
+        except TaskProcessShutdown:
+            self._release_active(_ActiveAttempt(task.id, token))
         except TaskFailure as exc:
             self._report_until_accepted(
                 task, token, lost, "failed", retryable=exc.retryable,
@@ -136,18 +151,53 @@ class WorkerRunner:
         finally:
             heartbeat_stop.set()
             heartbeat.join(timeout=2.0)
+            control.join(timeout=2.0)
             with self._active_lock:
                 if self._active and self._active.task_id == task.id:
                     self._active = None
 
-    def _execute(self, task: WorkerTask) -> dict[str, Any]:
+    def _execute(
+        self, task: WorkerTask, canceled: threading.Event, lost: threading.Event
+    ) -> dict[str, Any]:
         try:
             payload = json.loads(task.payload_json or "{}")
         except json.JSONDecodeError as exc:
             raise TaskFailure("invalid_task_payload", "task payload is not valid JSON") from exc
         if not isinstance(payload, dict):
             raise TaskFailure("invalid_task_payload", "task payload must be an object")
-        return execute_task(task.type, payload)
+        return self._process_runner.run(task.type, payload, canceled, lost, self._stop)
+
+    def _control_loop(
+        self,
+        task: WorkerTask,
+        stop: threading.Event,
+        lost: threading.Event,
+        canceled: threading.Event,
+    ) -> None:
+        while not stop.wait(self._config.cancel_poll_interval_seconds):
+            try:
+                current = self._client.get_task(task.id)
+            except GoAPIError as exc:
+                if exc.code == "task_not_found":
+                    lost.set()
+                    return
+                logger.warning("read task %s cancellation state failed: %s", task.id, exc)
+                continue
+            if current.status == "canceled" or current.cancel_requested:
+                canceled.set()
+                return
+            if current.status in {"complete", "failed"} or (
+                current.claimed_by and current.claimed_by != self._worker_id
+            ):
+                lost.set()
+                return
+
+    def _release_active(self, active: _ActiveAttempt) -> None:
+        try:
+            self._client.release(active.task_id, self._worker_id, active.token)
+        except GoAPIError as exc:
+            if exc.code not in {"task_lease_lost", "task_already_terminal"}:
+                logger.warning("release task %s failed: %s", active.task_id, exc)
 
     def _heartbeat_loop(
         self, task: WorkerTask, token: str, stop: threading.Event,

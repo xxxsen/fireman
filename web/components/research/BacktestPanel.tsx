@@ -22,6 +22,7 @@ import {
   formatPercent,
 } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { runStatusBadge } from "@/components/research/runStatus";
 import { REBALANCE_POLICY_LABELS } from "@/components/research/CollectionParamsForm";
 import { OptimizationConfigDialog } from "@/components/research/OptimizationConfigDialog";
@@ -365,6 +366,11 @@ export function BacktestPanel({
             {runGateReason}
           </p>
         )}
+        <TaskCancelButton
+          task={backtestTask.task ?? backtestRestore.task}
+          className="min-h-9 px-3 py-1.5 text-sm"
+          onCanceled={invalidateBacktest}
+        />
         {backtestRestore.restoreError && (
           <Button variant="ghost" onClick={() => void backtestRestore.retryRestore()}>
             重试状态检查
@@ -402,6 +408,11 @@ export function BacktestPanel({
             {optimizationGateReason}
           </p>
         )}
+        <TaskCancelButton
+          task={optimizationTask.task ?? optimizationRestore.task}
+          className="min-h-9 px-3 py-1.5 text-sm"
+          onCanceled={invalidateOptimization}
+        />
         {optimizationRestore.restoreError && (
           <Button variant="ghost" onClick={() => void optimizationRestore.retryRestore()}>
             重试状态检查

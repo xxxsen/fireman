@@ -9,6 +9,7 @@ import { AssetClassRegionGroups } from "@/components/charts/AssetClassRegionGrou
 import { MetricHelp } from "@/components/ui/MetricHelp";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageSkeleton } from "@/components/ui/Skeleton";
@@ -185,6 +186,16 @@ export default function OverviewPage() {
         >
           前往计划设置查看
         </Link>
+        <span className="ml-2 inline-flex">
+          <TaskCancelButton
+            task={pendingTask.task}
+            className="min-h-8 px-2 py-1 text-xs"
+            onCanceled={async () => {
+              await pendingTask.refetch();
+              await qc.invalidateQueries({ queryKey: ["dashboard", planId] });
+            }}
+          />
+        </span>
         {pendingTask.pollError && (
           <Button
             variant="ghost"

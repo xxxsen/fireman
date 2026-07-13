@@ -11,6 +11,7 @@ import {
 } from "@/lib/api/simulations";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import Link from "next/link";
 
 const POLL_INTERVAL_MS = 4000;
@@ -203,6 +204,26 @@ export function SimulationReadinessPanel({ planId }: { planId: string }) {
           </span>
         )}
       </div>
+      {data.active_tasks.length > 0 && (
+        <ul className="mt-3 space-y-1.5">
+          {data.active_tasks.map((task) => (
+            <li
+              key={task.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-xs"
+            >
+              <span className="min-w-0 truncate font-mono text-ink-muted">
+                {task.scope_id || task.id}
+              </span>
+              <TaskCancelButton
+                task={task}
+                shared
+                className="min-h-7 px-2 py-0.5 text-xs"
+                onCanceled={() => readinessQ.refetch().then(() => undefined)}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
       </Alert>
     </div>
   );

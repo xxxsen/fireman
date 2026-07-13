@@ -106,7 +106,7 @@ func (s *Supervisor) tryExecute(parent context.Context, taskID string) bool {
 	return true
 }
 
-//nolint:gocyclo // Attempt execution explicitly covers every lease, cancel and processor terminal path.
+//nolint:gocyclo,gocognit,funlen // Attempt execution explicitly covers every lease, cancel and processor terminal path.
 func (s *Supervisor) execute(parent context.Context, item repository.WorkerTask, token string) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -114,6 +114,37 @@ func (s *Supervisor) execute(parent context.Context, item repository.WorkerTask,
 		coordinator: s.coordinator, taskID: item.ID, workerID: s.workerID, token: token,
 		current: item.ProgressCurrent, total: item.ProgressTotal, phase: item.Phase,
 		cancel: cancel,
+	}
+	events, unsubscribe := s.coordinator.Events().Subscribe(item.ID)
+	eventDone := make(chan struct{})
+	go func() {
+		defer close(eventDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if event.Status == repository.WorkerTaskStatusCanceled {
+					state.cancelRequested.Store(true)
+					cancel()
+					return
+				}
+				if repository.IsTerminalWorkerTaskStatus(event.Status) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	if current, getErr := s.coordinator.Get(parent, item.ID); getErr == nil &&
+		repository.IsTerminalWorkerTaskStatus(current.Status) {
+		if current.Status == repository.WorkerTaskStatusCanceled {
+			state.cancelRequested.Store(true)
+		}
+		cancel()
 	}
 	heartbeatDone := make(chan struct{})
 	go func() {
@@ -135,13 +166,15 @@ func (s *Supervisor) execute(parent context.Context, item repository.WorkerTask,
 		Canceled: func() bool { return ctx.Err() != nil || state.cancelRequested.Load() },
 	})
 	cancel()
+	unsubscribe()
+	<-eventDone
 	<-heartbeatDone
 
 	if state.leaseLost.Load() {
 		return
 	}
 	current, getErr := s.coordinator.Get(context.WithoutCancel(parent), item.ID)
-	if getErr == nil && current.Status == repository.WorkerTaskStatusComplete {
+	if getErr == nil && repository.IsTerminalWorkerTaskStatus(current.Status) {
 		return
 	}
 	owned := taskcore.OwnedRequest{

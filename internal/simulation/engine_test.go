@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func TestRunCancellationDoesNotAggregatePartialPaths(t *testing.T) {
+	in := testInputSnapshot()
+	checks := 0
+	result := Run(in, RunOptions{Runs: 20, CancelCheck: func() bool {
+		checks++
+		return checks > 5
+	}})
+	if !result.Canceled {
+		t.Fatal("canceled run was not marked canceled")
+	}
+	if len(result.Paths) != 0 || result.SuccessCount != 0 || result.FailureCount != 0 ||
+		len(result.QuantileSeries) != 0 || result.Summary.TerminalQuantiles != nil {
+		t.Fatalf("canceled run returned partial aggregate: %#v", result)
+	}
+}
+
 func TestSplitMix64Deterministic(t *testing.T) {
 	a := SplitMix64(42)
 	b := SplitMix64(42)

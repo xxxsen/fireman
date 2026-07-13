@@ -15,6 +15,7 @@ import { queryErrorMessage } from "@/lib/query-error";
 import { formatDateTimeFromMs, formatNullablePercent, formatPercent } from "@/lib/format";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
@@ -426,6 +427,17 @@ export default function OptimizationDetailPage() {
           role="status"
         >
           <LoadingState label={progressLabel(opt)} className="justify-center" />
+          <div className="mt-3 flex justify-center">
+            <TaskCancelButton
+              task={taskState.task ?? (opt.task
+                ? { id: opt.task_id, status: opt.task.status }
+                : null)}
+              onCanceled={async () => {
+                await taskState.refetch();
+                await optQuery.refetch();
+              }}
+            />
+          </div>
           {taskState.pollError && (
             <p className="mt-2 text-xs text-warning">状态更新暂时失败，正在重试。</p>
           )}

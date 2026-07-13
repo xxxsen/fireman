@@ -232,6 +232,9 @@ export interface AdminWorkerTaskFull {
   claimed_by?: string;
   attempt_count: number;
   max_attempts: number;
+  progress_current: number;
+  progress_total: number;
+  phase: string;
   heartbeat_at?: number | null;
   error_code: string;
   error_message: string;
@@ -291,6 +294,12 @@ export function getAdminWorkerTask(
   taskId: string,
 ): Promise<AdminWorkerTaskDetail> {
   return apiGet(`/api/v1/admin/worker-tasks/${encodeURIComponent(taskId)}`);
+}
+
+export function cancelAdminWorkerTask(taskId: string) {
+  return apiPost<import("@/types/api").Task>(
+    `/api/v1/admin/worker-tasks/${encodeURIComponent(taskId)}/cancel`,
+  );
 }
 
 // --- finalization records ---

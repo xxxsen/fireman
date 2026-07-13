@@ -13,6 +13,7 @@ import { useTaskStatus } from "@/hooks/useTaskStatus";
 import { queryErrorMessage } from "@/lib/query-error";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 
 /** Readable retry suggestion for a failed sync task error code. */
 export function syncFailureSuggestion(errorCode?: string): string {
@@ -127,6 +128,12 @@ function SyncTaskRow({
             重试
           </button>
         )}
+        <TaskCancelButton
+          task={current}
+          shared
+          className="min-h-7 px-2 py-0.5 text-xs"
+          onCanceled={settle}
+        />
       </span>
     </li>
   );

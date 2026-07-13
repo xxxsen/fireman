@@ -2,7 +2,7 @@
 
 - 状态：已实施
 - 适用范围：全部 `worker_tasks` 业务任务、对应业务页面及管理后台
-- 关联架构：`docs/031-unified-worker-task-architecture.md`
+- 关联架构：`docs/031-unified-worker-task-architecture.md`、`docs/035-worker-task-cancellation.md`
 - 数据库影响：无新增结构；复用 `worker_tasks` active dedupe 唯一索引
 
 ## 1. 架构结论

@@ -167,7 +167,7 @@ func autoUpdateWhere(filter MarketDataAutoUpdateFilter) ([]string, []any, error)
 			 OR EXISTS (
 				SELECT 1 FROM worker_tasks t
 				WHERE t.id=market_data_auto_update_rules.last_task_id
-				  AND t.status IN ('failed','canceled')
+				  AND t.status='failed'
 			 ))`)
 	case "true", "false":
 		where = append(where, "enabled=?")
@@ -470,7 +470,7 @@ func (r *MarketDataAutoUpdateRepo) Reconcile(ctx context.Context, now int64) err
 			), last_success_at),
 			last_failed_at=CASE
 				WHEN (SELECT status FROM worker_tasks t WHERE t.id=last_task_id)
-					IN ('failed','canceled')
+					= 'failed'
 				THEN COALESCE((
 					SELECT finished_at FROM worker_tasks t WHERE t.id=last_task_id
 				), ?)
@@ -478,7 +478,7 @@ func (r *MarketDataAutoUpdateRepo) Reconcile(ctx context.Context, now int64) err
 			END,
 			last_error_code=CASE
 				WHEN (SELECT status FROM worker_tasks t WHERE t.id=last_task_id)
-					IN ('failed','canceled')
+					= 'failed'
 				THEN COALESCE((
 					SELECT error_code FROM worker_tasks t WHERE t.id=last_task_id
 				), '')
@@ -486,7 +486,7 @@ func (r *MarketDataAutoUpdateRepo) Reconcile(ctx context.Context, now int64) err
 			END,
 			last_error_message=CASE
 				WHEN (SELECT status FROM worker_tasks t WHERE t.id=last_task_id)
-					IN ('failed','canceled')
+					= 'failed'
 				THEN COALESCE((
 					SELECT error_message FROM worker_tasks t WHERE t.id=last_task_id
 				), '')

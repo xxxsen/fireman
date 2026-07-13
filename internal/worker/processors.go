@@ -164,7 +164,7 @@ func (p *ProcessorSet) simulation(ctx context.Context, item repository.WorkerTas
 	result := simulation.Run(&snapshot, simulation.RunOptions{
 		Runs: snapshot.Parameters.SimulationRuns, Progress: attempt.Progress, CancelCheck: attempt.Canceled,
 	})
-	if attempt.Canceled() {
+	if result.Canceled || attempt.Canceled() {
 		return context.Canceled
 	}
 	summary, err := json.Marshal(result.Summary)
@@ -221,7 +221,7 @@ func (p *ProcessorSet) analysisTask(
 	var report any
 	switch analysisType {
 	case repository.AnalysisTypeStress:
-		report = stress.Run(&pending.InputSnapshot, stress.RunOptions{
+		report, err = stress.RunCancelable(&pending.InputSnapshot, stress.RunOptions{
 			Runs:     pending.InputSnapshot.Parameters.SimulationRuns,
 			Progress: attempt.Progress, CancelCheck: attempt.Canceled,
 		})

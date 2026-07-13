@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@/components/ui/Alert";
 import { Drawer } from "@/components/ui/Drawer";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import {
   getAdminWorkerTask,
   workerTaskTypeLabel,
@@ -41,6 +42,7 @@ export function WorkerTaskDetailDrawer({
   actions,
 }: WorkerTaskDetailDrawerProps) {
   const [copied, setCopied] = useState(false);
+  const queryClient = useQueryClient();
   const detail = useQuery({
     queryKey: ["admin", "worker-task", taskId],
     queryFn: () => getAdminWorkerTask(taskId!),
@@ -209,7 +211,29 @@ export function WorkerTaskDetailDrawer({
             )}
           </section>
 
-          {actions && <div data-testid="task-detail-actions">{actions}</div>}
+          {(actions || isTaskActive(task.status)) && (
+            <div
+              className="flex justify-end gap-2 border-t border-line pt-4"
+              data-testid="task-detail-actions"
+            >
+              {actions}
+              <TaskCancelButton
+                task={task}
+                admin
+                onCanceled={async () => {
+                  await queryClient.invalidateQueries({
+                    queryKey: ["admin", "worker-task", task.id],
+                  });
+                  await queryClient.invalidateQueries({
+                    queryKey: ["admin", "worker-tasks"],
+                  });
+                  await queryClient.invalidateQueries({
+                    queryKey: ["admin", "overview"],
+                  });
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
     </Drawer>

@@ -21,6 +21,7 @@ class WorkerConfig:
     poll_interval_seconds: float = 2.0
     heartbeat_interval_seconds: float = 10.0
     http_timeout_seconds: float = 30.0
+    cancel_poll_interval_seconds: float = 1.0
 
     @staticmethod
     def from_env() -> "WorkerConfig":
@@ -33,6 +34,9 @@ class WorkerConfig:
                 "FIREMAN_WORKER_HEARTBEAT_INTERVAL", 10.0
             ),
             http_timeout_seconds=_env_float("FIREMAN_WORKER_HTTP_TIMEOUT", 30.0),
+            cancel_poll_interval_seconds=_env_float(
+                "FIREMAN_WORKER_CANCEL_POLL_INTERVAL", 1.0
+            ),
         )
 
 

@@ -33,6 +33,7 @@ class WorkerTask:
     progress_total: int = 0
     phase: str = ""
     cancel_requested: bool = False
+    claimed_by: str = ""
 
     @staticmethod
     def from_json(value: dict[str, Any]) -> "WorkerTask":
@@ -46,6 +47,7 @@ class WorkerTask:
             progress_total=int(value.get("progress_total", 0)),
             phase=str(value.get("phase", "")),
             cancel_requested=bool(value.get("cancel_requested", False)),
+            claimed_by=str(value.get("claimed_by", "")),
         )
 
 
@@ -105,6 +107,10 @@ class GoInternalClient:
         data = payload.get("data", {})
         items = data.get("items", []) if isinstance(data, dict) else []
         return [WorkerTask.from_json(item) for item in items if isinstance(item, dict)]
+
+    def get_task(self, task_id: str) -> WorkerTask:
+        payload = self._request("GET", f"/internal/worker-tasks/{task_id}")
+        return WorkerTask.from_json(payload["data"])
 
     def claim(self, task_id: str, worker_id: str, claim_token: str) -> WorkerTask:
         payload = self._post_json(

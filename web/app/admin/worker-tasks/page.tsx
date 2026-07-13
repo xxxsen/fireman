@@ -217,6 +217,7 @@ function WorkerTasksBoard() {
           <WorkerTaskTableRows
             items={page.items}
             onSelect={(taskId) => params.apply({ task_id: taskId })}
+            onCanceled={() => query.refetch().then(() => undefined)}
           />
         )}
       </AdminTable>

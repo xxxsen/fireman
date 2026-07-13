@@ -1,11 +1,28 @@
 package sensitivity
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/simulation"
 )
+
+func TestRunCancellationReturnsNoPartialReport(t *testing.T) {
+	in := testSensitivityInput()
+	checks := 0
+	report, err := Run(in, RunOptions{Runs: 20, CancelCheck: func() bool {
+		checks++
+		return checks > 5
+	}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+	if report.Runs != 0 || len(report.Points) != 0 || len(report.Heatmap) != 0 {
+		t.Fatalf("canceled sensitivity run returned partial report: %#v", report)
+	}
+}
 
 func TestDefaultPerturbationCount(t *testing.T) {
 	pts := DefaultPerturbations()

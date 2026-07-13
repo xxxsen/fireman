@@ -43,7 +43,7 @@ type ResearchService struct {
 	portfolio               *repository.PortfolioSnapshotRepo
 	marketSvc               *MarketAssetService
 	optimizationConcurrency int
-	optimizationBacktest    func(BacktestInput) (*BacktestResult, error)
+	optimizationBacktest    func(BacktestInput, BacktestRunOptions) (*BacktestResult, error)
 	now                     func() time.Time
 }
 
@@ -76,7 +76,7 @@ func NewResearchService(
 		portfolio:               repository.NewPortfolioSnapshotRepo(sqlDB),
 		marketSvc:               marketSvc,
 		optimizationConcurrency: DefaultResearchOptimizationConcurrency,
-		optimizationBacktest:    RunResearchBacktest,
+		optimizationBacktest:    RunResearchBacktestWithOptions,
 		now:                     time.Now,
 	}
 }
@@ -1110,13 +1110,7 @@ func validateUpdatedResearchCollection(collection *repository.ResearchCollection
 // cascades items and runs.
 func (s *ResearchService) DeleteCollection(ctx context.Context, id string, hard bool) error {
 	if hard {
-		if err := s.research.DeleteCollection(ctx, id); err != nil {
-			if errors.Is(err, repository.ErrResearchCollectionNotFound) {
-				return newErr("research_collection_not_found", "research collection not found", nil)
-			}
-			return wrapRepo("delete research collection", err)
-		}
-		return nil
+		return s.hardDeleteCollection(ctx, id)
 	}
 	if err := s.research.SetCollectionStatus(ctx, id,
 		repository.ResearchCollectionStatusArchived, s.now().UnixMilli()); err != nil {
@@ -1126,6 +1120,57 @@ func (s *ResearchService) DeleteCollection(ctx context.Context, id string, hard 
 		return wrapRepo("archive research collection", err)
 	}
 	return nil
+}
+
+func (s *ResearchService) hardDeleteCollection(ctx context.Context, id string) error {
+	var canceledTaskIDs []string
+	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
+		var err error
+		canceledTaskIDs, err = activeResearchTaskIDsTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		now := s.now().UnixMilli()
+		for _, taskID := range canceledTaskIDs {
+			if err := s.coordinator.RequestCancelTx(ctx, tx, taskID,
+				repository.WorkerTaskErrorCanceled, "research collection deleted", now); err != nil {
+				return fmt.Errorf("cancel research task: %w", err)
+			}
+		}
+		return s.research.DeleteCollectionTx(ctx, tx, id)
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrResearchCollectionNotFound) {
+			return newErr("research_collection_not_found", "research collection not found", nil)
+		}
+		return wrapRepo("delete research collection", err)
+	}
+	for _, taskID := range canceledTaskIDs {
+		_ = s.coordinator.PublishCurrent(ctx, taskID)
+	}
+	return nil
+}
+
+func activeResearchTaskIDsTx(ctx context.Context, tx *sql.Tx, collectionID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM worker_tasks
+		WHERE scope_type='research_collection' AND scope_id=?
+		AND status IN ('pending','running','pre_complete')`, collectionID)
+	if err != nil {
+		return nil, fmt.Errorf("list active research tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	taskIDs := make([]string, 0)
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			return nil, fmt.Errorf("scan active research task: %w", err)
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active research tasks: %w", err)
+	}
+	return taskIDs, nil
 }
 
 // --- items ---

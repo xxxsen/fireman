@@ -13,6 +13,7 @@ import (
 
 	"github.com/fireman/fireman/internal/repository"
 	"github.com/fireman/fireman/internal/service"
+	taskcore "github.com/fireman/fireman/internal/task"
 	"github.com/fireman/fireman/internal/testutil"
 )
 
@@ -174,5 +175,65 @@ func TestTaskEventsActiveSnapshotAndKeepalive(t *testing.T) {
 	}
 	if keepalive != ": keepalive\n" {
 		t.Fatalf("keepalive frame=%q", keepalive)
+	}
+}
+
+func TestPublicAndAdminTaskCancellationContracts(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	seedPublicTask(t, db, "task_cancel_public", repository.WorkerTaskStatusPending)
+	seedPublicTask(t, db, "task_cancel_admin", repository.WorkerTaskStatusRunning)
+	seedPublicTask(t, db, "task_cancel_complete", repository.WorkerTaskStatusComplete)
+	srv := httptest.NewServer(NewRouter(context.Background(), Deps{
+		DB: db, Services: buildServices(db),
+	}))
+	defer srv.Close()
+
+	post := func(path string, wantStatus int) map[string]any {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("POST %s status=%d want=%d", path, resp.StatusCode, wantStatus)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	public := post("/api/v1/tasks/task_cancel_public/cancel", http.StatusOK)
+	publicData := public["data"].(map[string]any)
+	if publicData["status"] != repository.WorkerTaskStatusCanceled ||
+		publicData["error_code"] != repository.WorkerTaskErrorCanceled {
+		t.Fatalf("public cancellation=%v", publicData)
+	}
+	// Repeating the same cancellation is an idempotent success.
+	repeated := post("/api/v1/tasks/task_cancel_public/cancel", http.StatusOK)
+	if repeated["data"].(map[string]any)["status"] != repository.WorkerTaskStatusCanceled {
+		t.Fatalf("repeated cancellation=%v", repeated)
+	}
+
+	admin := post("/api/v1/admin/worker-tasks/task_cancel_admin/cancel", http.StatusOK)
+	adminData := admin["data"].(map[string]any)
+	if adminData["status"] != repository.WorkerTaskStatusCanceled ||
+		adminData["error_code"] != repository.WorkerTaskErrorCanceledByAdmin {
+		t.Fatalf("admin cancellation=%v", adminData)
+	}
+
+	conflict := post("/api/v1/tasks/task_cancel_complete/cancel", http.StatusConflict)
+	if conflict["code"] != taskcore.ErrAlreadyTerminal {
+		t.Fatalf("terminal cancellation=%v", conflict)
+	}
+	details := conflict["details"].(map[string]any)
+	if details["status"] != repository.WorkerTaskStatusComplete {
+		t.Fatalf("terminal details=%v", details)
 	}
 }

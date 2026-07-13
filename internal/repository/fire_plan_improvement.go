@@ -93,6 +93,14 @@ func (r *FirePlanImprovementRepo) CompleteTx(
 	return nil
 }
 
+func (r *FirePlanImprovementRepo) MarkCanceledByTaskTx(
+	ctx context.Context, tx *sql.Tx, taskID string, completedAt int64,
+) error {
+	_, err := tx.ExecContext(ctx, `UPDATE fire_plan_improvement_runs
+		SET completed_at=COALESCE(completed_at,?) WHERE task_id=?`, completedAt, taskID)
+	return wrapSQL("mark canceled fire plan improvement run", err)
+}
+
 const firePlanImprovementSelect = `SELECT r.id,r.task_id,r.plan_id,r.source_simulation_run_id,
 	r.input_hash,r.algorithm_version,r.source_engine_version,r.source_config_hash,
 	r.source_market_hash,r.config_json,r.input_snapshot_json,r.result_json,r.created_at,r.completed_at,

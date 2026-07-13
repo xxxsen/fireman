@@ -31,6 +31,7 @@ import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { TaskErrorInline } from "@/components/ui/TaskErrorInline";
 import { LastRefreshMeta } from "@/components/ui/LastRefreshMeta";
 import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { ReturnSeriesChart } from "@/components/charts/ReturnSeriesChart";
 import {
   defaultHistoryRange,
@@ -215,6 +216,11 @@ export default function MarketAssetDetailPage() {
         >
           刷新历史数据
         </RefreshTaskButton>
+        <TaskCancelButton
+          task={task}
+          shared
+          onCanceled={invalidateDetail}
+        />
         <button
           type="button"
           title={

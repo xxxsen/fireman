@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -520,13 +521,30 @@ type preparedAsset struct {
 	unbounded bool
 }
 
+type BacktestRunOptions struct {
+	CancelCheck func() bool
+}
+
 // RunResearchBacktest executes one deterministic portfolio backtest.
 func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
+	return RunResearchBacktestWithOptions(in, BacktestRunOptions{})
+}
+
+//nolint:gocyclo // Validation and cancellation gates follow the ordered backtest preparation phases.
+func RunResearchBacktestWithOptions(
+	in BacktestInput, opt BacktestRunOptions,
+) (*BacktestResult, error) {
+	if researchBacktestCanceled(opt.CancelCheck) {
+		return nil, context.Canceled
+	}
 	if len(in.Assets) == 0 {
 		return nil, ErrResearchNoAssets
 	}
 	weightSum := 0.0
 	for _, a := range in.Assets {
+		if researchBacktestCanceled(opt.CancelCheck) {
+			return nil, context.Canceled
+		}
 		if a.Weight < 0 || a.Weight > 1+ResearchWeightTolerance {
 			return nil, fmt.Errorf("%w: %s weight %v", ErrResearchWeightInvalid, a.AssetKey, a.Weight)
 		}
@@ -541,6 +559,9 @@ func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
 
 	fxSeries := make(map[string]preparedSeries, len(in.FX))
 	for pair, pts := range in.FX {
+		if researchBacktestCanceled(opt.CancelCheck) {
+			return nil, context.Canceled
+		}
 		ps, err := prepareSeries(pts)
 		if err != nil {
 			return nil, fmt.Errorf("fx %s: %w", pair, err)
@@ -552,7 +573,7 @@ func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
 		fxTolerance = researchFXFillGapDays
 	}
 
-	assets, err := prepareAssets(in, fxSeries)
+	assets, err := prepareAssets(in, fxSeries, opt.CancelCheck)
 	if err != nil {
 		return nil, err
 	}
@@ -562,11 +583,18 @@ func RunResearchBacktest(in BacktestInput) (*BacktestResult, error) {
 		return nil, err
 	}
 
-	res, err := simulatePortfolio(in, assets, fxSeries, fxTolerance, lo, hi)
+	if researchBacktestCanceled(opt.CancelCheck) {
+		return nil, context.Canceled
+	}
+	res, err := simulatePortfolio(in, assets, fxSeries, fxTolerance, lo, hi, opt.CancelCheck)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+func researchBacktestCanceled(cancelCheck func() bool) bool {
+	return cancelCheck != nil && cancelCheck()
 }
 
 func resolveResearchBacktestWindow(in BacktestInput, assets []preparedAsset) (int, int, error) {
@@ -587,9 +615,14 @@ func resolveResearchBacktestWindow(in BacktestInput, assets []preparedAsset) (in
 	return lo, hi, nil
 }
 
-func prepareAssets(in BacktestInput, fxSeries map[string]preparedSeries) ([]preparedAsset, error) {
+func prepareAssets(
+	in BacktestInput, fxSeries map[string]preparedSeries, cancelCheck func() bool,
+) ([]preparedAsset, error) {
 	out := make([]preparedAsset, 0, len(in.Assets))
 	for _, a := range in.Assets {
+		if researchBacktestCanceled(cancelCheck) {
+			return nil, context.Canceled
+		}
 		pa := preparedAsset{input: a}
 		conv, label, err := prepareFXConverter(a.AssetKey, a.Currency, in.BaseCurrency, fxSeries)
 		if err != nil {
@@ -749,15 +782,22 @@ func simulatePortfolio(
 	fxSeries map[string]preparedSeries,
 	fxTolerance int,
 	lo, hi int,
+	cancelCheck func() bool,
 ) (*BacktestResult, error) {
 	values, effective, err := buildResearchValueGrid(
-		assets, fxSeries, lo, hi, in.FreezeEffectiveCalendar,
+		assets, fxSeries, lo, hi, in.FreezeEffectiveCalendar, cancelCheck,
 	)
 	if err != nil {
 		return nil, err
 	}
 	targets := normalizedResearchTargets(assets)
-	walk := walkResearchPortfolio(in, values, effective, targets, lo, hi)
+	walk, err := walkResearchPortfolioCancelable(in, values, effective, targets, lo, hi, cancelCheck)
+	if err != nil {
+		return nil, err
+	}
+	if researchBacktestCanceled(cancelCheck) {
+		return nil, context.Canceled
+	}
 	effReturns, effAssetReturns, effContribReturns := collectEffectiveResearchReturns(
 		effective, walk.periodReturns, walk.assetReturns, walk.contribRows,
 	)
@@ -766,6 +806,9 @@ func simulatePortfolio(
 	}
 	drawdowns := researchDrawdowns(walk.navs)
 	points := buildResearchPoints(assets, walk, drawdowns, lo)
+	if researchBacktestCanceled(cancelCheck) {
+		return nil, context.Canceled
+	}
 
 	// Benchmark overlay.
 	var benchSummary *BacktestBenchmarkSummary
@@ -780,6 +823,9 @@ func simulatePortfolio(
 
 	years := buildYears(points, effective, lo)
 	months := buildMonths(points)
+	if researchBacktestCanceled(cancelCheck) {
+		return nil, context.Canceled
+	}
 	summary, err := buildSummary(
 		in, points, years, months, effReturns, effAssetReturns, effContribReturns,
 		assets, targets, walk.weightRows, walk.contribRows, drawdowns, walk.navs, lo, hi,
@@ -822,6 +868,7 @@ type researchPortfolioWalk struct {
 func buildResearchValueGrid(
 	assets []preparedAsset, fxSeries map[string]preparedSeries, lo, hi int,
 	freezeEffectiveCalendar bool,
+	cancelCheck func() bool,
 ) ([][]float64, []bool, error) {
 	n := hi - lo + 1
 	values := make([][]float64, len(assets))
@@ -834,6 +881,9 @@ func buildResearchValueGrid(
 		assets, freezeEffectiveCalendar,
 	)
 	for t := 0; t < n; t++ {
+		if researchBacktestCanceled(cancelCheck) {
+			return nil, nil, context.Canceled
+		}
 		day := lo + t
 		for i, asset := range assets {
 			value, ok := researchGridValue(asset, valueRelevant[i], day)
@@ -908,6 +958,14 @@ func normalizedResearchTargets(assets []preparedAsset) []float64 {
 func walkResearchPortfolio(
 	in BacktestInput, values [][]float64, effective []bool, targets []float64, lo, hi int,
 ) researchPortfolioWalk {
+	walk, _ := walkResearchPortfolioCancelable(in, values, effective, targets, lo, hi, nil)
+	return walk
+}
+
+func walkResearchPortfolioCancelable(
+	in BacktestInput, values [][]float64, effective []bool, targets []float64, lo, hi int,
+	cancelCheck func() bool,
+) (researchPortfolioWalk, error) {
 	n, numAssets := hi-lo+1, len(values)
 	walk := researchPortfolioWalk{
 		navs: make([]float64, n), grossNAVs: make([]float64, n), periodReturns: make([]float64, n),
@@ -923,6 +981,9 @@ func walkResearchPortfolio(
 	walk.weightRows[0] = append([]float64(nil), weights...)
 	walk.contribRows[0] = make([]float64, numAssets)
 	for t := 1; t < n; t++ {
+		if researchBacktestCanceled(cancelCheck) {
+			return researchPortfolioWalk{}, context.Canceled
+		}
 		portfolioReturn := researchPeriodReturn(values, weights, walk.assetReturns, t)
 		contributions := make([]float64, numAssets)
 		for i := range weights {
@@ -962,7 +1023,7 @@ func walkResearchPortfolio(
 		walk.contribRows[t] = contributions
 		walk.weightRows[t] = append([]float64(nil), weights...)
 	}
-	return walk
+	return walk, nil
 }
 
 func researchTurnover(weights, targets []float64) float64 {

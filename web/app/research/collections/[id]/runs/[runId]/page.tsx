@@ -28,6 +28,7 @@ import type { NormalizedSeries } from "@/lib/research/candidate-analysis";
 import { annualWeightDeviation } from "@/lib/research/run-analysis";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { MetricHelp } from "@/components/ui/MetricHelp";
@@ -317,6 +318,17 @@ export default function ResearchRunDetailPage() {
             }
             className="justify-center"
           />
+          <div className="mt-3 flex justify-center">
+            <TaskCancelButton
+              task={taskState.task ?? (run.task
+                ? { id: run.task_id, status: run.task.status }
+                : null)}
+              onCanceled={async () => {
+                await taskState.refetch();
+                await runQuery.refetch();
+              }}
+            />
+          </div>
           {taskState.pollError && (
             <p className="mt-2 text-xs text-warning">状态更新暂时失败，正在重试。</p>
           )}

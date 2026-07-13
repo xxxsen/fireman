@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -177,6 +178,66 @@ func TestAutoUpdateReconcilesTerminalFailure(t *testing.T) {
 	}
 	if rule.LastFailedAt == nil || *rule.LastFailedAt != failedAt || rule.LastErrorCode != "provider_down" {
 		t.Fatalf("failure was not reconciled: %+v", rule)
+	}
+}
+
+func TestAutoUpdateCancellationIsNotReconciledAsFailure(t *testing.T) {
+	svc, _, db := newAutoUpdateServiceForTest(t)
+	now := time.Date(2026, 1, 1, 0, 5, 0, 0, cst)
+	svc.now = func() time.Time { return now }
+	created, err := svc.CreateDirectory(context.Background(), "us_etf", 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = time.Date(2026, 1, 1, 0, 10, 0, 0, cst)
+	if err := svc.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rule, err := svc.repo.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE worker_tasks SET status='canceled',cancel_requested=1,
+		error_code='canceled_by_admin',error_message='task canceled by administrator',finished_at=? WHERE id=?`,
+		now.Add(time.Minute).UnixMilli(), rule.LastTaskID); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if err := svc.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rule, err = svc.repo.Get(context.Background(), rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.LastFailedAt != nil || rule.LastErrorCode != "" || rule.LastErrorMessage != "" {
+		t.Fatalf("canceled task was recorded as rule failure: %+v", rule)
+	}
+	page, err := svc.List(context.Background(), AutoUpdateListParams{Enabled: "failed", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("canceled task matched failed filter: %+v", page)
+	}
+}
+
+func TestAutoUpdateCanceledContextCreatesNoTasksOrFailures(t *testing.T) {
+	svc, tasks, _ := newAutoUpdateServiceForTest(t)
+	if _, err := svc.CreateDirectory(context.Background(), "hk_stock", 24); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.RunOnce(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+	_, total, err := tasks.List(context.Background(), repository.WorkerTaskFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 0 {
+		t.Fatalf("canceled scan created %d tasks", total)
 	}
 }
 

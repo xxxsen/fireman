@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -1136,6 +1137,7 @@ func (s *ResearchService) startOptimizationCandidatePool(
 	assets []OptimizationAsset,
 	candidateCount int,
 	cancelCheck func() bool,
+	userCanceled *atomic.Bool,
 ) (<-chan optimizationCandidateEvaluation, <-chan optimizationCandidateGeneration) {
 	workerCount := s.optimizationWorkerCount(candidateCount)
 	candidates := make(chan OptimizationWeightVector, workerCount*2)
@@ -1143,7 +1145,7 @@ func (s *ResearchService) startOptimizationCandidatePool(
 		ctx, stop, assets, snapshot.Config.WeightStep, cancelCheck, candidates,
 	)
 	evaluations := s.startOptimizationCandidateEvaluators(
-		ctx, snapshot, ds, workerCount, candidates,
+		ctx, stop, snapshot, ds, workerCount, candidates, cancelCheck, userCanceled,
 	)
 	return evaluations, generationDone
 }
@@ -1180,22 +1182,27 @@ func startOptimizationCandidateGenerator(
 
 func (s *ResearchService) startOptimizationCandidateEvaluators(
 	ctx context.Context,
+	stop context.CancelFunc,
 	snapshot optimizationInputSnapshot,
 	ds *researchDataset,
 	workerCount int,
 	candidates <-chan OptimizationWeightVector,
+	cancelCheck func() bool,
+	userCanceled *atomic.Bool,
 ) <-chan optimizationCandidateEvaluation {
 	evaluations := make(chan optimizationCandidateEvaluation, workerCount)
 	backtest := s.optimizationBacktest
 	if backtest == nil {
-		backtest = RunResearchBacktest
+		backtest = RunResearchBacktestWithOptions
 	}
 	var workers sync.WaitGroup
 	workers.Add(workerCount)
 	for range workerCount {
 		go func() {
 			defer workers.Done()
-			runOptimizationCandidateEvaluator(ctx, snapshot, ds, candidates, evaluations, backtest)
+			runOptimizationCandidateEvaluator(
+				ctx, stop, snapshot, ds, candidates, evaluations, backtest, cancelCheck, userCanceled,
+			)
 		}()
 	}
 	go func() {
@@ -1207,11 +1214,14 @@ func (s *ResearchService) startOptimizationCandidateEvaluators(
 
 func runOptimizationCandidateEvaluator(
 	ctx context.Context,
+	stop context.CancelFunc,
 	snapshot optimizationInputSnapshot,
 	ds *researchDataset,
 	candidates <-chan OptimizationWeightVector,
 	evaluations chan<- optimizationCandidateEvaluation,
-	backtest func(BacktestInput) (*BacktestResult, error),
+	backtest func(BacktestInput, BacktestRunOptions) (*BacktestResult, error),
+	cancelCheck func() bool,
+	userCanceled *atomic.Bool,
 ) {
 	for {
 		select {
@@ -1221,7 +1231,20 @@ func runOptimizationCandidateEvaluator(
 			if !ok {
 				return
 			}
-			result, err := backtest(buildBacktestInputForCandidate(snapshot, ds, candidate))
+			result, err := backtest(
+				buildBacktestInputForCandidate(snapshot, ds, candidate),
+				BacktestRunOptions{CancelCheck: func() bool {
+					if cancelCheck != nil && cancelCheck() {
+						userCanceled.Store(true)
+						stop()
+						return true
+					}
+					return ctx.Err() != nil
+				}},
+			)
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				return
+			}
 			evaluation := optimizationCandidateEvaluation{candidate: candidate, err: err}
 			if err == nil && result != nil {
 				evaluation.summary = &result.Summary
@@ -1301,8 +1324,9 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 	var stopErr error
 	poolCtx, stopPool := context.WithCancel(ctx)
 	defer stopPool()
+	var userCanceled atomic.Bool
 	evaluations, generationDone := s.startOptimizationCandidatePool(
-		poolCtx, stopPool, snapshot, ds, assets, candidateCount, cancelCheck,
+		poolCtx, stopPool, snapshot, ds, assets, candidateCount, cancelCheck, &userCanceled,
 	)
 	for evaluation := range evaluations {
 		if stopErr != nil {
@@ -1320,7 +1344,7 @@ func (s *ResearchService) evaluateOptimizationCandidates(
 		}
 	}
 	generation := <-generationDone
-	if generation.userCanceled {
+	if generation.userCanceled || userCanceled.Load() {
 		s.cancelOptimization(ctx, runID)
 		return OptimizationResult{}, context.Canceled
 	}

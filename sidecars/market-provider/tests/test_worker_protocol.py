@@ -5,6 +5,10 @@ import time
 from fireman_market_provider.worker.config import WorkerConfig
 from fireman_market_provider.worker.goclient import GoAPIError, WorkerTask
 from fireman_market_provider.worker.runner import WorkerRunner, _ActiveAttempt
+from fireman_market_provider.worker.process_runner import (
+    TaskProcessCanceled,
+    TaskProcessLeaseLost,
+)
 
 
 def task(task_id: str = "task_1") -> WorkerTask:
@@ -28,6 +32,9 @@ class FakeClient:
         self.heartbeats += 1
         return task(str(args[0]))
 
+    def get_task(self, task_id):
+        return task(task_id)
+
     def upload_result(self, *args, **kwargs):  # noqa: ANN002, ANN003
         self.uploads += 1
         return "resource:abc"
@@ -43,17 +50,37 @@ class FakeClient:
 
 
 def runner(client: FakeClient, heartbeat: float = 10.0) -> WorkerRunner:
-    value = WorkerRunner(WorkerConfig("http://go", heartbeat_interval_seconds=heartbeat))
+    value = WorkerRunner(
+        WorkerConfig(
+            "http://go",
+            heartbeat_interval_seconds=heartbeat,
+            cancel_poll_interval_seconds=0.005,
+        )
+    )
     value._client = client  # type: ignore[attr-defined]
     return value
 
 
-def test_success_uploads_task_bound_resource_and_reports_result(monkeypatch):
+class InlineProcessRunner:
+    def __init__(self, execute):
+        self._execute = execute
+
+    def run(self, task_type, payload, _canceled, _lost, _stopped):
+        return self._execute(task_type, payload)
+
+
+class CancelAwareProcessRunner:
+    def run(self, _task_type, _payload, canceled, _lost, _stopped):
+        if not canceled.wait(timeout=1.0):
+            raise AssertionError("sidecar did not observe canceled task")
+        raise TaskProcessCanceled()
+
+
+def test_success_uploads_task_bound_resource_and_reports_result():
     client = FakeClient()
     value = runner(client)
-    monkeypatch.setattr(
-        "fireman_market_provider.worker.runner.execute_task",
-        lambda _task_type, _payload: {"type": "asset_history_sync"},
+    value._process_runner = InlineProcessRunner(
+        lambda _task_type, _payload: {"type": "asset_history_sync"}
     )
 
     value._run_task(task(), "token-0123456789abcdef")
@@ -77,9 +104,8 @@ def test_result_transport_failure_keeps_heartbeat_and_retries(monkeypatch):
     client.report = flaky_report  # type: ignore[method-assign]
     value = runner(client, heartbeat=0.005)
     monkeypatch.setattr(value._stop, "wait", lambda _delay: False)
-    monkeypatch.setattr(
-        "fireman_market_provider.worker.runner.execute_task",
-        lambda _task_type, _payload: {"type": "asset_history_sync"},
+    value._process_runner = InlineProcessRunner(
+        lambda _task_type, _payload: {"type": "asset_history_sync"}
     )
 
     value._run_task(task(), "token-0123456789abcdef")
@@ -89,12 +115,11 @@ def test_result_transport_failure_keeps_heartbeat_and_retries(monkeypatch):
     assert client.reports == ["success"]
 
 
-def test_accepted_result_stops_heartbeat(monkeypatch):
+def test_accepted_result_stops_heartbeat():
     client = FakeClient()
     value = runner(client, heartbeat=0.005)
-    monkeypatch.setattr(
-        "fireman_market_provider.worker.runner.execute_task",
-        lambda _task_type, _payload: {"type": "asset_history_sync"},
+    value._process_runner = InlineProcessRunner(
+        lambda _task_type, _payload: {"type": "asset_history_sync"}
     )
 
     value._run_task(task(), "token-0123456789abcdef")
@@ -117,7 +142,75 @@ def test_lease_lost_aborts_without_upload_or_result(monkeypatch):
         time.sleep(0.04)
         return {"type": "asset_history_sync"}
 
-    monkeypatch.setattr("fireman_market_provider.worker.runner.execute_task", slow_execute)
+    value._process_runner = InlineProcessRunner(slow_execute)
+    value._run_task(task(), "token-0123456789abcdef")
+
+    assert client.uploads == 0
+    assert client.reports == []
+
+
+def test_control_poll_cancels_execution_without_upload_or_report():
+    client = FakeClient()
+
+    def canceled_task(task_id):
+        current = task(task_id)
+        return WorkerTask(**{**current.__dict__, "status": "canceled", "cancel_requested": True})
+
+    client.get_task = canceled_task  # type: ignore[method-assign]
+    value = runner(client, heartbeat=10.0)
+    value._process_runner = CancelAwareProcessRunner()
+
+    started = time.monotonic()
+    value._run_task(task(), "token-0123456789abcdef")
+
+    assert time.monotonic() - started < 1.0
+    assert client.uploads == 0
+    assert client.reports == []
+
+
+def test_temporary_control_read_failure_does_not_cancel_execution():
+    client = FakeClient()
+    reads = 0
+
+    def flaky_get(task_id):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            raise GoAPIError("temporary")
+        return task(task_id)
+
+    client.get_task = flaky_get  # type: ignore[method-assign]
+    value = runner(client)
+
+    def slow_success(_task_type, _payload):
+        time.sleep(0.02)
+        return {"type": "asset_history_sync"}
+
+    value._process_runner = InlineProcessRunner(slow_success)
+    value._run_task(task(), "token-0123456789abcdef")
+
+    assert reads >= 1
+    assert client.uploads == 1
+    assert client.reports == ["success"]
+
+
+def test_control_poll_stops_execution_after_ownership_loss():
+    client = FakeClient()
+
+    def stolen_task(task_id):
+        current = task(task_id)
+        return WorkerTask(**{**current.__dict__, "claimed_by": "sidecar_worker:other"})
+
+    client.get_task = stolen_task  # type: ignore[method-assign]
+    value = runner(client, heartbeat=10.0)
+
+    class LeaseAwareProcessRunner:
+        def run(self, _task_type, _payload, _canceled, lost, _stopped):
+            if not lost.wait(timeout=1.0):
+                raise AssertionError("sidecar did not observe ownership loss")
+            raise TaskProcessLeaseLost()
+
+    value._process_runner = LeaseAwareProcessRunner()
     value._run_task(task(), "token-0123456789abcdef")
 
     assert client.uploads == 0

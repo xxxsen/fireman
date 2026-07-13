@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -477,6 +478,9 @@ func (s *AutoUpdateService) RunOnce(ctx context.Context) error {
 }
 
 func (s *AutoUpdateService) RunOnceSummary(ctx context.Context) (AutoUpdateScanSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return AutoUpdateScanSummary{}, fmt.Errorf("auto update scan canceled before start: %w", err)
+	}
 	startedAt := s.now()
 	now := startedAt.UnixMilli()
 	if err := s.repo.Reconcile(ctx, now); err != nil {
@@ -484,6 +488,9 @@ func (s *AutoUpdateService) RunOnceSummary(ctx context.Context) (AutoUpdateScanS
 	}
 	counts := AutoUpdateScanSummary{}
 	for {
+		if err := ctx.Err(); err != nil {
+			return counts, fmt.Errorf("auto update scan canceled between batches: %w", err)
+		}
 		done, err := s.runBatch(ctx, now, &counts)
 		if err != nil {
 			return counts, err
@@ -518,7 +525,12 @@ func (s *AutoUpdateService) runBatch(
 	}
 	counts.Candidates += len(rules)
 	for _, rule := range rules {
-		s.scheduleRule(ctx, rule, now, counts)
+		if err := ctx.Err(); err != nil {
+			return false, fmt.Errorf("auto update scan canceled while scheduling rules: %w", err)
+		}
+		if err := s.scheduleRule(ctx, rule, now, counts); err != nil {
+			return false, err
+		}
 	}
 	return len(rules) < autoUpdateBatchSize, nil
 }
@@ -528,21 +540,31 @@ func (s *AutoUpdateService) scheduleRule(
 	rule repository.MarketDataAutoUpdateRule,
 	now int64,
 	counts *AutoUpdateScanSummary,
-) {
+) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("auto update rule scheduling canceled: %w", err)
+	}
 	task, err := s.enqueueRule(ctx, rule, now)
+	if ctx.Err() != nil {
+		return fmt.Errorf("auto update task creation canceled: %w", ctx.Err())
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
 	if errors.Is(err, repository.ErrAutoUpdateRuleNotFound) {
-		return
+		return nil
 	}
 	if err != nil {
 		s.markScanFailure(ctx, rule, err)
 		counts.Failed++
-		return
+		return nil
 	}
 	if task.Existed {
 		counts.Reused++
-		return
+		return nil
 	}
 	counts.Created++
+	return nil
 }
 
 func (s *AutoUpdateService) enqueueRule(

@@ -38,6 +38,7 @@ import { SplitButton } from "@/components/ui/SplitButton";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { TaskErrorInline } from "@/components/ui/TaskErrorInline";
 import { RefreshTaskButton } from "@/components/ui/RefreshTaskButton";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 
 const PAGE_SIZE = 50;
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -126,6 +127,12 @@ function DirectoryUnitRow({
           <span>从未同步</span>
         )}
         {active && <LoadingState label="同步进行中…" className="text-xs" />}
+        <TaskCancelButton
+          task={task}
+          shared
+          className="min-h-7 px-2 py-0.5 text-xs"
+          onCanceled={onChanged}
+        />
         {task?.status === "failed" && (
           <TaskErrorInline
             errorCode={task.error_code}
@@ -335,6 +342,12 @@ function FXSyncRow({
           />
         )}
         {active && <LoadingState label="同步进行中…" className="text-xs" />}
+        <TaskCancelButton
+          task={task}
+          shared
+          className="min-h-7 px-2 py-0.5 text-xs"
+          onCanceled={taskSettled}
+        />
         {task?.status === "failed" && (
           <TaskErrorInline
             errorCode={task.error_code}

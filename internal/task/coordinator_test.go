@@ -191,6 +191,83 @@ func TestExternalResultIdempotencyConflictRetryAndCancel(t *testing.T) {
 	}
 }
 
+func TestRunningCancellationIsImmediateIdempotentAndFencesAttempt(t *testing.T) {
+	c, repo, db := testCoordinator(t)
+	createTask(t, c, db, "task_running_cancel", repository.WorkerTypeGo,
+		repository.WorkerTaskTypeSimulation)
+	req := claimRequest(repository.WorkerTypeGo, "running-cancel-token-0001")
+	if _, err := c.Claim(context.Background(), "task_running_cancel", req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Heartbeat(context.Background(), "task_running_cancel", HeartbeatRequest{
+		WorkerType: req.WorkerType, WorkerID: req.WorkerID, ClaimToken: req.ClaimToken,
+		ProgressCurrent: 7, ProgressTotal: 10, Phase: "computing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := c.RequestCancel(context.Background(), "task_running_cancel")
+	if err != nil || canceled.Status != repository.WorkerTaskStatusCanceled ||
+		canceled.ClaimedBy != "" || canceled.LeaseExpiresAt != nil ||
+		canceled.ProgressCurrent != 7 || canceled.Phase != "computing" {
+		t.Fatalf("canceled task=%+v err=%v", canceled, err)
+	}
+	attempts, err := repo.ListAttempts(context.Background(), canceled.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Outcome != "canceled" ||
+		attempts[0].ReleasedAt == nil {
+		t.Fatalf("canceled attempts=%+v err=%v", attempts, err)
+	}
+	if _, err := c.Heartbeat(context.Background(), canceled.ID, HeartbeatRequest{
+		WorkerType: req.WorkerType, WorkerID: req.WorkerID, ClaimToken: req.ClaimToken,
+		ProgressCurrent: 8, ProgressTotal: 10,
+	}); !isTaskError(err, ErrLeaseLost) {
+		t.Fatalf("old owner heartbeat error=%v", err)
+	}
+	again, err := c.RequestCancel(context.Background(), canceled.ID)
+	if err != nil || again.Status != repository.WorkerTaskStatusCanceled {
+		t.Fatalf("idempotent cancel=%+v err=%v", again, err)
+	}
+
+	err = fdb.WithTx(context.Background(), db, func(tx *sql.Tx) error {
+		return c.CreateTx(context.Background(), tx, &repository.WorkerTask{
+			ID: "task_after_cancel", WorkerType: repository.WorkerTypeGo,
+			Type: repository.WorkerTaskTypeSimulation, Status: repository.WorkerTaskStatusPending,
+			PayloadJSON: `{}`, ScopeType: "test", ScopeID: "replacement",
+			DedupeKey: repository.WorkerTaskTypeSimulation + "|task_running_cancel",
+		})
+	})
+	if err != nil {
+		t.Fatalf("replacement task remained blocked: %v", err)
+	}
+}
+
+func TestPreCompleteCancellationStopsFinalizationAndPreservesAcceptedAttempt(t *testing.T) {
+	c, repo, db := testCoordinator(t)
+	createTask(t, c, db, "task_precomplete_cancel", repository.WorkerTypeSidecar,
+		repository.WorkerTaskTypeAssetHistorySync)
+	req := claimRequest(repository.WorkerTypeSidecar, "precomplete-cancel-token")
+	_, _ = c.Claim(context.Background(), "task_precomplete_cancel", req)
+	accepted, err := c.Report(context.Background(), "task_precomplete_cancel", ResultRequest{
+		WorkerType: req.WorkerType, WorkerID: req.WorkerID, ClaimToken: req.ClaimToken,
+		Outcome: "success", ResultKey: "resource:cancel-me",
+	})
+	if err != nil || accepted.Status != repository.WorkerTaskStatusPreComplete {
+		t.Fatalf("accepted=%+v err=%v", accepted, err)
+	}
+	canceled, err := c.RequestCancel(context.Background(), accepted.ID)
+	if err != nil || canceled.Status != repository.WorkerTaskStatusCanceled ||
+		canceled.NextFinalizeAt != nil || canceled.ResultKey != "resource:cancel-me" {
+		t.Fatalf("canceled=%+v err=%v", canceled, err)
+	}
+	reservations, err := c.ReserveDueFinalizations(context.Background(), 10)
+	if err != nil || len(reservations) != 0 {
+		t.Fatalf("canceled task was finalized: %+v err=%v", reservations, err)
+	}
+	attempts, err := repo.ListAttempts(context.Background(), canceled.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Outcome != "result_accepted" {
+		t.Fatalf("accepted attempt was overwritten: %+v err=%v", attempts, err)
+	}
+}
+
 func TestExpiredLeaseRejectsHeartbeatUploadAndResultBeforeMaintenance(t *testing.T) {
 	c, _, db := testCoordinator(t)
 	now := time.Unix(1_800_000_000, 0)

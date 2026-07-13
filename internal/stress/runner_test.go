@@ -1,11 +1,28 @@
 package stress
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/fireman/fireman/internal/domain"
 	"github.com/fireman/fireman/internal/simulation"
 )
+
+func TestRunCancelableReturnsNoPartialReport(t *testing.T) {
+	in := testStressInput()
+	checks := 0
+	report, err := RunCancelable(in, RunOptions{Runs: 20, CancelCheck: func() bool {
+		checks++
+		return checks > 5
+	}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+	if report.Runs != 0 || len(report.Scenarios) != 0 {
+		t.Fatalf("canceled stress run returned partial report: %#v", report)
+	}
+}
 
 func TestBuiltinScenarioCount(t *testing.T) {
 	if len(BuiltinScenarios()) != 7 {

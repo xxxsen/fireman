@@ -21,6 +21,7 @@ import {
 import { queryErrorMessage } from "@/lib/query-error";
 import { AdminPagination } from "@/components/admin/AdminTable";
 import { isTaskActive } from "@/lib/api/tasks";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 
 const HOURS = [1, 6, 12, 24, 48, 72, 168];
 function formatInterval(hours: number): string {
@@ -63,7 +64,10 @@ function ruleStatus(rule: AdminAutoUpdateRule): string {
   if (isTaskActive(rule.task?.status)) {
     return "任务执行中";
   }
-  if (rule.task && ["failed", "canceled"].includes(rule.task.status)) {
+  if (rule.task?.status === "canceled") {
+    return "最近任务已取消";
+  }
+  if (rule.task?.status === "failed") {
     return "最近失败";
   }
   if (
@@ -128,15 +132,17 @@ function RuleCells({
   rule,
   pending,
   onUpdate,
+  onTaskCanceled,
 }: {
   rule: AdminAutoUpdateRule;
   pending: boolean;
   onUpdate: (enabled: boolean, hours: number) => Promise<void>;
+  onTaskCanceled: () => void | Promise<void>;
 }) {
   return (
     <>
       <td>{ruleStatus(rule)}</td>
-      <td>
+      <td className="space-x-2 whitespace-nowrap">
         <IntervalEditor
           key={`${rule.id}-${rule.version}`}
           rule={rule}
@@ -174,6 +180,13 @@ function RuleCells({
         >
           {pending ? "处理中…" : rule.enabled ? "暂停" : "启用"}
         </button>
+        <TaskCancelButton
+          task={rule.task}
+          admin
+          label="取消本次任务"
+          className="min-h-8 px-2 py-1 text-xs"
+          onCanceled={onTaskCanceled}
+        />
       </td>
     </>
   );
@@ -405,6 +418,7 @@ function AutoUpdatesContent() {
                         onUpdate={(active, hours) =>
                           updateRule(rule, active, hours)
                         }
+                        onTaskCanceled={refresh}
                       />
                     ) : (
                       <>
@@ -523,6 +537,7 @@ function AutoUpdatesContent() {
                         onUpdate={(active, hours) =>
                           updateRule(rule, active, hours)
                         }
+                        onTaskCanceled={refresh}
                       />
                     </tr>
                   ))}

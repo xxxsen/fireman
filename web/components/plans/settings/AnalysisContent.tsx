@@ -34,11 +34,11 @@ import {
 } from "@/lib/api/analysis";
 import { getHoldings } from "@/lib/api/holdings";
 import {
-  cancelTask,
   createSimulation,
   listPaths,
   listSimulations,
 } from "@/lib/api/simulations";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { activeTaskConflictRef, isTaskActive } from "@/lib/api/tasks";
 import {
   formatDateTimeFromMs,
@@ -250,7 +250,6 @@ function AnalysisJobPanel({
   onRetryRestore,
   runDisabled,
   runDisabledHint,
-  onCancel,
   latest,
   listError,
   onReloadList,
@@ -268,7 +267,6 @@ function AnalysisJobPanel({
   onRetryRestore?: () => void;
   runDisabled?: boolean;
   runDisabledHint?: string;
-  onCancel?: () => void;
   latest?: {
     status: string;
     result_stale?: boolean;
@@ -318,15 +316,11 @@ function AnalysisJobPanel({
                 : (taskState.task?.phase || taskState.task?.status || "连接中")}…{" "}
               {Math.round(taskState.progress * 100)}%
             </span>
-            {onCancel && (
-              <Button
-                variant="ghost"
-                className="px-2 py-1 text-danger"
-                onClick={onCancel}
-              >
-                取消
-              </Button>
-            )}
+            <TaskCancelButton
+              task={taskState.task}
+              className="min-h-8 px-2 py-1 text-xs"
+              onCanceled={() => taskState.refetch().then(() => undefined)}
+            />
           </>
         )}
         {taskState.pollError && (
@@ -1070,13 +1064,11 @@ export function AnalysisContent() {
                   : (simTaskState.task?.phase || simTaskState.task?.status || "连接中")}…{" "}
                 {Math.round(simTaskState.progress * 100)}%
               </span>
-              <Button
-                variant="ghost"
-                className="px-2 py-1 text-danger"
-                onClick={() => void cancelTask(activeSimTaskID)}
-              >
-                取消
-              </Button>
+              <TaskCancelButton
+                task={simTaskState.task}
+                className="min-h-8 px-2 py-1 text-xs"
+                onCanceled={() => simTaskState.refetch().then(() => undefined)}
+              />
             </>
           )}
           {simTaskState.pollError && (
@@ -1246,11 +1238,6 @@ export function AnalysisContent() {
         onRetryRestore={() => void stressRestore.retryRestore()}
         runDisabled={attachDisabled || stressRestoreBlocked}
         runDisabledHint={attachHint}
-        onCancel={
-          activeStressTaskID
-            ? () => void cancelTask(activeStressTaskID)
-            : undefined
-        }
         latest={latestStress}
         listError={
           stressQ.isError && !stressQ.data
@@ -1277,11 +1264,6 @@ export function AnalysisContent() {
         onRetryRestore={() => void sensitivityRestore.retryRestore()}
         runDisabled={attachDisabled || sensitivityRestoreBlocked}
         runDisabledHint={attachHint}
-        onCancel={
-          activeSensitivityTaskID
-            ? () => void cancelTask(activeSensitivityTaskID)
-            : undefined
-        }
         latest={latestSens}
         listError={
           sensQ.isError && !sensQ.data ? queryErrorMessage(sensQ.error) : null

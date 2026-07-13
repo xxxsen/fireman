@@ -64,8 +64,12 @@ func (s *ResearchService) ExecuteBacktestTaskOwned(
 		progress(2, researchJobPhases, "computing")
 	}
 	input := backtestInputFromDataset(snapshot, ds)
-	result, err := RunResearchBacktest(input)
+	result, err := RunResearchBacktestWithOptions(input, BacktestRunOptions{CancelCheck: cancelCheck})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			s.markRunCanceled(ctx, run.ID)
+			return context.Canceled
+		}
 		s.markRunFailed(ctx, run.ID)
 		return fmt.Errorf("run research backtest: %w", err)
 	}

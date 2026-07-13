@@ -1,6 +1,7 @@
 package sensitivity
 
 import (
+	"context"
 	"math"
 	"sort"
 
@@ -64,6 +65,8 @@ type RunOptions struct {
 }
 
 // Run evaluates default perturbations with common random numbers.
+//
+//nolint:gocognit,gocyclo,funlen // Cancellation checks intentionally remain adjacent to each expensive phase.
 func Run(base *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 	runs := opt.Runs
 	if runs <= 0 {
@@ -71,6 +74,9 @@ func Run(base *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 	}
 
 	baseline := evaluateSnapshot(base, runs, opt)
+	if baseline.canceled || (opt.CancelCheck != nil && opt.CancelCheck()) {
+		return Report{}, context.Canceled
+	}
 	baselineProb := float64(baseline.success) / float64(runs)
 	stdErr := math.Sqrt(baselineProb * (1 - baselineProb) / float64(runs))
 
@@ -84,13 +90,16 @@ func Run(base *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 
 	for _, pt := range perturbations {
 		if opt.CancelCheck != nil && opt.CancelCheck() {
-			break
+			return Report{}, context.Canceled
 		}
 		in, err := ApplyPerturbation(base, pt)
 		if err != nil {
 			return Report{}, err
 		}
 		out := evaluateSnapshot(in, runs, opt)
+		if out.canceled || (opt.CancelCheck != nil && opt.CancelCheck()) {
+			return Report{}, context.Canceled
+		}
 		prob := float64(out.success) / float64(runs)
 		points = append(points, PointResult{
 			PerturbationPoint:  pt,
@@ -107,10 +116,13 @@ func Run(base *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 
 	heatmap := make([][]HeatmapCell, len(HeatmapSpendingDeltas))
 	for si, sd := range HeatmapSpendingDeltas {
+		if opt.CancelCheck != nil && opt.CancelCheck() {
+			return Report{}, context.Canceled
+		}
 		row := make([]HeatmapCell, len(HeatmapReturnDeltas))
 		for ri, rd := range HeatmapReturnDeltas {
 			if opt.CancelCheck != nil && opt.CancelCheck() {
-				break
+				return Report{}, context.Canceled
 			}
 			in, _ := ApplyPerturbation(base, PerturbationPoint{
 				ParameterID: ParamAnnualSpending, Delta: sd, DeltaUnit: "relative",
@@ -119,6 +131,9 @@ func Run(base *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 				ParameterID: ParamNonCashReturn, Delta: rd, DeltaUnit: "pp",
 			})
 			out := evaluateSnapshot(in, runs, opt)
+			if out.canceled || (opt.CancelCheck != nil && opt.CancelCheck()) {
+				return Report{}, context.Canceled
+			}
 			row[ri] = HeatmapCell{
 				SpendingDelta: sd, ReturnDelta: rd,
 				SpendingLabel: formatPctLabel(sd), ReturnLabel: formatPPLabel(rd),
@@ -146,6 +161,7 @@ func Run(base *simulation.InputSnapshot, opt RunOptions) (Report, error) {
 }
 
 type evalOut struct {
+	canceled       bool
 	success        int
 	terminalP50    int64
 	maxDrawdownP95 float64
@@ -154,6 +170,7 @@ type evalOut struct {
 func evaluateSnapshot(in *simulation.InputSnapshot, runs int, opt RunOptions) evalOut {
 	result := simulation.Run(in, simulation.RunOptions{Runs: runs, CancelCheck: opt.CancelCheck})
 	var out evalOut
+	out.canceled = result.Canceled
 	out.success = result.SuccessCount
 	if q, ok := result.Summary.TerminalQuantiles["p50"]; ok {
 		out.terminalP50 = q

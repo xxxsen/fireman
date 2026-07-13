@@ -262,15 +262,15 @@ func (s *PlanService) Delete(ctx context.Context, planID string) error {
 	var canceledTaskIDs []string
 	err := fdb.WithTx(ctx, s.sql, func(tx *sql.Tx) error {
 		if s.tasks != nil {
-			taskIDs, err := activeImprovementTaskIDsTx(ctx, tx, planID)
+			taskIDs, err := activePlanTaskIDsTx(ctx, tx, planID)
 			if err != nil {
 				return err
 			}
 			now := time.Now().UnixMilli()
 			for _, taskID := range taskIDs {
 				if err := s.tasks.RequestCancelTx(ctx, tx, taskID,
-					repository.WorkerTaskErrorCanceled, "plan deleted", now); err != nil {
-					return fmt.Errorf("cancel plan improvement task: %w", err)
+					repository.WorkerTaskErrorCanceledPlan, "plan deleted", now); err != nil {
+					return fmt.Errorf("cancel plan task: %w", err)
 				}
 				canceledTaskIDs = append(canceledTaskIDs, taskID)
 			}
@@ -289,25 +289,25 @@ func (s *PlanService) Delete(ctx context.Context, planID string) error {
 	return nil
 }
 
-func activeImprovementTaskIDsTx(ctx context.Context, tx *sql.Tx, planID string) ([]string, error) {
+func activePlanTaskIDsTx(ctx context.Context, tx *sql.Tx, planID string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM worker_tasks
-		WHERE scope_type='plan' AND scope_id=? AND type=?
+		WHERE scope_type='plan' AND scope_id=?
 		AND status IN ('pending','running','pre_complete')`,
-		planID, repository.WorkerTaskTypeFirePlanImprovement)
+		planID)
 	if err != nil {
-		return nil, fmt.Errorf("list plan improvement tasks: %w", err)
+		return nil, fmt.Errorf("list active plan tasks: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var taskIDs []string
 	for rows.Next() {
 		var taskID string
 		if err := rows.Scan(&taskID); err != nil {
-			return nil, fmt.Errorf("scan plan improvement task: %w", err)
+			return nil, fmt.Errorf("scan active plan task: %w", err)
 		}
 		taskIDs = append(taskIDs, taskID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate plan improvement tasks: %w", err)
+		return nil, fmt.Errorf("iterate active plan tasks: %w", err)
 	}
 	return taskIDs, nil
 }

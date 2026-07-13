@@ -727,7 +727,7 @@ describe("AnalysisPage zero success", () => {
       ),
     );
     expect(await screen.findByText(/running… 40%/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消任务" })).toBeInTheDocument();
   });
 
   it("locks creation immediately when scope recovery finds an active simulation", async () => {

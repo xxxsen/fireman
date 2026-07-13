@@ -6,15 +6,16 @@ import (
 	"github.com/fireman/fireman/internal/service"
 )
 
-// registerAdminRoutes mounts the read-only observation namespace. Handlers do
-// parameter parsing and envelopes only; every derived semantic (stale,
-// duration, timeline) lives in AdminService. The endpoints share one Group so
-// a future auth middleware mounts in a single place.
+// registerAdminRoutes mounts the administration namespace. Handlers do
+// parameter parsing and envelopes only; task cancellation is delegated to the
+// same service used by business pages. The endpoints share one Group so a
+// future auth middleware mounts in a single place.
 func (s Services) registerAdminRoutes(rg *gin.RouterGroup) {
 	admin := rg.Group("/admin")
 	admin.GET("/overview", s.adminOverview)
 	admin.GET("/worker-tasks", s.adminListWorkerTasks)
 	admin.GET("/worker-tasks/:task_id", s.adminWorkerTaskDetail)
+	admin.POST("/worker-tasks/:task_id/cancel", s.adminCancelWorkerTask)
 	admin.GET("/finalize-records", s.adminListFinalizeRecords)
 	admin.GET("/data-versions", s.adminListDataVersions)
 	admin.GET("/auto-updates", s.adminListAutoUpdates)
@@ -103,6 +104,15 @@ func (s Services) adminListWorkerTasks(c *gin.Context) {
 
 func (s Services) adminWorkerTaskDetail(c *gin.Context) {
 	out, err := s.Admin.GetWorkerTaskDetail(c.Request.Context(), c.Param("task_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) adminCancelWorkerTask(c *gin.Context) {
+	out, err := s.Tasks.CancelAdmin(c.Request.Context(), c.Param("task_id"))
 	if err != nil {
 		FailErr(c, err)
 		return

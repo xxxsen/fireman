@@ -1,9 +1,11 @@
 "use client";
 
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
+import { TaskCancelButton } from "@/components/ui/TaskCancelButton";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { AdminWorkerTaskItem } from "@/lib/api/admin";
 import { workerTaskTypeLabel } from "@/lib/api/admin";
+import { isTaskActive } from "@/lib/api/tasks";
 import {
   formatDurationMs,
   formatRelativeTime,
@@ -14,6 +16,7 @@ import { formatDateTimeFromMs } from "@/lib/format";
 export interface WorkerTaskTableRowsProps {
   items: AdminWorkerTaskItem[];
   onSelect: (taskId: string) => void;
+  onCanceled?: () => void;
 }
 
 /**
@@ -23,6 +26,7 @@ export interface WorkerTaskTableRowsProps {
 export function WorkerTaskTableRows({
   items,
   onSelect,
+  onCanceled,
 }: WorkerTaskTableRowsProps) {
   return (
     <>
@@ -120,6 +124,19 @@ export function WorkerTaskTableRows({
               {formatRelativeTime(task.created_at)}
             </span>
           </td>
+          <td
+            className="whitespace-nowrap px-3 py-2"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <TaskCancelButton
+              task={task}
+              admin
+              className="min-h-8 px-2 py-1 text-xs"
+              onCanceled={onCanceled}
+            />
+            {!isTaskActive(task.status) && <span className="text-ink-muted">—</span>}
+          </td>
         </tr>
       ))}
     </>
@@ -137,4 +154,5 @@ export const WORKER_TASK_TABLE_HEADERS = [
   "错误",
   "耗时",
   "创建时间",
+  "操作",
 ];

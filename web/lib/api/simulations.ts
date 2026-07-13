@@ -131,7 +131,7 @@ export function getTask(taskId: string) {
 }
 
 export function cancelTask(taskId: string) {
-	return apiPost(`/api/v1/tasks/${taskId}/cancel`);
+	return apiPost<import("@/types/api").Task>(`/api/v1/tasks/${taskId}/cancel`);
 }
 
 export interface TaskEventHandlers {

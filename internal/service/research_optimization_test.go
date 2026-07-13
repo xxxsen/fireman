@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -415,7 +416,7 @@ func TestEvaluateOptimizationCandidatesUsesFourWorkersAndIsDeterministic(t *test
 		},
 	}
 	candidateCount := CountCandidates(assets, snapshot.Config.WeightStep)
-	backtest := func(input BacktestInput) (*BacktestResult, error) {
+	backtest := func(input BacktestInput, _ BacktestRunOptions) (*BacktestResult, error) {
 		weight := input.Assets[0].Weight
 		calmar := weight
 		return &BacktestResult{Summary: BacktestSummary{
@@ -440,10 +441,10 @@ func TestEvaluateOptimizationCandidatesUsesFourWorkersAndIsDeterministic(t *test
 	started := make(chan struct{}, candidateCount)
 	release := make(chan struct{})
 	svc.SetOptimizationConcurrency(4)
-	svc.optimizationBacktest = func(input BacktestInput) (*BacktestResult, error) {
+	svc.optimizationBacktest = func(input BacktestInput, opt BacktestRunOptions) (*BacktestResult, error) {
 		started <- struct{}{}
 		<-release
-		return backtest(input)
+		return backtest(input, opt)
 	}
 	type evaluationOutcome struct {
 		result OptimizationResult
@@ -485,7 +486,7 @@ func TestEvaluateOptimizationCandidatesUsesFourWorkersAndIsDeterministic(t *test
 func TestEvaluateOptimizationCandidatesCancelsParallelPoolBeforeEvaluation(t *testing.T) {
 	svc, _ := newResearchTestService(t)
 	called := false
-	svc.optimizationBacktest = func(BacktestInput) (*BacktestResult, error) {
+	svc.optimizationBacktest = func(BacktestInput, BacktestRunOptions) (*BacktestResult, error) {
 		called = true
 		return nil, errors.New("must not run")
 	}
@@ -502,6 +503,51 @@ func TestEvaluateOptimizationCandidatesCancelsParallelPoolBeforeEvaluation(t *te
 	}
 	if called {
 		t.Fatal("candidate evaluator ran after cancellation")
+	}
+}
+
+func TestEvaluateOptimizationCandidatesCancelsInFlightSingleBacktest(t *testing.T) {
+	svc, _ := newResearchTestService(t)
+	started := make(chan struct{})
+	var requested atomic.Bool
+	svc.optimizationBacktest = func(
+		_ BacktestInput, options BacktestRunOptions,
+	) (*BacktestResult, error) {
+		close(started)
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			if options.CancelCheck != nil && options.CancelCheck() {
+				return nil, context.Canceled
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return nil, errors.New("in-flight candidate did not observe cancellation")
+	}
+	assets := []OptimizationAsset{{ItemID: "i1", AssetKey: "A"}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.evaluateOptimizationCandidates(
+			context.Background(), "", optimizationInputSnapshot{
+				Config: OptimizationConfig{WeightStep: 0.1, TopK: 5},
+			},
+			&researchDataset{FX: map[string]*researchFXData{}},
+			assets, 1, requested.Load, nil,
+		)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("single candidate backtest did not start")
+	}
+	requested.Store(true)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("single candidate backtest did not stop after cancellation")
 	}
 }
 

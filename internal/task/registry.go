@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,18 @@ type Definition struct {
 }
 
 type Registry struct{ definitions map[string]Definition }
+
+// Definitions returns a stable snapshot used by startup completeness checks.
+func (r *Registry) Definitions() []Definition {
+	out := make([]Definition, 0, len(r.definitions))
+	for _, definition := range r.definitions {
+		out = append(out, definition)
+	}
+	slices.SortFunc(out, func(a, b Definition) int {
+		return strings.Compare(a.WorkerType+"\x00"+a.Type, b.WorkerType+"\x00"+b.Type)
+	})
+	return out
+}
 
 var (
 	errDefinitionIdentity   = errors.New("task definition worker_type and type are required")
