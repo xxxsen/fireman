@@ -131,9 +131,10 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | `/assets/market/{assetKey}` | 市场资产详情、历史同步、年度收益 |
 | `/research` | 组合研究首页：研究集合、最近回测运行、JSON 导入导出 |
 | `/admin/auto-updates` | 自动更新管理：目录单元全量清单、资产历史规则列表、启停与周期编辑 |
-| `/research/screener` | 资产筛选器、候选池与候选比较 |
 | `/research/collections/{id}` | 研究集合编辑、readiness、批量数据更新、回测入口 |
+| `/research/collections/{id}/runs` | 研究集合的历史回测运行列表 |
 | `/research/collections/{id}/runs/{runId}` | 确定性历史回测结果（图表/年度表/热力图/贡献/相关性/数据质量） |
+| `/research/collections/{id}/optimizations/{optimizationId}` | 自动调优进度、四类 Top K 结果与原子应用 |
 | `/scenarios` | 全局配置模板管理 |
 | `/settings` | 备份与恢复 |
 

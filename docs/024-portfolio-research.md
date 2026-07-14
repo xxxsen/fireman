@@ -1,71 +1,156 @@
 # 组合研究（Portfolio Research）
 
-- 定位：与「计划」「资产」平级的研究工作台——筛选资产、组建研究集合、运行确定性历史回测，并与 FIRE 计划双向联动。只有用户核对替换预览并明确确认后，研究集合才会原子改写目标计划。
+- 状态：已实施
+- 当前回测版本：`research_backtest_v4`
+- 定位：在不修改 FIRE 计划的前提下，维护研究集合、准备本地历史数据、运行确定性历史回测与自动调优；只有用户核对替换预览并明确确认后，研究集合才会原子写入目标计划。
 
-## 1. 信息架构
+## 1. 当前用户路径
 
-| 路由 | 页面 |
+| 路由 | 页面与职责 |
 | --- | --- |
-| `/research` | 首页：集合列表（含归档区）、最近运行、回测计算中、需要处理、JSON 导入 |
-| `/research/screener` | 资产筛选器 + 候选池 + 候选比较；`?collection={id}` 时支持逐行「加入集合」 |
-| `/research/collections/new` | 新建集合 |
-| `/research/collections/{id}` | 集合编辑：基础参数 / 资产与权重 / 数据状态 / 回测入口四个工作区 |
-| `/research/collections/{id}/runs` | 运行记录 |
-| `/research/collections/{id}/runs/{runId}` | 回测结果详情 |
+| `/research` | 集合列表、归档区、最近回测、需要处理的集合、从计划复制、JSON 导入 |
+| `/research/collections/new` | 创建空研究集合 |
+| `/research/collections/{id}` | 编辑参数、资产、权重与分类，检查数据状态，启动回测或自动调优，导出 JSON，预览应用到计划 |
+| `/research/collections/{id}/runs` | 查看该集合的历史回测运行 |
+| `/research/collections/{id}/runs/{runId}` | 查看不可变回测结果、数据质量、冻结输入与 CSV 导出 |
+| `/research/collections/{id}/optimizations/{optimizationId}` | 查看自动调优进度、四类 Top K 结果并选择一项应用 |
 
-侧边栏在「计划」之后新增「组合研究」入口。
+组合研究当前不提供独立资产筛选器、候选池或候选比较页面。添加资产统一在集合详情页完成，数据来自本地市场资产目录；对应的基础接口为 `GET /api/v1/research/assets`。
 
-## 2. 资产筛选器与候选比较
+## 2. 研究集合
 
-- 数据完全来自本地：`market_assets` + `market_asset_history_state` + 预计算指标投影 `research_asset_metrics`（asset_key + adjust_policy + point_type 维度，含 CAGR、年化/下行波动率、最大回撤、Sharpe、Calmar、近 1/3/5 年收益、首末日期）。投影在历史 post-process 事务内更新，筛选查询前对缺失维度惰性补算。
-- 筛选条件覆盖：市场、类型、关键词、历史数据状态、数据截至日（近 7/30/90 天预设 + 指定日期）、历史长度、收益/风险/风险收益指标（含下行波动率、收益回撤比）、币种、上市状态、是否可回测。
-- 结果表支持列配置（默认列 + 交易所/点位数/来源/下行波动率/收益回撤比等可选列）、排序、分页、CSV 导出、数据质量徽标、逐行刷新历史/加入候选池/加入集合。
-- 筛选条件可保存复用（`research_saved_filters` CRUD）。
-- 候选比较：归一化收益曲线、回撤曲线、年度收益矩阵、指标对比（可按指标排序）、相关系数矩阵、平均相关性、CSV 导出、多选加入集合（有目标集合则逐项追加，否则等权新建）。历史数据复用资产详情 API 客户端计算。
-- 候选池实时显示数量、币种分布、共同区间预估、平均相关性，可等权一键创建集合（尾项吸收舍入误差，权重合计恰为 1）。
+集合保存以下稳定配置：
 
-## 3. 研究集合与权重编辑
+- 名称、描述、标签、状态；
+- 基准币种、初始资金；
+- 再平衡规则与阈值；
+- 共同区间或自定义回测区间；
+- 可选基准资产、无风险利率、交易成本率；
+- CVaR 置信度与持有期，默认 `95% / 20 个有效收益日`。
 
-- 集合字段：名称/描述/标签、基准币种（默认 CNY）、初始资金（默认 1,000,000）、再平衡规则、历史区间策略（共同区间 / 自定义区间）、可选基准资产、无风险利率、预留 `transaction_cost_rate`。
-- 集合操作：新建、从筛选/候选池创建、从集合复制、从计划复制、预览并应用到计划、归档/恢复/硬删除、导入/导出 JSON。
-- 权重编辑：直接输入、等权、按类别/市场等权、剩余分配、锁定后归一化、拖拽排序、禁用但保留、现金资产、逐资产 adjust_policy/point_type。
-- 实时汇总：权重合计、币种/市场/资产类型暴露、单资产最大权重、缺历史与缺 FX 数量、共同区间预估。
-- 权重校验统一 `1e-6` 容差。
+集合条目保存资产、启用状态、目标权重、权重锁定状态、复权口径、点位类型、资产类别、地区和备注。普通回测只使用启用且正权重的资产，并要求权重合计在 `1e-6` 容差内等于 100%；自动调优有独立的准入规则，允许未锁定条目暂时为零权重或集合尚未配平。
 
-## 4. readiness 与批量数据更新
+集合可通过以下方式建立或维护：
 
-- `GET /collections/{id}/readiness` 为回测唯一准入门禁。阻断条件：无启用资产、权重非法、缺历史、同步中/同步失败无旧数据、非正点位、多数据源混杂、FX 缺失/同步中/缺口超限、共同区间为空或 < 1 年、有效估值日不足、基准缺历史、基准/基准 FX 未完整覆盖最终回测窗口、基准连续缺口超限。基准不改变组合共同窗口，且禁止在最后真实点之后填充平直尾部。警告条件：区间 < 3 年、数据过期（股票/ETF 7 天、场外基金 10 天）、停更资产、超容忍前值填充、滞后拖累共同终点、同步失败用旧数据、权重/市场/币种集中度、高相关对。现金资产免历史检查；inactive 不按过期阻断。
-- 「更新组合数据」批量创建/复用 `asset_history_sync` 与 `fx_rate_sync` worker 任务（active 任务返回 `existed`），前端按资产逐行轮询 `GET /tasks/{id}`，失败给出错误码与建议，全部终态后自动刷新 readiness，支持单资产重试与强制刷新。
+- 创建空集合后搜索并添加资产；
+- 从现有 FIRE 计划或研究集合复制；
+- 导入版本化 JSON；
+- 归档、恢复或明确执行硬删除。
 
-## 5. 回测引擎与不可变 run
+当前 JSON 导入/导出格式包含集合基本参数、标签和条目，不包含历史 run、worker task 或 CVaR 置信度/持有期。
 
-- 引擎为纯函数（`engine_version = research_backtest_v2`）：自然日估值 + 前值填充（默认容忍 7 天、场外基金 14 天，不在上市前/末点后填充）；FX 转换（CNY 基准直连，其他经 CNY 交叉）且 FX 参与共同区间与缺口检查；再平衡支持 monthly/quarterly/yearly/buy_hold/fixed/threshold。threshold 在任一资产偏离 `>=` 阈值时触发，阈值 0 表示不启用。
-- 指标口径：CAGR（365.25/days）、有效估值日样本标准差 ×√252、负数回撤、Sharpe/Calmar 不可用时为 null、回撤持续期（当前/历史最长）、年度表（不完整年份标记、年内回撤与波动、年初/年末权重偏离）、月度收益、最好/最差年份与月份、正收益月份占比、链接累计贡献、实际单期贡献序列风险分解、链接回撤期贡献、相关性矩阵。
-- 贡献满足精确不变量：累计贡献 `sum_t((NAV[t-1]/NAV[0]) * w[i,t-1] * r[i,t])` 按资产求和等于组合累计收益；峰谷回撤贡献以 `NAV[t-1]/NAV[peak]` 链接后按资产求和等于最大回撤；风险贡献 `cov(c_i, r_p)/var(r_p)` 在非零方差时按资产求和等于 1，零方差时为 null。
-- run 生命周期：readiness 门禁 → 冻结 input snapshot（参数 + 各序列摘要）→ `source_hash` / `input_hash` → 同 `input_hash` 的 succeeded/active run 直接复用 → 事务内创建 `worker_tasks` 行（`research_backtest`）和 run 占位 → worker 执行时重载冻结输入并校验 source hash（漂移即失败）→ points/years/months、summary/data_quality 和 task 终态单事务落库。
-- **序列摘要的最小闭包**：资产、基准与 FX 序列摘要不止取窗口内点位——若窗口起点当天无真实点位，则把窗口前最后一个点（forward-fill 锚点）一并纳入哈希，锚点日期以 `anchor_date` 写入快照并进入 `source_hash`。锚点之前的点位不影响哈希。由此保证：只改锚点价格必然产生新 run（不复用旧结果），且 freeze 后锚点漂移会被执行前校验拦截。
+## 3. 数据准备与 readiness
 
-## 6. 结果展示与导出
+研究计算只读取本地市场历史与 FX 数据，不在回测引擎中访问外网。`GET /api/v1/research/collections/{id}/readiness` 是普通回测的唯一准入门禁，主要检查：
 
-- 总览指标卡（含 tooltip）：累计收益、CAGR、年化波动率、最大回撤、Sharpe、Calmar、最好/最差年份与月份、正收益月份占比、当前与历史最长回撤持续期。
-- 收益/回撤双图共享时间轴、hover 联动（显示各资产贡献与权重）、最大回撤区间高亮、线性/对数切换、月度/日度切换、单资产归一化曲线显隐、空数据错误态。
-- 年度收益表、月度热力图、滚动指标（12/36 个月收益、12 个月波动率、滚动回撤，由前端从 points 派生）、资产贡献表、相关性矩阵。
-- 数据质量面板：共同区间及其成因、各序列原始/可用区间、填充统计、FX 区间、每序列 source / point_type / points_hash。
-- 底部：运行输入快照查看、CSV/JSON 导出、与任意集合的 run 对比、复制参数生成新集合。
+- 启用资产和权重是否合法；
+- 所需资产历史与 FX 是否存在、是否仍在同步、是否包含不可用点位或超限连续缺口；
+- 共同可用区间或自定义区间是否有效，是否至少一年且包含足够有效估值日；
+- 基准资产及其 FX 能否完整覆盖最终窗口；
+- 当前 CVaR 置信度和持有期是否拥有足够场景样本。
 
-## 7. 与 FIRE 计划联动
+短于三年的区间、数据过期、集中度、高相关性和容忍范围内的前值填充等事实作为 warning 展示。现金资产不要求价格历史；非现金资产不会在真实末点之后填平尾部。
 
-- 从计划复制：持仓 current amount 折算权重（同资产多分组合并），基准币种继承计划。
-- 应用到计划：先校验 asset_class/region、启用权重合计和资产有效性；目标金额按目标计划当前 `total_assets_minor` 折算。预览返回完整大类/区域配置、替换后持仓、删除清单、`config_version` 和 replacement hash。用户确认后在一个事务内替换 allocation/holdings、创建组合快照并仅将计划版本加一；版本或集合变化返回冲突并要求重新预览。
+“更新组合数据”通过统一任务体系创建或复用 `asset_history_sync` 与 `fx_rate_sync` 任务。前端跟踪任务终态并刷新 readiness，失败时保留稳定错误码和重试入口。
 
-## 8. 数据模型与 API
+## 4. 确定性回测
 
-- `migrations/0001_init.sql` 包含 `research_collections`、`research_collection_items`、`research_saved_filters`、`research_backtest_runs`（含 succeeded 部分唯一索引 `uq_research_backtest_runs_success_input`）、`research_backtest_points/years/months` 和 `research_asset_metrics`。
-- API 全部挂 `/api/v1/research`。计划联动使用 `POST /collections/:id/plan-preview` 和 `POST /collections/:id/apply-to-plan`；旧 `copy-to-plan` 在兼容周期内返回 410，防止调用方误以为未落库草稿已经生效。
-- task type `research_backtest` 纳入统一 worker registry 与 admin 控制台。
+`research_backtest_v4` 是无数据库依赖的纯计算引擎。服务层先冻结集合、资产历史、FX、基准与配置，再将冻结输入交给 worker。核心口径为：
 
-## 9. 测试
+- 将资产点位转换到集合基准币种，FX 缺口参与窗口和数据质量判断；
+- 在共同可用窗口内使用有界前值填充，场外基金与其他资产采用各自容忍天数；
+- 支持 `monthly`、`quarterly`、`yearly`、`buy_hold`、`fixed`、`threshold` 六种再平衡规则；阈值策略在任一资产偏离达到 `>=` 阈值时触发，阈值为 0 时不触发；
+- v4 在有效估值日收益之后、恢复目标权重之前按单边换手扣除交易成本，并以初始资金换算到 minor unit 后确定性舍入；
+- 基于同一条扣费后的 NAV/收益路径计算累计收益、CAGR、波动率、最大回撤、Sharpe、Calmar、年度/月度结果、贡献归因、相关性、换手与交易成本拖累；
+- 使用 `empirical_cvar_v1` 对重叠持有期收益计算 VaR、CVaR 和最差损失；样本不足直接由 readiness 阻断，不自动放宽口径。
 
-- Go：引擎单测（区间/填充/FX/各再平衡/全部指标/年度/回撤持续期/贡献）、readiness 全条件、sync-history 创建/复用/跳过、hash 稳定性与幂等（含锚点闭包回归：改锚点必换 hash、锚点前点位不影响 hash、锚点漂移被 source 校验拦截）以及 run 事务。
-- Web：Vitest 覆盖 §11.3 全部场景（导航、首页、筛选、候选池与比较、权重校验、锁定归一化、readiness、任务轮询、run 状态、图表、移动端标签、CSV/JSON 导入导出）。
-- 手工验收（§11.4）依赖真实行情与 sidecar，由用户执行。
+贡献归因必须满足：资产累计贡献之和等于组合累计收益，峰谷回撤贡献之和等于最大回撤，非零方差时风险贡献之和等于 1。
+
+详细的版本演进、交易成本时序和 CVaR 公式分别见 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md) 与 [030-research-cvar-optimization.md](./030-research-cvar-optimization.md)。
+
+## 5. 不可变 run 与任务状态
+
+创建回测时，服务端冻结输入快照并计算 `source_hash` 与 `input_hash`：
+
+1. `source_hash` 描述实际使用的资产、基准和 FX 数据；窗口起点依赖前值填充时，起点前最后一个锚点也进入摘要和哈希。
+2. `input_hash` 同时覆盖计算配置和引擎版本；版本变化不会复用旧结果。
+3. 相同集合与 `input_hash` 的已完成或活动 run 可直接复用。
+4. 新 run 与 `research_backtest` worker task 在同一事务内创建。
+5. worker 执行前重新校验冻结来源；来源漂移时失败，不以新数据悄悄替换快照。
+6. 结果与任务终态通过统一 finalize 流程收敛；取消中的任务不得发布成功结果。
+
+`research_backtest_runs` 不单独持久化生命周期状态。API 视图以关联 `worker_tasks` 的状态为准，并统一暴露 pending、running、complete、failed、canceled 等状态。任务跟踪、恢复与取消契约见 [031-unified-worker-task-architecture.md](./031-unified-worker-task-architecture.md)、[034-async-task-tracking-and-recovery.md](./034-async-task-tracking-and-recovery.md) 和 [035-worker-task-cancellation.md](./035-worker-task-cancellation.md)。
+
+## 6. 结果与导出
+
+回测详情展示：
+
+- 累计收益、CAGR、波动率、最大回撤、Sharpe、Calmar；
+- VaR、CVaR、最差持有期损失和对应样本口径；
+- NAV、收益、回撤、年度收益、月度热力图与滚动指标；
+- 资产累计贡献、回撤贡献、风险贡献和相关性矩阵；
+- 换手、交易成本、基准比较与数据质量；
+- 引擎版本、冻结输入快照和来源摘要。
+
+CSV 导出使用 run 的不可变结果，不重新运行计算。历史旧版本 run 继续只读展示；旧版本没有的指标显示为不可用，不根据当前引擎补算。
+
+## 7. 自动调优
+
+集合详情页的“寻找最优组合”使用独立 readiness 和 `research_optimization_backtest` task。当前优化器为 `research_optimizer_v6`，在同一冻结窗口、有效收益日、CVaR 口径和扣费回测引擎上枚举离散权重，产出：
+
+- 最高 CAGR；
+- 最低最大回撤；
+- 最高 Calmar；
+- 最低 CVaR。
+
+调优结果只在用户确认后原子应用回研究集合，同时同步权重、启用/锁定状态、回测窗口和当前版本支持的 CVaR 口径。完整规则见 [025-research-portfolio-auto-optimization.md](./025-research-portfolio-auto-optimization.md) 与 [030-research-cvar-optimization.md](./030-research-cvar-optimization.md)。
+
+## 8. 与 FIRE 计划联动
+
+从计划复制时，当前持仓金额按资产合并后折算为研究权重，并继承计划基准币种。
+
+从研究集合应用到计划必须先调用：
+
+```http
+POST /api/v1/research/collections/{id}/plan-preview
+```
+
+预览会验证正权重资产、`asset_class`、`region`、本地资产有效性和权重，并按目标计划当前 `total_assets_minor` 生成完整大类/地区配置、目标持仓、删除清单、舍入调整、`config_version` 与 replacement hash。用户确认后调用：
+
+```http
+POST /api/v1/research/collections/{id}/apply-to-plan
+```
+
+服务端在一个事务内重新构建并校验替换结果，完整替换 allocation 与 holdings，创建组合快照，并把计划 `config_version` 恰好增加一次。计划版本或集合内容在预览后变化时返回冲突，要求重新预览。旧 `copy-to-plan` 接口固定返回 410，不能作为写入入口。
+
+## 9. 数据模型与 API 边界
+
+组合研究业务表位于 `migrations/0001_init.sql`，当前运行时使用：
+
+- `research_collections`、`research_collection_items`；
+- `research_backtest_runs`、`research_backtest_points`、`research_backtest_years`、`research_backtest_months`；
+- `research_optimization_runs`；
+- `research_asset_metrics`；
+- 统一的 `worker_tasks` 及其尝试、finalize 记录。
+
+基线 schema 仍保留 `research_saved_filters` 旧表，但当前没有页面、API、service 或 repository 读写该表；它不代表资产筛选器仍是可用功能。若未来彻底删除该表，应通过新的顺序 migration 处理旧数据库升级，而不是修改运行时代码进行 schema repair。
+
+组合研究 API 全部挂在 `/api/v1/research`，覆盖本地资产搜索、集合及条目 CRUD、readiness、历史同步、回测、run 查询与导出、自动调优，以及计划预览/应用。不存在 saved filters、候选池或候选比较 API。
+
+## 10. 验证不变量
+
+实现和后续修改必须持续覆盖：
+
+- 相同冻结输入和版本生成相同哈希与结果，来源漂移不会复用旧 run；
+- 普通回测权重、共同窗口、FX、基准覆盖和 CVaR 样本门禁一致；
+- 交易成本、贡献归因和 CVaR 使用同一条实际组合路径；
+- run 状态与 worker task 终态收敛，取消后不发布结果；
+- 调优候选共享有效日历和计算口径，应用结果为单事务；
+- 应用到计划必须经过 replacement hash 与 `config_version` 双重并发校验；
+- 前端不暴露已移除的筛选器或 saved filters 入口。
+
+仓库级验证使用：
+
+```bash
+make ci
+```
