@@ -53,7 +53,7 @@ fireman/
 ```bash
 make web-install
 make market-provider-install
-make dev    # backend :8080 / web :3000 / market-provider :18081
+make dev    # backend :8180 / web :3030 / market-provider :18081
 ```
 
 后端从 `config.json` 读取运行配置。市场数据自动更新扫描器在服务启动后立即扫描一次，
@@ -87,8 +87,15 @@ make ci
 
 在无外网环境下顺序执行：Go build/test/lint、前端 lint/Vitest/build、sidecar pytest、`-tags=integration` 集成测试。
 
+浏览器 E2E 使用 Playwright，当前覆盖关键 UI 回归。它需要本机已有 Playwright Chromium，或显式指定 Chromium/Chrome 路径：
+
+```bash
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome make web-e2e
+```
+
+E2E 暂未加入默认 `make ci`，避免无浏览器环境的后端 CI 被环境依赖阻塞。
+
 ## 不在本期范围内
 
 - 不引入 Dev Container（仓库无 `.devcontainer/`）
-- 不引入 E2E（无 Playwright/Cypress）
-- 完整主链路通过集成测试 + Vitest + 人工浏览器验收
+- 尚未为全部业务主链路建立浏览器 E2E 覆盖；其余链路继续由集成测试和 Vitest 验证

@@ -328,6 +328,7 @@ var adminWorkerTaskTypes = map[string]bool{
 	repository.WorkerTaskTypeSensitivity:          true,
 	repository.WorkerTaskTypeResearchBacktest:     true,
 	repository.WorkerTaskTypeResearchOptimization: true,
+	repository.WorkerTaskTypeInvestmentPath:       true,
 	repository.WorkerTaskTypeAutoUpdateScan:       true,
 	repository.WorkerTaskTypeAssetDirectorySync:   true,
 	repository.WorkerTaskTypeAssetHistorySync:     true,

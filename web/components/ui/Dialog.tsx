@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { getFocusableElements, handleFocusTrapKeyDown } from "@/lib/focus-trap";
 
@@ -56,9 +57,9 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
       <button
         type="button"
@@ -73,8 +74,8 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "relative flex max-h-[min(90vh,720px)] w-full max-w-lg flex-col rounded-lg border border-line bg-surface shadow-lg",
-          className,
+          "relative flex max-h-[min(90vh,720px)] w-full flex-col rounded-lg border border-line bg-surface shadow-lg",
+          className || "max-w-lg",
         )}
         data-testid="dialog"
       >
@@ -90,6 +91,7 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

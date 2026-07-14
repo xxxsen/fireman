@@ -52,6 +52,10 @@ func Fail(c *gin.Context, status int, code, message string, details map[string]a
 func FailErr(c *gin.Context, err error) {
 	var ae *service.AppError
 	if ok := asAppError(err, &ae); ok {
+		if status, investmentPathError := investmentPathErrorStatus(ae.Code); investmentPathError {
+			Fail(c, status, ae.Code, ae.Message, ae.Details)
+			return
+		}
 		status := http.StatusBadRequest
 		switch ae.Code {
 		case "plan_not_found", "scenario_not_found", "instrument_not_found", "holding_not_found", "snapshot_not_found":
@@ -117,6 +121,22 @@ func FailErr(c *gin.Context, err error) {
 		return
 	}
 	Fail(c, http.StatusInternalServerError, "internal_error", "internal server error", nil)
+}
+
+func investmentPathErrorStatus(code string) (int, bool) {
+	switch code {
+	case "investment_path_asset_not_found", "investment_path_run_not_found":
+		return http.StatusNotFound, true
+	case "investment_path_task_active", "investment_path_source_changed":
+		return http.StatusConflict, true
+	case "investment_path_history_missing", "investment_path_fx_missing", "investment_path_no_complete_window",
+		"investment_path_trade_budget_too_small":
+		return http.StatusUnprocessableEntity, true
+	case "investment_path_invalid_request", "investment_path_budget_exceeded":
+		return http.StatusBadRequest, true
+	default:
+		return 0, false
+	}
 }
 
 func asAppError(err error, target **service.AppError) bool {

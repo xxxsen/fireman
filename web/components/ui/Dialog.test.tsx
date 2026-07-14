@@ -18,6 +18,32 @@ describe("Dialog", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("lets callers replace the default maximum width", () => {
+    render(
+      <Dialog open title="宽弹窗" onClose={vi.fn()} className="max-w-5xl">
+        <p>内容</p>
+      </Dialog>,
+    );
+
+    const panel = screen.getByTestId("dialog");
+    expect(panel).toHaveClass("max-w-5xl");
+    expect(panel).not.toHaveClass("max-w-lg");
+  });
+
+  it("portals the overlay to the document body", () => {
+    const { container } = render(
+      <div data-testid="transformed-ancestor">
+        <Dialog open title="Portal 弹窗" onClose={vi.fn()}>
+          <p>内容</p>
+        </Dialog>
+      </div>,
+    );
+
+    const panel = screen.getByTestId("dialog");
+    expect(container).not.toContainElement(panel);
+    expect(panel.parentElement?.parentElement).toBe(document.body);
+  });
+
   it("traps Tab focus within the dialog panel", () => {
     const onClose = vi.fn();
     render(

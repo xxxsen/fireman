@@ -30,6 +30,7 @@ import (
 type ResearchService struct {
 	sql                     *sql.DB
 	research                *repository.ResearchRepo
+	investmentPaths         *repository.InvestmentPathRepo
 	assets                  *repository.MarketAssetRepo
 	tasks                   *repository.WorkerTaskRepo
 	coordinator             *taskcore.Coordinator
@@ -63,6 +64,7 @@ func NewResearchService(
 	return &ResearchService{
 		sql:                     sqlDB,
 		research:                research,
+		investmentPaths:         repository.NewInvestmentPathRepo(sqlDB),
 		assets:                  assets,
 		tasks:                   tasks,
 		coordinator:             coordinator,

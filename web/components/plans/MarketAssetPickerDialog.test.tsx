@@ -130,12 +130,33 @@ describe("MarketAssetPickerDialog", () => {
 		expect(screen.queryByRole("button", { name: /美元现金/ })).not.toBeInTheDocument();
 	});
 
+  it("can exclude every cash asset for risk-asset-only experiments", async () => {
+    pool = [
+      makeMarketAsset(1, {
+        asset_key: "SYS|cash||CNY",
+        instrument_type: "cash",
+        symbol: "CNY",
+        name: "人民币现金",
+        currency: "CNY",
+      }),
+      makeMarketAsset(2),
+    ];
+    renderDialog({ allowCash: false });
+    expect(await screen.findByRole("button", { name: /目录基金2/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /人民币现金/ })).not.toBeInTheDocument();
+  });
+
   it("invokes onSelect with the picked asset", async () => {
     const { onSelect } = renderDialog();
     fireEvent.click(await screen.findByRole("button", { name: /目录基金1/ }));
     expect(onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ asset_key: makeMarketAsset(1).asset_key }),
     );
+  });
+
+  it("uses the wide dialog needed by long asset names", async () => {
+    renderDialog();
+    expect(screen.getByTestId("dialog")).toHaveClass("max-w-5xl");
   });
 
   it("shows the identity-conflict hint and sorts by response priority", async () => {

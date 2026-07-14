@@ -95,6 +95,7 @@ func DefaultRegistry() *Registry {
 		frontierDefinition(),
 		goDefinition(repository.WorkerTaskTypeResearchBacktest, "research_backtest_run:"),
 		goDefinition(repository.WorkerTaskTypeResearchOptimization, "research_optimization_run:"),
+		goDefinition(repository.WorkerTaskTypeInvestmentPath, "single_asset_investment_path_run:"),
 		{
 			WorkerType: repository.WorkerTypeGo, Type: repository.WorkerTaskTypeAutoUpdateScan,
 			CompletionMode: CompletionDirect, MaxAttempts: 2, LeaseDuration: time.Minute,

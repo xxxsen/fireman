@@ -9,6 +9,8 @@ WEB_DIR="$ROOT/web"
 PROVIDER_DIR="$ROOT/sidecars/market-provider"
 CONFIG_PATH="${FIREMAN_CONFIG:-$ROOT/config.json}"
 DEV_DATA_DIR="${FIREMAN_DEV_DATA_DIR:-$ROOT/.dev-data}"
+WEB_PORT="${FIREMAN_DEV_WEB_PORT:-3030}"
+BACKEND_URL="${FIREMAN_DEV_BACKEND_URL:-http://127.0.0.1:8180}"
 mkdir -p "$DEV_DATA_DIR"
 PID_DIR="${FIREMAN_DEV_PID_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$PID_DIR"
@@ -84,6 +86,11 @@ cleanup_previous
 : >"$PID_FILE"
 trap cleanup INT TERM EXIT
 
+# A production `next build` and `next dev` cannot safely share generated
+# chunks. Start every dev session from a clean Next build directory so a prior
+# web-build does not leave the browser loading mismatched client modules.
+rm -rf "$WEB_DIR/.next"
+
 echo "[fireman] starting backend with config=$CONFIG_PATH"
 (
   cd "$ROOT"
@@ -101,8 +108,11 @@ echo "[fireman] starting market-provider worker on :18081"
 ) &
 record_pid "$!" "market-provider"
 
-echo "[fireman] starting web on :3000"
-( cd "$WEB_DIR" && npm run dev ) &
+echo "[fireman] starting web on :$WEB_PORT with API proxy=$BACKEND_URL"
+(
+  cd "$WEB_DIR"
+  API_PROXY_TARGET="${API_PROXY_TARGET:-$BACKEND_URL}" npm run dev -- --port "$WEB_PORT"
+) &
 record_pid "$!" "web"
 
 wait -n

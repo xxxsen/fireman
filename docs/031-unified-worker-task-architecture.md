@@ -46,6 +46,7 @@
 | `sensitivity` | `jobs` | `POST /plans/:plan_id/sensitivity-tests` | `AnalysisRunner.RunSensitivity` | pending snapshot | `analysis_results.result_json` |
 | `research_backtest` | `jobs` | `POST /research/collections/:id/backtests` | `ResearchService.ExecuteBacktestJob` | `research_backtest_runs.input_snapshot_json` | backtest run、points、years、months |
 | `research_optimization_backtest` | `jobs` | `POST /research/collections/:id/optimizations` | `ResearchService.ExecuteOptimizationJob` | optimization run snapshot/config | `research_optimization_runs.result_json` |
+| `single_asset_investment_path_backtest` | `go_worker` | `POST /research/investment-path-runs` | `ResearchService.ExecuteInvestmentPathTaskOwned` | investment path run snapshot | 主窗口 points/trades 与 rolling windows |
 | `asset_directory_sync` | `worker_tasks` | 资产目录同步、自动更新规则 | sidecar directory executor | `payload_json` | `resource_db` 后由 Go 写 `market_assets` |
 | `asset_history_sync` | `worker_tasks` | 资产详情、计划 readiness、研究集合、自动更新 | sidecar history executor | `payload_json` | `resource_db` 后由 Go 写历史、投影、研究指标 |
 | `fx_rate_sync` | `worker_tasks` | FX 同步、研究集合缺失数据同步 | sidecar FX executor | `payload_json` | `resource_db` 后由 Go 写系统 FX 数据 |
@@ -453,6 +454,7 @@ scope_type + scope_id + task_type + idempotency_key -> task_id + input_hash
 | `sensitivity` | `analysis_result:{task_id}` |
 | `research_backtest` | `research_backtest_run:{run_id}` |
 | `research_optimization_backtest` | `research_optimization_run:{run_id}` |
+| `single_asset_investment_path_backtest` | `single_asset_investment_path_run:{run_id}` |
 | `fire_plan_improvement` | `fire_plan_improvement_run:{run_id}` |
 | `market_data_auto_update_scan` | `resource:{sha256}`，内容为 scan summary |
 | 三类 sidecar task | `resource:{sha256}` |
@@ -560,6 +562,7 @@ attempt_count < max_attempts
 
 - ownership CAS 未命中：409 `task_lease_lost`，worker 必须立即中止且不得上报结果；
 - progress_current 只能单调增加；
+- 任务进入 `complete` 时由控制面原子地把 `progress_current` 收敛为 `progress_total`，终态不保留“尚差一步”的执行中进度；
 - total 一旦从 0 变为正数不得减小；
 - phase 最大 64 字符；
 - 响应包含 `lease_expires_at` 与 `cancel_requested`；worker 收到取消后停止 processor 并上报 canceled。

@@ -11,6 +11,8 @@ bin/
 .tmp/
 __debug*
 /.vscode
+web/playwright-report/
+web/test-results/
 
 # Local requirements, designs, reviews, and acceptance records.
 /td/

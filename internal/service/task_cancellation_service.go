@@ -48,6 +48,7 @@ func NewTaskCancellationService(
 		repository.WorkerTaskTypeAssetDirectorySync: noop,
 		repository.WorkerTaskTypeAssetHistorySync:   noop,
 		repository.WorkerTaskTypeFXRateSync:         noop,
+		repository.WorkerTaskTypeInvestmentPath:     noop,
 		repository.WorkerTaskTypeFirePlanImprovement: func(
 			ctx context.Context, tx *sql.Tx, taskID string, at int64,
 		) error {

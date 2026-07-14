@@ -65,6 +65,8 @@ export interface MarketAssetSearchPickerProps {
   resultsVisible?: boolean;
   /** Asset keys that are already owned and must be hidden from candidates. */
   excludeAssetKeys: Set<string>;
+  /** Whether CNY cash may appear. Foreign cash remains unavailable. */
+  allowCash?: boolean;
   onSelect: (asset: MarketAsset) => void;
   /** Fired when the user focuses or types in the search input. */
   onActivate?: () => void;
@@ -90,6 +92,7 @@ export function MarketAssetSearchPicker({
   active,
   resultsVisible = true,
   excludeAssetKeys,
+  allowCash = true,
   onSelect,
   onActivate,
   onEscape,
@@ -142,11 +145,11 @@ export function MarketAssetSearchPicker({
           .filter(
             (asset) =>
               !excludeAssetKeys.has(asset.asset_key) &&
-              (asset.instrument_type !== "cash" || asset.currency === "CNY"),
+              (asset.instrument_type !== "cash" || (allowCash && asset.currency === "CNY")),
           ),
         symbolQ ?? "",
       ),
-    [listQuery.data, excludeAssetKeys, symbolQ],
+    [listQuery.data, excludeAssetKeys, allowCash, symbolQ],
   );
 
   // Same code under several instrument types: surface the ambiguity instead
@@ -340,6 +343,7 @@ export interface MarketAssetPickerDialogProps {
   onClose: () => void;
   onSelect: (asset: MarketAsset) => void;
   excludeAssetKeys: Set<string>;
+  allowCash?: boolean;
   title?: string;
   inputTestId?: string;
   resultsTestId?: string;
@@ -356,16 +360,18 @@ export function MarketAssetPickerDialog({
   onClose,
   onSelect,
   excludeAssetKeys,
+  allowCash = true,
   title = "选择标的",
   inputTestId = "wizard-holding-search",
   resultsTestId = "wizard-library-results",
   children,
 }: MarketAssetPickerDialogProps) {
   return (
-    <Dialog open={open} onClose={onClose} title={title} className="max-w-3xl">
+    <Dialog open={open} onClose={onClose} title={title} className="max-w-5xl">
       <MarketAssetSearchPicker
         active={open}
         excludeAssetKeys={excludeAssetKeys}
+        allowCash={allowCash}
         onSelect={onSelect}
         inputTestId={inputTestId}
         resultsTestId={resultsTestId}

@@ -1,5 +1,5 @@
 {
-  "addr": ":8080",
+  "addr": ":8180",
   "internal_addr": "127.0.0.1:8081",
   "db_path": ".dev-data/fireman.db",
   "resource_db_path": ".dev-data/fireman_resource.db",

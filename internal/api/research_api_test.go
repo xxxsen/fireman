@@ -428,6 +428,71 @@ func TestResearchAPIFullBacktestFlow(t *testing.T) {
 	}
 }
 
+func TestInvestmentPathAPIFullFlowAndModeValidation(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	seedResearchAsset(t, db, "IPA1", "投入路径基金", 1500, 100)
+	services := buildServices(db)
+	worker := newTestTaskWorker(db, services)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Start(ctx, 1)
+	srv := httptest.NewServer(NewRouter(ctx, Deps{DB: db, Services: services}))
+	defer srv.Close()
+
+	end := time.Now().UTC().Truncate(24 * time.Hour)
+	request := map[string]any{
+		"mode":          "income_dca",
+		"asset":         map[string]any{"asset_key": "IPA1", "adjust_policy": "hfq", "point_type": "adjusted_close"},
+		"base_currency": "CNY", "evaluation_start": end.AddDate(-3, 0, 0).Format("2006-01-02"),
+		"evaluation_end": end.AddDate(-1, 0, 0).Format("2006-01-02"), "horizon_months": 12,
+		"monthly_day": 15, "transaction_cost_rate": .001,
+		"income_dca": map[string]any{"initial_investment_minor": 0, "monthly_contribution_minor": 100000},
+	}
+	resp, body := researchPost(t, srv, "/api/v1/research/investment-paths/readiness", request)
+	if resp.StatusCode != http.StatusOK || envData(t, body)["ready"] != true {
+		t.Fatalf("readiness status=%d body=%s", resp.StatusCode, body)
+	}
+
+	invalid := mapsClone(request)
+	invalid["existing_capital"] = map[string]any{"initial_capital_minor": 100000}
+	resp, body = researchPost(t, srv, "/api/v1/research/investment-path-runs", invalid)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "investment_path_invalid_request") {
+		t.Fatalf("mixed mode status=%d body=%s", resp.StatusCode, body)
+	}
+
+	request["idempotency_key"] = "88f0c082-bce3-476b-b9c4-924745c3519d"
+	resp, body = researchPost(t, srv, "/api/v1/research/investment-path-runs", request)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", resp.StatusCode, body)
+	}
+	created := envData(t, body)["run"].(map[string]any)
+	runID := created["id"].(string)
+	taskID := created["task_id"].(string)
+	waitJobSucceeded(t, srv, taskID)
+
+	resp, body = researchGet(t, srv, "/api/v1/research/investment-path-runs/"+runID)
+	if resp.StatusCode != http.StatusOK || envData(t, body)["completed_at"] == nil {
+		t.Fatalf("run status=%d body=%s", resp.StatusCode, body)
+	}
+	for _, suffix := range []string{
+		"/points?strategy_key=income_dca", "/trades?strategy_key=income_dca",
+		"/windows?strategy_key=income_dca&limit=1000", "/export.csv",
+	} {
+		resp, body = researchGet(t, srv, "/api/v1/research/investment-path-runs/"+runID+suffix)
+		if resp.StatusCode != http.StatusOK || len(body) == 0 {
+			t.Fatalf("GET %s status=%d body=%s", suffix, resp.StatusCode, body)
+		}
+	}
+}
+
+func mapsClone(input map[string]any) map[string]any {
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
 func TestOptimizationReadinessRejectsMalformedQuery(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	services := buildServices(db)

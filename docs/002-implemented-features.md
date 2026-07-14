@@ -129,12 +129,14 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 | `/plans/{id}/frontier` | 运行四类 FIRE 达标前沿，查看冻结计算依据、曲线点证据与历史运行 |
 | `/assets` | 全市场资产目录（同步状态面板、筛选、分页）|
 | `/assets/market/{assetKey}` | 市场资产详情、历史同步、年度收益 |
-| `/research` | 组合研究首页：研究集合、最近回测运行、JSON 导入导出 |
+| `/research` | 数据研究中的组合研究：首页展示研究集合、最近回测运行、JSON 导入导出 |
 | `/admin/auto-updates` | 自动更新管理：目录单元全量清单、资产历史规则列表、启停与周期编辑 |
 | `/research/collections/{id}` | 研究集合编辑、readiness、批量数据更新、回测入口 |
 | `/research/collections/{id}/runs` | 研究集合的历史回测运行列表 |
 | `/research/collections/{id}/runs/{runId}` | 确定性历史回测结果（图表/年度表/热力图/贡献/相关性/数据质量） |
 | `/research/collections/{id}/optimizations/{optimizationId}` | 自动调优进度、四类 Top K 结果与原子应用 |
+| `/research/investment-paths` | 数据研究中的单资产实验：从资产目录选标的，缺少历史时可触发拉取，再运行工资型定投与存量资金入场实验 |
+| `/research/investment-paths/runs/{runId}` | 主窗口路径、滚动起点、交易成本与审计结果 |
 | `/scenarios` | 全局配置模板管理 |
 | `/settings` | 备份与恢复 |
 
@@ -148,7 +150,7 @@ TickFlow 配置与 fallback 规则详见 `sidecars/market-provider/README.md`。
 调仓执行详见 [018-rebalance-planning-and-execution.md](./018-rebalance-planning-and-execution.md)。
 Web 信息架构、术语与可访问性规范详见 [020-web-ui-information-architecture-and-accessibility.md](./020-web-ui-information-architecture-and-accessibility.md)。
 FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](./027-quick-fire-calculator.md)。
-组合研究模块详见 [024-portfolio-research.md](./024-portfolio-research.md)、[025-research-portfolio-auto-optimization.md](./025-research-portfolio-auto-optimization.md) 与 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md)。
+数据研究模块包含并列的组合研究与单资产实验。组合研究详见 [024-portfolio-research.md](./024-portfolio-research.md)、[025-research-portfolio-auto-optimization.md](./025-research-portfolio-auto-optimization.md) 和 [026-portfolio-research-and-simulation-logic-corrections.md](./026-portfolio-research-and-simulation-logic-corrections.md)；单资产实验详见 [038-single-asset-investment-path.md](./038-single-asset-investment-path.md)。
 
 ---
 
@@ -193,7 +195,7 @@ FIRE 快算的公式、API 和验收约定详见 [027-quick-fire-calculator.md](
 
 ## 10. 已知限制
 
-1. **无 E2E**：依赖 Go 集成测试 + Vitest + 人工浏览器。
+1. **E2E 覆盖有限**：Playwright 当前覆盖关键 UI 回归；其余主链路依赖 Go 集成测试与 Vitest。
 2. **单用户本地优先**：无账号、权限、多租户。
 3. **数据源**：除系统 FX/现金外，市场资产目录与历史数据均由任务化 worker sidecar（AKShare/TickFlow）同步。
 
@@ -206,4 +208,5 @@ make ci                                    # 全量 CI
 go test -tags=integration ./internal/api/...  # 集成测试
 cd sidecars/market-provider && uv run pytest  # sidecar
 cd web && npm test -- --run                  # 前端单测
+make web-e2e                                 # Playwright 浏览器 E2E（需可用 Chromium/Chrome）
 ```

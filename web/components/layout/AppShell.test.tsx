@@ -36,7 +36,7 @@ describe("AppShell", () => {
     }
   });
 
-  it("includes 组合研究 entry and marks it active on /research routes", () => {
+  it("includes 数据研究 entry and marks it active on /research routes", () => {
     for (const pathname of ["/research", "/research/collections/rc_1"]) {
       mockPathname.mockReturnValue(pathname);
       const { unmount } = render(
@@ -45,7 +45,7 @@ describe("AppShell", () => {
         </AppShell>,
       );
 
-      for (const link of screen.getAllByRole("link", { name: "组合研究" })) {
+      for (const link of screen.getAllByRole("link", { name: "数据研究" })) {
         expect(link).toHaveAttribute("href", "/research");
         expect(link).toHaveAttribute("aria-current", "page");
       }
@@ -57,14 +57,14 @@ describe("AppShell", () => {
     }
   });
 
-  it("does not highlight 组合研究 outside /research", () => {
+  it("does not highlight 数据研究 outside /research", () => {
     mockPathname.mockReturnValue("/assets");
     render(
       <AppShell>
         <div>content</div>
       </AppShell>,
     );
-    for (const link of screen.getAllByRole("link", { name: "组合研究" })) {
+    for (const link of screen.getAllByRole("link", { name: "数据研究" })) {
       expect(link).not.toHaveAttribute("aria-current", "page");
     }
   });

@@ -48,6 +48,122 @@ func (s Services) registerResearchRoutes(rg *gin.RouterGroup) {
 	research.GET("/collections/:collection_id/optimizations/latest", s.getLatestOptimization)
 	research.GET("/optimizations/:optimization_id", s.getOptimization)
 	research.POST("/optimizations/:optimization_id/apply", s.applyOptimization)
+
+	research.POST("/investment-paths/readiness", s.getInvestmentPathReadiness)
+	research.POST("/investment-path-runs", s.createInvestmentPathRun)
+	research.GET("/investment-path-runs", s.listInvestmentPathRuns)
+	research.GET("/investment-path-runs/:run_id", s.getInvestmentPathRun)
+	research.GET("/investment-path-runs/:run_id/points", s.getInvestmentPathPoints)
+	research.GET("/investment-path-runs/:run_id/trades", s.getInvestmentPathTrades)
+	research.GET("/investment-path-runs/:run_id/windows", s.getInvestmentPathWindows)
+	research.GET("/investment-path-runs/:run_id/export.csv", s.exportInvestmentPathCSV)
+}
+
+func (s Services) getInvestmentPathReadiness(c *gin.Context) {
+	var req service.InvestmentPathRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "investment_path_invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Research.GetInvestmentPathReadiness(c.Request.Context(), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func (s Services) createInvestmentPathRun(c *gin.Context) {
+	var req service.InvestmentPathRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "investment_path_invalid_request", err.Error(), nil)
+		return
+	}
+	out, err := s.Research.CreateInvestmentPathRun(c.Request.Context(), req)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	Accepted(c, out)
+}
+
+func (s Services) listInvestmentPathRuns(c *gin.Context) {
+	out, err := s.Research.ListInvestmentPathRuns(
+		c.Request.Context(), atoiDefault(c.Query("limit"), 50), atoiDefault(c.Query("offset"), 0),
+	)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{"runs": out})
+}
+
+func (s Services) getInvestmentPathRun(c *gin.Context) {
+	out, err := s.Research.GetInvestmentPathRun(c.Request.Context(), c.Param("run_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, out)
+}
+
+func investmentPathStrategy(c *gin.Context) (string, bool) {
+	strategy := strings.TrimSpace(c.Query("strategy_key"))
+	if strategy == "" {
+		Fail(c, http.StatusBadRequest, "investment_path_invalid_request", "strategy_key is required", nil)
+		return "", false
+	}
+	return strategy, true
+}
+
+func (s Services) getInvestmentPathPoints(c *gin.Context) {
+	strategy, ok := investmentPathStrategy(c)
+	if !ok {
+		return
+	}
+	out, err := s.Research.GetInvestmentPathPoints(c.Request.Context(), c.Param("run_id"), strategy)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{"points": out})
+}
+
+func (s Services) getInvestmentPathTrades(c *gin.Context) {
+	strategy, ok := investmentPathStrategy(c)
+	if !ok {
+		return
+	}
+	out, err := s.Research.GetInvestmentPathTrades(c.Request.Context(), c.Param("run_id"), strategy)
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{"trades": out})
+}
+
+func (s Services) getInvestmentPathWindows(c *gin.Context) {
+	strategy, ok := investmentPathStrategy(c)
+	if !ok {
+		return
+	}
+	out, err := s.Research.GetInvestmentPathWindows(c.Request.Context(), c.Param("run_id"), strategy,
+		atoiDefault(c.Query("limit"), 200), atoiDefault(c.Query("offset"), 0))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	OK(c, gin.H{"windows": out})
+}
+
+func (s Services) exportInvestmentPathCSV(c *gin.Context) {
+	name, content, err := s.Research.ExportInvestmentPathCSV(c.Request.Context(), c.Param("run_id"))
+	if err != nil {
+		FailErr(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", []byte(content))
 }
 
 // --- screener ---

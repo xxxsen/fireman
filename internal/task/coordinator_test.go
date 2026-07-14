@@ -345,6 +345,33 @@ func TestDirectCompletionRollsBackWithBusinessTransaction(t *testing.T) {
 	}
 }
 
+func TestDirectCompletionMarksProgressComplete(t *testing.T) {
+	c, _, db := testCoordinator(t)
+	createTask(t, c, db, "task_progress_complete", repository.WorkerTypeGo,
+		repository.WorkerTaskTypeSimulation)
+	if _, err := db.Exec(`UPDATE worker_tasks SET progress_current=4,progress_total=5 WHERE id=?`,
+		"task_progress_complete"); err != nil {
+		t.Fatal(err)
+	}
+	req := claimRequest(repository.WorkerTypeGo, "progress-token-0000000001")
+	if _, err := c.Claim(context.Background(), "task_progress_complete", req); err != nil {
+		t.Fatal(err)
+	}
+	err := fdb.WithTx(context.Background(), db, func(tx *sql.Tx) error {
+		return c.CompleteOwnedTx(context.Background(), tx, "task_progress_complete", req.WorkerID,
+			repository.HashClaimToken(req.ClaimToken), "simulation_run:run", map[string]any{},
+			time.Now().UnixMilli())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := c.Get(context.Background(), "task_progress_complete")
+	if err != nil || item.Status != repository.WorkerTaskStatusComplete ||
+		item.ProgressCurrent != 5 || item.ProgressTotal != 5 {
+		t.Fatalf("completed task=%+v err=%v", item, err)
+	}
+}
+
 func TestStartupAndExpiredLeaseRecovery(t *testing.T) {
 	c, _, db := testCoordinator(t)
 	now := time.Unix(1_800_000_000, 0)

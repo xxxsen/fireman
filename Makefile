@@ -10,6 +10,7 @@ WEB_API_PROXY_TARGET ?= http://backend:8080
 GO ?= go
 NPM ?= npm
 UV ?= uv
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?=
 DOCKER ?= docker
 COMPOSE ?= $(DOCKER) compose
 GOBIN ?= $(PROJECT_ROOT)/bin
@@ -26,7 +27,7 @@ COMPOSE_FILE := $(PROJECT_ROOT)/docker/docker-compose.yml
 
 .PHONY: help \
 	build test lint lint-go install-golangci-lint backend-check \
-	web-install web-lint web-test web-build web-check \
+	web-install web-lint web-test web-build web-check web-e2e \
 	market-provider-install market-provider-test market-provider-start \
 	build-backend-image build-web-image build-market-provider-image build-images \
 	dev docker-up docker-down integration-test ci
@@ -78,6 +79,9 @@ web-build: ## Build the Next.js production bundle.
 	cd $(WEB_DIR) && $(NPM) run build
 
 web-check: web-install web-lint web-test web-build ## Web install + lint + test + build.
+
+web-e2e: ## Run Playwright browser E2E tests (uses bundled Chromium unless an executable path is provided).
+	cd $(WEB_DIR) && PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="$(PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)" $(NPM) run test:e2e
 
 # -----------------------------------------------------------------------------
 # Market provider (Python sidecar)

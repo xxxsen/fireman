@@ -581,7 +581,8 @@ func (c *Coordinator) CompleteOwnedTx(ctx context.Context, tx *sql.Tx, id, worke
 		return err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE worker_tasks SET status=?,result_key=?,result_meta_json=?,
-		result_reported_at=?,finished_at=?,heartbeat_at=NULL,lease_expires_at=NULL,phase='',updated_at=?
+		result_reported_at=?,finished_at=?,progress_current=progress_total,
+		heartbeat_at=NULL,lease_expires_at=NULL,phase='',updated_at=?
 		WHERE id=? AND status=? AND claimed_by=? AND claim_token_hash=? AND cancel_requested=0`,
 		repository.WorkerTaskStatusComplete, resultKey, string(meta), now, now, now,
 		id, repository.WorkerTaskStatusRunning, workerID, tokenHash)

@@ -67,6 +67,7 @@ func NewProcessorSet(
 		repository.WorkerTaskTypeFireFrontier:         set.fireFrontier,
 		repository.WorkerTaskTypeResearchBacktest:     set.researchBacktest,
 		repository.WorkerTaskTypeResearchOptimization: set.researchOptimization,
+		repository.WorkerTaskTypeInvestmentPath:       set.investmentPath,
 		repository.WorkerTaskTypeAutoUpdateScan:       set.autoUpdateScan,
 	}
 	definitions := coordinator.Registry().DefinitionsFor(repository.WorkerTypeGo)
@@ -398,6 +399,19 @@ func (p *ProcessorSet) researchOptimization(ctx context.Context, item repository
 		func(tx *sql.Tx) error {
 			return p.complete(ctx, tx, item, attempt, "research_optimization_run:"+run,
 				map[string]any{"run_id": run})
+		})
+}
+
+//nolint:wrapcheck // The research service preserves cancellation and stable public errors.
+func (p *ProcessorSet) investmentPath(ctx context.Context, item repository.WorkerTask, attempt Attempt) error {
+	run, err := repository.NewInvestmentPathRepo(p.db).GetRunByTaskID(ctx, item.ID)
+	if err != nil {
+		return err
+	}
+	return p.research.ExecuteInvestmentPathTaskOwned(ctx, item.ID, attempt.Canceled, attempt.Progress,
+		func(tx *sql.Tx) error {
+			return p.complete(ctx, tx, item, attempt, "single_asset_investment_path_run:"+run.ID,
+				map[string]any{"run_id": run.ID})
 		})
 }
 

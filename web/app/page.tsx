@@ -40,7 +40,7 @@ export default function HomePage() {
       <div className="content-enter">
         <PageHeader title="我的 FIRE 计划" />
         <ErrorState
-          message="无法连接后端 API。请确认 Go 服务已在 :8080 运行。"
+          message="无法连接后端 API。请确认 Go 服务已在 :8180 运行。"
           onRetry={() => void refetch()}
           technicalDetail={queryErrorMessage(error)}
         />

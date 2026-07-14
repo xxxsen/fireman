@@ -47,6 +47,7 @@ flowchart LR
 | `fire_plan_improvement` | `go_worker` | FIRE 计划改善器 | 按 improvement run 与 plan scope 恢复 | `fire_plan_improvement|plan:{plan_id}` |
 | `research_backtest` | `go_worker` | 组合研究回测 | 集合页按 collection scope 恢复；详情页同时轮询 task 与业务 run | `research_backtest|collection:{collection_id}` |
 | `research_optimization_backtest` | `go_worker` | 寻找最优组合 | 集合页按 collection scope 恢复；详情页同时轮询 task 与业务 run | `research_optimization_backtest|collection:{collection_id}` |
+| `single_asset_investment_path_backtest` | `go_worker` | 单资产投入路径实验 | 实验列表与结果页按 run/task 恢复 | `single_asset_investment_path_backtest|asset:{asset_key}` |
 | `market_data_auto_update_scan` | `go_worker` | Go 定时器 | 自动更新管理页和 worker task 管理页条件刷新 | `market_data_auto_update_scan|system` |
 | `asset_directory_sync` | `sidecar_worker` | 资产目录、研究数据面板、自动更新扫描 | 目录 sync state 保存 latest task；创建响应立即进入轮询 | `asset_directory_sync|{sync_key}` |
 | `asset_history_sync` | `sidecar_worker` | 资产详情、计划 readiness、研究集合、自动更新扫描 | 资产 history state、研究项状态或 readiness active task 恢复 | `asset_history_sync|{asset_key}|{adjust_policy}|{point_type}` |

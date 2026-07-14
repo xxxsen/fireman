@@ -24,6 +24,7 @@ const (
 	WorkerTaskTypeFireFrontier         = "fire_frontier"
 	WorkerTaskTypeResearchBacktest     = "research_backtest"
 	WorkerTaskTypeResearchOptimization = "research_optimization_backtest"
+	WorkerTaskTypeInvestmentPath       = "single_asset_investment_path_backtest"
 	WorkerTaskTypeAutoUpdateScan       = "market_data_auto_update_scan"
 	WorkerTaskTypeAssetDirectorySync   = "asset_directory_sync"
 	WorkerTaskTypeAssetHistorySync     = "asset_history_sync"

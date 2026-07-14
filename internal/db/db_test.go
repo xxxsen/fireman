@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/fireman/fireman/migrations"
 )
@@ -38,7 +39,7 @@ func TestValidateMigrationDDLRejectsDataStatements(t *testing.T) {
 	}
 }
 
-func TestMigrationsAreSingleDDLOnlyBaseline(t *testing.T) {
+func TestMigrationsAreOrderedAndDDLOnly(t *testing.T) {
 	entries, err := fs.ReadDir(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -49,20 +50,25 @@ func TestMigrationsAreSingleDDLOnlyBaseline(t *testing.T) {
 			sqlFiles = append(sqlFiles, entry.Name())
 		}
 	}
-	if len(sqlFiles) != 1 || sqlFiles[0] != "0001_init.sql" {
-		t.Fatalf("migration files=%v, want only 0001_init.sql", sqlFiles)
-	}
-	body, err := fs.ReadFile(migrations.FS, sqlFiles[0])
-	if err != nil {
-		t.Fatal(err)
+	want := []string{"0001_init.sql", "0002_single_asset_investment_path.sql"}
+	if strings.Join(sqlFiles, ",") != strings.Join(want, ",") {
+		t.Fatalf("migration files=%v, want %v", sqlFiles, want)
 	}
 	dml := regexp.MustCompile(`(?im)^\s*(insert|update|delete|replace|merge)\b`)
-	if match := dml.Find(body); match != nil {
-		t.Fatalf("migration contains prohibited DML statement %q", match)
-	}
-	historicalDDL := regexp.MustCompile(`(?im)^\s*(alter|drop)\b`)
-	if match := historicalDDL.Find(body); match != nil {
-		t.Fatalf("consolidated baseline contains historical DDL statement %q", match)
+	for _, name := range sqlFiles {
+		body, readErr := fs.ReadFile(migrations.FS, name)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if match := dml.Find(body); match != nil {
+			t.Fatalf("migration %s contains prohibited DML statement %q", name, match)
+		}
+		if name == "0001_init.sql" {
+			historicalDDL := regexp.MustCompile(`(?im)^\s*(alter|drop)\b`)
+			if match := historicalDDL.Find(body); match != nil {
+				t.Fatalf("consolidated baseline contains historical DDL statement %q", match)
+			}
+		}
 	}
 }
 
@@ -112,6 +118,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"plan_return_assumption_overrides",
 		"analysis_results", "worker_task_idempotency_keys",
 		"fire_frontier_runs", "fire_frontier_applications",
+		"research_investment_path_runs", "research_investment_path_points",
+		"research_investment_path_trades", "research_investment_path_windows",
 	}
 	for _, name := range expectedTables {
 		var got string
@@ -175,8 +183,8 @@ func TestMigrate_AppliesInitialSchemaAndIsIdempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Errorf("expected 1 migration record after idempotent re-run, got %d", migrationCount)
+	if migrationCount != 2 {
+		t.Errorf("expected 2 migration records after idempotent re-run, got %d", migrationCount)
 	}
 }
 
@@ -225,6 +233,38 @@ func TestMigrate_DoesNotBackupFreshDatabase(t *testing.T) {
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".bak") {
 			t.Errorf("did not expect backup on fresh install, got %q", e.Name())
+		}
+	}
+}
+
+func TestMigrateUpgradesExistingBaselineToInvestmentPathSchema(t *testing.T) {
+	baseline, err := fs.ReadFile(migrations.FS, "0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetMigrations(fstest.MapFS{"0001_init.sql": &fstest.MapFile{Data: baseline}})
+	t.Cleanup(func() { SetMigrations(migrations.FS) })
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fireman.db")
+	pool, err := Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := Migrate(context.Background(), pool, dbPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	SetMigrations(migrations.FS)
+	if err := Migrate(context.Background(), pool, dbPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{
+		"research_investment_path_runs", "research_investment_path_points",
+		"research_investment_path_trades", "research_investment_path_windows",
+	} {
+		var name string
+		if err := pool.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
+			t.Fatalf("upgraded table %s: %v", table, err)
 		}
 	}
 }
